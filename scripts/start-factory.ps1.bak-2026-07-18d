@@ -1,0 +1,88 @@
+# Factory Deck launcher (ASCII only - PS 5.1 reads no-BOM files as CP1252).
+# Single-process production mode: the backend on 127.0.0.1:5179 serves the
+# built UI from dist/ui, so no Vite dev server or concurrently is needed.
+# The UI is rebuilt only when a source file is newer than the build, and the
+# browser opens when /api/health actually answers instead of a blind timer.
+$ErrorActionPreference = "Stop"
+Set-Location -Path (Split-Path -Parent $PSScriptRoot)  # repo root
+
+$backendUrl = "http://127.0.0.1:5179"
+$distIndex = "dist\ui\index.html"
+
+# --- 0. Idempotency guard: if a Factory Deck is already answering, just open it.
+# Prevents a second launch from spawning a duplicate backend or an orphaned
+# browser-poll helper. We VERIFY the service marker so a foreign process holding
+# the port is never mistaken for our app (and never opened). Crucially we
+# distinguish "something answered but is not us" (a 200 with no/invalid marker,
+# incl. non-JSON bodies) from "nothing is listening" (connection refused): only
+# the latter falls through to a normal start.
+$existing = $null
+try {
+    $existing = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 "$backendUrl/api/health"
+} catch {
+    $existing = $null  # connection refused / no response - nothing is listening
+}
+if ($null -ne $existing) {
+    # Something is on the port. Treat it as ours ONLY if the marker matches; a
+    # non-JSON or marker-less 200 is a foreign service -> fail, do not open it.
+    $marker = $null
+    try { $marker = ($existing.Content | ConvertFrom-Json).service } catch { $marker = $null }
+    if ($marker -eq "factory-deck") {
+        Write-Host "Factory Deck is already running at $backendUrl - opening it." -ForegroundColor Green
+        Start-Process $backendUrl
+        exit 0
+    }
+    Write-Host "Port 5179 is in use by another (non-Factory Deck) service." -ForegroundColor Red
+    Write-Host "Free the port or change PORT, then re-run. Not opening it." -ForegroundColor Red
+    exit 1
+}
+
+# --- 1. Rebuild the UI only when it is missing or stale. -------------------
+$needBuild = -not (Test-Path $distIndex)
+if (-not $needBuild) {
+    $built = (Get-Item $distIndex).LastWriteTime
+    $inputs = @(Get-ChildItem src -Recurse -File)
+    foreach ($extra in @("index.html", "vite.config.ts", "package.json", "tailwind.config.js")) {
+        if (Test-Path $extra) { $inputs += Get-Item $extra }
+    }
+    $newest = ($inputs | Measure-Object -Property LastWriteTime -Maximum).Maximum
+    if ($newest -gt $built) { $needBuild = $true }
+}
+if ($needBuild) {
+    Write-Host "UI build missing or stale - rebuilding (vite build)..." -ForegroundColor Yellow
+    & pnpm exec vite build
+    if ($LASTEXITCODE -ne 0) {
+        if (Test-Path $distIndex) {
+            Write-Host "Build FAILED - starting with the previous UI build." -ForegroundColor Red
+        } else {
+            # No usable UI at all: fall back to the old two-process dev mode.
+            Write-Host "Build FAILED and no previous build exists - falling back to dev mode." -ForegroundColor Red
+            # Vite (:5180) proxies /api to the backend, so /api/health carries the
+            # factory-deck marker here too. Open the dev UI ONLY when that marker
+            # is present - a foreign 200 on :5180 (non-JSON or marker-less) is
+            # never opened. Same check as the production preflight + poller.
+            Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", `
+                "for (`$i = 0; `$i -lt 240; `$i++) { try { `$r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 'http://localhost:5180/api/health'; if ((`$r.Content | ConvertFrom-Json).service -eq 'factory-deck') { Start-Process 'http://localhost:5180'; break } } catch { }; Start-Sleep -Milliseconds 250 }"
+            & pnpm dev
+            exit $LASTEXITCODE
+        }
+    }
+}
+
+# --- 2. Open the browser as soon as the backend is actually ready. ---------
+# Open ONLY after /api/health returns a body that parses as JSON AND carries the
+# service:"factory-deck" marker - so a foreign service answering the port (incl.
+# a 200 with a non-JSON body) is never opened. Same marker check as the preflight.
+Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", `
+    "for (`$i = 0; `$i -lt 240; `$i++) { try { `$r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 '$backendUrl/api/health'; if ((`$r.Content | ConvertFrom-Json).service -eq 'factory-deck') { Start-Process '$backendUrl'; break } } catch { }; Start-Sleep -Milliseconds 250 }"
+
+Write-Host ""
+Write-Host "Starting Factory Deck (local AI software factory)..."
+Write-Host "App: $backendUrl  (single process; browser opens when ready)"
+Write-Host "(Close this window to stop the factory.)"
+Write-Host ""
+
+# --- 3. Run the backend in the foreground. ----------------------------------
+# Invoke node directly: `pnpm server` as a child process exits silently with
+# code 0 on this machine (known trap) - the direct binary is also faster.
+& node --import tsx src/server/index.ts

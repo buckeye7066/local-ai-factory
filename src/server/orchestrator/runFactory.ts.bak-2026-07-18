@@ -1,0 +1,391 @@
+import { randomUUID } from "node:crypto";
+import type { AppConfig, AppSecrets } from "../config.js";
+import type {
+  RunRecord,
+  RunOptions,
+  FileContent,
+  StageId,
+  LogKind,
+  QaReport,
+  FileBuild,
+  ProviderName,
+} from "../../shared/schemas.js";
+import { freshStages } from "../../shared/schemas.js";
+import type { LLMProvider } from "../../shared/types.js";
+import { createProviderRegistry } from "../providers/index.js";
+import { createWorkspace } from "../workspace/createWorkspace.js";
+import { writeWorkspaceFile } from "../workspace/fileWriter.js";
+import { runCommand } from "../workspace/commandRunner.js";
+import { summarize } from "../workspace/summarizeFiles.js";
+import { saveRun, putRunInMemory, saveRunFiles } from "../storage/runsStore.js";
+import { makeLog, startStage, finishStage, nowMs, CountingProvider } from "./stages.js";
+import { RunCancelledError, clearCancel } from "./cancellation.js";
+import { runRepairLoop } from "./repairLoop.js";
+import { productSpecAgent } from "../agents/productSpecAgent.js";
+import { architectAgent } from "../agents/architectAgent.js";
+import { taskPlannerAgent } from "../agents/taskPlannerAgent.js";
+import { fileBuilderAgent } from "../agents/fileBuilderAgent.js";
+import { testWriterAgent } from "../agents/testWriterAgent.js";
+import { qaCriticAgent } from "../agents/qaCriticAgent.js";
+import { repairAgent } from "../agents/repairAgent.js";
+import { finalReviewerAgent } from "../agents/finalReviewerAgent.js";
+
+export interface StartRunArgs {
+  idea: string;
+  options: RunOptions;
+  config: AppConfig;
+  secrets: AppSecrets;
+}
+
+/** Create the initial queued record. Providers are resolved lazily at run time. */
+function createRecord(args: StartRunArgs): RunRecord {
+  const { config, secrets, options } = args;
+  const registry = createProviderRegistry(config, secrets);
+  const hasKeys = registry.available().some((n) => n !== "stub");
+  const demo = options.demo === true || !hasKeys;
+
+  const codeProvider: ProviderName = demo
+    ? "stub"
+    : registry.resolve(
+        options.codeProvider ?? config.defaultCodeProvider,
+        config.defaultCodeProvider,
+      ).name;
+  const reviewProvider: ProviderName = demo
+    ? "stub"
+    : registry.resolve(
+        options.reviewProvider ?? config.defaultReviewProvider,
+        config.defaultReviewProvider,
+      ).name;
+
+  return {
+    id: randomUUID(),
+    idea: args.idea,
+    status: "queued",
+    demo,
+    codeProvider,
+    reviewProvider,
+    currentStage: null,
+    stages: freshStages(),
+    logs: [],
+    files: [],
+    repairLoops: 0,
+    providerUsage: {
+      anthropic: { calls: 0 },
+      openai: { calls: 0 },
+      stub: { calls: 0 },
+      totalCalls: 0,
+    },
+    finalReport: null,
+    appName: null,
+    workspacePath: null,
+    error: null,
+    createdAt: nowMs(),
+    updatedAt: nowMs(),
+  };
+}
+
+/** Mutable helpers bound to one run. */
+function controller(run: RunRecord) {
+  const touch = () => {
+    run.updatedAt = nowMs();
+    putRunInMemory(run);
+  };
+  const flush = async () => {
+    touch();
+    await saveRun(run);
+  };
+  const log = (
+    kind: LogKind,
+    message: string,
+    stage: StageId | null = run.currentStage,
+  ) => {
+    run.logs.push(makeLog(kind, message, stage));
+    touch();
+  };
+  return { touch, flush, log };
+}
+
+/**
+ * Execute the full assembly line. Mutates `run` in place and persists at every
+ * stage boundary so the UI can poll live progress.
+ */
+async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
+  const { config, secrets } = args;
+  const { flush, log } = controller(run);
+  const registry = createProviderRegistry(config, secrets);
+
+  // Resolve + meter providers (budget enforced inside CountingProvider).
+  const rawCode = run.demo
+    ? registry.get("stub")
+    : registry.resolve(run.codeProvider, config.defaultCodeProvider);
+  const rawReview = run.demo
+    ? registry.get("stub")
+    : registry.resolve(run.reviewProvider, config.defaultReviewProvider);
+  const code: LLMProvider = new CountingProvider(
+    rawCode,
+    run,
+    config.maxModelCallsPerRun,
+  );
+  const review: LLMProvider = new CountingProvider(
+    rawReview,
+    run,
+    config.maxModelCallsPerRun,
+  );
+
+  // The live in-memory view of the workspace, keyed by path.
+  const files = new Map<string, FileContent>();
+
+  const writeBuild = async (
+    workspacePath: string,
+    incoming: { path: string; purpose: string; contents: string }[],
+    stage: StageId,
+  ) => {
+    for (const f of incoming) {
+      const res = await writeWorkspaceFile(workspacePath, f.path, f.contents);
+      const status: FileContent["status"] = res.existed ? "modified" : "generated";
+      files.set(res.path, {
+        path: res.path,
+        purpose: f.purpose,
+        language: res.language,
+        size: res.size,
+        status,
+        contents: f.contents,
+      });
+      log(
+        "file_write",
+        `${status === "modified" ? "Updated" : "Wrote"} ${res.path} (${res.size} B)`,
+        stage,
+      );
+    }
+    run.files = summarize([...files.values()]);
+    saveRunFiles(run.id, [...files.values()]);
+  };
+
+  try {
+    run.status = "running";
+    log("info", `Factory run started in ${run.demo ? "demo (stub)" : "live"} mode.`);
+    if (run.demo)
+      log("warning", "Demo mode: no API keys used; output is the offline stub app.");
+    await flush();
+
+    /* Stage 1 — Intake */
+    startStage(run, "intake");
+    log("info", `Intake: "${run.idea}"`);
+    finishStage(run, "intake", "completed");
+    await flush();
+
+    /* Stage 2 — Product Spec */
+    startStage(run, "product_spec");
+    log("model_call", `Product Spec agent (${code.name})…`);
+    const spec = await productSpecAgent({ provider: code }, run.idea);
+    run.appName = spec.appName;
+    log(
+      "success",
+      `Spec ready: ${spec.appName} — ${spec.coreFeatures.length} core features.`,
+    );
+    finishStage(run, "product_spec", "completed");
+    await flush();
+
+    /* Stage 3 — Architect */
+    startStage(run, "architect");
+    log("model_call", `Architect agent (${code.name})…`);
+    const arch = await architectAgent({ provider: code }, spec);
+    log(
+      "success",
+      `Architecture set${arch.risks.length ? ` — ${arch.risks.length} risk(s) noted.` : "."}`,
+    );
+    finishStage(run, "architect", "completed");
+    await flush();
+
+    /* Stage 4 — Task Planner */
+    startStage(run, "task_planner");
+    log("model_call", `Task Planner agent (${code.name})…`);
+    const plan = await taskPlannerAgent({ provider: code }, spec, arch);
+    log("success", `Plan ready: ${plan.tasks.length} tasks.`);
+    finishStage(run, "task_planner", "completed");
+    await flush();
+
+    /* Stage 5 + 6 — Builder (generate + write files) */
+    startStage(run, "builder");
+    const workspace = await createWorkspace(config.workspaceRoot, spec.appName, run.id);
+    run.workspacePath = workspace.path;
+    log("info", `Workspace: ${workspace.path}`);
+    log("model_call", `File Builder agent (${code.name})…`);
+    const build = await fileBuilderAgent({ provider: code }, spec, arch, plan);
+    await writeBuild(workspace.path, build.files, "builder");
+    log("success", `Generated ${build.files.length} files.`);
+    finishStage(run, "builder", "completed");
+    await flush();
+
+    /* Stage 7 — Test Writer (+ optional install/test commands) */
+    startStage(run, "test_writer");
+    log("model_call", `Test Writer agent (${review.name})…`);
+    const testPlan = await testWriterAgent({ provider: review }, spec, build);
+    if (testPlan.files.length) {
+      await writeBuild(workspace.path, testPlan.files, "test_writer");
+    }
+    // Merge tests into the build view used by QA/repair.
+    const fullBuild: FileBuild = {
+      files: [...files.values()].map((f) => ({
+        path: f.path,
+        purpose: f.purpose,
+        contents: f.contents,
+      })),
+    };
+
+    // Install + test, subject to the allowlist + dry-run flag.
+    let commandOutput = "";
+    let testsExecuted = false;
+    let testExit: number | null = null;
+    for (const cmd of [
+      { bin: "pnpm", args: ["install"] },
+      { bin: "pnpm", args: ["test"] },
+    ]) {
+      const res = await runCommand(
+        { bin: cmd.bin, args: cmd.args, cwd: workspace.path },
+        { workspaceRoot: config.workspaceRoot, dryRun: config.dryRunCommands },
+      );
+      log(
+        "command_run",
+        res.executed
+          ? `Ran: ${res.command} (exit ${res.exitCode})`
+          : (res.reason ?? res.command),
+      );
+      if (res.executed) {
+        commandOutput += `\n$ ${res.command}\n${res.stdout}\n${res.stderr}`;
+        if (cmd.args[0] === "test") {
+          testsExecuted = true;
+          testExit = res.exitCode;
+        }
+      }
+    }
+    finishStage(run, "test_writer", "completed");
+    await flush();
+
+    /* Stage 8 — QA Critic */
+    startStage(run, "qa_critic");
+    log("model_call", `QA Critic agent (${review.name})…`);
+    let qa: QaReport = await qaCriticAgent(
+      { provider: review },
+      fullBuild,
+      commandOutput,
+    );
+    log(qa.passed ? "success" : "warning", `QA: ${qa.summary}`);
+    finishStage(run, "qa_critic", qa.passed ? "completed" : "completed");
+    await flush();
+
+    /* Stage 9 — Repair Loop (bounded) */
+    startStage(run, "repair");
+    const maxLoops = args.options.maxRepairLoops ?? config.maxRepairLoops;
+    if (qa.passed) {
+      log("success", "No high-severity issues — repair loop skipped.");
+      finishStage(run, "repair", "skipped");
+    } else {
+      const loopResult = await runRepairLoop({
+        maxLoops,
+        initialQa: qa,
+        onLoop: (n) =>
+          log("warning", `Repair loop ${n}/${maxLoops} — patching files…`, "repair"),
+        repair: async (report) => {
+          const liveBuild: FileBuild = {
+            files: [...files.values()].map((f) => ({
+              path: f.path,
+              purpose: f.purpose,
+              contents: f.contents,
+            })),
+          };
+          log("model_call", `Repair agent (${code.name})…`, "repair");
+          const fix = await repairAgent(
+            { provider: code },
+            report,
+            liveBuild,
+            commandOutput,
+          );
+          if (fix.files.length) await writeBuild(workspace.path, fix.files, "repair");
+          log("info", fix.notes || "Applied repairs.", "repair");
+        },
+        reverify: async () => {
+          const liveBuild: FileBuild = {
+            files: [...files.values()].map((f) => ({
+              path: f.path,
+              purpose: f.purpose,
+              contents: f.contents,
+            })),
+          };
+          log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
+          const next = await qaCriticAgent(
+            { provider: review },
+            liveBuild,
+            commandOutput,
+          );
+          log(next.passed ? "success" : "warning", `QA: ${next.summary}`, "repair");
+          return next;
+        },
+      });
+      run.repairLoops = loopResult.loops;
+      qa = loopResult.finalQa;
+      finishStage(run, "repair", qa.passed ? "completed" : "failed");
+      if (!qa.passed)
+        log(
+          "warning",
+          `Reached max repair loops (${maxLoops}); residual issues remain.`,
+          "repair",
+        );
+    }
+    await flush();
+
+    /* Stage — Final Review */
+    startStage(run, "final_review");
+    const testStatus = testsExecuted
+      ? testExit === 0
+        ? "passing"
+        : "failing"
+      : qa.passed
+        ? "passing"
+        : "unknown";
+    log("model_call", `Final Reviewer agent (${review.name})…`);
+    const report = await finalReviewerAgent({ provider: review }, spec, qa, {
+      repairLoops: run.repairLoops,
+      workspacePath: workspace.path,
+      providerUsage: run.providerUsage,
+      testStatus,
+    });
+    run.finalReport = report;
+    finishStage(run, "final_review", "completed");
+
+    run.status = "completed";
+    log("success", `Run complete — ${spec.appName} is ready at ${workspace.path}.`);
+    await flush();
+  } catch (err) {
+    if (err instanceof RunCancelledError) {
+      run.status = "cancelled";
+      run.error = null;
+      if (run.currentStage) finishStage(run, run.currentStage, "skipped");
+      log("warning", "Run cancelled by user — stopping cleanly.");
+    } else {
+      run.status = "failed";
+      run.error = err instanceof Error ? err.message : "Unknown error";
+      if (run.currentStage) finishStage(run, run.currentStage, "failed");
+      log("error", `Run failed: ${run.error}`);
+    }
+    await flush();
+  } finally {
+    clearCancel(run.id);
+  }
+}
+
+/** Fire-and-forget: returns the queued record immediately, runs in background. */
+export function startRun(args: StartRunArgs): RunRecord {
+  const run = createRecord(args);
+  putRunInMemory(run);
+  void saveRun(run).then(() => executeRun(run, args));
+  return run;
+}
+
+/** Await the full run (used by the CLI). */
+export async function runFactory(args: StartRunArgs): Promise<RunRecord> {
+  const run = createRecord(args);
+  await saveRun(run);
+  await executeRun(run, args);
+  return run;
+}

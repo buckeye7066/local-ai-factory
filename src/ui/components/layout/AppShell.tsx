@@ -1,0 +1,96 @@
+import { useState } from "react";
+import type { ReactNode } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { AuroraBackground } from "./AuroraBackground.js";
+import { Sidebar, type NavKey } from "./Sidebar.js";
+import { TopBar } from "./TopBar.js";
+import type { Health } from "../../../shared/schemas.js";
+import type { Theme } from "../../lib/useTheme.js";
+
+/**
+ * AppShell — full-screen responsive layout: fixed glass sidebar (overlay on
+ * mobile), sticky top bar, and a main content area. Children are keyed by the
+ * parent so page changes animate via AnimatePresence.
+ */
+export function AppShell({
+  active,
+  onNavigate,
+  onDemo,
+  health,
+  theme,
+  onToggleTheme,
+  children,
+}: {
+  active: NavKey | "run";
+  onNavigate: (key: NavKey) => void;
+  onDemo: () => void;
+  health: Health | null;
+  theme: Theme;
+  onToggleTheme: () => void;
+  children: ReactNode;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const nav = (key: NavKey) => {
+    onNavigate(key);
+    setMenuOpen(false);
+  };
+
+  return (
+    <div className="relative min-h-screen text-slate-100">
+      <AuroraBackground />
+
+      <div className="flex min-h-screen">
+        {/* Desktop sidebar */}
+        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 border-r border-white/[0.06] bg-white/[0.02] backdrop-blur-xl lg:block">
+          <Sidebar active={active} onNavigate={onNavigate} onDemo={onDemo} />
+        </aside>
+
+        {/* Mobile sidebar overlay */}
+        <AnimatePresence>
+          {menuOpen && (
+            <>
+              <motion.div
+                className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setMenuOpen(false)}
+              />
+              <motion.aside
+                className="fixed inset-y-0 left-0 z-50 w-72 border-r border-white/10 bg-deck-surface/95 backdrop-blur-2xl lg:hidden"
+                initial={{ x: "-100%" }}
+                animate={{ x: 0 }}
+                exit={{ x: "-100%" }}
+                transition={{ type: "spring", stiffness: 320, damping: 34 }}
+              >
+                <Sidebar
+                  active={active}
+                  onNavigate={nav}
+                  onDemo={() => {
+                    onDemo();
+                    setMenuOpen(false);
+                  }}
+                  onClose={() => setMenuOpen(false)}
+                />
+              </motion.aside>
+            </>
+          )}
+        </AnimatePresence>
+
+        {/* Main column */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <TopBar
+            health={health}
+            theme={theme}
+            onToggleTheme={onToggleTheme}
+            onOpenMenu={() => setMenuOpen(true)}
+          />
+          <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+            <div className="mx-auto max-w-6xl">{children}</div>
+          </main>
+        </div>
+      </div>
+    </div>
+  );
+}

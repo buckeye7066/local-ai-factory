@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Dependencies & build output
+node_modules
+dist
+*.tsbuildinfo
+
+# Generated app workspaces (local only)
+workspaces/
+
+# Run history (local JSON store)
+.factory/
+
+# Logs & temp
+logs
+*.log
+.DS_Store
+Thumbs.db
+*.tmp

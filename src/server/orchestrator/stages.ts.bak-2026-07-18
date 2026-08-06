@@ -1,0 +1,103 @@
+import { randomUUID } from "node:crypto";
+import type {
+  RunRecord,
+  StageId,
+  LogKind,
+  LogLine,
+  ProviderName,
+} from "../../shared/schemas.js";
+import type {
+  LLMProvider,
+  GenerateTextInput,
+  GenerateTextResult,
+  GenerateJsonInput,
+} from "../../shared/types.js";
+import { throwIfCancelled } from "./cancellation.js";
+
+/**
+ * stages.ts — pure helpers the orchestrator uses to mutate a RunRecord:
+ * append logs, move stages through their lifecycle, and meter provider calls.
+ */
+
+export function nowMs(): number {
+  return Date.now();
+}
+
+export function makeLog(
+  kind: LogKind,
+  message: string,
+  stage: StageId | null,
+): LogLine {
+  return { id: randomUUID(), ts: nowMs(), stage, kind, message };
+}
+
+export function startStage(run: RunRecord, id: StageId): void {
+  // Stage boundaries are cancellation checkpoints (model calls are the other).
+  throwIfCancelled(run.id);
+  run.currentStage = id;
+  const stage = run.stages.find((s) => s.id === id);
+  if (stage) {
+    stage.status = "active";
+    stage.startedAt = nowMs();
+  }
+}
+
+export function finishStage(
+  run: RunRecord,
+  id: StageId,
+  status: "completed" | "failed" | "skipped",
+): void {
+  const stage = run.stages.find((s) => s.id === id);
+  if (stage) {
+    stage.status = status;
+    stage.endedAt = nowMs();
+    if (stage.startedAt) stage.durationMs = stage.endedAt - stage.startedAt;
+  }
+}
+
+/** Raised when the per-run model-call budget is exceeded. */
+export class ModelBudgetError extends Error {
+  constructor(limit: number) {
+    super(`Model-call budget exceeded (MAX_MODEL_CALLS_PER_RUN=${limit}).`);
+    this.name = "ModelBudgetError";
+  }
+}
+
+/**
+ * Wraps a provider so every call is counted toward the run's usage tally and
+ * the global budget. Keeps the safety limit close to where calls happen.
+ */
+export class CountingProvider implements LLMProvider {
+  readonly name: ProviderName;
+  constructor(
+    private inner: LLMProvider,
+    private run: RunRecord,
+    private limit: number,
+  ) {
+    this.name = inner.name;
+  }
+
+  isConfigured(): boolean {
+    return this.inner.isConfigured();
+  }
+
+  private tick() {
+    // A cancel request stops the run before the next (paid) model call.
+    throwIfCancelled(this.run.id);
+    if (this.run.providerUsage.totalCalls >= this.limit) {
+      throw new ModelBudgetError(this.limit);
+    }
+    this.run.providerUsage.totalCalls += 1;
+    this.run.providerUsage[this.name].calls += 1;
+  }
+
+  async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
+    this.tick();
+    return this.inner.generateText(input);
+  }
+
+  async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
+    this.tick();
+    return this.inner.generateJson(input);
+  }
+}

@@ -1,0 +1,98 @@
+import { timingSafeEqual } from "node:crypto";
+
+/**
+ * security/access.ts — network exposure + request authorization.
+ *
+ * Factory Deck is a single-user local app. By default the backend binds to
+ * loopback only, so nothing on the LAN can read run history or generated file
+ * contents. Exposing it to other devices is an explicit, token-gated opt-in:
+ *  - FACTORY_BIND_LAN=1 asks to bind 0.0.0.0, but is REFUSED unless
+ *    FACTORY_AUTH_TOKEN is also set (fail closed — never expose without a token).
+ *  - Every non-loopback /api request must then present a matching bearer token
+ *    (compared in constant time). Loopback requests are trusted as before.
+ *
+ * The helpers are pure so the policy can be unit-tested without a live socket.
+ */
+
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"]);
+
+/** True when the peer address is the local machine. */
+export function isLoopbackAddress(addr: string | undefined | null): boolean {
+  if (!addr) return false;
+  return LOOPBACK.has(addr) || addr.startsWith("127.");
+}
+
+/** Constant-time string comparison that never throws on length mismatch. */
+export function safeEqual(a: string, b: string): boolean {
+  const ba = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
+}
+
+/** Extract the token from an `Authorization: Bearer <token>` header. */
+export function bearerToken(authorization: string | undefined | null): string | null {
+  if (!authorization) return null;
+  const m = /^Bearer\s+(.+)$/i.exec(authorization.trim());
+  return m ? m[1].trim() : null;
+}
+
+export interface AccessDecision {
+  ok: boolean;
+  status: number;
+  reason?: string;
+}
+
+/**
+ * Authorize an /api request. Loopback is always allowed; any remote peer must
+ * present a bearer token equal to the server's configured token. If no token is
+ * configured, remote access is refused (it should not have been bound at all).
+ */
+export function authorizeApiRequest(opts: {
+  remoteAddress: string | undefined | null;
+  authorization: string | undefined | null;
+  token: string;
+}): AccessDecision {
+  if (isLoopbackAddress(opts.remoteAddress)) return { ok: true, status: 200 };
+  if (!opts.token) {
+    return {
+      ok: false,
+      status: 401,
+      reason: "Remote access is disabled (no FACTORY_AUTH_TOKEN configured).",
+    };
+  }
+  const provided = bearerToken(opts.authorization);
+  if (!provided || !safeEqual(provided, opts.token)) {
+    return { ok: false, status: 401, reason: "Invalid or missing bearer token." };
+  }
+  return { ok: true, status: 200 };
+}
+
+export interface BindDecision {
+  host: string;
+  lan: boolean;
+  error?: string;
+}
+
+/**
+ * Decide which interface to bind. Default: loopback. LAN is opt-in via
+ * `bindLan` AND requires a token; asking for LAN without a token is refused
+ * (returns an error and keeps the host on loopback — the caller must fail loud).
+ */
+export function resolveBindHost(opts: {
+  bindLan: boolean;
+  token: string;
+}): BindDecision {
+  if (!opts.bindLan) return { host: "127.0.0.1", lan: false };
+  if (!opts.token) {
+    return {
+      host: "127.0.0.1",
+      lan: true,
+      error:
+        "FACTORY_BIND_LAN is set but FACTORY_AUTH_TOKEN is empty — refusing to " +
+        "expose Factory Deck on the LAN without a bearer token. Set " +
+        "FACTORY_AUTH_TOKEN, or unset FACTORY_BIND_LAN to stay loopback-only.",
+    };
+  }
+  return { host: "0.0.0.0", lan: true };
+}

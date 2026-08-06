@@ -1,0 +1,368 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Toaster, toast } from "sonner";
+import {
+  Workflow,
+  ScrollText,
+  FolderGit2,
+  FolderOpen,
+  Copy,
+  Boxes,
+} from "lucide-react";
+import { AppShell } from "./components/layout/AppShell.js";
+import type { NavKey } from "./components/layout/Sidebar.js";
+import { NewRunHero } from "./components/factory/NewRunHero.js";
+import { AgentAssemblyLine } from "./components/factory/AgentAssemblyLine.js";
+import { StageTimeline } from "./components/factory/StageTimeline.js";
+import { RunControlBar } from "./components/factory/RunControlBar.js";
+import { LogsPanel } from "./components/logs/LogsPanel.js";
+import { FilesPanel } from "./components/files/FilesPanel.js";
+import { FinalReport } from "./components/reports/FinalReport.js";
+import { RunHistory } from "./components/history/RunHistory.js";
+import { SettingsPage } from "./components/settings/SettingsPage.js";
+import { Card, CardHeader } from "./components/ui/Card.js";
+import { Tabs } from "./components/ui/Tabs.js";
+import { Badge } from "./components/ui/Badge.js";
+import { EmptyState } from "./components/ui/EmptyState.js";
+import { routeTransition } from "./lib/motion.js";
+import { useClipboard } from "./lib/useClipboard.js";
+import { api, useHealth, useRunPolling } from "./lib/api.js";
+import { useTheme } from "./lib/useTheme.js";
+import type { RunOptions, RunSummary, FileContent } from "../shared/schemas.js";
+
+type View = NavKey | "run";
+
+export function App() {
+  const { theme, toggle } = useTheme();
+  const { health } = useHealth();
+
+  const [view, setView] = useState<View>("new");
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [runsLoading, setRunsLoading] = useState(true);
+  const [files, setFiles] = useState<FileContent[]>([]);
+
+  const { run } = useRunPolling(view === "run" ? activeRunId : null);
+  const lastStatus = useRef<string | null>(null);
+
+  const refreshRuns = useCallback(async () => {
+    try {
+      const { runs: list } = await api.listRuns();
+      setRuns(list);
+    } catch {
+      /* backend offline — keep what we have */
+    } finally {
+      setRunsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshRuns();
+  }, [refreshRuns]);
+
+  // Start a run (live or demo).
+  const startRun = useCallback(
+    async (idea: string, options: RunOptions) => {
+      setStarting(true);
+      try {
+        const { runId } = await api.createRun(idea, options);
+        setActiveRunId(runId);
+        setFiles([]);
+        setView("run");
+        lastStatus.current = "queued";
+        toast.success("Factory run started", {
+          description: options.demo ? "Demo mode — offline stub provider." : idea,
+        });
+        refreshRuns();
+      } catch (e) {
+        toast.error("Could not start run", {
+          description:
+            e instanceof Error ? e.message : "Is the backend running? (pnpm dev)",
+        });
+      } finally {
+        setStarting(false);
+      }
+    },
+    [refreshRuns],
+  );
+
+  const startDemo = useCallback(() => {
+    startRun("Build a Bible reading habit tracker", { demo: true });
+  }, [startRun]);
+
+  // Toast + refresh on terminal transitions; fetch file contents as they grow.
+  useEffect(() => {
+    if (!run) return;
+    if (run.status !== lastStatus.current) {
+      if (run.status === "completed") {
+        toast.success(`${run.appName ?? "App"} is ready`, {
+          description: `Completed in ${run.stages.length} stages · ${run.repairLoops} repair loop(s).`,
+        });
+        refreshRuns();
+      } else if (run.status === "failed") {
+        toast.error("Run failed", { description: run.error ?? undefined });
+        refreshRuns();
+      } else if (run.status === "cancelled") {
+        toast.warning("Run cancelled", {
+          description: "The factory stopped cleanly at the next checkpoint.",
+        });
+        refreshRuns();
+      }
+      lastStatus.current = run.status;
+    }
+  }, [run, refreshRuns]);
+
+  // Pull full file contents whenever the file count changes.
+  useEffect(() => {
+    if (!activeRunId || !run || run.files.length === 0) return;
+    let active = true;
+    api
+      .getFiles(activeRunId)
+      .then(({ files: f }) => active && setFiles(f))
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [activeRunId, run?.files.length, run]);
+
+  const openRun = useCallback((id: string) => {
+    setActiveRunId(id);
+    setFiles([]);
+    setView("run");
+    lastStatus.current = null;
+  }, []);
+
+  return (
+    <AppShell
+      active={view}
+      onNavigate={(k) => setView(k)}
+      onDemo={startDemo}
+      health={health}
+      theme={theme}
+      onToggleTheme={toggle}
+    >
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={view + (view === "run" ? activeRunId : "")}
+          variants={routeTransition}
+          initial="hidden"
+          animate="show"
+          exit="exit"
+        >
+          {view === "new" && (
+            <NewRunHero health={health} starting={starting} onStart={startRun} />
+          )}
+
+          {view === "history" && (
+            <RunHistory runs={runs} loading={runsLoading} onOpen={openRun} />
+          )}
+
+          {view === "workspaces" && (
+            <WorkspacesView runs={runs} loading={runsLoading} onOpen={openRun} />
+          )}
+
+          {view === "settings" && <SettingsPage health={health} />}
+
+          {view === "run" && run && (
+            <RunDetail run={run} files={files} onNewRun={() => setView("new")} />
+          )}
+
+          {view === "run" && !run && (
+            <div className="py-20 text-center text-sm text-slate-400">Loading run…</div>
+          )}
+        </motion.div>
+      </AnimatePresence>
+
+      <Toaster
+        theme="dark"
+        position="bottom-right"
+        toastOptions={{
+          style: {
+            background: "rgba(17,26,46,0.92)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            color: "#e6edf6",
+            backdropFilter: "blur(12px)",
+          },
+        }}
+      />
+    </AppShell>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Run detail                                                          */
+/* ------------------------------------------------------------------ */
+
+function RunDetail({
+  run,
+  files,
+  onNewRun,
+}: {
+  run: import("../shared/schemas.js").RunRecord;
+  files: FileContent[];
+  onNewRun: () => void;
+}) {
+  const [tab, setTab] = useState("logs");
+  const [cancelling, setCancelling] = useState(false);
+  const repairActive = run.stages.find((s) => s.id === "repair")?.status === "active";
+  const running = run.status === "running" || run.status === "queued";
+
+  const cancel = useCallback(async () => {
+    setCancelling(true);
+    try {
+      await api.cancelRun(run.id);
+      toast.message("Stopping run…", {
+        description: "The factory will halt at the next checkpoint.",
+      });
+    } catch (e) {
+      setCancelling(false);
+      toast.error("Could not cancel", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    }
+  }, [run.id]);
+
+  return (
+    <div className="space-y-5">
+      <RunControlBar
+        run={run}
+        onNewRun={onNewRun}
+        onCancel={cancel}
+        cancelling={cancelling}
+      />
+
+      <Card>
+        <CardHeader
+          title="Agent Assembly Line"
+          subtitle="Specialist agents hand work down the line"
+          icon={<Workflow className="h-4.5 w-4.5" />}
+        />
+        <AgentAssemblyLine stages={run.stages} repairActive={!!repairActive} />
+      </Card>
+
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+        <Card className="lg:col-span-1">
+          <CardHeader title="Stage Timeline" subtitle="Live progress" />
+          <StageTimeline
+            stages={run.stages}
+            loading={running && run.logs.length === 0}
+          />
+        </Card>
+
+        <div className="lg:col-span-2">
+          <Card className="p-0">
+            <div className="flex items-center justify-between border-b border-white/[0.06] p-4">
+              <Tabs
+                items={[
+                  {
+                    id: "logs",
+                    label: "Logs",
+                    icon: <ScrollText className="h-3.5 w-3.5" />,
+                  },
+                  {
+                    id: "files",
+                    label: "Files",
+                    icon: <FolderGit2 className="h-3.5 w-3.5" />,
+                    badge: run.files.length ? (
+                      <Badge tone="cyan" className="ml-1">
+                        {run.files.length}
+                      </Badge>
+                    ) : undefined,
+                  },
+                ]}
+                active={tab}
+                onChange={setTab}
+              />
+            </div>
+            <div className="p-4">
+              {tab === "logs" ? (
+                <LogsPanel logs={run.logs} running={running} />
+              ) : (
+                <FilesPanel
+                  files={run.files}
+                  fileContents={files}
+                  workspacePath={run.workspacePath}
+                  loading={running && run.files.length === 0}
+                />
+              )}
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      {run.finalReport && <FinalReport report={run.finalReport} onNewRun={onNewRun} />}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Workspaces view                                                     */
+/* ------------------------------------------------------------------ */
+
+function WorkspacesView({
+  runs,
+  loading,
+  onOpen,
+}: {
+  runs: RunSummary[];
+  loading: boolean;
+  onOpen: (id: string) => void;
+}) {
+  const { copy, copied } = useClipboard();
+  const withWorkspaces = runs.filter((r) => r.workspacePath);
+
+  return (
+    <div>
+      <div className="mb-5 flex items-center gap-2">
+        <h1 className="text-2xl font-semibold tracking-tight">Workspaces</h1>
+        <Badge tone="neutral">{withWorkspaces.length}</Badge>
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-slate-400">Loading…</div>
+      ) : withWorkspaces.length === 0 ? (
+        <EmptyState
+          icon={<Boxes className="h-6 w-6" />}
+          title="No workspaces yet"
+          description="Each run writes its generated app into an isolated folder under ./workspaces. Start a run to create one."
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {withWorkspaces.map((r) => (
+            <Card key={r.id} interactive onClick={() => onOpen(r.id)}>
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white/5 text-aurora-cyan">
+                  <FolderOpen className="h-4.5 w-4.5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-white">
+                    {r.appName ?? "Untitled app"}
+                  </p>
+                  <p className="truncate text-xs text-slate-400">{r.idea}</p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <code className="truncate rounded bg-black/30 px-2 py-1 font-mono text-[11px] text-slate-400">
+                      {r.workspacePath}
+                    </code>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        copy(r.workspacePath ?? "");
+                        toast.success("Workspace path copied");
+                      }}
+                      aria-label="Copy workspace path"
+                      className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+      {copied && <span className="sr-only">copied</span>}
+    </div>
+  );
+}
