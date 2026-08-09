@@ -62,17 +62,30 @@ export class AnthropicProvider implements LLMProvider {
 You MUST respond with a single valid JSON object matching the "${input.schemaName}" shape.
 Do not include markdown fences, comments, or any prose outside the JSON.`;
 
-    return withRetry("anthropic.generateJson", async () => {
+    const callOnce = async (prompt: string): Promise<unknown> => {
       const res = await client.messages.create({
         model: this.model,
         max_tokens: input.maxTokens ?? 8192,
         system,
-        messages: [{ role: "user", content: input.prompt }],
+        messages: [{ role: "user", content: prompt }],
       });
       const text = res.content
         .map((block) => (block.type === "text" ? block.text : ""))
         .join("");
-      return input.schema.parse(extractJson(text));
+      return extractJson(text);
+    };
+
+    return withRetry("anthropic.generateJson", async () => {
+      const raw = await callOnce(input.prompt);
+      const first = input.schema.safeParse(raw);
+      if (first.success) return first.data;
+      const repairPrompt = `${input.prompt}
+
+Your previous JSON failed schema validation for "${input.schemaName}".
+Issues (truncated): ${JSON.stringify(first.error.issues.slice(0, 12))}
+Return corrected JSON only.`;
+      const repaired = await callOnce(repairPrompt);
+      return input.schema.parse(repaired);
     });
   }
 }

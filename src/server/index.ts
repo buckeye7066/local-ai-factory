@@ -5,7 +5,10 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { getConfig, getSecrets, toHealth, isFactoryHealthPayload } from "./config.js";
 import { RunOptionsSchema, isValidRunId } from "../shared/schemas.js";
-import { startRun } from "./orchestrator/runFactory.js";
+import {
+  startRun,
+  MissingProviderCredentialError,
+} from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
 import { getRun, listRuns, getRunFiles, pruneOldRuns } from "./storage/runsStore.js";
 import {
@@ -118,7 +121,21 @@ app.post(
     }
 
     const options = { ...parsed.data, idempotencyKey };
-    const run = startRun({ idea, options, config, secrets });
+    let run;
+    try {
+      run = startRun({ idea, options, config, secrets });
+    } catch (err) {
+      if (err instanceof MissingProviderCredentialError) {
+        res.status(409).json({
+          error: err.message,
+          missing: err.missing,
+          blocked: true,
+          hint: "Set ANTHROPIC_API_KEY and/or OPENAI_API_KEY in .env, or pass options.demo=true for offline mock only.",
+        });
+        return;
+      }
+      throw err;
+    }
     if (idempotencyKey) {
       await rememberIdempotency(idempotencyKey, idea, run.id);
     }

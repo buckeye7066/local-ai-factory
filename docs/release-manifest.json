@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "program": "Factory Deck",
+  "repo": "buckeye7066/local-ai-factory",
+  "default_branch": "main",
+  "main_sha": "902559b5253efac6aca860cf87066678172a9667",
+  "worktree_sha": "902559b5253efac6aca860cf87066678172a9667",
+  "deployed_sha": null,
+  "launcher_sha": "6e60b706c9711f238e585ba485a6ac3c871753cf",
+  "generated_at": "2026-08-09T04:09:32Z",
+  "status": "BLOCKED",
+  "purpose_contract_version": "0.2",
+  "purpose_contract_path": "docs/purpose-contract.md",
+  "blockers": [
+    "functional review pending",
+    "security review pending",
+    "release review pending",
+    "launcher_sha mismatch launcher=6e60b706c9711f238e585ba485a6ac3c871753cf worktree=902559b5253efac6aca860cf87066678172a9667"
+  ],
+  "gates": {
+    "release_check": true,
+    "production_readiness_workflow": true,
+    "purpose_contract": true,
+    "typecheck": true,
+    "unit_tests": true,
+    "real_provider_proof": true
+  },
+  "reviews": {
+    "functional": "pending",
+    "security": "pending",
+    "release": "pending"
+  },
+  "proofs": {
+    "real_provider_journey": true,
+    "real_provider_detail": {
+      "runId": "242eaea8-4324-407e-a9c9-654d872b0545",
+      "codeProvider": "openai",
+      "reviewProvider": "openai",
+      "status": "completed",
+      "recorded_at": "2026-08-09T04:04:50Z"
+    },
+    "mock_e2e_as_production_ready": false,
+    "missing_credentials_observed": []
+  },
+  "mock_only_core": false,
+  "sha_match": true,
+  "notes": [
+    "status_downgraded_to_BLOCKED_due_to_unresolved_blockers"
+  ]
+}

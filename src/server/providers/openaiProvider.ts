@@ -57,14 +57,45 @@ export class OpenAIProvider implements LLMProvider {
 You MUST respond with a single valid JSON object matching the "${input.schemaName}" shape.
 Do not include markdown fences, comments, or any prose outside the JSON.`;
 
+    const callOnce = async (prompt: string): Promise<unknown> => {
+      // Prefer json_object when the Responses API accepts it; fall back plain.
+      try {
+        const res = await client.responses.create({
+          model: this.model,
+          instructions,
+          input: prompt,
+          max_output_tokens: input.maxTokens ?? 8192,
+          text: { format: { type: "json_object" } },
+        });
+        return extractJson(res.output_text ?? "");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/format|json_object|text\.format|unsupported/i.test(msg)) {
+          const res = await client.responses.create({
+            model: this.model,
+            instructions,
+            input: prompt,
+            max_output_tokens: input.maxTokens ?? 8192,
+          });
+          return extractJson(res.output_text ?? "");
+        }
+        throw err;
+      }
+    };
+
     return withRetry("openai.generateJson", async () => {
-      const res = await client.responses.create({
-        model: this.model,
-        instructions,
-        input: input.prompt,
-        max_output_tokens: input.maxTokens ?? 8192,
-      });
-      return input.schema.parse(extractJson(res.output_text ?? ""));
+      const raw = await callOnce(input.prompt);
+      const first = input.schema.safeParse(raw);
+      if (first.success) return first.data;
+
+      // One schema-repair pass — common for live models that invent nested shapes.
+      const repairPrompt = `${input.prompt}
+
+Your previous JSON failed schema validation for "${input.schemaName}".
+Issues (truncated): ${JSON.stringify(first.error.issues.slice(0, 12))}
+Return corrected JSON only.`;
+      const repaired = await callOnce(repairPrompt);
+      return input.schema.parse(repaired);
     });
   }
 }

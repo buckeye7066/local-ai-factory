@@ -107,12 +107,81 @@ export type ProviderUsage = z.infer<typeof ProviderUsageSchema>;
 /* Agent output schemas                                                */
 /* ------------------------------------------------------------------ */
 
-export const ProductSpecSchema = z.object({
-  appName: z.string(),
-  tagline: z.string().default(""),
-  targetUser: z.string(),
-  coreFeatures: z.array(z.string()).min(1),
-  dataModel: z
+/** Coerce LLM list items that arrive as objects into readable strings. */
+function coerceStringList(val: unknown): string[] {
+  if (!Array.isArray(val)) return [];
+  return val
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (item && typeof item === "object") {
+        const o = item as Record<string, unknown>;
+        const parts = [
+          o.name,
+          o.title,
+          o.feature,
+          o.flow,
+          o.label,
+          o.id,
+          o.criterion,
+          o.description,
+          o.summary,
+          o.detail,
+        ].filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+        if (parts.length) return [...new Set(parts)].join(" — ");
+        try {
+          return JSON.stringify(item);
+        } catch {
+          return String(item);
+        }
+      }
+      if (item == null) return "";
+      return String(item);
+    })
+    .filter((s) => s.length > 0);
+}
+
+/** Accept either [{entity,fields}] or {EntityName: fields|fieldMap}. */
+function coerceDataModel(
+  val: unknown,
+): { entity: string; fields: string[] }[] {
+  if (Array.isArray(val)) {
+    return val
+      .map((row) => {
+        if (!row || typeof row !== "object") return null;
+        const o = row as Record<string, unknown>;
+        const entity = String(o.entity ?? o.name ?? o.table ?? "").trim();
+        const rawFields = o.fields ?? o.columns ?? o.properties ?? [];
+        const fields = Array.isArray(rawFields)
+          ? coerceStringList(rawFields)
+          : rawFields && typeof rawFields === "object"
+            ? Object.keys(rawFields as object)
+            : [];
+        if (!entity) return null;
+        return { entity, fields };
+      })
+      .filter((x): x is { entity: string; fields: string[] } => x !== null);
+  }
+  if (val && typeof val === "object") {
+    return Object.entries(val as Record<string, unknown>).map(([entity, fields]) => ({
+      entity,
+      fields: Array.isArray(fields)
+        ? coerceStringList(fields)
+        : fields && typeof fields === "object"
+          ? Object.keys(fields as object)
+          : [String(fields)],
+    }));
+  }
+  return [];
+}
+
+const StringListSchema = z.preprocess(coerceStringList, z.array(z.string()));
+const NonEmptyStringListSchema = z.preprocess(
+  coerceStringList,
+  z.array(z.string()).min(1),
+);
+const DataModelSchema = z.preprocess(
+  coerceDataModel,
+  z
     .array(
       z.object({
         entity: z.string(),
@@ -120,32 +189,107 @@ export const ProductSpecSchema = z.object({
       }),
     )
     .default([]),
-  userFlows: z.array(z.string()).default([]),
-  acceptanceCriteria: z.array(z.string()).min(1),
+);
+
+/** Flatten object/array LLM blobs into a single readable string field. */
+function coerceToReadableString(val: unknown): string {
+  if (typeof val === "string") return val;
+  if (val == null) return "";
+  if (typeof val === "number" || typeof val === "boolean") return String(val);
+  if (Array.isArray(val)) return coerceStringList(val).join("; ");
+  if (typeof val === "object") {
+    const o = val as Record<string, unknown>;
+    const preferred = [o.summary, o.description, o.overview, o.text, o.detail, o.name]
+      .filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+    if (preferred.length) return preferred.join(" — ");
+    try {
+      return JSON.stringify(val);
+    } catch {
+      return String(val);
+    }
+  }
+  return String(val);
+}
+
+const ReadableStringSchema = z.preprocess(coerceToReadableString, z.string());
+
+export const ProductSpecSchema = z.object({
+  appName: z.string(),
+  tagline: z.string().default(""),
+  targetUser: z.string(),
+  coreFeatures: NonEmptyStringListSchema,
+  dataModel: DataModelSchema,
+  userFlows: StringListSchema.default([]),
+  acceptanceCriteria: NonEmptyStringListSchema,
 });
 export type ProductSpec = z.infer<typeof ProductSpecSchema>;
 
 export const ArchitectureSchema = z.object({
-  overview: z.string(),
-  frontend: z.string(),
-  backend: z.string(),
-  dataModel: z.string(),
-  risks: z.array(z.string()).default([]),
+  overview: ReadableStringSchema,
+  frontend: ReadableStringSchema,
+  backend: ReadableStringSchema,
+  dataModel: ReadableStringSchema,
+  risks: StringListSchema.default([]),
 });
 export type Architecture = z.infer<typeof ArchitectureSchema>;
 
-export const TaskPlanSchema = z.object({
-  tasks: z
-    .array(
-      z.object({
-        order: z.number(),
-        category: z.enum(["frontend", "backend", "database", "tests", "docs"]),
-        title: z.string(),
-        detail: z.string().default(""),
-      }),
-    )
-    .min(1),
-});
+const TaskCategorySchema = z.preprocess((val) => {
+  const s = String(val ?? "")
+    .toLowerCase()
+    .trim();
+  if (["frontend", "backend", "database", "tests", "docs"].includes(s)) return s;
+  if (s.includes("front") || s.includes("ui")) return "frontend";
+  if (s.includes("back") || s.includes("api") || s.includes("server")) return "backend";
+  if (s.includes("data") || s.includes("db") || s.includes("sql")) return "database";
+  if (s.includes("test")) return "tests";
+  return "docs";
+}, z.enum(["frontend", "backend", "database", "tests", "docs"]));
+
+function coerceTaskPlan(val: unknown): unknown {
+  if (Array.isArray(val)) return { tasks: val };
+  if (!val || typeof val !== "object") return val;
+  const o = val as Record<string, unknown>;
+  if (Array.isArray(o.tasks)) return o;
+  // Nested wrappers some models emit.
+  for (const nestKey of ["taskPlan", "result", "data", "output"]) {
+    const nested = o[nestKey];
+    if (nested && typeof nested === "object") {
+      const coerced = coerceTaskPlan(nested);
+      if (
+        coerced &&
+        typeof coerced === "object" &&
+        Array.isArray((coerced as { tasks?: unknown }).tasks)
+      ) {
+        return coerced;
+      }
+    }
+  }
+  for (const key of ["items", "plan", "steps", "taskList", "buildTasks", "todos", "todo"]) {
+    if (Array.isArray(o[key])) return { ...o, tasks: o[key] };
+  }
+  for (const v of Object.values(o)) {
+    if (Array.isArray(v) && v.length > 0 && typeof v[0] === "object") {
+      return { ...o, tasks: v };
+    }
+  }
+  return o;
+}
+
+export const TaskPlanSchema = z.preprocess(
+  coerceTaskPlan,
+  z.object({
+    tasks: z
+      .array(
+        z.object({
+          order: z.coerce.number().default(0),
+          category: TaskCategorySchema,
+          title: ReadableStringSchema,
+          detail: ReadableStringSchema.default(""),
+        }),
+      )
+      .min(1),
+  }),
+);
 export type TaskPlan = z.infer<typeof TaskPlanSchema>;
 
 export const FileBuildSchema = z.object({
@@ -211,13 +355,13 @@ export type RepairResult = z.infer<typeof RepairResultSchema>;
 
 export const FinalReportSchema = z.object({
   appName: z.string(),
-  summary: z.string(),
-  whatWasBuilt: z.array(z.string()).default([]),
-  howToRun: z.string(),
+  summary: ReadableStringSchema,
+  whatWasBuilt: StringListSchema.default([]),
+  howToRun: ReadableStringSchema,
   testStatus: z.enum(["passing", "failing", "skipped", "unknown"]),
-  repairLoops: z.number().default(0),
-  caveats: z.array(z.string()).default([]),
-  nextImprovements: z.array(z.string()).default([]),
+  repairLoops: z.coerce.number().default(0),
+  caveats: StringListSchema.default([]),
+  nextImprovements: StringListSchema.default([]),
   workspacePath: z.string(),
   providerUsage: ProviderUsageSchema,
 });

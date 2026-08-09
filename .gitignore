@@ -10,6 +10,8 @@ dist
 
 # Generated app workspaces (local only)
 workspaces/
+.test-workspaces*/
+.test-factory-data*/
 
 # Run history (local JSON store)
 .factory/

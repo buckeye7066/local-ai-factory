@@ -12,7 +12,12 @@ import type {
 } from "../../shared/schemas.js";
 import { freshStages } from "../../shared/schemas.js";
 import type { LLMProvider } from "../../shared/types.js";
-import { createProviderRegistry } from "../providers/index.js";
+import {
+  createProviderRegistry,
+  MissingProviderCredentialError,
+  OFFLINE_PROVIDERS,
+} from "../providers/index.js";
+export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 import { runCommand } from "../workspace/commandRunner.js";
@@ -60,25 +65,37 @@ export class RunTimeoutError extends Error {
   }
 }
 
-/** Offline providers that never consume paid credits. */
-const OFFLINE_PROVIDERS = new Set<ProviderName>(["mock", "stub"]);
-
-/** Create the initial queued record. Providers are resolved lazily at run time. */
+/** Create the initial queued record. Providers are resolved at queue time. */
 function createRecord(args: StartRunArgs): RunRecord {
   const { config, secrets, options } = args;
   const registry = createProviderRegistry(config, secrets);
-  const hasPaidKeys = registry.available().some((n) => !OFFLINE_PROVIDERS.has(n));
-  const demo = options.demo === true || !hasPaidKeys;
+  // Explicit demo only. Missing paid keys must NOT silently coerce to mock success.
+  const demo = options.demo === true;
+
+  if (!demo && registry.availablePaid().length === 0) {
+    throw new MissingProviderCredentialError(registry.missingCredentialNames());
+  }
+
+  // Reject live requests that explicitly ask for offline providers.
+  if (!demo) {
+    for (const name of [options.codeProvider, options.reviewProvider]) {
+      if (name && OFFLINE_PROVIDERS.has(name)) {
+        throw new MissingProviderCredentialError([
+          `live run cannot use offline provider "${name}" — omit provider or set demo:true`,
+        ]);
+      }
+    }
+  }
 
   const codeProvider: ProviderName = demo
     ? "mock"
-    : registry.resolve(
+    : registry.resolveLive(
         options.codeProvider ?? config.defaultCodeProvider,
         config.defaultCodeProvider,
       ).name;
   const reviewProvider: ProviderName = demo
     ? "mock"
-    : registry.resolve(
+    : registry.resolveLive(
         options.reviewProvider ?? config.defaultReviewProvider,
         config.defaultReviewProvider,
       ).name;
@@ -154,13 +171,13 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
   const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : null;
 
   // Resolve + meter providers (budget enforced inside CountingProvider).
-  // Demo / offline journeys always use the deterministic mock provider (#237/#242).
+  // Demo journeys use mock; live journeys use resolveLive (never mock/stub).
   const rawCode = run.demo
     ? registry.get("mock")
-    : registry.resolve(run.codeProvider, config.defaultCodeProvider);
+    : registry.resolveLive(run.codeProvider, config.defaultCodeProvider);
   const rawReview = run.demo
     ? registry.get("mock")
-    : registry.resolve(run.reviewProvider, config.defaultReviewProvider);
+    : registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);
   const code: LLMProvider = new CountingProvider(
     rawCode,
     run,

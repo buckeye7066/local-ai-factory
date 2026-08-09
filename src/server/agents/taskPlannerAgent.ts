@@ -14,9 +14,16 @@ export async function taskPlannerAgent(
 ): Promise<TaskPlan> {
   return deps.provider.generateJson<TaskPlan>({
     system: `${SYSTEM_PREAMBLE}\nYou are the TASK PLANNER agent.`,
-    prompt: `Given this spec and architecture, produce an ordered list of concrete build tasks. Separate them by category (frontend, backend, database, tests, docs).\n\nSPEC:\n${JSON.stringify(
-      spec,
-    )}\n\nARCHITECTURE:\n${JSON.stringify(arch)}`,
+    prompt: `Given this spec and architecture, produce an ordered list of concrete build tasks.
+
+Return JSON shaped exactly as:
+{ "tasks": [ { "order": 1, "category": "frontend"|"backend"|"database"|"tests"|"docs", "title": string, "detail": string } ] }
+
+SPEC:
+${JSON.stringify(spec)}
+
+ARCHITECTURE:
+${JSON.stringify(arch)}`,
     schema: TaskPlanSchema,
     schemaName: "TaskPlan",
     temperature: 0.2,

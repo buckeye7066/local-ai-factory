@@ -1,0 +1,91 @@
+name: production-readiness
+
+on:
+  push:
+    branches: [main, "release-gate/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production-readiness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-check:
+    name: release:check
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Required controls present
+        shell: pwsh
+        run: |
+          $required = @(
+            "docs/purpose-contract.md",
+            "docs/release-manifest.schema.json",
+            ".github/workflows/production-readiness.yml",
+            "scripts/release-check.mjs",
+            "scripts/generate-release-manifest.mjs",
+            "package.json"
+          )
+          foreach ($p in $required) {
+            if (-not (Test-Path $p)) { throw "missing required control: $p" }
+          }
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          if (-not $pkg.scripts.'release:check') { throw "package.json missing release:check script" }
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests (release gate suite)
+        run: pnpm test:release-gates
+
+      - name: Generate honest release manifest
+        shell: pwsh
+        run: |
+          node scripts/generate-release-manifest.mjs --status "BLOCKED" --typecheck --unit-tests
+          if ($LASTEXITCODE -ne 0) { throw "manifest generator failed" }
+
+      - name: release:check
+        shell: pwsh
+        run: |
+          $env:FACTORY_REQUIRE_MANIFEST = "1"
+          node scripts/release-check.mjs
+          if ($LASTEXITCODE -ne 0) { throw "release:check failed" }
+
+      - name: Fail closed on Production Ready / mock-only core
+        shell: pwsh
+        run: |
+          $m = Get-Content docs/release-manifest.json -Raw | ConvertFrom-Json
+          if ($m.status -eq "PRODUCTION READY") {
+            throw "CI must not greenwash PRODUCTION READY; independent reviewers certify outside implementer lane"
+          }
+          if ($m.mock_only_core -eq $true -and $m.status -in @("RELEASE CANDIDATE", "PRODUCTION READY")) {
+            throw "mock_only_core cannot accompany ready status"
+          }
+          if ($m.proofs.mock_e2e_as_production_ready -eq $true) {
+            throw "mock e2e must never be recorded as production ready proof"
+          }
+
+      - name: Upload release manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: docs/release-manifest.json
