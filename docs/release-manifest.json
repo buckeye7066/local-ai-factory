@@ -3,15 +3,19 @@
   "program": "Factory Deck",
   "repo": "buckeye7066/local-ai-factory",
   "default_branch": "main",
-  "main_sha": "cec9757e8faedee153002f34eb5ca5b570d5fe06",
-  "worktree_sha": "cec9757e8faedee153002f34eb5ca5b570d5fe06",
+  "main_sha": "6f919e2e04066f7d1acb09800426e802e4c1dc01",
+  "worktree_sha": "6f919e2e04066f7d1acb09800426e802e4c1dc01",
   "deployed_sha": null,
-  "launcher_sha": "cec9757e8faedee153002f34eb5ca5b570d5fe06",
-  "generated_at": "2026-08-09T14:17:30Z",
-  "status": "RELEASE CANDIDATE",
+  "launcher_sha": null,
+  "generated_at": "2026-08-09T17:07:03Z",
+  "status": "BLOCKED",
   "purpose_contract_version": "0.2",
   "purpose_contract_path": "docs/purpose-contract.md",
-  "blockers": [],
+  "blockers": [
+    "functional review pending",
+    "security review pending",
+    "release review pending"
+  ],
   "gates": {
     "release_check": true,
     "production_readiness_workflow": true,
@@ -21,9 +25,9 @@
     "real_provider_proof": true
   },
   "reviews": {
-    "functional": "pass",
-    "security": "pass",
-    "release": "pass"
+    "functional": "pending",
+    "security": "pending",
+    "release": "pending"
   },
   "proofs": {
     "real_provider_journey": true,
