@@ -16,8 +16,8 @@ workspaces/
 # Run history (local JSON store)
 .factory/
 
-# Logs & temp
-logs
+# Logs & temp (root runtime log dir only — do not ignore src/**/logs UI)
+/logs/
 *.log
 .DS_Store
 Thumbs.db
