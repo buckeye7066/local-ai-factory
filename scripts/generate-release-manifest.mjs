@@ -95,9 +95,33 @@ if (headRes.code !== 0) {
 }
 const head = headRes.out;
 const mainRes = git("rev-parse", "origin/main");
-let mainSha = mainRes.code === 0 && mainRes.out ? mainRes.out : head;
+const originMain = mainRes.code === 0 && mainRes.out ? mainRes.out : head;
+let mainSha = originMain;
 const expectMain = argValue("--expect-main-sha", "").trim();
-if (expectMain) mainSha = expectMain;
+if (expectMain) {
+  // Never allow a ready-status identity to be caller-controlled away from origin/main.
+  if (
+    (statusArg === "RELEASE CANDIDATE" || statusArg === "PRODUCTION READY") &&
+    expectMain !== originMain &&
+    !originMain.startsWith(expectMain.slice(0, 12))
+  ) {
+    console.log(
+      JSON.stringify(
+        {
+          error: "expect_main_sha_forbidden_for_ready_status",
+          detail:
+            "Ready manifests must certify origin/main; do not pass a divergent --expect-main-sha.",
+          origin_main: originMain,
+          expect_main_sha: expectMain,
+        },
+        null,
+        2,
+      ),
+    );
+    process.exit(1);
+  }
+  mainSha = expectMain;
+}
 
 const shaMatch = Boolean(
   head && mainSha && (head === mainSha || head.startsWith(mainSha.slice(0, 12))),
