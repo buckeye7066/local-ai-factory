@@ -1,13 +1,16 @@
 import { getConfig, getSecrets } from "../server/config.js";
-import { startRun } from "../server/orchestrator/runFactory.js";
+import {
+  startRun,
+  MissingProviderCredentialError,
+} from "../server/orchestrator/runFactory.js";
 import { getRun } from "../server/storage/runsStore.js";
 import type { RunOptions } from "../shared/schemas.js";
 
 /**
  * cli/factory.ts — run the assembly line from the terminal.
  *
- *   pnpm factory "build me a habit tracker"
- *   pnpm demo                      (forces the offline stub provider)
+ *   pnpm factory "build me a habit tracker"   (live — requires paid keys)
+ *   pnpm demo                                 (explicit offline mock; not readiness)
  */
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -56,7 +59,19 @@ async function main() {
   console.log(`${COLORS.dim}  idea: ${idea}${COLORS.reset}\n`);
 
   const options: RunOptions = { demo };
-  const started = startRun({ idea, options, config, secrets });
+  let started;
+  try {
+    started = startRun({ idea, options, config, secrets });
+  } catch (err) {
+    if (err instanceof MissingProviderCredentialError) {
+      console.error(`${COLORS.red}✘ ${err.message}${COLORS.reset}`);
+      console.error(
+        `${COLORS.dim}  Pass --demo for offline mock only (not purpose fulfillment).${COLORS.reset}`,
+      );
+      process.exit(1);
+    }
+    throw err;
+  }
 
   // Poll the in-memory record and stream new log lines as they appear.
   let printed = 0;

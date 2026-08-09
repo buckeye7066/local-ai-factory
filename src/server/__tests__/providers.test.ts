@@ -8,10 +8,15 @@ import { ProductSpecSchema } from "../../shared/schemas.js";
 const cfg = loadConfig({});
 
 describe("provider registry selection", () => {
-  it("falls back to mock when no paid keys are configured", () => {
+  it("soft resolve may fall back to mock (demo diagnostics only)", () => {
     const reg = createProviderRegistry(cfg, loadSecrets({}));
     expect(reg.available().sort()).toEqual(["mock", "stub"]);
     expect(reg.resolve("anthropic", "anthropic").name).toBe("mock");
+  });
+
+  it("resolveLive fails closed when no paid keys are configured", () => {
+    const reg = createProviderRegistry(cfg, loadSecrets({}));
+    expect(() => reg.resolveLive("anthropic", "anthropic")).toThrow(/ANTHROPIC_API_KEY/);
   });
 
   it("resolves to the requested provider when its key exists", () => {

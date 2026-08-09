@@ -1,0 +1,32 @@
+{
+  "ok": true,
+  "demo": false,
+  "blocked": false,
+  "status": "completed",
+  "runId": "242eaea8-4324-407e-a9c9-654d872b0545",
+  "codeProvider": "openai",
+  "reviewProvider": "openai",
+  "appName": "Sticky Count",
+  "workspacePath": "workspaces/sticky-count-242eaea8",
+  "repairLoops": 0,
+  "providerUsage": {
+    "anthropic": {
+      "calls": 0
+    },
+    "openai": {
+      "calls": 7
+    },
+    "stub": {
+      "calls": 0
+    },
+    "mock": {
+      "calls": 0
+    },
+    "totalCalls": 7
+  },
+  "error": null,
+  "recorded_at": "2026-08-09T04:04:50Z",
+  "notes": [
+    "Live journey completed with OpenAI for code+review (ANTHROPIC_API_KEY present but Anthropic credit balance too low for default dual-provider path)."
+  ]
+}

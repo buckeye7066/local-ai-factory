@@ -8,7 +8,18 @@ export async function productSpecAgent(
 ): Promise<ProductSpec> {
   return deps.provider.generateJson<ProductSpec>({
     system: `${SYSTEM_PREAMBLE}\nYou are the PRODUCT SPEC agent.`,
-    prompt: `Produce a product spec for this app idea:\n\n"${idea}"\n\nInclude appName, a short tagline, targetUser, coreFeatures, a small dataModel (entities + fields), userFlows, and acceptanceCriteria.`,
+    prompt: `Produce a product spec for this app idea:
+
+"${idea}"
+
+Return JSON with:
+- appName (string)
+- tagline (string)
+- targetUser (string)
+- coreFeatures (array of plain strings — NOT objects)
+- dataModel (array of { "entity": string, "fields": string[] } — NOT a keyed object)
+- userFlows (array of plain strings)
+- acceptanceCriteria (array of plain strings)`,
     schema: ProductSpecSchema,
     schemaName: "ProductSpec",
     temperature: 0.3,
