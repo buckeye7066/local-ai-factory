@@ -14,6 +14,28 @@ const PURPOSE = resolve(ROOT, "docs/purpose-contract.md");
 const WORKFLOW = resolve(ROOT, ".github/workflows/production-readiness.yml");
 const SCHEMA = resolve(ROOT, "docs/release-manifest.schema.json");
 const REAL_PROOF = resolve(ROOT, "docs/evidence/real-provider-proof.json");
+const ENV_PATH = resolve(ROOT, ".env");
+
+/** Load .env into process.env without printing values (credential presence only). */
+function loadDotEnvQuiet() {
+  if (!existsSync(ENV_PATH)) return;
+  for (const raw of readFileSync(ENV_PATH, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (process.env[key] === undefined) process.env[key] = val;
+  }
+}
+loadDotEnvQuiet();
 
 function git(...args) {
   const env = {
@@ -124,9 +146,7 @@ if (!realProviderProof) {
     blockers.push(
       `missing credential(s) for live factory journey: ${missingCreds.join(", ")}`,
     );
-  } else if (missingCreds.length === 1 && !process.env.ANTHROPIC_API_KEY?.trim() && !process.env.OPENAI_API_KEY?.trim()) {
-    blockers.push(`missing credential(s) for live factory journey: ${missingCreds.join(", ")}`);
-  } else if (!realProviderProof) {
+  } else {
     blockers.push(
       "real-provider journey proof missing (docs/evidence/real-provider-proof.json); mock-only evidence does not fulfill purpose",
     );

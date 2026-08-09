@@ -84,8 +84,14 @@ if (!existsSync(MANIFEST_PATH)) {
   }
 
   if (mainSha && head && head !== mainSha && !head.startsWith(mainSha.slice(0, 12))) {
-    errors.push(`sha_mismatch:head=${head}:manifest=${mainSha}`);
     shaMatch = false;
+    // Feature / release-gate branches legitimately diverge from main tip.
+    // Only ready statuses require exact default-branch identity.
+    if (status === "RELEASE CANDIDATE" || status === "PRODUCTION READY") {
+      errors.push(`sha_mismatch:head=${head}:manifest=${mainSha}`);
+    } else {
+      notes.push(`sha_mismatch_allowed_for_${String(status).replace(/\s+/g, "_").toLowerCase()}:head=${head}:manifest=${mainSha}`);
+    }
   }
 
   if (!shaMatch && (status === "RELEASE CANDIDATE" || status === "PRODUCTION READY")) {
