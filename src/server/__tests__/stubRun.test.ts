@@ -36,7 +36,9 @@ describe("stub demo run (end-to-end, offline)", () => {
     // Demo run used only the stub — no real provider calls counted.
     expect(run.providerUsage.anthropic.calls).toBe(0);
     expect(run.providerUsage.openai.calls).toBe(0);
-    expect(run.providerUsage.stub.calls).toBeGreaterThan(0);
+    // Demo now uses mock; stub remains for back-compat only.
+    expect(run.providerUsage.mock.calls).toBeGreaterThan(0);
+    expect(run.codeProvider).toBe("mock");
   });
 
   it("does not execute commands under dry-run", async () => {

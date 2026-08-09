@@ -7,8 +7,8 @@ import type { Health } from "../../../shared/schemas.js";
 
 /**
  * ProviderRoutingCards — three routing cards describing how work flows across
- * providers. Selecting the Stub card switches the run into offline demo mode;
- * selecting a live card switches back (only if a key is configured).
+ * providers. Selecting the Mock card switches the run into offline demo mode
+ * (zero paid credits); selecting a live card switches back when a key exists.
  */
 export function ProviderRoutingCards({
   health,
@@ -44,9 +44,9 @@ export function ProviderRoutingCards({
       onClick: () => openaiReady && onToggleDemo(false),
     },
     {
-      key: "stub",
-      title: "Stub Demo",
-      role: "Offline showcase",
+      key: "mock",
+      title: "Mock Demo",
+      role: "Zero-credit offline",
       icon: FlaskConical,
       ready: true,
       live: demo,
@@ -64,7 +64,7 @@ export function ProviderRoutingCards({
     >
       {cards.map((c) => {
         const Icon = c.icon;
-        const selected = c.key === "stub" ? demo : !demo;
+        const selected = c.key === "mock" ? demo : !demo;
         const disabled = !c.ready;
         return (
           <motion.button
@@ -103,7 +103,7 @@ export function ProviderRoutingCards({
             <p className="mt-3 text-sm font-semibold text-white">{c.title}</p>
             <p className="text-xs text-slate-400">{c.role}</p>
             <div className="mt-2.5">
-              {c.key === "stub" ? (
+              {c.key === "mock" ? (
                 <Badge tone="emerald">Always available</Badge>
               ) : c.ready ? (
                 <Badge tone="emerald" icon={<Check className="h-3 w-3" />}>

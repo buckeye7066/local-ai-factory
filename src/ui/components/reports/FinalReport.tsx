@@ -177,8 +177,11 @@ export function FinalReport({
   const isPassing = report.testStatus === "passing";
 
   const usage = report.providerUsage;
-  // Demo runs powered entirely by the stub provider made zero real API calls.
-  const isDemo = usage.totalCalls === 0 && usage.stub.calls > 0;
+  // Demo runs powered by mock (or legacy stub) made zero paid API calls.
+  const isDemo =
+    usage.anthropic.calls === 0 &&
+    usage.openai.calls === 0 &&
+    (usage.mock.calls > 0 || usage.stub.calls > 0);
 
   const summaryText = useMemo(() => buildSummaryText(report), [report]);
 
@@ -311,15 +314,16 @@ export function FinalReport({
               icon={<Cpu className="h-4 w-4" />}
               action={
                 isDemo ? (
-                  <Badge tone="neutral">Demo (stub) — no API calls</Badge>
+                  <Badge tone="neutral">Demo (mock) — no paid API calls</Badge>
                 ) : (
                   <Badge tone="cyan">{usage.totalCalls} total calls</Badge>
                 )
               }
             />
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
               <UsageRow label="Claude / Anthropic" value={usage.anthropic.calls} />
               <UsageRow label="OpenAI" value={usage.openai.calls} />
+              <UsageRow label="Mock" value={usage.mock.calls} />
               <UsageRow label="Stub" value={usage.stub.calls} />
             </div>
           </Card>

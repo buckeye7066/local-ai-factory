@@ -36,16 +36,18 @@ function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
       anthropic: { calls: 0 },
       openai: { calls: 0 },
       stub: { calls: 0 },
+      mock: { calls: 0 },
       totalCalls: 0,
     },
     finalReport: null,
     appName: null,
     workspacePath: null,
     error: null,
+    attribution: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     ...overrides,
-  };
+  } as RunRecord;
 }
 
 async function freshStore() {

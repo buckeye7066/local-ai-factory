@@ -42,5 +42,7 @@ describe("config", () => {
     // Only booleans are exposed.
     expect(health.anthropicConfigured).toBe(true);
     expect(health.openaiConfigured).toBe(true);
+    expect(health.controlPlaneOk).toBe(true);
+    expect(health.mockConfigured).toBe(true);
   });
 });

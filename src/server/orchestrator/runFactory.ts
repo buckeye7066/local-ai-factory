@@ -18,7 +18,16 @@ import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import { saveRun, putRunInMemory, saveRunFiles } from "../storage/runsStore.js";
-import { makeLog, startStage, finishStage, nowMs, CountingProvider } from "./stages.js";
+import { appendAuditEvent } from "../storage/auditLog.js";
+import { buildAttribution, writeAttribution } from "../storage/attribution.js";
+import {
+  makeLog,
+  startStage,
+  finishStage,
+  nowMs,
+  CountingProvider,
+  ModelBudgetError,
+} from "./stages.js";
 import { redactSecrets, redactDeep } from "../security/redact.js";
 import {
   RunCancelledError,
@@ -43,21 +52,32 @@ export interface StartRunArgs {
   secrets: AppSecrets;
 }
 
+/** Raised when the overall run wall-clock timeout fires. */
+export class RunTimeoutError extends Error {
+  constructor(limitMs: number) {
+    super(`Run timed out after ${limitMs}ms (FACTORY_RUN_TIMEOUT_MS).`);
+    this.name = "RunTimeoutError";
+  }
+}
+
+/** Offline providers that never consume paid credits. */
+const OFFLINE_PROVIDERS = new Set<ProviderName>(["mock", "stub"]);
+
 /** Create the initial queued record. Providers are resolved lazily at run time. */
 function createRecord(args: StartRunArgs): RunRecord {
   const { config, secrets, options } = args;
   const registry = createProviderRegistry(config, secrets);
-  const hasKeys = registry.available().some((n) => n !== "stub");
-  const demo = options.demo === true || !hasKeys;
+  const hasPaidKeys = registry.available().some((n) => !OFFLINE_PROVIDERS.has(n));
+  const demo = options.demo === true || !hasPaidKeys;
 
   const codeProvider: ProviderName = demo
-    ? "stub"
+    ? "mock"
     : registry.resolve(
         options.codeProvider ?? config.defaultCodeProvider,
         config.defaultCodeProvider,
       ).name;
   const reviewProvider: ProviderName = demo
-    ? "stub"
+    ? "mock"
     : registry.resolve(
         options.reviewProvider ?? config.defaultReviewProvider,
         config.defaultReviewProvider,
@@ -82,12 +102,14 @@ function createRecord(args: StartRunArgs): RunRecord {
       anthropic: { calls: 0 },
       openai: { calls: 0 },
       stub: { calls: 0 },
+      mock: { calls: 0 },
       totalCalls: 0,
     },
     finalReport: null,
     appName: null,
     workspacePath: null,
     error: null,
+    attribution: null,
     createdAt: nowMs(),
     updatedAt: nowMs(),
   };
@@ -114,6 +136,12 @@ function controller(run: RunRecord) {
   return { touch, flush, log };
 }
 
+function throwIfTimedOut(deadline: number | null, limitMs: number): void {
+  if (deadline !== null && Date.now() > deadline) {
+    throw new RunTimeoutError(limitMs);
+  }
+}
+
 /**
  * Execute the full assembly line. Mutates `run` in place and persists at every
  * stage boundary so the UI can poll live progress.
@@ -122,13 +150,16 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
   const { config, secrets } = args;
   const { flush, log } = controller(run);
   const registry = createProviderRegistry(config, secrets);
+  const timeoutMs = args.options.timeoutMs ?? config.runTimeoutMs;
+  const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : null;
 
   // Resolve + meter providers (budget enforced inside CountingProvider).
+  // Demo / offline journeys always use the deterministic mock provider (#237/#242).
   const rawCode = run.demo
-    ? registry.get("stub")
+    ? registry.get("mock")
     : registry.resolve(run.codeProvider, config.defaultCodeProvider);
   const rawReview = run.demo
-    ? registry.get("stub")
+    ? registry.get("mock")
     : registry.resolve(run.reviewProvider, config.defaultReviewProvider);
   const code: LLMProvider = new CountingProvider(
     rawCode,
@@ -152,9 +183,11 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     // A cancel during a stage must stop further file writes, not only at stage
     // boundaries — check before touching the workspace.
     throwIfCancelled(run.id);
+    throwIfTimedOut(deadline, timeoutMs);
     for (const f of incoming) {
       // Re-check per file so a cancel mid-loop stops the REMAINING writes.
       throwIfCancelled(run.id);
+      throwIfTimedOut(deadline, timeoutMs);
       const res = await writeWorkspaceFile(workspacePath, f.path, f.contents);
       // And again after the awaited write, before we record/log/persist it.
       throwIfCancelled(run.id);
@@ -177,20 +210,50 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     saveRunFiles(run.id, [...files.values()]);
   };
 
+  const persistAttribution = async (
+    testResult: "passing" | "failing" | "skipped" | "unknown" | "not_run",
+    auditSeq: number | null,
+  ) => {
+    const attr = buildAttribution(run, {
+      dryRunCommands: config.dryRunCommands,
+      allowUntrustedScripts: config.allowUntrustedScripts,
+      testResult,
+      auditSeq,
+    });
+    const path = await writeAttribution(attr);
+    run.attribution = attr;
+    log("info", `Attribution written: ${path}`);
+    await appendAuditEvent({
+      type: "attribution.written",
+      runId: run.id,
+      detail: path,
+      meta: { testResult },
+    });
+  };
+
   try {
     run.status = "running";
-    log("info", `Factory run started in ${run.demo ? "demo (stub)" : "live"} mode.`);
+    await appendAuditEvent({ type: "run.started", runId: run.id });
+    log(
+      "info",
+      `Factory run started in ${run.demo ? "demo (mock)" : "live"} mode.`,
+    );
     if (run.demo)
-      log("warning", "Demo mode: no API keys used; output is the offline stub app.");
+      log(
+        "warning",
+        "Demo mode: zero paid credits; output is the offline mock provider.",
+      );
     await flush();
 
     /* Stage 1 — Intake */
+    throwIfTimedOut(deadline, timeoutMs);
     startStage(run, "intake");
     log("info", `Intake: "${run.idea}"`);
     finishStage(run, "intake", "completed");
     await flush();
 
     /* Stage 2 — Product Spec */
+    throwIfTimedOut(deadline, timeoutMs);
     startStage(run, "product_spec");
     log("model_call", `Product Spec agent (${code.name})…`);
     // Give the model the RAW idea (args.idea), not the redacted persisted copy.
@@ -206,6 +269,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     await flush();
 
     /* Stage 3 — Architect */
+    throwIfTimedOut(deadline, timeoutMs);
     startStage(run, "architect");
     log("model_call", `Architect agent (${code.name})…`);
     const arch = await architectAgent({ provider: code }, spec);
@@ -217,6 +281,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     await flush();
 
     /* Stage 4 — Task Planner */
+    throwIfTimedOut(deadline, timeoutMs);
     startStage(run, "task_planner");
     log("model_call", `Task Planner agent (${code.name})…`);
     const plan = await taskPlannerAgent({ provider: code }, spec, arch);
@@ -225,9 +290,15 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     await flush();
 
     /* Stage 5 + 6 — Builder (generate + write files) */
+    throwIfTimedOut(deadline, timeoutMs);
     startStage(run, "builder");
     const workspace = await createWorkspace(config.workspaceRoot, spec.appName, run.id);
     run.workspacePath = workspace.path;
+    await appendAuditEvent({
+      type: "workspace.created",
+      runId: run.id,
+      detail: workspace.path,
+    });
     log("info", `Workspace: ${workspace.path}`);
     log("model_call", `File Builder agent (${code.name})…`);
     const build = await fileBuilderAgent({ provider: code }, spec, arch, plan);
@@ -237,6 +308,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     await flush();
 
     /* Stage 7 — Test Writer (+ optional install/test commands) */
+    throwIfTimedOut(deadline, timeoutMs);
     startStage(run, "test_writer");
     log("model_call", `Test Writer agent (${review.name})…`);
     const testPlan = await testWriterAgent({ provider: review }, spec, build);
@@ -262,6 +334,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     ]) {
       // Don't start a new child process once cancellation has been requested.
       throwIfCancelled(run.id);
+      throwIfTimedOut(deadline, timeoutMs);
       const res = await runCommand(
         { bin: cmd.bin, args: cmd.args, cwd: workspace.path },
         {
@@ -292,6 +365,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     await flush();
 
     /* Stage 8 — QA Critic */
+    throwIfTimedOut(deadline, timeoutMs);
     startStage(run, "qa_critic");
     log("model_call", `QA Critic agent (${review.name})…`);
     let qa: QaReport = await qaCriticAgent(
@@ -304,6 +378,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     await flush();
 
     /* Stage 9 — Repair Loop (bounded) */
+    throwIfTimedOut(deadline, timeoutMs);
     startStage(run, "repair");
     const maxLoops = args.options.maxRepairLoops ?? config.maxRepairLoops;
     if (qa.passed) {
@@ -316,6 +391,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
         onLoop: (n) =>
           log("warning", `Repair loop ${n}/${maxLoops} — patching files…`, "repair"),
         repair: async (report) => {
+          throwIfTimedOut(deadline, timeoutMs);
           const liveBuild: FileBuild = {
             files: [...files.values()].map((f) => ({
               path: f.path,
@@ -334,6 +410,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
           log("info", fix.notes || "Applied repairs.", "repair");
         },
         reverify: async () => {
+          throwIfTimedOut(deadline, timeoutMs);
           const liveBuild: FileBuild = {
             files: [...files.values()].map((f) => ({
               path: f.path,
@@ -364,6 +441,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     await flush();
 
     /* Stage — Final Review */
+    throwIfTimedOut(deadline, timeoutMs);
     startStage(run, "final_review");
     const testStatus = testsExecuted
       ? testExit === 0
@@ -383,12 +461,15 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     // lost — there is no later stage boundary to catch it before we mark the run
     // completed. Check here, before the terminal durable mutation.
     throwIfCancelled(run.id);
+    throwIfTimedOut(deadline, timeoutMs);
     // Redact secret-shaped content in every string field before persisting +
     // serving the report (a provider caveat/summary could echo a key).
     run.finalReport = redactDeep(report);
     finishStage(run, "final_review", "completed");
 
     run.status = "completed";
+    const doneEv = await appendAuditEvent({ type: "run.completed", runId: run.id });
+    await persistAttribution(testStatus, doneEv.seq);
     log("success", `Run complete — ${spec.appName} is ready at ${workspace.path}.`);
     await flush();
   } catch (err) {
@@ -397,6 +478,30 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
       run.error = null;
       if (run.currentStage) finishStage(run, run.currentStage, "skipped");
       log("warning", "Run cancelled by user — stopping cleanly.");
+      const ev = await appendAuditEvent({ type: "run.cancelled", runId: run.id });
+      await persistAttribution("not_run", ev.seq).catch(() => {});
+    } else if (err instanceof RunTimeoutError) {
+      run.status = "failed";
+      run.error = err.message;
+      if (run.currentStage) finishStage(run, run.currentStage, "failed");
+      log("error", `Run failed: ${run.error}`);
+      const ev = await appendAuditEvent({
+        type: "run.timeout",
+        runId: run.id,
+        detail: err.message,
+      });
+      await persistAttribution("unknown", ev.seq).catch(() => {});
+    } else if (err instanceof ModelBudgetError) {
+      run.status = "failed";
+      run.error = err.message;
+      if (run.currentStage) finishStage(run, run.currentStage, "failed");
+      log("error", `Run failed: ${run.error}`);
+      const ev = await appendAuditEvent({
+        type: "run.budget_exhausted",
+        runId: run.id,
+        detail: err.message,
+      });
+      await persistAttribution("unknown", ev.seq).catch(() => {});
     } else {
       run.status = "failed";
       // The raw error may embed a provider/library message containing a
@@ -404,6 +509,12 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
       run.error = redactSecrets(err instanceof Error ? err.message : "Unknown error");
       if (run.currentStage) finishStage(run, run.currentStage, "failed");
       log("error", `Run failed: ${run.error}`);
+      const ev = await appendAuditEvent({
+        type: "run.failed",
+        runId: run.id,
+        detail: run.error,
+      });
+      await persistAttribution("unknown", ev.seq).catch(() => {});
     }
     await flush();
   } finally {
@@ -415,6 +526,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
 export function startRun(args: StartRunArgs): RunRecord {
   const run = createRecord(args);
   putRunInMemory(run);
+  void appendAuditEvent({ type: "run.queued", runId: run.id });
   void saveRun(run).then(() => executeRun(run, args));
   return run;
 }
@@ -422,6 +534,7 @@ export function startRun(args: StartRunArgs): RunRecord {
 /** Await the full run (used by the CLI). */
 export async function runFactory(args: StartRunArgs): Promise<RunRecord> {
   const run = createRecord(args);
+  await appendAuditEvent({ type: "run.queued", runId: run.id });
   await saveRun(run);
   await executeRun(run, args);
   return run;

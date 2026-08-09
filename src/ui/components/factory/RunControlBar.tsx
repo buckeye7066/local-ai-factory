@@ -19,6 +19,7 @@ const PROVIDER_LABEL: Record<ProviderName, string> = {
   anthropic: "Claude",
   openai: "OpenAI",
   stub: "Stub",
+  mock: "Mock",
 };
 
 /** RunControlBar — sticky header for an in-progress or finished run. */

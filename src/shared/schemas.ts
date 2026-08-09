@@ -98,6 +98,7 @@ export const ProviderUsageSchema = z.object({
   anthropic: z.object({ calls: z.number() }).default({ calls: 0 }),
   openai: z.object({ calls: z.number() }).default({ calls: 0 }),
   stub: z.object({ calls: z.number() }).default({ calls: 0 }),
+  mock: z.object({ calls: z.number() }).default({ calls: 0 }),
   totalCalls: z.number().default(0),
 });
 export type ProviderUsage = z.infer<typeof ProviderUsageSchema>;
@@ -226,7 +227,7 @@ export type FinalReport = z.infer<typeof FinalReportSchema>;
 /* Run options + run record (the object the UI polls)                  */
 /* ------------------------------------------------------------------ */
 
-export const ProviderNameSchema = z.enum(["anthropic", "openai", "stub"]);
+export const ProviderNameSchema = z.enum(["anthropic", "openai", "stub", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 export const RunOptionsSchema = z.object({
@@ -234,8 +235,32 @@ export const RunOptionsSchema = z.object({
   reviewProvider: ProviderNameSchema.optional(),
   demo: z.boolean().optional(),
   maxRepairLoops: z.number().optional(),
+  /** Client-supplied idempotency key (also accepted via Idempotency-Key header). */
+  idempotencyKey: z.string().min(1).max(200).optional(),
+  /** Optional overall run timeout in ms (overrides FACTORY_RUN_TIMEOUT_MS). */
+  timeoutMs: z.number().int().positive().max(3_600_000).optional(),
 });
 export type RunOptions = z.infer<typeof RunOptionsSchema>;
+
+/** Per-job attribution so every generated change is traceable (acceptance #244). */
+export const RunAttributionSchema = z.object({
+  jobId: z.string().uuid(),
+  worktreePath: z.string().nullable().default(null),
+  approval: z.object({
+    dryRunCommands: z.boolean(),
+    allowUntrustedScripts: z.boolean(),
+  }),
+  testResult: z
+    .enum(["passing", "failing", "skipped", "unknown", "not_run"])
+    .nullable()
+    .default(null),
+  /** Path to the durable attribution manifest under .factory/attribution/. */
+  commitPath: z.string().nullable().default(null),
+  /** How to roll back: delete this worktree (jailed under WORKSPACE_ROOT). */
+  rollbackPath: z.string().nullable().default(null),
+  auditSeq: z.number().nullable().default(null),
+});
+export type RunAttribution = z.infer<typeof RunAttributionSchema>;
 
 export const RunStatusSchema = z.enum([
   "queued",
@@ -278,6 +303,8 @@ export const RunRecordSchema = z.object({
   appName: z.string().nullable().default(null),
   workspacePath: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
+  /** Populated as the run progresses; full attribution written at completion. */
+  attribution: RunAttributionSchema.nullable().default(null),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
@@ -305,16 +332,24 @@ export type RunSummary = z.infer<typeof RunSummarySchema>;
 
 export const HealthSchema = z.object({
   ok: z.literal(true),
+  /** Always true when this process answers — independent of paid providers (#237). */
+  controlPlaneOk: z.boolean(),
+  service: z.literal("factory-deck").optional(),
+  /** Deterministic offline provider is always available. */
+  mockConfigured: z.boolean(),
   anthropicConfigured: z.boolean(),
   openaiConfigured: z.boolean(),
+  providersAvailable: z.array(ProviderNameSchema),
   anthropicModel: z.string(),
   openaiModel: z.string(),
   defaultCodeProvider: ProviderNameSchema,
   defaultReviewProvider: ProviderNameSchema,
   maxRepairLoops: z.number(),
   maxModelCallsPerRun: z.number(),
+  runTimeoutMs: z.number(),
   workspaceRoot: z.string(),
   dryRunCommands: z.boolean(),
+  allowUntrustedScripts: z.boolean().optional(),
 });
 export type Health = z.infer<typeof HealthSchema>;
 

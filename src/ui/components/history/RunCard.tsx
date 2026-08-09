@@ -14,6 +14,7 @@ const PROVIDER_LABELS: Record<RunSummary["codeProvider"], string> = {
   anthropic: "Claude",
   openai: "OpenAI",
   stub: "Stub",
+  mock: "Mock",
 };
 
 /**

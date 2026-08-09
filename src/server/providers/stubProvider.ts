@@ -17,9 +17,17 @@ import type {
  * issue on its first call and passes on the second, so the orchestrator's
  * repair loop runs exactly once — giving the UI a real assembly-line story.
  */
+/**
+ * Offline deterministic provider used for zero-credit journeys.
+ * `stub` remains for back-compat; prefer `mock` (see MockProvider) for new runs.
+ */
 export class StubProvider implements LLMProvider {
-  readonly name = "stub" as const;
+  readonly name: "stub" | "mock";
   private qaCalls = 0;
+
+  constructor(name: "stub" | "mock" = "stub") {
+    this.name = name;
+  }
 
   isConfigured(): boolean {
     return true;
@@ -27,8 +35,8 @@ export class StubProvider implements LLMProvider {
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     return {
-      text: `// stub response for: ${input.prompt.slice(0, 60)}`,
-      provider: "stub",
+      text: `// ${this.name} response for: ${input.prompt.slice(0, 60)}`,
+      provider: this.name,
     };
   }
 
@@ -189,7 +197,7 @@ export class StubProvider implements LLMProvider {
           repairLoops: 1,
           caveats: [
             "Data is stored per-browser in localStorage (no cloud sync).",
-            "Generated in demo mode with the offline stub provider.",
+            "Generated in demo mode with the offline mock provider (zero paid credits).",
           ],
           nextImprovements: [
             "Add reading-plan presets (e.g., one-year Bible plan)",
