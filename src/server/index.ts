@@ -8,6 +8,12 @@ import { RunOptionsSchema, isValidRunId } from "../shared/schemas.js";
 import { startRun } from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
 import { getRun, listRuns, getRunFiles, pruneOldRuns } from "./storage/runsStore.js";
+import {
+  lookupIdempotency,
+  rememberIdempotency,
+  isIdempotencyConflict,
+} from "./storage/idempotency.js";
+import { appendAuditEvent } from "./storage/auditLog.js";
 import { authorizeApiRequest, resolveBindHost } from "./security/access.js";
 
 /**
@@ -71,22 +77,54 @@ function wrap(
   };
 }
 
-app.post("/api/runs", (req, res) => {
-  const idea = typeof req.body?.idea === "string" ? req.body.idea.trim() : "";
-  if (!idea) {
-    res.status(400).json({ error: "Field 'idea' is required." });
-    return;
-  }
-  const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
-  if (!parsed.success) {
-    res.status(400).json({
-      error: `Invalid options: ${parsed.error.issues[0]?.message ?? "bad shape"}`,
-    });
-    return;
-  }
-  const run = startRun({ idea, options: parsed.data, config, secrets });
-  res.status(201).json({ runId: run.id });
-});
+app.post(
+  "/api/runs",
+  wrap(async (req, res) => {
+    const idea = typeof req.body?.idea === "string" ? req.body.idea.trim() : "";
+    if (!idea) {
+      res.status(400).json({ error: "Field 'idea' is required." });
+      return;
+    }
+    const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
+    if (!parsed.success) {
+      res.status(400).json({
+        error: `Invalid options: ${parsed.error.issues[0]?.message ?? "bad shape"}`,
+      });
+      return;
+    }
+    const headerKey =
+      typeof req.headers["idempotency-key"] === "string"
+        ? req.headers["idempotency-key"].trim()
+        : "";
+    const idempotencyKey = parsed.data.idempotencyKey?.trim() || headerKey || undefined;
+
+    if (idempotencyKey) {
+      if (await isIdempotencyConflict(idempotencyKey, idea)) {
+        res.status(409).json({
+          error: "Idempotency-Key was already used with a different idea.",
+        });
+        return;
+      }
+      const existing = await lookupIdempotency(idempotencyKey, idea);
+      if (existing) {
+        await appendAuditEvent({
+          type: "idempotency.hit",
+          runId: existing.runId,
+          detail: idempotencyKey,
+        });
+        res.status(200).json({ runId: existing.runId, idempotent: true });
+        return;
+      }
+    }
+
+    const options = { ...parsed.data, idempotencyKey };
+    const run = startRun({ idea, options, config, secrets });
+    if (idempotencyKey) {
+      await rememberIdempotency(idempotencyKey, idea, run.id);
+    }
+    res.status(201).json({ runId: run.id });
+  }),
+);
 
 app.get(
   "/api/runs",

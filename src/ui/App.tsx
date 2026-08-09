@@ -72,7 +72,7 @@ export function App() {
         setView("run");
         lastStatus.current = "queued";
         toast.success("Factory run started", {
-          description: options.demo ? "Demo mode — offline stub provider." : idea,
+          description: options.demo ? "Demo mode — offline mock provider." : idea,
         });
         refreshRuns();
       } catch (e) {

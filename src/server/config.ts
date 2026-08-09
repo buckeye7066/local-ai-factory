@@ -30,7 +30,10 @@ function bool(value: string | undefined, fallback: boolean): boolean {
 }
 
 function provider(value: string | undefined, fallback: ProviderName): ProviderName {
-  return value === "anthropic" || value === "openai" || value === "stub"
+  return value === "anthropic" ||
+    value === "openai" ||
+    value === "stub" ||
+    value === "mock"
     ? value
     : fallback;
 }
@@ -45,6 +48,8 @@ export interface AppConfig {
   defaultReviewProvider: ProviderName;
   maxRepairLoops: number;
   maxModelCallsPerRun: number;
+  /** Overall run wall-clock timeout in ms (0 = disabled). */
+  runTimeoutMs: number;
   workspaceRoot: string;
   dryRunCommands: boolean;
   /**
@@ -76,6 +81,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     defaultReviewProvider: provider(env.DEFAULT_REVIEW_PROVIDER, "openai"),
     maxRepairLoops: num(env.MAX_REPAIR_LOOPS, 3),
     maxModelCallsPerRun: num(env.MAX_MODEL_CALLS_PER_RUN, 30),
+    // Default 10 minutes; 0 disables. Mock/offline journeys finish far sooner.
+    runTimeoutMs: num(env.FACTORY_RUN_TIMEOUT_MS, 600_000),
     // Always resolved under the project root; the workspace writer enforces this too.
     workspaceRoot: resolve(process.cwd(), env.WORKSPACE_ROOT || "./workspaces"),
     dryRunCommands: bool(env.DRY_RUN_COMMANDS, true),
@@ -107,19 +114,29 @@ export function isOpenAiConfigured(secrets: AppSecrets): boolean {
  * and to log. Notice there is no field that could carry an API key.
  */
 export function toHealth(config: AppConfig, secrets: AppSecrets) {
+  const anthropicConfigured = isAnthropicConfigured(secrets);
+  const openaiConfigured = isOpenAiConfigured(secrets);
+  const providersAvailable: ProviderName[] = ["mock", "stub"];
+  if (anthropicConfigured) providersAvailable.push("anthropic");
+  if (openaiConfigured) providersAvailable.push("openai");
   return {
     ok: true as const,
+    // Control-plane health is independent of paid provider availability (#237).
+    controlPlaneOk: true as const,
     // Marker lets a launcher confirm THIS is Factory Deck before treating an
     // occupied port as "already running" (vs. some unrelated service).
     service: FACTORY_SERVICE_ID,
-    anthropicConfigured: isAnthropicConfigured(secrets),
-    openaiConfigured: isOpenAiConfigured(secrets),
+    mockConfigured: true as const,
+    anthropicConfigured,
+    openaiConfigured,
+    providersAvailable,
     anthropicModel: config.anthropicModel,
     openaiModel: config.openaiModel,
     defaultCodeProvider: config.defaultCodeProvider,
     defaultReviewProvider: config.defaultReviewProvider,
     maxRepairLoops: config.maxRepairLoops,
     maxModelCallsPerRun: config.maxModelCallsPerRun,
+    runTimeoutMs: config.runTimeoutMs,
     workspaceRoot: config.workspaceRoot,
     dryRunCommands: config.dryRunCommands,
     allowUntrustedScripts: config.allowUntrustedScripts,

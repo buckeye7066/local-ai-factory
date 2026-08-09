@@ -30,6 +30,7 @@ const PROVIDER_LABEL: Record<ProviderName, string> = {
   anthropic: "Claude",
   openai: "OpenAI",
   stub: "Stub",
+  mock: "Mock",
 };
 
 /** Placeholder shown when the backend is unreachable (health is null). */

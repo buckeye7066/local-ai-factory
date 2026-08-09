@@ -44,6 +44,7 @@ vi.mock("../agents/finalReviewerAgent.js", () => ({
       anthropic: { calls: 0 },
       openai: { calls: 0 },
       stub: { calls: 0 },
+      mock: { calls: 0 },
       totalCalls: 0,
     },
   }),

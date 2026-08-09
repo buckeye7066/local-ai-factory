@@ -122,7 +122,7 @@ export function NewRunHero({
           )}
           {hasAnyKey && demo && (
             <Helper tone="violet" icon={<FlaskConical className="h-3.5 w-3.5" />}>
-              Demo mode selected — this run uses the offline stub provider (no API
+              Demo mode selected — this run uses the offline mock provider (no API
               calls).
             </Helper>
           )}
