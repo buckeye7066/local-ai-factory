@@ -10,10 +10,20 @@ import {
 } from "../orchestrator/runFactory.js";
 
 const cfg = loadConfig({});
+/**
+ * The only genuinely provider-less deck: free route OFF and no paid key.
+ *
+ * These tests originally treated "no paid key" as "no live provider". That is
+ * no longer true — the free route is a live provider — so the fail-closed
+ * cases below switch the free route off explicitly. The guarantee they protect
+ * is unchanged and is the important one: a live run must NEVER silently
+ * complete on mock/stub.
+ */
+const noLiveCfg = loadConfig({ FACTORY_FREE_ENABLED: "0" } as NodeJS.ProcessEnv);
 
 describe("live path forbids silent mock fallback", () => {
-  it("resolveLive throws with exact missing credential names when no paid keys", () => {
-    const reg = createProviderRegistry(cfg, loadSecrets({}));
+  it("resolveLive throws with exact missing credential names when nothing is live", () => {
+    const reg = createProviderRegistry(noLiveCfg, loadSecrets({}));
     expect(() => reg.resolveLive("anthropic", "anthropic")).toThrow(
       MissingProviderCredentialError,
     );
@@ -30,7 +40,7 @@ describe("live path forbids silent mock fallback", () => {
 
   it("resolveLive never returns mock/stub when a paid key exists", () => {
     const reg = createProviderRegistry(
-      cfg,
+      noLiveCfg,
       loadSecrets({ OPENAI_API_KEY: "sk-test-openai" }),
     );
     const p = reg.resolveLive("anthropic", "openai");
@@ -39,23 +49,31 @@ describe("live path forbids silent mock fallback", () => {
     expect(p.name).not.toBe("stub");
   });
 
-  it("runFactory live without keys fails closed (no completed mock job)", async () => {
+  it("resolveLive never returns mock/stub on the FREE route either", () => {
+    const reg = createProviderRegistry(cfg, loadSecrets({}));
+    const p = reg.resolveLive(undefined, "free");
+    expect(p.name).toBe("free");
+    expect(p.name).not.toBe("mock");
+    expect(p.name).not.toBe("stub");
+  });
+
+  it("runFactory live with NO live provider fails closed (no completed mock job)", async () => {
     await expect(
       runFactory({
         idea: "Build a chore tracker",
         options: { demo: false },
-        config: cfg,
+        config: noLiveCfg,
         secrets: loadSecrets({}),
       }),
     ).rejects.toBeInstanceOf(RunMissingCred);
   });
 
-  it("runFactory default (no demo flag) without keys fails closed", async () => {
+  it("runFactory default (no demo flag) with NO live provider fails closed", async () => {
     await expect(
       runFactory({
         idea: "Build a chore tracker",
         options: {},
-        config: cfg,
+        config: noLiveCfg,
         secrets: loadSecrets({}),
       }),
     ).rejects.toBeInstanceOf(RunMissingCred);

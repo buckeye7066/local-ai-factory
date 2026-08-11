@@ -1,14 +1,18 @@
 import { motion } from "framer-motion";
-import { Sparkles, Cpu, FlaskConical, Check, AlertTriangle } from "lucide-react";
+import { Sparkles, Cpu, FlaskConical, Check, AlertTriangle, Gift } from "lucide-react";
 import { cn } from "../../lib/cn.js";
 import { Badge } from "../ui/Badge.js";
 import { staggerContainer, staggerItem } from "../../lib/motion.js";
 import type { Health } from "../../../shared/schemas.js";
 
 /**
- * ProviderRoutingCards — three routing cards describing how work flows across
- * providers. Selecting the Mock card switches the run into offline demo mode
- * (zero paid credits); selecting a live card switches back when a key exists.
+ * ProviderRoutingCards — how work actually flows across providers.
+ *
+ * The FREE local route is the primary and is shown first; Claude and OpenAI
+ * are labelled as what they now are, a rescue tier that only runs when the
+ * free route is proven wedged. The card for whoever is serving right now
+ * carries a live marker, so the routing shown here can never disagree with
+ * what the deck is doing.
  */
 export function ProviderRoutingCards({
   health,
@@ -19,38 +23,59 @@ export function ProviderRoutingCards({
   demo: boolean;
   onToggleDemo: (demo: boolean) => void;
 }) {
+  const freeReady = health?.freeConfigured ?? false;
   const anthropicReady = health?.anthropicConfigured ?? false;
   const openaiReady = health?.openaiConfigured ?? false;
+  const serving = health?.route?.serving ?? null;
+  const counts = health?.route?.counts;
 
   const cards = [
     {
+      key: "free",
+      title: "Free (Ollama / FCC)",
+      role: "Primary — zero cost",
+      icon: Gift,
+      ready: freeReady,
+      live: !demo,
+      accent: "emerald" as const,
+      serving: serving === "free",
+      calls: counts?.free,
+      onClick: () => freeReady && onToggleDemo(false),
+    },
+    {
       key: "code",
       title: "Claude",
-      role: "Planning & code",
+      role: "Paid rescue only",
       icon: Sparkles,
       ready: anthropicReady,
       live: !demo,
       accent: "violet" as const,
+      serving: serving === "anthropic",
+      calls: counts?.anthropic,
       onClick: () => anthropicReady && onToggleDemo(false),
     },
     {
       key: "review",
       title: "OpenAI",
-      role: "Review & testing",
+      role: "Paid rescue only",
       icon: Cpu,
       ready: openaiReady,
       live: !demo,
       accent: "cyan" as const,
+      serving: serving === "openai",
+      calls: counts?.openai,
       onClick: () => openaiReady && onToggleDemo(false),
     },
     {
       key: "mock",
       title: "Mock Demo",
-      role: "Zero-credit offline",
+      role: "Offline, deterministic",
       icon: FlaskConical,
       ready: true,
       live: demo,
       accent: "emerald" as const,
+      serving: false,
+      calls: undefined,
       onClick: () => onToggleDemo(true),
     },
   ];
@@ -60,7 +85,7 @@ export function ProviderRoutingCards({
       variants={staggerContainer}
       initial="hidden"
       animate="show"
-      className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+      className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
     >
       {cards.map((c) => {
         const Icon = c.icon;
@@ -102,16 +127,32 @@ export function ProviderRoutingCards({
             </div>
             <p className="mt-3 text-sm font-semibold text-white">{c.title}</p>
             <p className="text-xs text-slate-400">{c.role}</p>
-            <div className="mt-2.5">
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
               {c.key === "mock" ? (
                 <Badge tone="emerald">Always available</Badge>
+              ) : c.key === "free" ? (
+                c.ready ? (
+                  <Badge tone="emerald" icon={<Check className="h-3 w-3" />}>
+                    Free route ready
+                  </Badge>
+                ) : (
+                  <Badge tone="amber" icon={<AlertTriangle className="h-3 w-3" />}>
+                    Free route off
+                  </Badge>
+                )
               ) : c.ready ? (
                 <Badge tone="emerald" icon={<Check className="h-3 w-3" />}>
-                  Key configured
+                  Rescue key set
                 </Badge>
               ) : (
-                <Badge tone="amber" icon={<AlertTriangle className="h-3 w-3" />}>
-                  Key missing
+                <Badge tone="neutral" icon={<AlertTriangle className="h-3 w-3" />}>
+                  No rescue key
+                </Badge>
+              )}
+              {c.serving && <Badge tone="cyan">serving now</Badge>}
+              {typeof c.calls === "number" && c.calls > 0 && (
+                <Badge tone={c.key === "free" ? "emerald" : "amber"}>
+                  {c.calls} call{c.calls === 1 ? "" : "s"}
                 </Badge>
               )}
             </div>

@@ -8,7 +8,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getConfig, getSecrets, isAnthropicConfigured, isOpenAiConfigured } from "../server/config.js";
+import {
+  getConfig,
+  getSecrets,
+  isAnthropicConfigured,
+  isOpenAiConfigured,
+} from "../server/config.js";
 import {
   runFactory,
   MissingProviderCredentialError,
@@ -45,62 +50,65 @@ async function main() {
     process.exit(1);
   }
 
-const ideaParts: string[] = [];
-let codeProvider: "anthropic" | "openai" | undefined;
-let reviewProvider: "anthropic" | "openai" | undefined;
-for (const a of process.argv.slice(2)) {
-  if (a.startsWith("--code-provider=")) {
-    const v = a.slice("--code-provider=".length);
-    if (v === "anthropic" || v === "openai") codeProvider = v;
-  } else if (a.startsWith("--review-provider=")) {
-    const v = a.slice("--review-provider=".length);
-    if (v === "anthropic" || v === "openai") reviewProvider = v;
-  } else if (!a.startsWith("--")) {
-    ideaParts.push(a);
+  const ideaParts: string[] = [];
+  let codeProvider: "anthropic" | "openai" | undefined;
+  let reviewProvider: "anthropic" | "openai" | undefined;
+  for (const a of process.argv.slice(2)) {
+    if (a.startsWith("--code-provider=")) {
+      const v = a.slice("--code-provider=".length);
+      if (v === "anthropic" || v === "openai") codeProvider = v;
+    } else if (a.startsWith("--review-provider=")) {
+      const v = a.slice("--review-provider=".length);
+      if (v === "anthropic" || v === "openai") reviewProvider = v;
+    } else if (!a.startsWith("--")) {
+      ideaParts.push(a);
+    }
   }
-}
-const idea = ideaParts.join(" ").trim() || "Build a tiny sticky-note counter app";
+  const idea = ideaParts.join(" ").trim() || "Build a tiny sticky-note counter app";
 
-// Env overrides for CI/scripts (read after dotenv via getConfig already ran).
-if (!codeProvider) {
-  const v = process.env.FACTORY_PROOF_CODE_PROVIDER?.trim();
-  if (v === "anthropic" || v === "openai") codeProvider = v;
-}
-if (!reviewProvider) {
-  const v = process.env.FACTORY_PROOF_REVIEW_PROVIDER?.trim();
-  if (v === "anthropic" || v === "openai") reviewProvider = v;
-}
+  // Env overrides for CI/scripts (read after dotenv via getConfig already ran).
+  if (!codeProvider) {
+    const v = process.env.FACTORY_PROOF_CODE_PROVIDER?.trim();
+    if (v === "anthropic" || v === "openai") codeProvider = v;
+  }
+  if (!reviewProvider) {
+    const v = process.env.FACTORY_PROOF_REVIEW_PROVIDER?.trim();
+    if (v === "anthropic" || v === "openai") reviewProvider = v;
+  }
 
-console.log("Factory Deck — real-provider proof (demo=false)");
-console.log(`  idea: ${idea}`);
-console.log(
-  `  credentials: anthropic=${isAnthropicConfigured(secrets)} openai=${isOpenAiConfigured(secrets)}`,
-);
-if (codeProvider) console.log(`  codeProvider: ${codeProvider}`);
-if (reviewProvider) console.log(`  reviewProvider: ${reviewProvider}`);
+  console.log("Factory Deck — real-provider proof (demo=false)");
+  console.log(`  idea: ${idea}`);
+  console.log(
+    `  credentials: anthropic=${isAnthropicConfigured(secrets)} openai=${isOpenAiConfigured(secrets)}`,
+  );
+  if (codeProvider) console.log(`  codeProvider: ${codeProvider}`);
+  if (reviewProvider) console.log(`  reviewProvider: ${reviewProvider}`);
 
-try {
-  const run = await runFactory({
-    idea,
-    options: {
-      demo: false,
-      codeProvider,
-      reviewProvider,
-      // Prefer configured defaults; leave provider selection to resolveLive.
-      timeoutMs: Number(process.env.FACTORY_PROOF_TIMEOUT_MS || 900_000),
-    },
-    config: {
-      ...config,
-      // Keep commands dry-run for proof safety unless explicitly opted in.
-      dryRunCommands: process.env.FACTORY_PROOF_ALLOW_COMMANDS === "1" ? false : true,
-    },
-    secrets,
-  });
+  try {
+    const run = await runFactory({
+      idea,
+      options: {
+        demo: false,
+        codeProvider,
+        reviewProvider,
+        // Prefer configured defaults; leave provider selection to resolveLive.
+        timeoutMs: Number(process.env.FACTORY_PROOF_TIMEOUT_MS || 900_000),
+      },
+      config: {
+        ...config,
+        // Keep commands dry-run for proof safety unless explicitly opted in.
+        dryRunCommands: process.env.FACTORY_PROOF_ALLOW_COMMANDS === "1" ? false : true,
+      },
+      secrets,
+    });
 
     if (run.demo) {
       throw new Error("Refusing to record proof: run.demo unexpectedly true");
     }
-    if (OFFLINE_PROVIDERS.has(run.codeProvider) || OFFLINE_PROVIDERS.has(run.reviewProvider)) {
+    if (
+      OFFLINE_PROVIDERS.has(run.codeProvider) ||
+      OFFLINE_PROVIDERS.has(run.reviewProvider)
+    ) {
       throw new Error(
         `Refusing to record proof: offline provider used (code=${run.codeProvider}, review=${run.reviewProvider})`,
       );

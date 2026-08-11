@@ -37,6 +37,7 @@ function makeRun(id: string): RunRecord {
     files: [],
     repairLoops: 0,
     providerUsage: {
+      free: { calls: 0 },
       anthropic: { calls: 0 },
       openai: { calls: 0 },
       stub: { calls: 0 },

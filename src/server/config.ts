@@ -30,7 +30,8 @@ function bool(value: string | undefined, fallback: boolean): boolean {
 }
 
 function provider(value: string | undefined, fallback: ProviderName): ProviderName {
-  return value === "anthropic" ||
+  return value === "free" ||
+    value === "anthropic" ||
     value === "openai" ||
     value === "stub" ||
     value === "mock"
@@ -38,10 +39,36 @@ function provider(value: string | undefined, fallback: ProviderName): ProviderNa
     : fallback;
 }
 
+/**
+ * The FREE local route — the FCC proxy that "Claude Code - FREE (Ollama)"
+ * turns on. This is the DEFAULT primary for every live run; Anthropic and
+ * OpenAI exist only as a rescue tier for when it is genuinely wedged.
+ */
+export interface FreeRouteSettings {
+  enabled: boolean;
+  baseUrl: string;
+  model: string;
+  /** Only used for out-of-band liveness evidence, never for model calls. */
+  ollamaUrl: string;
+  /** Mirrors the proxy's PROVIDER_MAX_CONCURRENCY; drives queue patience. */
+  maxConcurrency: number;
+  /** How long to skip the free route after a PROVEN stall. */
+  holdMs: number;
+  /** Free attempts for ordinary (non-stall) failures before rescuing. */
+  attempts: number;
+  /** Spacing between free attempts; matches the proxy's rate window. */
+  retrySpacingMs: number;
+  /** Cap on patient retries when the backend reports backpressure. */
+  maxBackpressureRetries: number;
+  /** Restart fcc-server when the proxy is found dead. */
+  autoRestart: boolean;
+}
+
 /** Stable signature identifying a Factory Deck backend on /api/health. */
 export const FACTORY_SERVICE_ID = "factory-deck" as const;
 
 export interface AppConfig {
+  free: FreeRouteSettings;
   anthropicModel: string;
   openaiModel: string;
   defaultCodeProvider: ProviderName;
@@ -66,6 +93,12 @@ export interface AppConfig {
 }
 
 export interface AppSecrets {
+  /**
+   * Bearer token the local FCC proxy expects. Not a paid credential — it
+   * gates a loopback service — but it is handled like one so it can never be
+   * logged or served.
+   */
+  freeAuthToken: string;
   anthropicApiKey: string;
   openaiApiKey: string;
   /** Bearer token required for any non-loopback API access. "" = none set. */
@@ -75,14 +108,37 @@ export interface AppSecrets {
 /** Build the typed config from process.env (pure — easy to test). */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
+    free: {
+      enabled: bool(env.FACTORY_FREE_ENABLED, true),
+      baseUrl: env.FACTORY_FREE_BASE_URL || "http://127.0.0.1:8082",
+      // A Claude-shaped id the proxy maps onto its free backend. "sonnet" lands
+      // on the proxy's MODEL_SONNET tier (glm-5.2 here) rather than the much
+      // weaker haiku tier — verified live 2026-08-11.
+      model: env.FACTORY_FREE_MODEL || "claude-sonnet-4-5",
+      ollamaUrl: env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
+      maxConcurrency: num(env.FACTORY_FREE_MAX_CONCURRENCY, 2),
+      holdMs: num(env.FACTORY_FREE_HOLD_MS, 300_000),
+      attempts: num(env.FACTORY_FREE_ATTEMPTS, 3),
+      retrySpacingMs: num(env.FACTORY_FREE_RETRY_SPACING_MS, 6_000),
+      maxBackpressureRetries: num(env.FACTORY_FREE_BACKPRESSURE_RETRIES, 20),
+      autoRestart: bool(env.FACTORY_FREE_AUTORESTART, true),
+    },
     anthropicModel: env.ANTHROPIC_MODEL || "claude-opus-4-8",
     openaiModel: env.OPENAI_MODEL || "gpt-5.5",
-    defaultCodeProvider: provider(env.DEFAULT_CODE_PROVIDER, "anthropic"),
-    defaultReviewProvider: provider(env.DEFAULT_REVIEW_PROVIDER, "openai"),
+    // FREE-PRIMARY. The paid providers are a rescue tier, never the default —
+    // a config that defaults to paid is the exact failure this deck guards
+    // against.
+    defaultCodeProvider: provider(env.DEFAULT_CODE_PROVIDER, "free"),
+    defaultReviewProvider: provider(env.DEFAULT_REVIEW_PROVIDER, "free"),
     maxRepairLoops: num(env.MAX_REPAIR_LOOPS, 3),
     maxModelCallsPerRun: num(env.MAX_MODEL_CALLS_PER_RUN, 30),
-    // Default 10 minutes; 0 disables. Mock/offline journeys finish far sooner.
-    runTimeoutMs: num(env.FACTORY_RUN_TIMEOUT_MS, 600_000),
+    // Sized for the FREE route, which is the default primary. A single free
+    // call measured 128-302s here (cold start + queue), and a run makes up to
+    // MAX_MODEL_CALLS_PER_RUN of them, so the old 10-minute default would have
+    // killed almost every free run mid-assembly — and the "fix" for that would
+    // have been to go back to paid. 0 disables. Mock/offline journeys finish in
+    // seconds regardless.
+    runTimeoutMs: num(env.FACTORY_RUN_TIMEOUT_MS, 14_400_000),
     // Always resolved under the project root; the workspace writer enforces this too.
     workspaceRoot: resolve(process.cwd(), env.WORKSPACE_ROOT || "./workspaces"),
     dryRunCommands: bool(env.DRY_RUN_COMMANDS, true),
@@ -95,6 +151,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 /** Secrets are kept apart so they are never accidentally spread into logs. */
 export function loadSecrets(env: NodeJS.ProcessEnv = process.env): AppSecrets {
   return {
+    freeAuthToken:
+      env.FACTORY_FREE_AUTH_TOKEN?.trim() ||
+      env.ANTHROPIC_AUTH_TOKEN?.trim() ||
+      "freecc",
     anthropicApiKey: env.ANTHROPIC_API_KEY?.trim() || "",
     openaiApiKey: env.OPENAI_API_KEY?.trim() || "",
     authToken: env.FACTORY_AUTH_TOKEN?.trim() || "",
@@ -113,13 +173,23 @@ export function isOpenAiConfigured(secrets: AppSecrets): boolean {
  * Public, secret-free view of configuration. Safe to return from /api/health
  * and to log. Notice there is no field that could carry an API key.
  */
-export function toHealth(config: AppConfig, secrets: AppSecrets) {
+export function isFreeConfigured(config: AppConfig): boolean {
+  return config.free.enabled && config.free.baseUrl.length > 0;
+}
+
+export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown) {
   const anthropicConfigured = isAnthropicConfigured(secrets);
   const openaiConfigured = isOpenAiConfigured(secrets);
+  const freeConfigured = isFreeConfigured(config);
   const providersAvailable: ProviderName[] = ["mock", "stub"];
+  if (freeConfigured) providersAvailable.push("free");
   if (anthropicConfigured) providersAvailable.push("anthropic");
   if (openaiConfigured) providersAvailable.push("openai");
   return {
+    freeConfigured,
+    freeBaseUrl: config.free.baseUrl,
+    freeModel: config.free.model,
+    ...(route ? { route } : {}),
     ok: true as const,
     // Control-plane health is independent of paid provider availability (#237).
     controlPlaneOk: true as const,

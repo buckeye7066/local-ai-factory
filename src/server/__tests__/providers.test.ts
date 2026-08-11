@@ -6,31 +6,66 @@ import { MockProvider } from "../providers/mockProvider.js";
 import { ProductSpecSchema } from "../../shared/schemas.js";
 
 const cfg = loadConfig({});
+/** A deck with the free route switched off — the only truly provider-less case. */
+const noFreeCfg = loadConfig({ FACTORY_FREE_ENABLED: "0" } as NodeJS.ProcessEnv);
 
 describe("provider registry selection", () => {
-  it("soft resolve may fall back to mock (demo diagnostics only)", () => {
+  it("offers the FREE route even with no paid keys at all", () => {
+    // The old contract here was "no paid key means no live provider". That is
+    // now wrong by design: the free route is a real live provider that happens
+    // to cost nothing, so a deck with no credit card still builds software.
     const reg = createProviderRegistry(cfg, loadSecrets({}));
+    expect(reg.available().sort()).toEqual(["free", "mock", "stub"]);
+    expect(reg.availableLive()).toEqual(["free"]);
+    expect(reg.resolveLive(undefined, "free").name).toBe("free");
+  });
+
+  it("soft resolve may fall back to mock only when nothing live exists", () => {
+    const reg = createProviderRegistry(noFreeCfg, loadSecrets({}));
     expect(reg.available().sort()).toEqual(["mock", "stub"]);
     expect(reg.resolve("anthropic", "anthropic").name).toBe("mock");
   });
 
-  it("resolveLive fails closed when no paid keys are configured", () => {
-    const reg = createProviderRegistry(cfg, loadSecrets({}));
-    expect(() => reg.resolveLive("anthropic", "anthropic")).toThrow(/ANTHROPIC_API_KEY/);
+  it("resolveLive fails closed when there is NO live provider at all", () => {
+    // Fail-closed still holds; it just now requires the free route to be off
+    // AND no paid key, rather than merely no paid key.
+    const reg = createProviderRegistry(noFreeCfg, loadSecrets({}));
+    expect(() => reg.resolveLive("anthropic", "anthropic")).toThrow(
+      /ANTHROPIC_API_KEY/,
+    );
   });
 
-  it("resolves to the requested provider when its key exists", () => {
+  it("prefers FREE over a configured paid key", () => {
     const reg = createProviderRegistry(
       cfg,
       loadSecrets({ ANTHROPIC_API_KEY: "sk-a", OPENAI_API_KEY: "sk-o" }),
     );
-    expect(reg.resolve("anthropic", "openai").name).toBe("anthropic");
-    expect(reg.resolve("openai", "anthropic").name).toBe("openai");
-    expect(reg.available().sort()).toEqual(["anthropic", "mock", "openai", "stub"]);
+    // Paid keys present, but the live chain still starts on free.
+    expect(reg.resolveLive(undefined, "free").name).toBe("free");
+    expect(reg.availableLive().sort()).toEqual(["anthropic", "free", "openai"]);
+    expect(reg.available().sort()).toEqual([
+      "anthropic",
+      "free",
+      "mock",
+      "openai",
+      "stub",
+    ]);
+  });
+
+  it("honours an explicit paid pin, so a rescue tier can still be forced", () => {
+    const reg = createProviderRegistry(
+      cfg,
+      loadSecrets({ ANTHROPIC_API_KEY: "sk-a", OPENAI_API_KEY: "sk-o" }),
+    );
+    expect(reg.resolveLive("anthropic", "free").name).toBe("anthropic");
+    expect(reg.resolveLive("openai", "free").name).toBe("openai");
   });
 
   it("falls back past an unconfigured requested provider", () => {
-    const reg = createProviderRegistry(cfg, loadSecrets({ OPENAI_API_KEY: "sk-o" }));
+    const reg = createProviderRegistry(
+      noFreeCfg,
+      loadSecrets({ OPENAI_API_KEY: "sk-o" }),
+    );
     // Anthropic requested but missing → should land on openai (configured).
     expect(reg.resolve("anthropic", "openai").name).toBe("openai");
   });

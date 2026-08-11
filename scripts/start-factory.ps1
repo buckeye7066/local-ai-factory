@@ -115,7 +115,88 @@ Write-Host "App: $backendUrl  (single process; browser opens when ready)"
 Write-Host "(Close this window to stop the factory.)"
 Write-Host ""
 
-# --- 3. Run the backend in the foreground. ----------------------------------
+# --- 2b. FREE route preflight. ----------------------------------------------
+# Factory Deck runs FREE-PRIMARY: every model call goes through the local FCC
+# proxy (the same free route the "Claude Code - FREE (Ollama)" shortcut turns
+# on) at zero cost. Paid keys are a rescue tier only.
+#
+# Bring the proxy up here rather than letting the first model call discover it
+# is dead: a dead free backend is precisely the condition that spends money, so
+# it is worth 90 seconds up front to avoid it.
+$freeBase = if ($env:FACTORY_FREE_BASE_URL) { $env:FACTORY_FREE_BASE_URL } else { "http://127.0.0.1:8082" }
+
+function Test-FreeRouteUp([string]$base) {
+    try {
+        $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 "$base/health"
+        return ($r.StatusCode -eq 200)
+    } catch {
+        return $false
+    }
+}
+
+if (Test-FreeRouteUp $freeBase) {
+    Write-Host "FREE route: fcc-server is up at $freeBase - all model calls are free." -ForegroundColor Green
+} else {
+    Write-Host "FREE route: proxy not answering at $freeBase - starting fcc-server ..." -ForegroundColor Yellow
+    $fcc = Get-Command fcc-server -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -eq $fcc) {
+        Write-Host "  fcc-server is not on PATH. The deck will start, but until the free" -ForegroundColor Red
+        Write-Host "  route is up, calls can fall through to the PAID rescue tier." -ForegroundColor Red
+        Write-Host "  Run the 'Claude Code - FREE (Ollama)' shortcut to bring it up." -ForegroundColor Red
+    } else {
+        $fccHome = if ($env:FCC_HOME) { $env:FCC_HOME } else { Join-Path $HOME ".fcc" }
+        $fccLogs = Join-Path $fccHome "logs"
+        if (-not (Test-Path $fccLogs)) { New-Item -ItemType Directory -Path $fccLogs -Force | Out-Null }
+        $uri = [Uri]$freeBase
+        # Messaging startup blocks the FastAPI bind (documented FCC trap).
+        $prevMsg = $env:MESSAGING_PLATFORM; $prevHost = $env:HOST; $prevPort = $env:PORT
+        try {
+            if ($env:FCC_ENABLE_MESSAGING -ne "1") { $env:MESSAGING_PLATFORM = "none" }
+            $env:HOST = $uri.Host
+            $env:PORT = "$($uri.Port)"
+            Start-Process -FilePath $fcc.Source -WorkingDirectory $fccHome `
+                -RedirectStandardOutput (Join-Path $fccLogs "server.stdout.log") `
+                -RedirectStandardError  (Join-Path $fccLogs "server.stderr.log") `
+                -WindowStyle Hidden | Out-Null
+        } finally {
+            $env:MESSAGING_PLATFORM = $prevMsg; $env:HOST = $prevHost; $env:PORT = $prevPort
+        }
+        $deadline = (Get-Date).AddSeconds(90)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 1000
+            if (Test-FreeRouteUp $freeBase) { break }
+        }
+        if (Test-FreeRouteUp $freeBase) {
+            Write-Host "  FREE route is up at $freeBase." -ForegroundColor Green
+        } else {
+            Write-Host "  fcc-server did not answer within 90s. Starting anyway - the deck" -ForegroundColor Red
+            Write-Host "  keeps retrying free and only pays if the route is PROVEN wedged." -ForegroundColor Red
+        }
+    }
+}
+Write-Host ""
+
+# --- 3. Run the backend under a supervisor. ---------------------------------
 # Invoke node directly: `pnpm server` as a child process exits silently with
 # code 0 on this machine (known trap) - the direct binary is also faster.
-& node --import tsx src/server/index.ts
+#
+# The supervisor restarts the backend if it dies unexpectedly. A CLEAN exit
+# (code 0) is the user closing the deck and is never restarted; only a crash
+# is. Bounded at 5 attempts so a permanently broken build fails visibly instead
+# of respawning forever.
+$maxAttempts = 5
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    if ($attempt -gt 1) {
+        Write-Host ""
+        Write-Host "RESTART $attempt/$maxAttempts - the backend exited unexpectedly; relaunching ..." -ForegroundColor Yellow
+    }
+    & node --import tsx src/server/index.ts
+    $code = $LASTEXITCODE
+    if ($code -eq 0) { break }
+    Write-Host "Factory Deck backend exited with code $code." -ForegroundColor Yellow
+    if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
+}
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Gave up after $maxAttempts attempts - see the output above." -ForegroundColor Red
+}
+exit $LASTEXITCODE

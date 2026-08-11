@@ -5,10 +5,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { getConfig, getSecrets, toHealth, isFactoryHealthPayload } from "./config.js";
 import { RunOptionsSchema, isValidRunId } from "../shared/schemas.js";
-import {
-  startRun,
-  MissingProviderCredentialError,
-} from "./orchestrator/runFactory.js";
+import { startRun, MissingProviderCredentialError } from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
 import { getRun, listRuns, getRunFiles, pruneOldRuns } from "./storage/runsStore.js";
 import {
@@ -18,6 +15,8 @@ import {
 } from "./storage/idempotency.js";
 import { appendAuditEvent } from "./storage/auditLog.js";
 import { authorizeApiRequest, resolveBindHost } from "./security/access.js";
+import { snapshotRoute, getThresholds, probeLiveness } from "./providers/freeRoute.js";
+import { paidBudgetStatus } from "./providers/paidBudget.js";
 
 /**
  * server/index.ts — the LOCAL backend API.
@@ -36,8 +35,39 @@ app.use(express.json({ limit: "1mb" }));
 // booleans + the launcher's `service` marker, and the EADDRINUSE/idempotency
 // probe must reach it even when a token gates every other route. Registered
 // BEFORE the auth middleware so it is never subject to it.
+/**
+ * Assemble the live routing picture served on /api/health.
+ *
+ * This is the anti-silent-demotion surface: `serving` says who answered the
+ * last call, `counts` says how many calls each tier has taken, `paidBudget`
+ * says what the rescue has cost today, and `wouldHaveFailedOver` says how
+ * often the deck nearly paid and waited instead. A threshold that is quietly
+ * too tight shows up in that last number long before it shows up as a bill.
+ */
+function routeStatus() {
+  return {
+    ...snapshotRoute(),
+    thresholds: getThresholds(),
+    paidBudget: (() => {
+      const b = paidBudgetStatus();
+      return {
+        lastHour: b.lastHour,
+        lastDay: b.lastDay,
+        usdLastDay: b.usdLastDay,
+        exhausted: b.exhausted,
+        reason: b.reason,
+        limits: {
+          perHour: b.limits.perHour,
+          perDay: b.limits.perDay,
+          usdPerDay: b.limits.usdPerDay,
+        },
+      };
+    })(),
+  };
+}
+
 app.get("/api/health", (_req, res) => {
-  res.json(toHealth(config, secrets));
+  res.json(toHealth(config, secrets, routeStatus()));
 });
 
 /**
@@ -59,6 +89,18 @@ app.use("/api", (req, res, next) => {
     return;
   }
   next();
+});
+
+/**
+ * Live proxy probe — behind the auth boundary on purpose. Unlike /api/health
+ * this actually touches the free backend, so it must not be a way for an
+ * unauthenticated caller to generate outbound traffic.
+ */
+app.get("/api/route", (_req, res) => {
+  void (async () => {
+    const liveness = await probeLiveness(config.free.baseUrl, config.free.ollamaUrl);
+    res.json({ ...routeStatus(), liveness });
+  })();
 });
 
 /** A `:runId` route param must be a well-formed run id or the route 404s. */
@@ -130,7 +172,11 @@ app.post(
           error: err.message,
           missing: err.missing,
           blocked: true,
-          hint: "Set ANTHROPIC_API_KEY and/or OPENAI_API_KEY in .env, or pass options.demo=true for offline mock only.",
+          hint:
+            "Start the FREE route (run the 'Claude Code - FREE (Ollama)' shortcut, " +
+            "or set FACTORY_FREE_ENABLED=1 with fcc-server running). " +
+            "A paid ANTHROPIC_API_KEY / OPENAI_API_KEY is optional and used only " +
+            "as a rescue tier. Or pass options.demo=true for offline mock only.",
         });
         return;
       }

@@ -18,10 +18,7 @@ import type { LogLine as LogLineType, LogKind } from "../../../shared/schemas.js
  * Per-kind presentation: which lucide glyph to show, the icon tint, and a
  * subtle message tint. Colors are kept muted so a wall of logs stays readable.
  */
-const KIND_STYLE: Record<
-  LogKind,
-  { Icon: LucideIcon; icon: string; text: string }
-> = {
+const KIND_STYLE: Record<LogKind, { Icon: LucideIcon; icon: string; text: string }> = {
   info: { Icon: Info, icon: "text-slate-400", text: "text-slate-300" },
   success: {
     Icon: CheckCircle2,
@@ -57,13 +54,7 @@ const KIND_STYLE: Record<
  * The newest line (`isNew`) gets a quick typewriter/fade feel on mount so the
  * eye catches incoming output; this is skipped under reduced-motion.
  */
-export function LogLine({
-  log,
-  isNew,
-}: {
-  log: LogLineType;
-  isNew?: boolean;
-}) {
+export function LogLine({ log, isNew }: { log: LogLineType; isNew?: boolean }) {
   const reduced = usePrefersReducedMotion();
   const { Icon, icon, text } = KIND_STYLE[log.kind];
 

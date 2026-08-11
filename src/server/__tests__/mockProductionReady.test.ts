@@ -14,9 +14,8 @@ const { runFactory } = await import("../orchestrator/runFactory.js");
 const { loadConfig, loadSecrets, toHealth } = await import("../config.js");
 const { createProviderRegistry } = await import("../providers/index.js");
 const { MockProvider } = await import("../providers/mockProvider.js");
-const { verifyAuditChain, _resetAuditCursorForTests } = await import(
-  "../storage/auditLog.js"
-);
+const { verifyAuditChain, _resetAuditCursorForTests } =
+  await import("../storage/auditLog.js");
 const { rollbackWorkspace } = await import("../workspace/cleanup.js");
 const { ProductSpecSchema, QaReportSchema } = await import("../../shared/schemas.js");
 
@@ -35,7 +34,13 @@ describe("mock provider (#237)", () => {
     const reg = createProviderRegistry(loadConfig({}), loadSecrets({}));
     expect(reg.available()).toContain("mock");
     expect(reg.get("mock").isConfigured()).toBe(true);
-    expect(reg.resolve("anthropic", "anthropic").name).toBe("mock");
+    // Soft resolve now prefers the FREE route over mock, because free is a
+    // real live provider. Mock remains the last resort when nothing is live.
+    const noLive = createProviderRegistry(
+      loadConfig({ FACTORY_FREE_ENABLED: "0" } as NodeJS.ProcessEnv),
+      loadSecrets({}),
+    );
+    expect(noLive.resolve("anthropic", "anthropic").name).toBe("mock");
   });
 
   it("returns schema-valid product specs offline", async () => {

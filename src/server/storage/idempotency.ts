@@ -11,7 +11,10 @@ import { writeFileContained } from "./runsStore.js";
 const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".factory");
 const IDEM_DIR = join(DATA_ROOT, "idempotency");
 
-const memory = new Map<string, { runId: string; ideaHash: string; createdAt: number }>();
+const memory = new Map<
+  string,
+  { runId: string; ideaHash: string; createdAt: number }
+>();
 
 function safeKeyFilename(key: string): string {
   const hash = createHash("sha256").update(key).digest("hex");
@@ -60,11 +63,17 @@ export async function rememberIdempotency(
   };
   memory.set(key, record);
   await mkdir(IDEM_DIR, { recursive: true });
-  await writeFileContained(join(IDEM_DIR, safeKeyFilename(key)), JSON.stringify(record));
+  await writeFileContained(
+    join(IDEM_DIR, safeKeyFilename(key)),
+    JSON.stringify(record),
+  );
 }
 
 /** True when the key exists but was used with a different idea (HTTP 409). */
-export async function isIdempotencyConflict(key: string, idea: string): Promise<boolean> {
+export async function isIdempotencyConflict(
+  key: string,
+  idea: string,
+): Promise<boolean> {
   const ideaHash = hashIdea(idea);
   const mem = memory.get(key);
   if (mem) return mem.ideaHash !== ideaHash;

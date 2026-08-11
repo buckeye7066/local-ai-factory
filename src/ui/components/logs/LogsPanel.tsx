@@ -16,9 +16,7 @@ function stageLabel(stage: StageId | null): string {
 
 /** Serialize all log lines into a copy-paste-friendly transcript. */
 function logsToText(logs: LogLineType[]): string {
-  return logs
-    .map((l) => `${formatTime(l.ts)}  [${l.kind}]  ${l.message}`)
-    .join("\n");
+  return logs.map((l) => `${formatTime(l.ts)}  [${l.kind}]  ${l.message}`).join("\n");
 }
 
 /**

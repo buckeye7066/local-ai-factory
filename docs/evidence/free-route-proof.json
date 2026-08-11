@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "recorded_at": "2026-08-11T17:46:07Z",
+  "freeBaseUrl": "http://127.0.0.1:8082",
+  "freeModel": "claude-sonnet-4-5",
+  "defaultCodeProvider": "free",
+  "defaultReviewProvider": "free",
+  "resolvedProvider": "free",
+  "servingProvider": "free",
+  "elapsedMs": 2066,
+  "responseText": "FREE ROUTE OK",
+  "liveness": {
+    "verdict": "alive",
+    "proxyHealth": true,
+    "proxyAdminStatus": "running",
+    "ollamaUp": true,
+    "ollamaLoadedModels": [],
+    "detail": "proxy /health ok; proxy admin status=running"
+  },
+  "counts": {
+    "free": 1,
+    "anthropic": 0,
+    "openai": 0
+  },
+  "paidCallsMade": 0,
+  "wouldHaveFailedOver": 0,
+  "backpressureRetries": 0,
+  "estimatedPaidSpendUsdLast24h": 0,
+  "routeEvents": []
+}

@@ -13,14 +13,25 @@ import { withRetry, extractJson } from "./types.js";
  * The API key is captured in this closure only and never logged or returned.
  * JSON mode asks for strict JSON and validates with the caller's Zod schema.
  */
+/** Reports token usage for one paid call, so the spend ceiling can see it. */
+export type UsageSink = (usage: { inTokens: number; outTokens: number }) => void;
+
 export class AnthropicProvider implements LLMProvider {
   readonly name = "anthropic" as const;
   private client: Anthropic | null;
   private model: string;
+  private onUsage: UsageSink;
 
-  constructor(apiKey: string, model: string) {
-    this.client = apiKey ? new Anthropic({ apiKey }) : null;
+  constructor(apiKey: string, model: string, onUsage: UsageSink = () => {}) {
+    // Explicit apiKey AND baseURL. This is the PAID tier, and the free route
+    // sets ANTHROPIC_BASE_URL-shaped configuration elsewhere in this process;
+    // passing both explicitly makes the SDK ignore every credential env var so
+    // free-route settings can never leak into a billable call (and vice versa).
+    this.client = apiKey
+      ? new Anthropic({ apiKey, baseURL: "https://api.anthropic.com" })
+      : null;
     this.model = model;
+    this.onUsage = onUsage;
   }
 
   isConfigured(): boolean {
@@ -48,6 +59,10 @@ export class AnthropicProvider implements LLMProvider {
         system: input.system,
         messages: [{ role: "user", content: input.prompt }],
       });
+      this.onUsage({
+        inTokens: res.usage?.input_tokens ?? 0,
+        outTokens: res.usage?.output_tokens ?? 0,
+      });
       return res.content
         .map((block) => (block.type === "text" ? block.text : ""))
         .join("");
@@ -68,6 +83,10 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
         max_tokens: input.maxTokens ?? 8192,
         system,
         messages: [{ role: "user", content: prompt }],
+      });
+      this.onUsage({
+        inTokens: res.usage?.input_tokens ?? 0,
+        outTokens: res.usage?.output_tokens ?? 0,
       });
       const text = res.content
         .map((block) => (block.type === "text" ? block.text : ""))

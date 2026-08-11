@@ -104,7 +104,10 @@ export async function appendAuditEvent(input: AuditEventInput): Promise<AuditEve
 }
 
 /** Verify the on-disk chain; returns first bad seq or null if intact. */
-export async function verifyAuditChain(): Promise<{ ok: boolean; badSeq: number | null }> {
+export async function verifyAuditChain(): Promise<{
+  ok: boolean;
+  badSeq: number | null;
+}> {
   // Wait for in-flight appends so verification sees a consistent file.
   await chain.catch(() => {});
   let prev = "genesis";

@@ -14,6 +14,7 @@ import type {
 } from "../../shared/types.js";
 import { throwIfCancelled } from "./cancellation.js";
 import { redactSecrets } from "../security/redact.js";
+import { snapshotRoute } from "../providers/freeRoute.js";
 
 /**
  * stages.ts — pure helpers the orchestrator uses to mutate a RunRecord:
@@ -82,6 +83,18 @@ export class CountingProvider implements LLMProvider {
     private inner: LLMProvider,
     private run: RunRecord,
     private limit: number,
+    /**
+     * How to attribute a call to a provider.
+     *
+     * "declared" — credit `inner.name`. Correct for a single concrete
+     * provider.
+     *
+     * "served"   — credit whoever ACTUALLY served, read from the live route
+     * snapshot after the call. Required for the failover chain: its declared
+     * name is "free" (the primary), so declared-attribution would book a paid
+     * rescue as a free call and hide the very spend the deck must surface.
+     */
+    private attribution: "declared" | "served" = "declared",
   ) {
     this.name = inner.name;
   }
@@ -91,22 +104,42 @@ export class CountingProvider implements LLMProvider {
   }
 
   private tick() {
-    // A cancel request stops the run before the next (paid) model call.
+    // A cancel request stops the run before the next model call.
     throwIfCancelled(this.run.id);
     if (this.run.providerUsage.totalCalls >= this.limit) {
       throw new ModelBudgetError(this.limit);
     }
     this.run.providerUsage.totalCalls += 1;
-    this.run.providerUsage[this.name].calls += 1;
+    if (this.attribution === "declared") {
+      this.run.providerUsage[this.name].calls += 1;
+    }
+  }
+
+  /** Credit the provider that actually served the call just completed. */
+  private creditServed() {
+    if (this.attribution !== "served") return;
+    const served = snapshotRoute().serving;
+    const name: ProviderName = served ?? this.name;
+    if (this.run.providerUsage[name]) {
+      this.run.providerUsage[name].calls += 1;
+    }
   }
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     this.tick();
-    return this.inner.generateText(input);
+    try {
+      return await this.inner.generateText(input);
+    } finally {
+      this.creditServed();
+    }
   }
 
   async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
     this.tick();
-    return this.inner.generateJson(input);
+    try {
+      return await this.inner.generateJson(input);
+    } finally {
+      this.creditServed();
+    }
   }
 }

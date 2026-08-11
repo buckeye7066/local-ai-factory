@@ -95,6 +95,7 @@ export type FileContent = z.infer<typeof FileContentSchema>;
 /* ------------------------------------------------------------------ */
 
 export const ProviderUsageSchema = z.object({
+  free: z.object({ calls: z.number() }).default({ calls: 0 }),
   anthropic: z.object({ calls: z.number() }).default({ calls: 0 }),
   openai: z.object({ calls: z.number() }).default({ calls: 0 }),
   stub: z.object({ calls: z.number() }).default({ calls: 0 }),
@@ -141,9 +142,7 @@ function coerceStringList(val: unknown): string[] {
 }
 
 /** Accept either [{entity,fields}] or {EntityName: fields|fieldMap}. */
-function coerceDataModel(
-  val: unknown,
-): { entity: string; fields: string[] }[] {
+function coerceDataModel(val: unknown): { entity: string; fields: string[] }[] {
   if (Array.isArray(val)) {
     return val
       .map((row) => {
@@ -199,8 +198,14 @@ function coerceToReadableString(val: unknown): string {
   if (Array.isArray(val)) return coerceStringList(val).join("; ");
   if (typeof val === "object") {
     const o = val as Record<string, unknown>;
-    const preferred = [o.summary, o.description, o.overview, o.text, o.detail, o.name]
-      .filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+    const preferred = [
+      o.summary,
+      o.description,
+      o.overview,
+      o.text,
+      o.detail,
+      o.name,
+    ].filter((x): x is string => typeof x === "string" && x.trim().length > 0);
     if (preferred.length) return preferred.join(" — ");
     try {
       return JSON.stringify(val);
@@ -233,17 +238,21 @@ export const ArchitectureSchema = z.object({
 });
 export type Architecture = z.infer<typeof ArchitectureSchema>;
 
-const TaskCategorySchema = z.preprocess((val) => {
-  const s = String(val ?? "")
-    .toLowerCase()
-    .trim();
-  if (["frontend", "backend", "database", "tests", "docs"].includes(s)) return s;
-  if (s.includes("front") || s.includes("ui")) return "frontend";
-  if (s.includes("back") || s.includes("api") || s.includes("server")) return "backend";
-  if (s.includes("data") || s.includes("db") || s.includes("sql")) return "database";
-  if (s.includes("test")) return "tests";
-  return "docs";
-}, z.enum(["frontend", "backend", "database", "tests", "docs"]));
+const TaskCategorySchema = z.preprocess(
+  (val) => {
+    const s = String(val ?? "")
+      .toLowerCase()
+      .trim();
+    if (["frontend", "backend", "database", "tests", "docs"].includes(s)) return s;
+    if (s.includes("front") || s.includes("ui")) return "frontend";
+    if (s.includes("back") || s.includes("api") || s.includes("server"))
+      return "backend";
+    if (s.includes("data") || s.includes("db") || s.includes("sql")) return "database";
+    if (s.includes("test")) return "tests";
+    return "docs";
+  },
+  z.enum(["frontend", "backend", "database", "tests", "docs"]),
+);
 
 function coerceTaskPlan(val: unknown): unknown {
   if (Array.isArray(val)) return { tasks: val };
@@ -264,7 +273,15 @@ function coerceTaskPlan(val: unknown): unknown {
       }
     }
   }
-  for (const key of ["items", "plan", "steps", "taskList", "buildTasks", "todos", "todo"]) {
+  for (const key of [
+    "items",
+    "plan",
+    "steps",
+    "taskList",
+    "buildTasks",
+    "todos",
+    "todo",
+  ]) {
     if (Array.isArray(o[key])) return { ...o, tasks: o[key] };
   }
   for (const v of Object.values(o)) {
@@ -371,7 +388,18 @@ export type FinalReport = z.infer<typeof FinalReportSchema>;
 /* Run options + run record (the object the UI polls)                  */
 /* ------------------------------------------------------------------ */
 
-export const ProviderNameSchema = z.enum(["anthropic", "openai", "stub", "mock"]);
+/**
+ * "free" is the local FCC/Ollama route and is the DEFAULT primary. It is a
+ * live provider (it really builds software), it just costs nothing — so unlike
+ * mock/stub it is never treated as an offline demo.
+ */
+export const ProviderNameSchema = z.enum([
+  "free",
+  "anthropic",
+  "openai",
+  "stub",
+  "mock",
+]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 export const RunOptionsSchema = z.object({
@@ -474,6 +502,68 @@ export type RunSummary = z.infer<typeof RunSummarySchema>;
 /* Health (no secrets — only "configured" booleans)                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The live routing picture. This exists so a silent demotion to a PAID
+ * provider is impossible: the deck always shows who is serving right now, why
+ * it failed over, how many times it nearly paid but waited instead, and what
+ * the rescue has cost today.
+ */
+export const RouteEventSchema = z.object({
+  ts: z.number(),
+  kind: z.string(),
+  from: ProviderNameSchema.nullable(),
+  to: ProviderNameSchema.nullable(),
+  reason: z.string(),
+});
+
+export const RouteStatusSchema = z.object({
+  primary: ProviderNameSchema,
+  serving: ProviderNameSchema.nullable(),
+  holdActive: z.boolean(),
+  holdUntil: z.number().nullable(),
+  lastFailoverAt: z.number().nullable(),
+  lastFailoverReason: z.string().nullable(),
+  lastRecoveryAt: z.number().nullable(),
+  proxyUp: z.boolean().nullable(),
+  proxyLastProbeAt: z.number().nullable(),
+  proxyRestarts: z.number(),
+  counts: z.object({
+    free: z.number(),
+    anthropic: z.number(),
+    openai: z.number(),
+  }),
+  /** Times the deck came within one grant of paying, waited, and was right. */
+  wouldHaveFailedOver: z.number(),
+  backpressureRetries: z.number(),
+  inFlightFree: z.number(),
+  events: z.array(RouteEventSchema),
+  thresholds: z.object({
+    firstTokenWindowMs: z.number(),
+    idleGapWindowMs: z.number(),
+    backstopMs: z.number(),
+    maxPatienceGrants: z.number(),
+    source: z.enum(["measured", "defaults"]),
+    basis: z.object({
+      firstTokenMaxMs: z.number(),
+      gapMaxMs: z.number(),
+      samples: z.number(),
+    }),
+  }),
+  paidBudget: z.object({
+    lastHour: z.number(),
+    lastDay: z.number(),
+    usdLastDay: z.number(),
+    exhausted: z.boolean(),
+    reason: z.string().nullable(),
+    limits: z.object({
+      perHour: z.number(),
+      perDay: z.number(),
+      usdPerDay: z.number(),
+    }),
+  }),
+});
+export type RouteStatus = z.infer<typeof RouteStatusSchema>;
+
 export const HealthSchema = z.object({
   ok: z.literal(true),
   /** Always true when this process answers — independent of paid providers (#237). */
@@ -481,11 +571,17 @@ export const HealthSchema = z.object({
   service: z.literal("factory-deck").optional(),
   /** Deterministic offline provider is always available. */
   mockConfigured: z.boolean(),
+  /** The FREE local route (FCC proxy / Ollama). The default primary. */
+  freeConfigured: z.boolean(),
+  freeBaseUrl: z.string(),
+  freeModel: z.string(),
   anthropicConfigured: z.boolean(),
   openaiConfigured: z.boolean(),
   providersAvailable: z.array(ProviderNameSchema),
   anthropicModel: z.string(),
   openaiModel: z.string(),
+  /** Live routing + cost picture. Optional so older clients still parse. */
+  route: RouteStatusSchema.optional(),
   defaultCodeProvider: ProviderNameSchema,
   defaultReviewProvider: ProviderNameSchema,
   maxRepairLoops: z.number(),

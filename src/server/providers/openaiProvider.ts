@@ -6,6 +6,7 @@ import type {
   GenerateJsonInput,
 } from "../../shared/types.js";
 import { withRetry, extractJson } from "./types.js";
+import type { UsageSink } from "./anthropicProvider.js";
 
 /**
  * openaiProvider.ts — OpenAI via the official SDK's Responses API.
@@ -17,10 +18,18 @@ export class OpenAIProvider implements LLMProvider {
   readonly name = "openai" as const;
   private client: OpenAI | null;
   private model: string;
+  private onUsage: UsageSink;
 
-  constructor(apiKey: string, model: string) {
-    this.client = apiKey ? new OpenAI({ apiKey }) : null;
+  constructor(apiKey: string, model: string, onUsage: UsageSink = () => {}) {
+    // Explicit apiKey AND baseURL — same reasoning as the Anthropic tier. An
+    // empty-but-PRESENT OPENAI_BASE_URL in the environment is honoured by the
+    // SDK as a literal base URL and produces a connection error, so the paid
+    // client must never be built from the environment.
+    this.client = apiKey
+      ? new OpenAI({ apiKey, baseURL: "https://api.openai.com/v1" })
+      : null;
     this.model = model;
+    this.onUsage = onUsage;
   }
 
   isConfigured(): boolean {
@@ -45,6 +54,10 @@ export class OpenAIProvider implements LLMProvider {
         input: input.prompt,
         max_output_tokens: input.maxTokens ?? 4096,
       });
+      this.onUsage({
+        inTokens: res.usage?.input_tokens ?? 0,
+        outTokens: res.usage?.output_tokens ?? 0,
+      });
       return res.output_text ?? "";
     });
     return { text, provider: "openai" };
@@ -67,6 +80,10 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
           max_output_tokens: input.maxTokens ?? 8192,
           text: { format: { type: "json_object" } },
         });
+        this.onUsage({
+          inTokens: res.usage?.input_tokens ?? 0,
+          outTokens: res.usage?.output_tokens ?? 0,
+        });
         return extractJson(res.output_text ?? "");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -76,6 +93,10 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
             instructions,
             input: prompt,
             max_output_tokens: input.maxTokens ?? 8192,
+          });
+          this.onUsage({
+            inTokens: res.usage?.input_tokens ?? 0,
+            outTokens: res.usage?.output_tokens ?? 0,
           });
           return extractJson(res.output_text ?? "");
         }

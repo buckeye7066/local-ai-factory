@@ -41,6 +41,7 @@ vi.mock("../agents/finalReviewerAgent.js", () => ({
     nextImprovements: [],
     workspacePath: "(ws)",
     providerUsage: {
+      free: { calls: 0 },
       anthropic: { calls: 0 },
       openai: { calls: 0 },
       stub: { calls: 0 },

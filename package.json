@@ -23,6 +23,8 @@
     "demo": "tsx src/cli/factory.ts --demo \"Build a Bible reading habit tracker\"",
     "proof:mock-e2e": "tsx src/cli/factory.ts --demo \"Build a Bible reading habit tracker\"",
     "proof:real-provider": "tsx src/cli/proof-real-provider.ts",
+    "proof:free-route": "tsx src/cli/proof-free-route.ts",
+    "measure:free-route": "node scripts/measure-free-route.mjs",
     "release:check": "node scripts/release-check.mjs",
     "release:manifest": "node scripts/generate-release-manifest.mjs",
     "icon": "tsx scripts/make-icon.ts",

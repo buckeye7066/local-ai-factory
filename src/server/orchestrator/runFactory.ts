@@ -14,6 +14,7 @@ import { freshStages } from "../../shared/schemas.js";
 import type { LLMProvider } from "../../shared/types.js";
 import {
   createProviderRegistry,
+  FailoverProvider,
   MissingProviderCredentialError,
   OFFLINE_PROVIDERS,
 } from "../providers/index.js";
@@ -72,7 +73,10 @@ function createRecord(args: StartRunArgs): RunRecord {
   // Explicit demo only. Missing paid keys must NOT silently coerce to mock success.
   const demo = options.demo === true;
 
-  if (!demo && registry.availablePaid().length === 0) {
+  // A live run needs ONE usable live provider — and the free route counts.
+  // Requiring a paid key here would have made "no credit card" mean "no
+  // factory", which is exactly backwards for a free-primary deck.
+  if (!demo && registry.availableLive().length === 0) {
     throw new MissingProviderCredentialError(registry.missingCredentialNames());
   }
 
@@ -116,6 +120,7 @@ function createRecord(args: StartRunArgs): RunRecord {
     files: [],
     repairLoops: 0,
     providerUsage: {
+      free: { calls: 0 },
       anthropic: { calls: 0 },
       openai: { calls: 0 },
       stub: { calls: 0 },
@@ -166,7 +171,11 @@ function throwIfTimedOut(deadline: number | null, limitMs: number): void {
 async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
   const { config, secrets } = args;
   const { flush, log } = controller(run);
-  const registry = createProviderRegistry(config, secrets);
+  // Route decisions land in the run log, so "why did this cost money?" is
+  // answerable from the run itself and not only from the server console.
+  const registry = createProviderRegistry(config, secrets, (kind, message) => {
+    log(kind === "warn" ? "warning" : "info", message);
+  });
   const timeoutMs = args.options.timeoutMs ?? config.runTimeoutMs;
   const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : null;
 
@@ -178,15 +187,22 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
   const rawReview = run.demo
     ? registry.get("mock")
     : registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);
+  // The failover chain declares itself as "free" but may serve a call from a
+  // paid rescue tier, so it must be attributed by who ACTUALLY served —
+  // otherwise a paid call would be booked as free and the spend would hide.
+  const attribution = (p: LLMProvider): "declared" | "served" =>
+    p instanceof FailoverProvider ? "served" : "declared";
   const code: LLMProvider = new CountingProvider(
     rawCode,
     run,
     config.maxModelCallsPerRun,
+    attribution(rawCode),
   );
   const review: LLMProvider = new CountingProvider(
     rawReview,
     run,
     config.maxModelCallsPerRun,
+    attribution(rawReview),
   );
 
   // The live in-memory view of the workspace, keyed by path.
@@ -251,10 +267,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
   try {
     run.status = "running";
     await appendAuditEvent({ type: "run.started", runId: run.id });
-    log(
-      "info",
-      `Factory run started in ${run.demo ? "demo (mock)" : "live"} mode.`,
-    );
+    log("info", `Factory run started in ${run.demo ? "demo (mock)" : "live"} mode.`);
     if (run.demo)
       log(
         "warning",

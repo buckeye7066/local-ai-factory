@@ -11,6 +11,7 @@ import type { RunSummary } from "../../../shared/schemas.js";
 
 /** Human-friendly labels for the provider routing chip. */
 const PROVIDER_LABELS: Record<RunSummary["codeProvider"], string> = {
+  free: "Free (Ollama)",
   anthropic: "Claude",
   openai: "OpenAI",
   stub: "Stub",

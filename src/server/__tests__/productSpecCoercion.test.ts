@@ -17,10 +17,7 @@ describe("ProductSpecSchema LLM shape coercion", () => {
         Settings: ["theme", "color"],
       },
       userFlows: [{ flow: "Add a note", detail: "click +" }, "Reset all"],
-      acceptanceCriteria: [
-        { criterion: "User can add a note" },
-        "Counter updates",
-      ],
+      acceptanceCriteria: [{ criterion: "User can add a note" }, "Counter updates"],
     });
 
     expect(parsed.coreFeatures.length).toBeGreaterThanOrEqual(3);

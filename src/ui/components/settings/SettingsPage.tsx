@@ -27,6 +27,7 @@ import type { Health } from "../../../shared/schemas.js";
 type ProviderName = Health["defaultCodeProvider"];
 
 const PROVIDER_LABEL: Record<ProviderName, string> = {
+  free: "Free (Ollama)",
   anthropic: "Claude",
   openai: "OpenAI",
   stub: "Stub",

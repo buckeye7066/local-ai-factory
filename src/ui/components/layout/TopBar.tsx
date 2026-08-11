@@ -1,9 +1,80 @@
-import { Menu, Sun, Moon, KeyRound, ShieldCheck, Wifi, WifiOff } from "lucide-react";
+import {
+  Menu,
+  Sun,
+  Moon,
+  KeyRound,
+  ShieldCheck,
+  Wifi,
+  WifiOff,
+  Gift,
+  CreditCard,
+  PauseCircle,
+} from "lucide-react";
 import { Badge } from "../ui/Badge.js";
 import { Tooltip } from "../ui/Tooltip.js";
 import { cn } from "../../lib/cn.js";
 import type { Health } from "../../../shared/schemas.js";
 import type { Theme } from "../../lib/useTheme.js";
+
+/**
+ * LiveRouteBadge — who is serving RIGHT NOW, always on screen.
+ *
+ * The whole point of the free-primary design is that a switch to a paid
+ * provider can never happen quietly. Green means free and costing nothing;
+ * amber means a paid rescue is currently serving and says why; slate means
+ * nothing has run yet.
+ */
+function LiveRouteBadge({ health }: { health: Health | null }) {
+  const route = health?.route;
+  if (!route) return null;
+
+  const serving = route.serving;
+  const onPaid = serving === "anthropic" || serving === "openai";
+  const spend = route.paidBudget.usdLastDay;
+
+  const label = onPaid
+    ? `PAID: ${serving}`
+    : serving === "free"
+      ? "FREE (Ollama/FCC)"
+      : route.holdActive
+        ? "free on hold"
+        : "FREE — idle";
+
+  const tip = onPaid
+    ? `A paid rescue is serving this call because the free route stalled: ` +
+      `${route.lastFailoverReason ?? "unknown reason"}. ` +
+      `The free route stays primary and is re-probed automatically. ` +
+      `Est. rescue spend in the last 24h: $${spend.toFixed(4)} of ` +
+      `$${route.paidBudget.limits.usdPerDay.toFixed(2)}.`
+    : `Running on the FREE local route at zero cost. ` +
+      `Free calls: ${route.counts.free}, paid rescues: ` +
+      `${route.counts.anthropic + route.counts.openai}. ` +
+      `Nearly failed over ${route.wouldHaveFailedOver} time(s) and waited instead.`;
+
+  return (
+    <Tooltip content={tip}>
+      <span
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium",
+          onPaid
+            ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+            : route.holdActive
+              ? "border-amber-400/25 bg-amber-400/5 text-amber-200/80"
+              : "border-aurora-emerald/25 bg-aurora-emerald/10 text-aurora-emerald",
+        )}
+      >
+        {onPaid ? (
+          <CreditCard className="h-3.5 w-3.5" />
+        ) : route.holdActive ? (
+          <PauseCircle className="h-3.5 w-3.5" />
+        ) : (
+          <Gift className="h-3.5 w-3.5" />
+        )}
+        {label}
+      </span>
+    </Tooltip>
+  );
+}
 
 /**
  * TopBar — provider/key status, dry-run badge, theme toggle, and the mobile
@@ -50,6 +121,10 @@ export function TopBar({
             {online ? "Connected" : "Offline"}
           </span>
         </Tooltip>
+
+        {/* ALWAYS-ON routing indicator. A paid rescue can never be silent:
+            this turns amber the moment a call is served by a paid tier. */}
+        <LiveRouteBadge health={health} />
       </div>
 
       <div className="ml-auto flex items-center gap-2">
