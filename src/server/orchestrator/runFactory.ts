@@ -25,7 +25,7 @@ import {
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import { writeWorkspaceFile } from "../workspace/fileWriter.js";
-import { runCommand } from "../workspace/commandRunner.js";
+import { isInsideWorkspace, runCommand } from "../workspace/commandRunner.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -730,7 +730,23 @@ async function executeRun(
     if (run.status === "failed") {
       run.resumable = Boolean(await getRunCheckpoint(run.id));
     }
+    // A user cancellation is terminal, not resumable. Persist that terminal
+    // truth first, then remove the private raw checkpoint so cancelled input
+    // does not linger until retention pruning.
     await flush();
+    if (run.status === "cancelled") {
+      try {
+        await deleteRunCheckpoint(run.id);
+      } catch (cleanupErr) {
+        log(
+          "warning",
+          `Cancelled-run checkpoint cleanup failed: ${redactSecrets(
+            cleanupErr instanceof Error ? cleanupErr.message : "unknown error",
+          )}`,
+        );
+        await flush();
+      }
+    }
   } finally {
     clearCancel(run.id);
   }
@@ -769,6 +785,31 @@ async function prepareResume(
         "Run has no interrupted durable checkpoint to resume.",
       );
     }
+    if (
+      run.workspacePath &&
+      !isInsideWorkspace(config.workspaceRoot, run.workspacePath)
+    ) {
+      throw new RunNotResumableError(
+        "Saved workspace is outside the current WORKSPACE_ROOT. Restore the prior root or start a new run.",
+      );
+    }
+
+    // Resolve providers before consuming the checkpoint. If credentials or the
+    // free route changed while the process was down, the run remains failed and
+    // resumable instead of becoming a queued ghost after the API returns 202.
+    const registry = createProviderRegistry(config, secrets);
+    if (run.demo) {
+      registry.get("mock");
+    } else {
+      if (registry.availableLive().length === 0) {
+        throw new MissingProviderCredentialError(
+          registry.missingCredentialNames(),
+        );
+      }
+      registry.resolveLive(run.codeProvider, config.defaultCodeProvider);
+      registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);
+    }
+
     for (const stage of run.stages) {
       if (stage.status === "failed" || stage.status === "active") {
         stage.status = "pending";
@@ -797,6 +838,15 @@ async function prepareResume(
   }
 }
 
+async function restoreFailedResume(run: RunRecord, err: unknown): Promise<void> {
+  run.status = "failed";
+  run.resumable = Boolean(await getRunCheckpoint(run.id));
+  run.error = redactSecrets(
+    err instanceof Error ? err.message : "Resume setup failed unexpectedly.",
+  );
+  await saveRun(run);
+}
+
 /** Resume in the background (API/UI entry point). */
 export async function resumeRun(
   runId: string,
@@ -804,7 +854,11 @@ export async function resumeRun(
   secrets: AppSecrets,
 ): Promise<RunRecord> {
   const prepared = await prepareResume(runId, config, secrets);
-  void executeRun(prepared.run, prepared.args, prepared.checkpoint);
+  void executeRun(prepared.run, prepared.args, prepared.checkpoint).catch(
+    async (err) => {
+      await restoreFailedResume(prepared.run, err).catch(() => {});
+    },
+  );
   return prepared.run;
 }
 
@@ -815,7 +869,12 @@ export async function resumeFactory(
   secrets: AppSecrets,
 ): Promise<RunRecord> {
   const prepared = await prepareResume(runId, config, secrets);
-  await executeRun(prepared.run, prepared.args, prepared.checkpoint);
+  try {
+    await executeRun(prepared.run, prepared.args, prepared.checkpoint);
+  } catch (err) {
+    await restoreFailedResume(prepared.run, err);
+    throw err;
+  }
   return prepared.run;
 }
 
