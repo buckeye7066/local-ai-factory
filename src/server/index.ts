@@ -247,6 +247,16 @@ app.post(
         res.status(409).json({ error: err.message });
         return;
       }
+      if (err instanceof MissingProviderCredentialError) {
+        res.status(409).json({
+          error: err.message,
+          missing: err.missing,
+          blocked: true,
+          hint:
+            "Restore the provider/free-route configuration used by this run, then resume again.",
+        });
+        return;
+      }
       throw err;
     }
   }),
