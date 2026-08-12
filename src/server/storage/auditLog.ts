@@ -19,6 +19,7 @@ const AUDIT_FILE = join(AUDIT_DIR, "events.jsonl");
 export type AuditEventType =
   | "run.queued"
   | "run.started"
+  | "run.resumed"
   | "run.completed"
   | "run.failed"
   | "run.cancelled"

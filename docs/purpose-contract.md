@@ -27,6 +27,7 @@ Orchestrate a multi-agent software-factory workflow with:
 3. **Observe** stage progress, completion (or honest failure), and inspectable workspace + attribution artifacts.
 4. **Provider / cancel / timeout failures** do not corrupt source inputs; workspaces remain jailed under `WORKSPACE_ROOT`.
 5. **Cancel** a running job and confirm terminal `cancelled` status with durable audit/attribution.
+6. After an unplanned backend interruption, use **Resume** (or `POST /api/runs/:id/resume`) and continue from the last private durable stage artifact without replaying completed provider stages.
 
 ## Scope that must not be narrowed
 

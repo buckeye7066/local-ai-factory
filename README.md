@@ -81,8 +81,10 @@ the sidebar), and watch the assembly line run.
   `POST /api/runs/:id/cancel`); it halts at the next stage/model-call
   checkpoint and is recorded as `cancelled`.
 - **Runs** — history of past runs (persisted locally). Generated file contents
-  are persisted too, so the Files panel survives a restart; runs interrupted
-  by a crash are marked failed instead of showing as running forever.
+  are persisted too. A process-interrupted run is marked failed and
+  **Resume** continues from its private durable stage checkpoint without
+  replaying completed provider stages. The same action is available as
+  `POST /api/runs/:id/resume`.
 - **Workspaces** — the generated app folders.
 - **Settings** — shows which keys are configured (never the keys themselves),
   models, limits, and the dry-run flag.

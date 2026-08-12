@@ -13,7 +13,7 @@ export interface RepairLoopOptions {
   /** Re-run QA after a repair and return the new report. */
   reverify: () => Promise<QaReport>;
   /** Called at the start of each repair iteration (1-based). */
-  onLoop?: (loopNumber: number) => void;
+  onLoop?: (loopNumber: number) => void | Promise<void>;
 }
 
 export interface RepairLoopResult {
@@ -29,7 +29,7 @@ export async function runRepairLoop(
 
   while (!qa.passed && loops < opts.maxLoops) {
     loops += 1;
-    opts.onLoop?.(loops);
+    await opts.onLoop?.(loops);
     await opts.repair(qa);
     qa = await opts.reverify();
   }

@@ -41,6 +41,10 @@ export const api = {
     }),
   cancelRun: (id: string) =>
     jsonFetch<{ ok: true }>(`/api/runs/${id}/cancel`, { method: "POST" }),
+  resumeRun: (id: string) =>
+    jsonFetch<{ ok: true; runId: string }>(`/api/runs/${id}/resume`, {
+      method: "POST",
+    }),
 };
 
 /** True when a run has reached a terminal state (no more polling needed). */
@@ -52,9 +56,14 @@ export function isTerminal(status: string): boolean {
 export function useRunPolling(
   runId: string | null,
   intervalMs = 750,
-): { run: RunRecord | null; error: string | null } {
+): {
+  run: RunRecord | null;
+  error: string | null;
+  refresh: () => void;
+} {
   const [run, setRun] = useState<RunRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [generation, setGeneration] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -83,9 +92,9 @@ export function useRunPolling(
       active = false;
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [runId, intervalMs]);
+  }, [runId, intervalMs, generation]);
 
-  return { run, error };
+  return { run, error, refresh: () => setGeneration((value) => value + 1) };
 }
 
 /**

@@ -43,7 +43,9 @@ export function App() {
   const [runsLoading, setRunsLoading] = useState(true);
   const [files, setFiles] = useState<FileContent[]>([]);
 
-  const { run } = useRunPolling(view === "run" ? activeRunId : null);
+  const { run, refresh: refreshRun } = useRunPolling(
+    view === "run" ? activeRunId : null,
+  );
   const lastStatus = useRef<string | null>(null);
 
   const refreshRuns = useCallback(async () => {
@@ -165,7 +167,12 @@ export function App() {
           {view === "settings" && <SettingsPage health={health} />}
 
           {view === "run" && run && (
-            <RunDetail run={run} files={files} onNewRun={() => setView("new")} />
+            <RunDetail
+              run={run}
+              files={files}
+              onNewRun={() => setView("new")}
+              refreshRun={refreshRun}
+            />
           )}
 
           {view === "run" && !run && (
@@ -198,15 +205,25 @@ function RunDetail({
   run,
   files,
   onNewRun,
+  refreshRun,
 }: {
   run: import("../shared/schemas.js").RunRecord;
   files: FileContent[];
   onNewRun: () => void;
+  refreshRun: () => void;
 }) {
   const [tab, setTab] = useState("logs");
   const [cancelling, setCancelling] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const repairActive = run.stages.find((s) => s.id === "repair")?.status === "active";
   const running = run.status === "running" || run.status === "queued";
+
+  useEffect(() => {
+    if (!running) {
+      setResuming(false);
+      setCancelling(false);
+    }
+  }, [running]);
 
   const cancel = useCallback(async () => {
     setCancelling(true);
@@ -223,13 +240,31 @@ function RunDetail({
     }
   }, [run.id]);
 
+  const resume = useCallback(async () => {
+    setResuming(true);
+    try {
+      await api.resumeRun(run.id);
+      refreshRun();
+      toast.success("Run resumed", {
+        description: "Continuing from the last durable stage checkpoint.",
+      });
+    } catch (e) {
+      setResuming(false);
+      toast.error("Could not resume", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    }
+  }, [run.id, refreshRun]);
+
   return (
     <div className="space-y-5">
       <RunControlBar
         run={run}
         onNewRun={onNewRun}
         onCancel={cancel}
+        onResume={resume}
         cancelling={cancelling}
+        resuming={resuming}
       />
 
       <Card>

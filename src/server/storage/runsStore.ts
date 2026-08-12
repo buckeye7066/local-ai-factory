@@ -12,6 +12,8 @@ import { constants as FS } from "node:fs";
 import { resolve, join, relative, isAbsolute, sep } from "node:path";
 import { z } from "zod";
 import type { RunRecord, RunSummary, FileContent } from "../../shared/schemas.js";
+import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
+import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
 import {
   RunRecordSchema,
   FileContentSchema,
@@ -34,6 +36,7 @@ import {
 const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".factory");
 const STORE_DIR = join(DATA_ROOT, "runs");
 const FILES_DIR = join(DATA_ROOT, "files");
+const CHECKPOINTS_DIR = join(DATA_ROOT, "checkpoints");
 
 const memory = new Map<string, RunRecord>();
 const fileContents = new Map<string, FileContent[]>();
@@ -41,6 +44,7 @@ const fileContents = new Map<string, FileContent[]>();
 async function ensureDirs() {
   await mkdir(STORE_DIR, { recursive: true });
   await mkdir(FILES_DIR, { recursive: true });
+  await mkdir(CHECKPOINTS_DIR, { recursive: true });
 }
 
 /** True when `child`'s resolved path is `parent` or beneath it (lexical). */
@@ -67,7 +71,7 @@ function isInside(parent: string, child: string): boolean {
 async function guardStoreDirs(): Promise<void> {
   const rootReal = await realpath(DATA_ROOT).catch(() => null);
   if (!rootReal) return; // nothing created yet — nothing can have escaped
-  for (const dir of [STORE_DIR, FILES_DIR]) {
+  for (const dir of [STORE_DIR, FILES_DIR, CHECKPOINTS_DIR]) {
     const st = await lstat(dir).catch(() => null);
     if (!st) continue; // not created yet
     if (st.isSymbolicLink()) {
@@ -168,12 +172,22 @@ export function putRunInMemory(run: RunRecord): void {
  * closed) mid-run — the in-flight work is gone, so surface it honestly as
  * failed instead of showing a "running" ghost forever.
  */
-function normalizeLoaded(run: RunRecord): RunRecord {
+async function normalizeLoaded(run: RunRecord): Promise<RunRecord> {
   if (run.status === "queued" || run.status === "running") {
     run.status = "failed";
-    run.error = "Interrupted: the backend restarted while this run was in progress.";
+    const hasCheckpoint = Boolean(await getRunCheckpoint(run.id));
+    run.resumable = hasCheckpoint;
+    run.error = hasCheckpoint
+      ? "Interrupted: the backend restarted while this run was in progress. Resume continues from its last durable checkpoint."
+      : "Interrupted: the backend restarted while this run was in progress, but no durable checkpoint was available. Start a new run.";
+    run.currentStage = null;
     for (const stage of run.stages) {
-      if (stage.status === "active") stage.status = "failed";
+      if (stage.status === "active") {
+        stage.status = "pending";
+        stage.startedAt = null;
+        stage.endedAt = null;
+        stage.durationMs = null;
+      }
     }
     run.updatedAt = Date.now();
     // Persist the correction so it survives the next restart too.
@@ -182,23 +196,31 @@ function normalizeLoaded(run: RunRecord): RunRecord {
   return run;
 }
 
-export async function getRun(id: string): Promise<RunRecord | null> {
-  if (!isValidRunId(id)) return null; // reject traversal ids up front
-  // SERVE BOUNDARY: always return a redacted COPY (never the raw canonical /
-  // raw-on-disk record). This scrubs OLD pre-fix records and PLANTED raw records
-  // on the way out, regardless of when they were written.
-  if (memory.has(id)) return sanitizeRunRecordForServe(memory.get(id)!);
+/**
+ * Load the canonical mutable record for the orchestrator. Unlike getRun(), this
+ * never returns a sanitized copy and therefore must not be used at an API serve
+ * boundary.
+ */
+export async function getRunForExecution(id: string): Promise<RunRecord | null> {
+  if (!isValidRunId(id)) return null;
+  if (memory.has(id)) return memory.get(id)!;
   try {
     const raw = await readFile(await safeStorePath(STORE_DIR, id), "utf8");
     const parsed = RunRecordSchema.parse(JSON.parse(raw));
-    // A record whose id disagrees with its filename is corrupt/planted — refuse.
     if (parsed.id !== id) return null;
-    const normalized = normalizeLoaded(parsed);
+    const normalized = await normalizeLoaded(parsed);
     memory.set(id, normalized);
-    return sanitizeRunRecordForServe(normalized);
+    return normalized;
   } catch {
     return null;
   }
+}
+
+export async function getRun(id: string): Promise<RunRecord | null> {
+  // SERVE BOUNDARY: always return a redacted COPY (never the raw canonical /
+  // raw-on-disk record). This scrubs OLD pre-fix records and PLANTED raw records.
+  const run = await getRunForExecution(id);
+  return run ? sanitizeRunRecordForServe(run) : null;
 }
 
 export async function listRuns(): Promise<RunSummary[]> {
@@ -219,7 +241,7 @@ export async function listRuns(): Promise<RunSummary[]> {
         // A planted record with an id != its filename must never be loaded or
         // (via normalizeLoaded → saveRun) rewritten to the id's path.
         if (parsed.id !== id) continue;
-        seen.set(id, normalizeLoaded(parsed));
+        seen.set(id, await normalizeLoaded(parsed));
       } catch {
         // skip corrupt entries
       }
@@ -234,6 +256,7 @@ export async function listRuns(): Promise<RunSummary[]> {
       // (covers old/planted raw records loaded from disk).
       idea: redactSecrets(r.idea),
       status: r.status,
+      resumable: r.resumable,
       demo: r.demo,
       codeProvider: r.codeProvider,
       reviewProvider: r.reviewProvider,
@@ -283,12 +306,44 @@ export async function pruneOldRuns(keep = 200): Promise<number> {
       // Route deletes through the containment/symlink guard too.
       await rm(await safeStorePath(STORE_DIR, id), { force: true }).catch(() => {});
       await rm(await safeStorePath(FILES_DIR, id), { force: true }).catch(() => {});
+      await rm(await safeStorePath(CHECKPOINTS_DIR, id), { force: true }).catch(() => {});
       removed++;
     }
     return removed;
   } catch {
     return 0;
   }
+}
+
+/** Persist private continuation state; never served by an API route. */
+export async function saveRunCheckpoint(
+  checkpoint: FactoryCheckpoint,
+): Promise<void> {
+  if (!isValidRunId(checkpoint.runId)) {
+    throw new Error("Refused: invalid checkpoint run id.");
+  }
+  await ensureDirs();
+  const target = await safeStorePath(CHECKPOINTS_DIR, checkpoint.runId);
+  await writeFileContained(target, JSON.stringify(checkpoint));
+}
+
+export async function getRunCheckpoint(
+  id: string,
+): Promise<FactoryCheckpoint | null> {
+  if (!isValidRunId(id)) return null;
+  try {
+    const raw = await readFile(await safeStorePath(CHECKPOINTS_DIR, id), "utf8");
+    const parsed = FactoryCheckpointSchema.parse(JSON.parse(raw));
+    return parsed.runId === id ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteRunCheckpoint(id: string): Promise<void> {
+  if (!isValidRunId(id)) return;
+  await ensureDirs();
+  await rm(await safeStorePath(CHECKPOINTS_DIR, id), { force: true });
 }
 
 const FileContentListSchema = z.array(FileContentSchema);
