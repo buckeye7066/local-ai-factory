@@ -218,6 +218,13 @@ function RunDetail({
   const repairActive = run.stages.find((s) => s.id === "repair")?.status === "active";
   const running = run.status === "running" || run.status === "queued";
 
+  useEffect(() => {
+    if (!running) {
+      setResuming(false);
+      setCancelling(false);
+    }
+  }, [running]);
+
   const cancel = useCallback(async () => {
     setCancelling(true);
     try {
