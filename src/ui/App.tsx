@@ -237,7 +237,6 @@ function RunDetail({
     setResuming(true);
     try {
       await api.resumeRun(run.id);
-      lastStatus.current = "queued";
       refreshRun();
       toast.success("Run resumed", {
         description: "Continuing from the last durable stage checkpoint.",
