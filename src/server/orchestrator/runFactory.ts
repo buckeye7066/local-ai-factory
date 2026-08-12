@@ -743,6 +743,11 @@ export class RunNotResumableError extends Error {
   }
 }
 
+// The local backend is a single process. Claim synchronously before the first
+// await so two concurrent HTTP requests cannot both observe the same failed
+// record and start duplicate executions.
+const resumeClaims = new Set<string>();
+
 async function prepareResume(
   runId: string,
   config: AppConfig,
@@ -752,36 +757,44 @@ async function prepareResume(
   checkpoint: FactoryCheckpoint;
   args: StartRunArgs;
 }> {
-  const run = await getRunForExecution(runId);
-  const checkpoint = await getRunCheckpoint(runId);
-  if (!run || !checkpoint || run.status !== "failed" || !run.resumable) {
-    throw new RunNotResumableError(
-      "Run has no interrupted durable checkpoint to resume.",
-    );
+  if (resumeClaims.has(runId)) {
+    throw new RunNotResumableError("Run resume is already being claimed.");
   }
-  for (const stage of run.stages) {
-    if (stage.status === "failed" || stage.status === "active") {
-      stage.status = "pending";
-      stage.startedAt = null;
-      stage.endedAt = null;
-      stage.durationMs = null;
+  resumeClaims.add(runId);
+  try {
+    const run = await getRunForExecution(runId);
+    const checkpoint = await getRunCheckpoint(runId);
+    if (!run || !checkpoint || run.status !== "failed" || !run.resumable) {
+      throw new RunNotResumableError(
+        "Run has no interrupted durable checkpoint to resume.",
+      );
     }
+    for (const stage of run.stages) {
+      if (stage.status === "failed" || stage.status === "active") {
+        stage.status = "pending";
+        stage.startedAt = null;
+        stage.endedAt = null;
+        stage.durationMs = null;
+      }
+    }
+    run.currentStage = null;
+    run.status = "queued";
+    run.resumable = false;
+    run.error = null;
+    await saveRun(run);
+    return {
+      run,
+      checkpoint,
+      args: {
+        idea: checkpoint.idea,
+        options: checkpoint.options,
+        config,
+        secrets,
+      },
+    };
+  } finally {
+    resumeClaims.delete(runId);
   }
-  run.currentStage = null;
-  run.status = "queued";
-  run.resumable = false;
-  run.error = null;
-  await saveRun(run);
-  return {
-    run,
-    checkpoint,
-    args: {
-      idea: checkpoint.idea,
-      options: checkpoint.options,
-      config,
-      secrets,
-    },
-  };
 }
 
 /** Resume in the background (API/UI entry point). */
