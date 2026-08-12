@@ -7,6 +7,7 @@ import {
   Wrench,
   FolderOpen,
   Square,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "../ui/Button.js";
 import { Badge } from "../ui/Badge.js";
@@ -28,12 +29,16 @@ export function RunControlBar({
   run,
   onNewRun,
   onCancel,
+  onResume,
   cancelling = false,
+  resuming = false,
 }: {
   run: RunRecord;
   onNewRun: () => void;
   onCancel?: () => void;
+  onResume?: () => void;
   cancelling?: boolean;
+  resuming?: boolean;
 }) {
   const running = run.status === "running" || run.status === "queued";
   const done = run.stages.filter(
@@ -76,6 +81,18 @@ export function RunControlBar({
             <Badge tone="amber" icon={<Wrench className="h-3 w-3" />}>
               {run.repairLoops} repair
             </Badge>
+          )}
+          {run.status === "failed" && run.resumable && onResume && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<RotateCcw className="h-3.5 w-3.5" />}
+              onClick={onResume}
+              disabled={resuming}
+              className="text-aurora-cyan hover:text-white"
+            >
+              {resuming ? "Resuming…" : "Resume"}
+            </Button>
           )}
           {running && onCancel && (
             <Button
