@@ -3,6 +3,7 @@ import {
   ArchitectureSchema,
   FileBuildSchema,
   FileContentSchema,
+  FinalReportSchema,
   ProductSpecSchema,
   QaReportSchema,
   RunIdSchema,
@@ -33,6 +34,7 @@ export const FactoryCheckpointSchema = z.object({
   testExit: z.number().int().nullable().default(null),
   qa: QaReportSchema.optional(),
   repairComplete: z.boolean().default(false),
+  finalReport: FinalReportSchema.optional(),
   updatedAt: z.number(),
 });
 
