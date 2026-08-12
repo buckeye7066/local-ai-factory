@@ -464,141 +464,149 @@ async function executeRun(
     }
 
     /* Stage 7 — Test Writer (+ optional install/test commands) */
-    throwIfTimedOut(deadline, timeoutMs);
-    startStage(run, "test_writer");
-    log("model_call", `Test Writer agent (${review.name})…`);
-    const testPlan = await testWriterAgent({ provider: review }, spec, build);
-    if (testPlan.files.length) {
-      await writeBuild(workspace.path, testPlan.files, "test_writer");
-    }
-    // Merge tests into the build view used by QA/repair.
-    const fullBuild: FileBuild = {
-      files: [...files.values()].map((f) => ({
-        path: f.path,
-        purpose: f.purpose,
-        contents: f.contents,
-      })),
-    };
-
-    // Install + test, subject to the allowlist + dry-run flag.
-    let commandOutput = "";
-    let testsExecuted = false;
-    let testExit: number | null = null;
-    for (const cmd of [
-      { bin: "pnpm", args: ["install"] },
-      { bin: "pnpm", args: ["test"] },
-    ]) {
-      // Don't start a new child process once cancellation has been requested.
-      throwIfCancelled(run.id);
+    let commandOutput = checkpoint.commandOutput;
+    let testsExecuted = checkpoint.testsExecuted;
+    let testExit = checkpoint.testExit;
+    if (!checkpoint.testWriterComplete) {
       throwIfTimedOut(deadline, timeoutMs);
-      const res = await runCommand(
-        { bin: cmd.bin, args: cmd.args, cwd: workspace.path },
-        {
-          workspaceRoot: config.workspaceRoot,
-          dryRun: config.dryRunCommands,
-          // Executing model-authored scripts (e.g. `pnpm test`) needs explicit
-          // approval beyond turning dry-run off.
-          allowScriptExecution: config.allowUntrustedScripts,
-          // Force-kill an in-flight child if the run is cancelled mid-command.
-          shouldCancel: () => isCancelRequested(run.id),
-        },
-      );
-      log(
-        "command_run",
-        res.executed
-          ? `Ran: ${res.command} (exit ${res.exitCode})`
-          : (res.reason ?? res.command),
-      );
-      if (res.executed) {
-        commandOutput += `\n$ ${res.command}\n${res.stdout}\n${res.stderr}`;
-        if (cmd.args[0] === "test") {
-          testsExecuted = true;
-          testExit = res.exitCode;
+      startStage(run, "test_writer");
+      let testPlan = checkpoint.testPlan;
+      if (!testPlan) {
+        log("model_call", `Test Writer agent (${review.name})…`);
+        testPlan = await testWriterAgent({ provider: review }, spec, build);
+        await checkpointNow({ testPlan });
+      }
+      if (testPlan.files.length) {
+        await writeBuild(workspacePath, testPlan.files, "test_writer");
+      }
+
+      // Install + test, subject to the allowlist + dry-run flag. Command replay
+      // after a crash is allowed; the expensive provider result above is not.
+      commandOutput = "";
+      testsExecuted = false;
+      testExit = null;
+      for (const cmd of [
+        { bin: "pnpm", args: ["install"] },
+        { bin: "pnpm", args: ["test"] },
+      ]) {
+        throwIfCancelled(run.id);
+        throwIfTimedOut(deadline, timeoutMs);
+        const res = await runCommand(
+          { bin: cmd.bin, args: cmd.args, cwd: workspacePath },
+          {
+            workspaceRoot: config.workspaceRoot,
+            dryRun: config.dryRunCommands,
+            allowScriptExecution: config.allowUntrustedScripts,
+            shouldCancel: () => isCancelRequested(run.id),
+          },
+        );
+        log(
+          "command_run",
+          res.executed
+            ? `Ran: ${res.command} (exit ${res.exitCode})`
+            : (res.reason ?? res.command),
+        );
+        if (res.executed) {
+          commandOutput += `\n$ ${res.command}\n${res.stdout}\n${res.stderr}`;
+          if (cmd.args[0] === "test") {
+            testsExecuted = true;
+            testExit = res.exitCode;
+          }
         }
       }
+      await checkpointNow({
+        testWriterComplete: true,
+        commandOutput,
+        testsExecuted,
+        testExit,
+      });
     }
-    finishStage(run, "test_writer", "completed");
-    await flush();
+    if (!stageDone("test_writer")) {
+      finishStage(run, "test_writer", "completed");
+      await flush();
+    }
+
+    const fullBuild = (): FileBuild => ({
+      files: [...files.values()].map((file) => ({
+        path: file.path,
+        purpose: file.purpose,
+        contents: file.contents,
+      })),
+    });
 
     /* Stage 8 — QA Critic */
-    throwIfTimedOut(deadline, timeoutMs);
-    startStage(run, "qa_critic");
-    log("model_call", `QA Critic agent (${review.name})…`);
-    let qa: QaReport = await qaCriticAgent(
-      { provider: review },
-      fullBuild,
-      commandOutput,
-    );
-    log(qa.passed ? "success" : "warning", `QA: ${qa.summary}`);
-    finishStage(run, "qa_critic", qa.passed ? "completed" : "completed");
-    await flush();
+    let qa: QaReport | undefined = checkpoint.qa;
+    if (!qa) {
+      throwIfTimedOut(deadline, timeoutMs);
+      startStage(run, "qa_critic");
+      log("model_call", `QA Critic agent (${review.name})…`);
+      qa = await qaCriticAgent({ provider: review }, fullBuild(), commandOutput);
+      await checkpointNow({ qa });
+    }
+    if (!stageDone("qa_critic")) {
+      log(qa.passed ? "success" : "warning", `QA: ${qa.summary}`);
+      finishStage(run, "qa_critic", "completed");
+      await flush();
+    }
 
     /* Stage 9 — Repair Loop (bounded) */
-    throwIfTimedOut(deadline, timeoutMs);
-    startStage(run, "repair");
-    const maxLoops = args.options.maxRepairLoops ?? config.maxRepairLoops;
-    if (qa.passed) {
-      log("success", "No high-severity issues — repair loop skipped.");
-      finishStage(run, "repair", "skipped");
-    } else {
-      const loopResult = await runRepairLoop({
-        maxLoops,
-        initialQa: qa,
-        onLoop: (n) =>
-          log("warning", `Repair loop ${n}/${maxLoops} — patching files…`, "repair"),
-        repair: async (report) => {
-          throwIfTimedOut(deadline, timeoutMs);
-          const liveBuild: FileBuild = {
-            files: [...files.values()].map((f) => ({
-              path: f.path,
-              purpose: f.purpose,
-              contents: f.contents,
-            })),
-          };
-          log("model_call", `Repair agent (${code.name})…`, "repair");
-          const fix = await repairAgent(
-            { provider: code },
-            report,
-            liveBuild,
-            commandOutput,
+    if (!checkpoint.repairComplete) {
+      throwIfTimedOut(deadline, timeoutMs);
+      startStage(run, "repair");
+      const maxLoops = args.options.maxRepairLoops ?? config.maxRepairLoops;
+      if (qa.passed) {
+        log("success", "No high-severity issues — repair loop skipped.");
+        finishStage(run, "repair", "skipped");
+      } else {
+        const loopResult = await runRepairLoop({
+          maxLoops,
+          initialQa: qa,
+          onLoop: (n) =>
+            log("warning", `Repair loop ${n}/${maxLoops} — patching files…`, "repair"),
+          repair: async (report) => {
+            throwIfTimedOut(deadline, timeoutMs);
+            log("model_call", `Repair agent (${code.name})…`, "repair");
+            const fix = await repairAgent(
+              { provider: code },
+              report,
+              fullBuild(),
+              commandOutput,
+            );
+            if (fix.files.length) {
+              await writeBuild(workspacePath, fix.files, "repair");
+            }
+            log("info", fix.notes || "Applied repairs.", "repair");
+          },
+          reverify: async () => {
+            throwIfTimedOut(deadline, timeoutMs);
+            log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
+            const next = await qaCriticAgent(
+              { provider: review },
+              fullBuild(),
+              commandOutput,
+            );
+            // Each repair verification is itself a durable boundary.
+            await checkpointNow({ qa: next });
+            log(next.passed ? "success" : "warning", `QA: ${next.summary}`, "repair");
+            return next;
+          },
+        });
+        run.repairLoops += loopResult.loops;
+        qa = loopResult.finalQa;
+        finishStage(run, "repair", qa.passed ? "completed" : "failed");
+        if (!qa.passed) {
+          log(
+            "warning",
+            `Reached max repair loops (${maxLoops}); residual issues remain.`,
+            "repair",
           );
-          if (fix.files.length) await writeBuild(workspace.path, fix.files, "repair");
-          log("info", fix.notes || "Applied repairs.", "repair");
-        },
-        reverify: async () => {
-          throwIfTimedOut(deadline, timeoutMs);
-          const liveBuild: FileBuild = {
-            files: [...files.values()].map((f) => ({
-              path: f.path,
-              purpose: f.purpose,
-              contents: f.contents,
-            })),
-          };
-          log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
-          const next = await qaCriticAgent(
-            { provider: review },
-            liveBuild,
-            commandOutput,
-          );
-          log(next.passed ? "success" : "warning", `QA: ${next.summary}`, "repair");
-          return next;
-        },
-      });
-      run.repairLoops = loopResult.loops;
-      qa = loopResult.finalQa;
-      finishStage(run, "repair", qa.passed ? "completed" : "failed");
-      if (!qa.passed)
-        log(
-          "warning",
-          `Reached max repair loops (${maxLoops}); residual issues remain.`,
-          "repair",
-        );
+        }
+      }
+      await checkpointNow({ qa, repairComplete: true });
+      await flush();
     }
-    await flush();
 
     /* Stage — Final Review */
-    throwIfTimedOut(deadline, timeoutMs);
-    startStage(run, "final_review");
     const testStatus = testsExecuted
       ? testExit === 0
         ? "passing"
@@ -606,28 +614,31 @@ async function executeRun(
       : qa.passed
         ? "passing"
         : "unknown";
-    log("model_call", `Final Reviewer agent (${review.name})…`);
-    const report = await finalReviewerAgent({ provider: review }, spec, qa, {
-      repairLoops: run.repairLoops,
-      workspacePath: workspace.path,
-      providerUsage: run.providerUsage,
-      testStatus,
-    });
-    // A cancel that arrived WHILE the final reviewer was in flight must not be
-    // lost — there is no later stage boundary to catch it before we mark the run
-    // completed. Check here, before the terminal durable mutation.
+    let report = checkpoint.finalReport;
+    if (!report) {
+      throwIfTimedOut(deadline, timeoutMs);
+      startStage(run, "final_review");
+      log("model_call", `Final Reviewer agent (${review.name})…`);
+      report = await finalReviewerAgent({ provider: review }, spec, qa, {
+        repairLoops: run.repairLoops,
+        workspacePath,
+        providerUsage: run.providerUsage,
+        testStatus,
+      });
+      await checkpointNow({ finalReport: report });
+    }
     throwIfCancelled(run.id);
     throwIfTimedOut(deadline, timeoutMs);
-    // Redact secret-shaped content in every string field before persisting +
-    // serving the report (a provider caveat/summary could echo a key).
     run.finalReport = redactDeep(report);
     finishStage(run, "final_review", "completed");
 
     run.status = "completed";
+    run.resumable = false;
     const doneEv = await appendAuditEvent({ type: "run.completed", runId: run.id });
     await persistAttribution(testStatus, doneEv.seq);
-    log("success", `Run complete — ${spec.appName} is ready at ${workspace.path}.`);
+    log("success", `Run complete — ${spec.appName} is ready at ${workspacePath}.`);
     await flush();
+    await deleteRunCheckpoint(run.id);
   } catch (rawErr) {
     // A provider call aborted mid-flight because the deadline fired or the
     // run was cancelled — reuse the exact same, already-tested
