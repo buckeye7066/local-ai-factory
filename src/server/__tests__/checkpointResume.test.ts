@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { rm, resolve } from "node:fs/promises";
+import { rm } from "node:fs/promises";
+import { resolve } from "node:path";
 import { freshStages } from "../../shared/schemas.js";
 import type { RunRecord } from "../../shared/schemas.js";
 
