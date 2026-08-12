@@ -75,6 +75,7 @@ describe("durable checkpoint continuation", () => {
       commandOutput: "",
       testsExecuted: false,
       testExit: null,
+      repairLoops: 0,
       repairComplete: false,
       updatedAt: Date.now(),
     });
