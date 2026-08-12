@@ -254,6 +254,7 @@ export async function listRuns(): Promise<RunSummary[]> {
       // (covers old/planted raw records loaded from disk).
       idea: redactSecrets(r.idea),
       status: r.status,
+      resumable: r.resumable,
       demo: r.demo,
       codeProvider: r.codeProvider,
       reviewProvider: r.reviewProvider,
