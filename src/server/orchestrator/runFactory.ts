@@ -222,6 +222,7 @@ async function executeRun(
       commandOutput: "",
       testsExecuted: false,
       testExit: null,
+      repairLoops: 0,
       repairComplete: false,
       updatedAt: Date.now(),
     };
@@ -229,6 +230,7 @@ async function executeRun(
     checkpoint = { ...checkpoint, ...patch, updatedAt: Date.now() };
     await saveRunCheckpoint(checkpoint);
   };
+  run.repairLoops = Math.max(run.repairLoops, checkpoint.repairLoops);
   const stageDone = (id: StageId) => {
     const status = run.stages.find((stage) => stage.id === id)?.status;
     return status === "completed" || status === "skipped";
@@ -554,28 +556,42 @@ async function executeRun(
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "repair");
       const maxLoops = args.options.maxRepairLoops ?? config.maxRepairLoops;
+      const remainingLoops = Math.max(0, maxLoops - run.repairLoops);
       if (qa.passed) {
         log("success", "No high-severity issues — repair loop skipped.");
         finishStage(run, "repair", "skipped");
       } else {
         const loopResult = await runRepairLoop({
-          maxLoops,
+          maxLoops: remainingLoops,
           initialQa: qa,
-          onLoop: (n) =>
-            log("warning", `Repair loop ${n}/${maxLoops} — patching files…`, "repair"),
+          onLoop: async () => {
+            run.repairLoops += 1;
+            await checkpointNow({ repairLoops: run.repairLoops });
+            log(
+              "warning",
+              `Repair loop ${run.repairLoops}/${maxLoops} — patching files…`,
+              "repair",
+            );
+          },
           repair: async (report) => {
             throwIfTimedOut(deadline, timeoutMs);
-            log("model_call", `Repair agent (${code.name})…`, "repair");
-            const fix = await repairAgent(
-              { provider: code },
-              report,
-              fullBuild(),
-              commandOutput,
-            );
+            let fix = checkpoint.pendingRepair;
+            if (!fix) {
+              log("model_call", `Repair agent (${code.name})…`, "repair");
+              fix = await repairAgent(
+                { provider: code },
+                report,
+                fullBuild(),
+                commandOutput,
+              );
+              // Persist before writing so a crash cannot replay the provider call.
+              await checkpointNow({ pendingRepair: fix });
+            }
             if (fix.files.length) {
               await writeBuild(workspacePath, fix.files, "repair");
             }
             log("info", fix.notes || "Applied repairs.", "repair");
+            await checkpointNow({ pendingRepair: undefined });
           },
           reverify: async () => {
             throwIfTimedOut(deadline, timeoutMs);
@@ -585,13 +601,11 @@ async function executeRun(
               fullBuild(),
               commandOutput,
             );
-            // Each repair verification is itself a durable boundary.
             await checkpointNow({ qa: next });
             log(next.passed ? "success" : "warning", `QA: ${next.summary}`, "repair");
             return next;
           },
         });
-        run.repairLoops += loopResult.loops;
         qa = loopResult.finalQa;
         finishStage(run, "repair", qa.passed ? "completed" : "failed");
         if (!qa.passed) {
@@ -638,7 +652,9 @@ async function executeRun(
     await persistAttribution(testStatus, doneEv.seq);
     log("success", `Run complete — ${spec.appName} is ready at ${workspacePath}.`);
     await flush();
-    await deleteRunCheckpoint(run.id);
+    await deleteRunCheckpoint(run.id).catch(() => {
+      log("warning", "Completed run checkpoint cleanup will be retried by retention.");
+    });
   } catch (rawErr) {
     // A provider call aborted mid-flight because the deadline fired or the
     // run was cancelled — reuse the exact same, already-tested
@@ -697,6 +713,9 @@ async function executeRun(
         detail: run.error,
       });
       await persistAttribution("unknown", ev.seq).catch(() => {});
+    }
+    if (run.status === "failed") {
+      run.resumable = Boolean(await getRunCheckpoint(run.id));
     }
     await flush();
   } finally {
