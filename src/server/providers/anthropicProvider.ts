@@ -21,8 +21,20 @@ export class AnthropicProvider implements LLMProvider {
   private client: Anthropic | null;
   private model: string;
   private onUsage: UsageSink;
+  /**
+   * Bounds every call this provider makes — the run's own deadline combined
+   * with its cancellation signal (see runFactory.ts). Without this, a hung
+   * `messages.create()` await was bounded only by the SDK's own default
+   * timeout, not by FACTORY_RUN_TIMEOUT_MS or a cancel request.
+   */
+  private signal?: AbortSignal;
 
-  constructor(apiKey: string, model: string, onUsage: UsageSink = () => {}) {
+  constructor(
+    apiKey: string,
+    model: string,
+    onUsage: UsageSink = () => {},
+    signal?: AbortSignal,
+  ) {
     // Explicit apiKey AND baseURL. This is the PAID tier, and the free route
     // sets ANTHROPIC_BASE_URL-shaped configuration elsewhere in this process;
     // passing both explicitly makes the SDK ignore every credential env var so
@@ -32,6 +44,7 @@ export class AnthropicProvider implements LLMProvider {
       : null;
     this.model = model;
     this.onUsage = onUsage;
+    this.signal = signal;
   }
 
   isConfigured(): boolean {
@@ -49,24 +62,32 @@ export class AnthropicProvider implements LLMProvider {
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
-    const text = await withRetry("anthropic.generateText", async () => {
-      // NOTE: no `temperature` — sampling params are rejected (400) on
-      // Claude Opus 4.7+/Sonnet 5/Fable 5, so omitting keeps this provider
-      // model-agnostic. input.temperature still applies to other providers.
-      const res = await client.messages.create({
-        model: this.model,
-        max_tokens: input.maxTokens ?? 4096,
-        system: input.system,
-        messages: [{ role: "user", content: input.prompt }],
-      });
-      this.onUsage({
-        inTokens: res.usage?.input_tokens ?? 0,
-        outTokens: res.usage?.output_tokens ?? 0,
-      });
-      return res.content
-        .map((block) => (block.type === "text" ? block.text : ""))
-        .join("");
-    });
+    const text = await withRetry(
+      "anthropic.generateText",
+      async () => {
+        // NOTE: no `temperature` — sampling params are rejected (400) on
+        // Claude Opus 4.7+/Sonnet 5/Fable 5, so omitting keeps this provider
+        // model-agnostic. input.temperature still applies to other providers.
+        const res = await client.messages.create(
+          {
+            model: this.model,
+            max_tokens: input.maxTokens ?? 4096,
+            system: input.system,
+            messages: [{ role: "user", content: input.prompt }],
+          },
+          { signal: this.signal },
+        );
+        this.onUsage({
+          inTokens: res.usage?.input_tokens ?? 0,
+          outTokens: res.usage?.output_tokens ?? 0,
+        });
+        return res.content
+          .map((block) => (block.type === "text" ? block.text : ""))
+          .join("");
+      },
+      3,
+      this.signal,
+    );
     return { text, provider: "anthropic" };
   }
 
@@ -78,12 +99,15 @@ You MUST respond with a single valid JSON object matching the "${input.schemaNam
 Do not include markdown fences, comments, or any prose outside the JSON.`;
 
     const callOnce = async (prompt: string): Promise<unknown> => {
-      const res = await client.messages.create({
-        model: this.model,
-        max_tokens: input.maxTokens ?? 8192,
-        system,
-        messages: [{ role: "user", content: prompt }],
-      });
+      const res = await client.messages.create(
+        {
+          model: this.model,
+          max_tokens: input.maxTokens ?? 8192,
+          system,
+          messages: [{ role: "user", content: prompt }],
+        },
+        { signal: this.signal },
+      );
       this.onUsage({
         inTokens: res.usage?.input_tokens ?? 0,
         outTokens: res.usage?.output_tokens ?? 0,
@@ -94,17 +118,22 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
       return extractJson(text);
     };
 
-    return withRetry("anthropic.generateJson", async () => {
-      const raw = await callOnce(input.prompt);
-      const first = input.schema.safeParse(raw);
-      if (first.success) return first.data;
-      const repairPrompt = `${input.prompt}
+    return withRetry(
+      "anthropic.generateJson",
+      async () => {
+        const raw = await callOnce(input.prompt);
+        const first = input.schema.safeParse(raw);
+        if (first.success) return first.data;
+        const repairPrompt = `${input.prompt}
 
 Your previous JSON failed schema validation for "${input.schemaName}".
 Issues (truncated): ${JSON.stringify(first.error.issues.slice(0, 12))}
 Return corrected JSON only.`;
-      const repaired = await callOnce(repairPrompt);
-      return input.schema.parse(repaired);
-    });
+        const repaired = await callOnce(repairPrompt);
+        return input.schema.parse(repaired);
+      },
+      3,
+      this.signal,
+    );
   }
 }

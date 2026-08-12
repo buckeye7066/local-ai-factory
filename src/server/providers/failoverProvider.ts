@@ -18,6 +18,7 @@ import {
   noteServed,
 } from "./freeRoute.js";
 import { canPayNow, PaidBudgetExhaustedError } from "./paidBudget.js";
+import { ProviderAbortError } from "./types.js";
 
 /**
  * failoverProvider.ts — FREE primary, paid rescue, automatic return to free.
@@ -130,6 +131,10 @@ export class FailoverProvider implements LLMProvider {
         return result;
       } catch (err) {
         lastErr = err;
+
+        // A deliberate abort (deadline/cancel) is never a free-route retry
+        // candidate and must never trigger paid rescue.
+        if (err instanceof ProviderAbortError) throw err;
 
         // ---- Alive, just busy. Wait. Never escalate. --------------------
         if (err instanceof FreeRouteBackpressureError) {
@@ -254,6 +259,10 @@ export class FailoverProvider implements LLMProvider {
         noteServed(tierName);
         return result;
       } catch (err) {
+        // The run's deadline lapsed or it was cancelled WHILE this paid call
+        // was in flight. That is a deliberate stop, not a paid-tier failure —
+        // do not try the next paid tier, and do not let the caller retry.
+        if (err instanceof ProviderAbortError) throw err;
         lastErr = err;
         this.log(
           "warn",

@@ -17,6 +17,7 @@ import {
   FailoverProvider,
   MissingProviderCredentialError,
   OFFLINE_PROVIDERS,
+  ProviderAbortError,
 } from "../providers/index.js";
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
@@ -40,6 +41,7 @@ import {
   clearCancel,
   throwIfCancelled,
   isCancelRequested,
+  getCancelSignal,
 } from "./cancellation.js";
 import { runRepairLoop } from "./repairLoop.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
@@ -165,19 +167,54 @@ function throwIfTimedOut(deadline: number | null, limitMs: number): void {
 }
 
 /**
+ * Combine multiple AbortSignals into one that fires when the first of them
+ * does, preserving that signal's `reason`. Manual implementation (rather than
+ * `AbortSignal.any`, added in Node 20.3) because this project's declared
+ * engine floor is `node >=20`.
+ */
+function combineAbortSignals(signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
+  const active = signals.filter((s): s is AbortSignal => Boolean(s));
+  if (active.length === 0) return undefined;
+  if (active.length === 1) return active[0];
+  const controller = new AbortController();
+  for (const s of active) {
+    if (s.aborted) {
+      controller.abort(s.reason);
+      break;
+    }
+    s.addEventListener("abort", () => controller.abort(s.reason), { once: true });
+  }
+  return controller.signal;
+}
+
+/**
  * Execute the full assembly line. Mutates `run` in place and persists at every
  * stage boundary so the UI can poll live progress.
  */
 async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
   const { config, secrets } = args;
   const { flush, log } = controller(run);
-  // Route decisions land in the run log, so "why did this cost money?" is
-  // answerable from the run itself and not only from the server console.
-  const registry = createProviderRegistry(config, secrets, (kind, message) => {
-    log(kind === "warn" ? "warning" : "info", message);
-  });
   const timeoutMs = args.options.timeoutMs ?? config.runTimeoutMs;
   const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : null;
+  // Bound every individual paid-provider SDK call by the SAME budget that
+  // bounds the run as a whole, and by cancellation — not just the checks at
+  // stage/file boundaries via throwIfTimedOut/throwIfCancelled above. Without
+  // this, a single hung client.messages.create()/responses.create() await was
+  // bounded only by the SDK's own default timeout, never by
+  // FACTORY_RUN_TIMEOUT_MS or a cancel request. See ProviderAbortError for
+  // how an abort here is kept distinct from a retryable transport error.
+  const deadlineSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+  const callSignal = combineAbortSignals([deadlineSignal, getCancelSignal(run.id)]);
+  // Route decisions land in the run log, so "why did this cost money?" is
+  // answerable from the run itself and not only from the server console.
+  const registry = createProviderRegistry(
+    config,
+    secrets,
+    (kind, message) => {
+      log(kind === "warn" ? "warning" : "info", message);
+    },
+    callSignal,
+  );
 
   // Resolve + meter providers (budget enforced inside CountingProvider).
   // Demo journeys use mock; live journeys use resolveLive (never mock/stub).
@@ -502,7 +539,18 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     await persistAttribution(testStatus, doneEv.seq);
     log("success", `Run complete — ${spec.appName} is ready at ${workspace.path}.`);
     await flush();
-  } catch (err) {
+  } catch (rawErr) {
+    // A provider call aborted mid-flight because the deadline fired or the
+    // run was cancelled — reuse the exact same, already-tested
+    // cancelled-vs-timed-out classification the stage-boundary checks use,
+    // rather than re-deriving it here. Cancel takes priority if both are
+    // somehow true at once.
+    const err: unknown =
+      rawErr instanceof ProviderAbortError
+        ? isCancelRequested(run.id)
+          ? new RunCancelledError()
+          : new RunTimeoutError(timeoutMs)
+        : rawErr;
     if (err instanceof RunCancelledError) {
       run.status = "cancelled";
       run.error = null;

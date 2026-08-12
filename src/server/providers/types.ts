@@ -28,22 +28,75 @@ export function isNonRetryable(err: unknown): boolean {
 }
 
 /**
+ * Raised when a provider call is cut short by the caller-supplied
+ * AbortSignal (the run's deadline or a cancel request) rather than by the
+ * provider itself failing. This must never be retried and must never trigger
+ * paid failover — retrying, or paying to rescue, a call the run has already
+ * given up on would be exactly backwards. `failoverProvider.ts` checks for
+ * this type specifically so it short-circuits instead of treating the abort
+ * as a transient transport failure worth another attempt.
+ */
+export class ProviderAbortError extends Error {
+  constructor(
+    message = "Provider call aborted (run deadline exceeded or run cancelled).",
+  ) {
+    super(message);
+    this.name = "ProviderAbortError";
+  }
+}
+
+/**
+ * Reject with {@link ProviderAbortError} the moment `signal` fires, whichever
+ * settles first. This is the backstop that bounds a call even if the inner
+ * SDK request never itself reacts to `signal` — belt-and-suspenders on top of
+ * also passing `signal` to the SDK call itself (which is what actually tears
+ * down the underlying HTTP request instead of leaving it running unused).
+ */
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new ProviderAbortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new ProviderAbortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
+/**
  * Run an async LLM call with bounded exponential backoff.
  * Logs are intentionally generic — we never log prompts, keys, or responses.
+ *
+ * `signal`, when given, bounds EACH attempt (not just the gaps between them):
+ * a fired signal aborts an in-flight attempt immediately, skips any further
+ * retries, and always surfaces as {@link ProviderAbortError} — never wrapped
+ * in the generic "failed after N attempts" error below, so callers can tell
+ * a deliberate abort apart from a real provider failure.
  */
 export async function withRetry<T>(
   label: string,
   fn: () => Promise<T>,
   attempts = 3,
+  signal?: AbortSignal,
 ): Promise<T> {
   let lastErr: unknown;
   let used = 0;
   for (let i = 0; i < attempts; i++) {
+    if (signal?.aborted) throw new ProviderAbortError();
     try {
       used = i + 1;
-      return await fn();
+      return await raceAbort(fn(), signal);
     } catch (err) {
       lastErr = err;
+      if (err instanceof ProviderAbortError) throw err;
       if (isNonRetryable(err)) break;
       if (i < attempts - 1) {
         const backoff = Math.min(8000, 400 * 2 ** i);

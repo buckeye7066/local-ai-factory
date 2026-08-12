@@ -19,8 +19,20 @@ export class OpenAIProvider implements LLMProvider {
   private client: OpenAI | null;
   private model: string;
   private onUsage: UsageSink;
+  /**
+   * Bounds every call this provider makes — the run's own deadline combined
+   * with its cancellation signal (see runFactory.ts). Without this, a hung
+   * `responses.create()` await was bounded only by the SDK's own default
+   * timeout, not by FACTORY_RUN_TIMEOUT_MS or a cancel request.
+   */
+  private signal?: AbortSignal;
 
-  constructor(apiKey: string, model: string, onUsage: UsageSink = () => {}) {
+  constructor(
+    apiKey: string,
+    model: string,
+    onUsage: UsageSink = () => {},
+    signal?: AbortSignal,
+  ) {
     // Explicit apiKey AND baseURL — same reasoning as the Anthropic tier. An
     // empty-but-PRESENT OPENAI_BASE_URL in the environment is honoured by the
     // SDK as a literal base URL and produces a connection error, so the paid
@@ -30,6 +42,7 @@ export class OpenAIProvider implements LLMProvider {
       : null;
     this.model = model;
     this.onUsage = onUsage;
+    this.signal = signal;
   }
 
   isConfigured(): boolean {
@@ -45,21 +58,29 @@ export class OpenAIProvider implements LLMProvider {
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
-    const text = await withRetry("openai.generateText", async () => {
-      // NOTE: no `temperature` — gpt-5.x reasoning models reject it (400),
-      // same as current Claude models. Model defaults are used instead.
-      const res = await client.responses.create({
-        model: this.model,
-        instructions: input.system,
-        input: input.prompt,
-        max_output_tokens: input.maxTokens ?? 4096,
-      });
-      this.onUsage({
-        inTokens: res.usage?.input_tokens ?? 0,
-        outTokens: res.usage?.output_tokens ?? 0,
-      });
-      return res.output_text ?? "";
-    });
+    const text = await withRetry(
+      "openai.generateText",
+      async () => {
+        // NOTE: no `temperature` — gpt-5.x reasoning models reject it (400),
+        // same as current Claude models. Model defaults are used instead.
+        const res = await client.responses.create(
+          {
+            model: this.model,
+            instructions: input.system,
+            input: input.prompt,
+            max_output_tokens: input.maxTokens ?? 4096,
+          },
+          { signal: this.signal },
+        );
+        this.onUsage({
+          inTokens: res.usage?.input_tokens ?? 0,
+          outTokens: res.usage?.output_tokens ?? 0,
+        });
+        return res.output_text ?? "";
+      },
+      3,
+      this.signal,
+    );
     return { text, provider: "openai" };
   }
 
@@ -73,27 +94,36 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
     const callOnce = async (prompt: string): Promise<unknown> => {
       // Prefer json_object when the Responses API accepts it; fall back plain.
       try {
-        const res = await client.responses.create({
-          model: this.model,
-          instructions,
-          input: prompt,
-          max_output_tokens: input.maxTokens ?? 8192,
-          text: { format: { type: "json_object" } },
-        });
+        const res = await client.responses.create(
+          {
+            model: this.model,
+            instructions,
+            input: prompt,
+            max_output_tokens: input.maxTokens ?? 8192,
+            text: { format: { type: "json_object" } },
+          },
+          { signal: this.signal },
+        );
         this.onUsage({
           inTokens: res.usage?.input_tokens ?? 0,
           outTokens: res.usage?.output_tokens ?? 0,
         });
         return extractJson(res.output_text ?? "");
       } catch (err) {
+        // An aborted call must propagate as-is — the format-fallback retry
+        // below is for a 400 on `text.format`, not for a deliberate abort.
+        if (this.signal?.aborted) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         if (/format|json_object|text\.format|unsupported/i.test(msg)) {
-          const res = await client.responses.create({
-            model: this.model,
-            instructions,
-            input: prompt,
-            max_output_tokens: input.maxTokens ?? 8192,
-          });
+          const res = await client.responses.create(
+            {
+              model: this.model,
+              instructions,
+              input: prompt,
+              max_output_tokens: input.maxTokens ?? 8192,
+            },
+            { signal: this.signal },
+          );
           this.onUsage({
             inTokens: res.usage?.input_tokens ?? 0,
             outTokens: res.usage?.output_tokens ?? 0,
@@ -104,19 +134,24 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
       }
     };
 
-    return withRetry("openai.generateJson", async () => {
-      const raw = await callOnce(input.prompt);
-      const first = input.schema.safeParse(raw);
-      if (first.success) return first.data;
+    return withRetry(
+      "openai.generateJson",
+      async () => {
+        const raw = await callOnce(input.prompt);
+        const first = input.schema.safeParse(raw);
+        if (first.success) return first.data;
 
-      // One schema-repair pass — common for live models that invent nested shapes.
-      const repairPrompt = `${input.prompt}
+        // One schema-repair pass — common for live models that invent nested shapes.
+        const repairPrompt = `${input.prompt}
 
 Your previous JSON failed schema validation for "${input.schemaName}".
 Issues (truncated): ${JSON.stringify(first.error.issues.slice(0, 12))}
 Return corrected JSON only.`;
-      const repaired = await callOnce(repairPrompt);
-      return input.schema.parse(repaired);
-    });
+        const repaired = await callOnce(repairPrompt);
+        return input.schema.parse(repaired);
+      },
+      3,
+      this.signal,
+    );
   }
 }

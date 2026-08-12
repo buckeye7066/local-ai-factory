@@ -11,6 +11,7 @@ import { recordPaidCall } from "./paidBudget.js";
 
 export { AnthropicProvider, OpenAIProvider, StubProvider, MockProvider, FreeProvider };
 export { FailoverProvider };
+export { ProviderAbortError } from "./types.js";
 
 /**
  * Offline providers — deterministic fakes that never satisfy the live
@@ -68,6 +69,13 @@ export function createProviderRegistry(
   config: AppConfig,
   secrets: AppSecrets,
   log: RouteLogger = () => {},
+  /**
+   * Bounds every paid-provider SDK call this registry's Anthropic/OpenAI
+   * instances make — the run's deadline combined with its cancellation
+   * signal. Optional and unused by callers that only resolve provider NAMES
+   * (queue-time validation, health checks) rather than making live calls.
+   */
+  signal?: AbortSignal,
 ): ProviderRegistry {
   const mock = new MockProvider();
   const stub = new StubProvider("stub");
@@ -85,15 +93,21 @@ export function createProviderRegistry(
           `tokens (est. $${usd.toFixed(4)}).`,
       );
     },
+    signal,
   );
-  const openai = new OpenAIProvider(secrets.openaiApiKey, config.openaiModel, (u) => {
-    const usd = recordPaidCall("openai", u.inTokens, u.outTokens);
-    log(
-      "warn",
-      `[route] paid OpenAI call billed: ${u.inTokens} in / ${u.outTokens} out ` +
-        `tokens (est. $${usd.toFixed(4)}).`,
-    );
-  });
+  const openai = new OpenAIProvider(
+    secrets.openaiApiKey,
+    config.openaiModel,
+    (u) => {
+      const usd = recordPaidCall("openai", u.inTokens, u.outTokens);
+      log(
+        "warn",
+        `[route] paid OpenAI call billed: ${u.inTokens} in / ${u.outTokens} out ` +
+          `tokens (est. $${usd.toFixed(4)}).`,
+      );
+    },
+    signal,
+  );
 
   const free = new FreeProvider({
     baseUrl: config.free.baseUrl,
