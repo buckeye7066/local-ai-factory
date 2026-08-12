@@ -463,7 +463,7 @@ export const RunRecordSchema = z.object({
   idea: z.string(),
   status: RunStatusSchema,
   /** True only when a private durable checkpoint can continue this run. */
-  resumable: z.boolean().default(false),
+  resumable: z.boolean().optional(),
   demo: z.boolean(),
   codeProvider: ProviderNameSchema,
   reviewProvider: ProviderNameSchema,
