@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { lstat, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { AppConfig, AppSecrets } from "../config.js";
 import type {
   RunRecord,
@@ -25,7 +27,7 @@ import {
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import { writeWorkspaceFile } from "../workspace/fileWriter.js";
-import { isInsideWorkspace, runCommand } from "../workspace/commandRunner.js";
+import { runCommand } from "../workspace/commandRunner.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -764,6 +766,50 @@ export class RunNotResumableError extends Error {
 // record and start duplicate executions.
 const resumeClaims = new Set<string>();
 
+async function assertResumeWorkspace(
+  workspaceRoot: string,
+  workspacePath: string,
+): Promise<void> {
+  const root = resolve(workspaceRoot);
+  const candidate = resolve(workspacePath);
+  const lexical = relative(root, candidate);
+  if (
+    lexical === "" ||
+    lexical.startsWith("..") ||
+    isAbsolute(lexical)
+  ) {
+    throw new RunNotResumableError(
+      "Saved workspace must be a strict child of the current WORKSPACE_ROOT. Restore the prior root or start a new run.",
+    );
+  }
+
+  const stat = await lstat(candidate).catch(() => null);
+  if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new RunNotResumableError(
+      "Saved workspace is missing, is not a directory, or is a symlink. Restore it safely or start a new run.",
+    );
+  }
+  const [rootReal, candidateReal] = await Promise.all([
+    realpath(root).catch(() => null),
+    realpath(candidate).catch(() => null),
+  ]);
+  if (!rootReal || !candidateReal) {
+    throw new RunNotResumableError(
+      "Saved workspace could not be resolved under the current WORKSPACE_ROOT.",
+    );
+  }
+  const physical = relative(rootReal, candidateReal);
+  if (
+    physical === "" ||
+    physical.startsWith("..") ||
+    isAbsolute(physical)
+  ) {
+    throw new RunNotResumableError(
+      "Saved workspace resolves outside the current WORKSPACE_ROOT.",
+    );
+  }
+}
+
 async function prepareResume(
   runId: string,
   config: AppConfig,
@@ -785,13 +831,8 @@ async function prepareResume(
         "Run has no interrupted durable checkpoint to resume.",
       );
     }
-    if (
-      run.workspacePath &&
-      !isInsideWorkspace(config.workspaceRoot, run.workspacePath)
-    ) {
-      throw new RunNotResumableError(
-        "Saved workspace is outside the current WORKSPACE_ROOT. Restore the prior root or start a new run.",
-      );
+    if (run.workspacePath) {
+      await assertResumeWorkspace(config.workspaceRoot, run.workspacePath);
     }
 
     // Resolve providers before consuming the checkpoint. If credentials or the
