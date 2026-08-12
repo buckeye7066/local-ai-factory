@@ -172,10 +172,10 @@ export function putRunInMemory(run: RunRecord): void {
  * closed) mid-run — the in-flight work is gone, so surface it honestly as
  * failed instead of showing a "running" ghost forever.
  */
-function normalizeLoaded(run: RunRecord): RunRecord {
+async function normalizeLoaded(run: RunRecord): Promise<RunRecord> {
   if (run.status === "queued" || run.status === "running") {
     run.status = "failed";
-    run.resumable = true;
+    run.resumable = Boolean(await getRunCheckpoint(run.id));
     run.error =
       "Interrupted: the backend restarted while this run was in progress. Resume continues from its last durable checkpoint.";
     run.currentStage = null;
@@ -206,7 +206,7 @@ export async function getRunForExecution(id: string): Promise<RunRecord | null> 
     const raw = await readFile(await safeStorePath(STORE_DIR, id), "utf8");
     const parsed = RunRecordSchema.parse(JSON.parse(raw));
     if (parsed.id !== id) return null;
-    const normalized = normalizeLoaded(parsed);
+    const normalized = await normalizeLoaded(parsed);
     memory.set(id, normalized);
     return normalized;
   } catch {
@@ -239,7 +239,7 @@ export async function listRuns(): Promise<RunSummary[]> {
         // A planted record with an id != its filename must never be loaded or
         // (via normalizeLoaded → saveRun) rewritten to the id's path.
         if (parsed.id !== id) continue;
-        seen.set(id, normalizeLoaded(parsed));
+        seen.set(id, await normalizeLoaded(parsed));
       } catch {
         // skip corrupt entries
       }
