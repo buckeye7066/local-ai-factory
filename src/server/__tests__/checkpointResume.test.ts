@@ -110,4 +110,110 @@ describe("durable checkpoint continuation", () => {
     expect(resumed.logs.some((line) => /resumed from/i.test(line.message))).toBe(true);
     expect(await store.getRunCheckpoint(id)).toBeNull();
   });
+
+  it("keeps a checkpoint resumable when its workspace is outside the current root", async () => {
+    vi.resetModules();
+    const store = await import("../storage/runsStore.js");
+    const { resumeFactory } = await import("../orchestrator/runFactory.js");
+    const { loadConfig, loadSecrets } = await import("../config.js");
+
+    const id = crypto.randomUUID();
+    const run: RunRecord = {
+      id,
+      idea: "Workspace root proof",
+      status: "failed",
+      resumable: true,
+      demo: true,
+      codeProvider: "mock",
+      reviewProvider: "mock",
+      currentStage: null,
+      stages: freshStages(),
+      logs: [],
+      files: [],
+      repairLoops: 0,
+      providerUsage: {
+        free: { calls: 0 },
+        anthropic: { calls: 0 },
+        openai: { calls: 0 },
+        stub: { calls: 0 },
+        mock: { calls: 0 },
+        totalCalls: 0,
+      },
+      finalReport: null,
+      appName: null,
+      workspacePath: resolve(process.cwd(), ".old-factory-root", id),
+      error: "interrupted",
+      attribution: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await store.saveRun(run);
+    await store.saveRunCheckpoint({
+      schemaVersion: 1,
+      runId: id,
+      idea: run.idea,
+      options: { demo: true },
+      files: [],
+      testWriterComplete: false,
+      commandOutput: "",
+      testsExecuted: false,
+      testExit: null,
+      repairLoops: 0,
+      repairComplete: false,
+      updatedAt: Date.now(),
+    });
+
+    const config = { ...loadConfig({}), workspaceRoot };
+    await expect(resumeFactory(id, config, loadSecrets({}))).rejects.toThrow(
+      /outside the current WORKSPACE_ROOT/i,
+    );
+    const preserved = await store.getRunForExecution(id);
+    expect(preserved?.status).toBe("failed");
+    expect(preserved?.resumable).toBe(true);
+    expect(await store.getRunCheckpoint(id)).not.toBeNull();
+  });
+
+  it("does not promise resume after restart when no checkpoint exists", async () => {
+    vi.resetModules();
+    let store = await import("../storage/runsStore.js");
+    const id = crypto.randomUUID();
+    const run: RunRecord = {
+      id,
+      idea: "No checkpoint proof",
+      status: "running",
+      resumable: false,
+      demo: true,
+      codeProvider: "mock",
+      reviewProvider: "mock",
+      currentStage: "intake",
+      stages: freshStages(),
+      logs: [],
+      files: [],
+      repairLoops: 0,
+      providerUsage: {
+        free: { calls: 0 },
+        anthropic: { calls: 0 },
+        openai: { calls: 0 },
+        stub: { calls: 0 },
+        mock: { calls: 0 },
+        totalCalls: 0,
+      },
+      finalReport: null,
+      appName: null,
+      workspacePath: null,
+      error: null,
+      attribution: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await store.saveRun(run);
+
+    vi.resetModules();
+    store = await import("../storage/runsStore.js");
+    const normalized = await store.getRunForExecution(id);
+    expect(normalized?.status).toBe("failed");
+    expect(normalized?.resumable).toBe(false);
+    expect(normalized?.error).toMatch(/no durable checkpoint/i);
+    expect(normalized?.error).not.toMatch(/Resume continues/i);
+  });
 });
