@@ -653,6 +653,7 @@ async function executeRun(
         : rawErr;
     if (err instanceof RunCancelledError) {
       run.status = "cancelled";
+      run.resumable = false;
       run.error = null;
       if (run.currentStage) finishStage(run, run.currentStage, "skipped");
       log("warning", "Run cancelled by user — stopping cleanly.");
@@ -660,6 +661,7 @@ async function executeRun(
       await persistAttribution("not_run", ev.seq).catch(() => {});
     } else if (err instanceof RunTimeoutError) {
       run.status = "failed";
+      run.resumable = true;
       run.error = err.message;
       if (run.currentStage) finishStage(run, run.currentStage, "failed");
       log("error", `Run failed: ${run.error}`);
@@ -671,6 +673,7 @@ async function executeRun(
       await persistAttribution("unknown", ev.seq).catch(() => {});
     } else if (err instanceof ModelBudgetError) {
       run.status = "failed";
+      run.resumable = true;
       run.error = err.message;
       if (run.currentStage) finishStage(run, run.currentStage, "failed");
       log("error", `Run failed: ${run.error}`);
@@ -682,6 +685,7 @@ async function executeRun(
       await persistAttribution("unknown", ev.seq).catch(() => {});
     } else {
       run.status = "failed";
+      run.resumable = true;
       // The raw error may embed a provider/library message containing a
       // secret-shaped value — redact before it is persisted and served by the API.
       run.error = redactSecrets(err instanceof Error ? err.message : "Unknown error");
@@ -698,6 +702,76 @@ async function executeRun(
   } finally {
     clearCancel(run.id);
   }
+}
+
+export class RunNotResumableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunNotResumableError";
+  }
+}
+
+async function prepareResume(
+  runId: string,
+  config: AppConfig,
+  secrets: AppSecrets,
+): Promise<{
+  run: RunRecord;
+  checkpoint: FactoryCheckpoint;
+  args: StartRunArgs;
+}> {
+  const run = await getRunForExecution(runId);
+  const checkpoint = await getRunCheckpoint(runId);
+  if (!run || !checkpoint || run.status !== "failed" || !run.resumable) {
+    throw new RunNotResumableError(
+      "Run has no interrupted durable checkpoint to resume.",
+    );
+  }
+  for (const stage of run.stages) {
+    if (stage.status === "failed" || stage.status === "active") {
+      stage.status = "pending";
+      stage.startedAt = null;
+      stage.endedAt = null;
+      stage.durationMs = null;
+    }
+  }
+  run.currentStage = null;
+  run.status = "queued";
+  run.resumable = false;
+  run.error = null;
+  await saveRun(run);
+  return {
+    run,
+    checkpoint,
+    args: {
+      idea: checkpoint.idea,
+      options: checkpoint.options,
+      config,
+      secrets,
+    },
+  };
+}
+
+/** Resume in the background (API/UI entry point). */
+export async function resumeRun(
+  runId: string,
+  config: AppConfig,
+  secrets: AppSecrets,
+): Promise<RunRecord> {
+  const prepared = await prepareResume(runId, config, secrets);
+  void executeRun(prepared.run, prepared.args, prepared.checkpoint);
+  return prepared.run;
+}
+
+/** Resume and await completion (CLI and integration-test entry point). */
+export async function resumeFactory(
+  runId: string,
+  config: AppConfig,
+  secrets: AppSecrets,
+): Promise<RunRecord> {
+  const prepared = await prepareResume(runId, config, secrets);
+  await executeRun(prepared.run, prepared.args, prepared.checkpoint);
+  return prepared.run;
 }
 
 /** Fire-and-forget: returns the queued record immediately, runs in background. */
