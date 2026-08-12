@@ -9,6 +9,9 @@ import type {
   QaReport,
   FileBuild,
   ProviderName,
+  ProductSpec,
+  Architecture,
+  TaskPlan,
 } from "../../shared/schemas.js";
 import { freshStages } from "../../shared/schemas.js";
 import type { LLMProvider } from "../../shared/types.js";
@@ -24,7 +27,16 @@ import { createWorkspace } from "../workspace/createWorkspace.js";
 import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import { summarize } from "../workspace/summarizeFiles.js";
-import { saveRun, putRunInMemory, saveRunFiles } from "../storage/runsStore.js";
+import {
+  saveRun,
+  putRunInMemory,
+  saveRunFiles,
+  saveRunCheckpoint,
+  getRunCheckpoint,
+  deleteRunCheckpoint,
+  getRunForExecution,
+} from "../storage/runsStore.js";
+import type { FactoryCheckpoint } from "./checkpoint.js";
 import { appendAuditEvent } from "../storage/auditLog.js";
 import { buildAttribution, writeAttribution } from "../storage/attribution.js";
 import {
@@ -113,6 +125,7 @@ function createRecord(args: StartRunArgs): RunRecord {
     // is unaffected — only the durable/served copy is scrubbed.
     idea: redactSecrets(args.idea),
     status: "queued",
+    resumable: false,
     demo,
     codeProvider,
     reviewProvider,
@@ -191,9 +204,35 @@ function combineAbortSignals(signals: (AbortSignal | undefined)[]): AbortSignal 
  * Execute the full assembly line. Mutates `run` in place and persists at every
  * stage boundary so the UI can poll live progress.
  */
-async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
+async function executeRun(
+  run: RunRecord,
+  args: StartRunArgs,
+  restored?: FactoryCheckpoint,
+): Promise<void> {
   const { config, secrets } = args;
   const { flush, log } = controller(run);
+  let checkpoint: FactoryCheckpoint =
+    restored ?? {
+      schemaVersion: 1,
+      runId: run.id,
+      idea: args.idea,
+      options: args.options,
+      files: [],
+      testWriterComplete: false,
+      commandOutput: "",
+      testsExecuted: false,
+      testExit: null,
+      repairComplete: false,
+      updatedAt: Date.now(),
+    };
+  const checkpointNow = async (patch: Partial<FactoryCheckpoint> = {}) => {
+    checkpoint = { ...checkpoint, ...patch, updatedAt: Date.now() };
+    await saveRunCheckpoint(checkpoint);
+  };
+  const stageDone = (id: StageId) => {
+    const status = run.stages.find((stage) => stage.id === id)?.status;
+    return status === "completed" || status === "skipped";
+  };
   const timeoutMs = args.options.timeoutMs ?? config.runTimeoutMs;
   const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : null;
   // Bound every individual paid-provider SDK call by the SAME budget that
@@ -242,8 +281,11 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     attribution(rawReview),
   );
 
-  // The live in-memory view of the workspace, keyed by path.
-  const files = new Map<string, FileContent>();
+  // The live in-memory view of the workspace, restored from the private
+  // checkpoint so a resumed run never needs the redacted API copy.
+  const files = new Map<string, FileContent>(
+    checkpoint.files.map((file) => [file.path, file]),
+  );
 
   const writeBuild = async (
     workspacePath: string,
@@ -278,6 +320,7 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     }
     run.files = summarize([...files.values()]);
     saveRunFiles(run.id, [...files.values()]);
+    await checkpointNow({ files: [...files.values()] });
   };
 
   const persistAttribution = async (
@@ -302,10 +345,22 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
   };
 
   try {
+    const isResume = Boolean(restored);
     run.status = "running";
-    await appendAuditEvent({ type: "run.started", runId: run.id });
-    log("info", `Factory run started in ${run.demo ? "demo (mock)" : "live"} mode.`);
-    if (run.demo)
+    run.resumable = false;
+    run.error = null;
+    await checkpointNow();
+    await appendAuditEvent({
+      type: isResume ? "run.resumed" : "run.started",
+      runId: run.id,
+    });
+    log(
+      "info",
+      isResume
+        ? "Factory run resumed from its last durable checkpoint."
+        : `Factory run started in ${run.demo ? "demo (mock)" : "live"} mode.`,
+    );
+    if (run.demo && !isResume)
       log(
         "warning",
         "Demo mode: zero paid credits; output is the offline mock provider.",
@@ -313,66 +368,100 @@ async function executeRun(run: RunRecord, args: StartRunArgs): Promise<void> {
     await flush();
 
     /* Stage 1 — Intake */
-    throwIfTimedOut(deadline, timeoutMs);
-    startStage(run, "intake");
-    log("info", `Intake: "${run.idea}"`);
-    finishStage(run, "intake", "completed");
-    await flush();
+    if (!stageDone("intake")) {
+      throwIfTimedOut(deadline, timeoutMs);
+      startStage(run, "intake");
+      log("info", `Intake: "${run.idea}"`);
+      finishStage(run, "intake", "completed");
+      await flush();
+    }
 
     /* Stage 2 — Product Spec */
-    throwIfTimedOut(deadline, timeoutMs);
-    startStage(run, "product_spec");
-    log("model_call", `Product Spec agent (${code.name})…`);
-    // Give the model the RAW idea (args.idea), not the redacted persisted copy.
-    const spec = await productSpecAgent({ provider: code }, args.idea);
-    // appName is model-controlled and is served by /api/runs + /:runId + logs;
-    // redact the persisted/served copy (logs already go through makeLog).
-    run.appName = redactSecrets(spec.appName);
-    log(
-      "success",
-      `Spec ready: ${spec.appName} — ${spec.coreFeatures.length} core features.`,
-    );
-    finishStage(run, "product_spec", "completed");
-    await flush();
+    let spec: ProductSpec | undefined = checkpoint.spec;
+    if (!spec) {
+      throwIfTimedOut(deadline, timeoutMs);
+      startStage(run, "product_spec");
+      log("model_call", `Product Spec agent (${code.name})…`);
+      spec = await productSpecAgent({ provider: code }, checkpoint.idea);
+      // Persist the provider output before any later mutation: a crash after
+      // this point resumes without paying for the same call again.
+      await checkpointNow({ spec });
+    }
+    if (!stageDone("product_spec")) {
+      run.appName = redactSecrets(spec.appName);
+      log(
+        "success",
+        `Spec ready: ${spec.appName} — ${spec.coreFeatures.length} core features.`,
+      );
+      finishStage(run, "product_spec", "completed");
+      await flush();
+    }
 
     /* Stage 3 — Architect */
-    throwIfTimedOut(deadline, timeoutMs);
-    startStage(run, "architect");
-    log("model_call", `Architect agent (${code.name})…`);
-    const arch = await architectAgent({ provider: code }, spec);
-    log(
-      "success",
-      `Architecture set${arch.risks.length ? ` — ${arch.risks.length} risk(s) noted.` : "."}`,
-    );
-    finishStage(run, "architect", "completed");
-    await flush();
+    let arch: Architecture | undefined = checkpoint.architecture;
+    if (!arch) {
+      throwIfTimedOut(deadline, timeoutMs);
+      startStage(run, "architect");
+      log("model_call", `Architect agent (${code.name})…`);
+      arch = await architectAgent({ provider: code }, spec);
+      await checkpointNow({ architecture: arch });
+    }
+    if (!stageDone("architect")) {
+      log(
+        "success",
+        `Architecture set${arch.risks.length ? ` — ${arch.risks.length} risk(s) noted.` : "."}`,
+      );
+      finishStage(run, "architect", "completed");
+      await flush();
+    }
 
     /* Stage 4 — Task Planner */
-    throwIfTimedOut(deadline, timeoutMs);
-    startStage(run, "task_planner");
-    log("model_call", `Task Planner agent (${code.name})…`);
-    const plan = await taskPlannerAgent({ provider: code }, spec, arch);
-    log("success", `Plan ready: ${plan.tasks.length} tasks.`);
-    finishStage(run, "task_planner", "completed");
-    await flush();
+    let plan: TaskPlan | undefined = checkpoint.plan;
+    if (!plan) {
+      throwIfTimedOut(deadline, timeoutMs);
+      startStage(run, "task_planner");
+      log("model_call", `Task Planner agent (${code.name})…`);
+      plan = await taskPlannerAgent({ provider: code }, spec, arch);
+      await checkpointNow({ plan });
+    }
+    if (!stageDone("task_planner")) {
+      log("success", `Plan ready: ${plan.tasks.length} tasks.`);
+      finishStage(run, "task_planner", "completed");
+      await flush();
+    }
 
     /* Stage 5 + 6 — Builder (generate + write files) */
-    throwIfTimedOut(deadline, timeoutMs);
-    startStage(run, "builder");
-    const workspace = await createWorkspace(config.workspaceRoot, spec.appName, run.id);
-    run.workspacePath = workspace.path;
-    await appendAuditEvent({
-      type: "workspace.created",
-      runId: run.id,
-      detail: workspace.path,
-    });
-    log("info", `Workspace: ${workspace.path}`);
-    log("model_call", `File Builder agent (${code.name})…`);
-    const build = await fileBuilderAgent({ provider: code }, spec, arch, plan);
-    await writeBuild(workspace.path, build.files, "builder");
-    log("success", `Generated ${build.files.length} files.`);
-    finishStage(run, "builder", "completed");
-    await flush();
+    let workspacePath = run.workspacePath;
+    if (!workspacePath) {
+      const created = await createWorkspace(
+        config.workspaceRoot,
+        spec.appName,
+        run.id,
+      );
+      workspacePath = created.path;
+      run.workspacePath = workspacePath;
+      await appendAuditEvent({
+        type: "workspace.created",
+        runId: run.id,
+        detail: workspacePath,
+      });
+      log("info", `Workspace: ${workspacePath}`);
+      await flush();
+    }
+    let build: FileBuild | undefined = checkpoint.build;
+    if (!build) {
+      throwIfTimedOut(deadline, timeoutMs);
+      startStage(run, "builder");
+      log("model_call", `File Builder agent (${code.name})…`);
+      build = await fileBuilderAgent({ provider: code }, spec, arch, plan);
+      await checkpointNow({ build });
+    }
+    if (!stageDone("builder")) {
+      await writeBuild(workspacePath, build.files, "builder");
+      log("success", `Generated ${build.files.length} files.`);
+      finishStage(run, "builder", "completed");
+      await flush();
+    }
 
     /* Stage 7 — Test Writer (+ optional install/test commands) */
     throwIfTimedOut(deadline, timeoutMs);
