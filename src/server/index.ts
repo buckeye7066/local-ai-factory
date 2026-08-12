@@ -5,7 +5,12 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { getConfig, getSecrets, toHealth, isFactoryHealthPayload } from "./config.js";
 import { RunOptionsSchema, isValidRunId } from "../shared/schemas.js";
-import { startRun, MissingProviderCredentialError } from "./orchestrator/runFactory.js";
+import {
+  startRun,
+  resumeRun,
+  MissingProviderCredentialError,
+  RunNotResumableError,
+} from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
 import { getRun, listRuns, getRunFiles, pruneOldRuns } from "./storage/runsStore.js";
 import {
@@ -226,6 +231,24 @@ app.post(
     }
     requestCancel(run.id);
     res.status(202).json({ ok: true });
+  }),
+);
+
+app.post(
+  "/api/runs/:runId/resume",
+  wrap(async (req, res) => {
+    const runId = validRunIdParam(req, res);
+    if (runId === null) return;
+    try {
+      const run = await resumeRun(runId, config, secrets);
+      res.status(202).json({ ok: true, runId: run.id });
+    } catch (err) {
+      if (err instanceof RunNotResumableError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   }),
 );
 
