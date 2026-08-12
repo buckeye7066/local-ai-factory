@@ -118,9 +118,19 @@ export async function withRetry<T>(
  */
 export function extractJson(text: string): unknown {
   const trimmed = text.trim();
-  // Strip code fences.
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fenced ? fenced[1].trim() : trimmed;
+  // Strip a code fence ONLY when the response itself is fenced (starts with
+  // ```), anchored to the start/end. Models tag fences with whatever language
+  // they judge the content to be (```json, ```bash, ```ts, or no tag) even
+  // when asked for JSON only, so the tag itself is stripped too. Scanning the
+  // whole text for ANY ``` pair (the old behavior) false-positived on JSON
+  // whose string values legitimately contain markdown fences of their own --
+  // e.g. a generated README.md's "```\nnpm install\n```" usage example --
+  // which extracted that embedded snippet instead of the real JSON payload.
+  let candidate = trimmed;
+  if (trimmed.startsWith("```")) {
+    const fenced = trimmed.match(/^```[a-zA-Z0-9_-]*\s*\n?([\s\S]*?)```\s*$/);
+    if (fenced) candidate = fenced[1].trim();
+  }
   // Find the first { or [ and the matching last } or ].
   const firstBrace = candidate.search(/[[{]/);
   if (firstBrace === -1) {

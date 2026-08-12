@@ -96,7 +96,11 @@ export class AnthropicProvider implements LLMProvider {
     const system = `${input.system}
 
 You MUST respond with a single valid JSON object matching the "${input.schemaName}" shape.
-Do not include markdown fences, comments, or any prose outside the JSON.`;
+Do not include markdown fences, comments, shell commands, or any prose outside the JSON.
+If a field's value would naturally include setup/install instructions (e.g. npm commands),
+put that text INSIDE the appropriate JSON string field -- never emit it as bare text or a
+fenced code block outside the JSON object. Your entire response must be parseable by
+JSON.parse() as-is.`;
 
     const callOnce = async (prompt: string): Promise<unknown> => {
       const res = await client.messages.create(
