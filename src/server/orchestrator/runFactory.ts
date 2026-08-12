@@ -556,6 +556,20 @@ async function executeRun(
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "repair");
       const maxLoops = args.options.maxRepairLoops ?? config.maxRepairLoops;
+      // A repair output is checkpointed after its paid call and remains pending
+      // until QA verifies the applied files. Complete that already-counted loop
+      // before deciding whether another loop slot is available.
+      if (checkpoint.pendingRepair) {
+        const pending = checkpoint.pendingRepair;
+        if (pending.files.length) {
+          await writeBuild(workspacePath, pending.files, "repair");
+        }
+        log("info", pending.notes || "Applied checkpointed repair.", "repair");
+        log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
+        qa = await qaCriticAgent({ provider: review }, fullBuild(), commandOutput);
+        await checkpointNow({ qa, pendingRepair: undefined });
+        log(qa.passed ? "success" : "warning", `QA: ${qa.summary}`, "repair");
+      }
       const remainingLoops = Math.max(0, maxLoops - run.repairLoops);
       if (qa.passed) {
         log("success", "No high-severity issues — repair loop skipped.");
@@ -591,7 +605,6 @@ async function executeRun(
               await writeBuild(workspacePath, fix.files, "repair");
             }
             log("info", fix.notes || "Applied repairs.", "repair");
-            await checkpointNow({ pendingRepair: undefined });
           },
           reverify: async () => {
             throwIfTimedOut(deadline, timeoutMs);
@@ -601,7 +614,7 @@ async function executeRun(
               fullBuild(),
               commandOutput,
             );
-            await checkpointNow({ qa: next });
+            await checkpointNow({ qa: next, pendingRepair: undefined });
             log(next.passed ? "success" : "warning", `QA: ${next.summary}`, "repair");
             return next;
           },
