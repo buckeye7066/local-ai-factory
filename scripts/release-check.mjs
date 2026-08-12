@@ -1,145 +1,57 @@
 #!/usr/bin/env node
 /**
- * Permanent release:check gate for Factory Deck (local-ai-factory).
+ * Executable repository gate for Factory Deck.
  *
- * Fails (exit 1) when:
- *  - purpose contract / production-readiness workflow / schema missing
- *  - release manifest claims RC/PR with unresolved blockers
- *  - mock_only_core is true
- *  - SHA mismatch for ready statuses
- *  - PRODUCTION READY without all reviews pass (and implementer CI must refuse PR claim)
- *
- * Never invents success. Honest BLOCKED (missing credentials) is allowed.
+ * This check validates concrete source controls only. It deliberately does not
+ * create or consume readiness manifests, attestations, or review-status files.
+ * Product readiness is not self-certified by an implementation script.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const MANIFEST_PATH = resolve(ROOT, "docs/release-manifest.json");
-const SCHEMA_PATH = resolve(ROOT, "docs/release-manifest.schema.json");
-const PURPOSE_PATH = resolve(ROOT, "docs/purpose-contract.md");
-const WORKFLOW_PATH = resolve(ROOT, ".github/workflows/production-readiness.yml");
-const ALLOWED = new Set([
-  "IN PROGRESS",
-  "BLOCKED",
-  "RELEASE CANDIDATE",
-  "PRODUCTION READY",
-]);
-
-function git(...args) {
-  const env = {
-    ...process.env,
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "safe.directory",
-    GIT_CONFIG_VALUE_0: ROOT.replace(/\\/g, "/"),
-  };
-  const r = spawnSync("git", args, { cwd: ROOT, encoding: "utf8", env });
-  const out = (r.stdout || r.stderr || "").trim();
-  return { code: r.status ?? 1, out };
-}
-
-function utc() {
-  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-}
+const required = [
+  ["purpose_contract", "docs/purpose-contract.md"],
+  ["production_readiness_workflow", ".github/workflows/production-readiness.yml"],
+  ["provider_timeout_regression", "src/server/__tests__/providerAbort.test.ts"],
+  ["anthropic_provider", "src/server/providers/anthropicProvider.ts"],
+  ["openai_provider", "src/server/providers/openaiProvider.ts"],
+  ["package", "package.json"],
+];
 
 const errors = [];
 const notes = [];
-
-for (const [label, path] of [
-  ["purpose_contract", PURPOSE_PATH],
-  ["release_manifest_schema", SCHEMA_PATH],
-  ["production_readiness_workflow", WORKFLOW_PATH],
-]) {
-  if (!existsSync(path)) errors.push(`missing_required:${label}:${path}`);
+for (const [label, relativePath] of required) {
+  const path = resolve(ROOT, relativePath);
+  if (!existsSync(path)) errors.push(`missing_required:${label}:${relativePath}`);
   else notes.push(`present:${label}`);
 }
 
-const headRes = git("rev-parse", "HEAD");
-const head = headRes.code === 0 ? headRes.out : "";
-if (!head) errors.push(`git_head_unreadable:${headRes.out}`);
-
-let manifest = null;
-if (!existsSync(MANIFEST_PATH)) {
-  notes.push("release_manifest_absent");
-  errors.push("missing_release_manifest");
-} else {
-  manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
-  const status = manifest.status;
-  if (!ALLOWED.has(status)) errors.push(`invalid_status:${JSON.stringify(status)}`);
-  const blockers = Array.isArray(manifest.blockers) ? manifest.blockers : [];
-  const mockOnly = Boolean(manifest.mock_only_core);
-  let shaMatch = Boolean(manifest.sha_match);
-  const mainSha = String(manifest.main_sha || "");
-
-  if (mockOnly && (status === "RELEASE CANDIDATE" || status === "PRODUCTION READY")) {
-    errors.push("mock_only_core_true");
-  }
-  // Always forbid recording mock e2e as production-ready proof, any status.
-  if ((manifest.proofs || {}).mock_e2e_as_production_ready === true) {
-    errors.push("forbidden_proof:mock_e2e_as_production_ready");
-  }
-
-  // Ready statuses require EXACT identity with certified main_sha.
-  // A prior "docs-ahead" ancestor check was removed: it accepted arbitrary
-  // descendant runtime changes while reusing certification for an older SHA (P1).
-  if (mainSha && head && head !== mainSha && !head.startsWith(mainSha.slice(0, 12))) {
-    shaMatch = false;
-    if (status === "RELEASE CANDIDATE" || status === "PRODUCTION READY") {
-      errors.push(`sha_mismatch:head=${head}:manifest=${mainSha}`);
-    } else {
-      notes.push(`sha_mismatch_allowed_for_${String(status).replace(/\s+/g, "_").toLowerCase()}:head=${head}:manifest=${mainSha}`);
+const packagePath = resolve(ROOT, "package.json");
+if (existsSync(packagePath)) {
+  try {
+    const pkg = JSON.parse(readFileSync(packagePath, "utf8"));
+    for (const script of ["typecheck", "test", "release:check"]) {
+      if (!pkg?.scripts?.[script]) errors.push(`missing_package_script:${script}`);
     }
-  }
-
-  if (!shaMatch && (status === "RELEASE CANDIDATE" || status === "PRODUCTION READY")) {
-    errors.push("sha_match_false_for_ready_status");
-  }
-  if (blockers.length && (status === "RELEASE CANDIDATE" || status === "PRODUCTION READY")) {
-    errors.push("unresolved_blockers_with_ready_status:" + blockers.slice(0, 8).join("|"));
-  }
-  if (status === "PRODUCTION READY") {
-    const reviews = manifest.reviews || {};
-    for (const lane of ["functional", "security", "release"]) {
-      if (reviews[lane] !== "pass") {
-        errors.push(`review_not_pass:${lane}=${JSON.stringify(reviews[lane])}`);
-      }
+    if (pkg?.scripts?.["release:manifest"]) {
+      errors.push("forbidden_readiness_bookkeeping_script:release:manifest");
     }
-    if (blockers.length) errors.push("production_ready_forbidden_with_blockers");
-  }
-
-  const gates = manifest.gates || {};
-  for (const g of [
-    "release_check",
-    "production_readiness_workflow",
-    "purpose_contract",
-    "typecheck",
-    "unit_tests",
-    "real_provider_proof",
-  ]) {
-    if (gates[g] !== true && (status === "RELEASE CANDIDATE" || status === "PRODUCTION READY")) {
-      errors.push(`gate_false:${g}`);
-    }
-  }
-
-  // Core purpose cannot be satisfied by mock-only evidence for ready statuses.
-  const proofs = manifest.proofs || {};
-  if (
-    (status === "RELEASE CANDIDATE" || status === "PRODUCTION READY") &&
-    proofs.real_provider_journey !== true
-  ) {
-    errors.push("real_provider_journey_required_for_ready_status");
+  } catch (error) {
+    errors.push(`invalid_package_json:${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-const payload = {
-  ok: errors.length === 0,
-  generated_at: utc(),
-  head,
-  errors,
-  notes,
-  manifest_present: manifest !== null,
-};
-console.log(JSON.stringify(payload, null, 2));
+for (const forbidden of [
+  "docs/release-manifest.json",
+  "docs/release-manifest.schema.json",
+  "docs/reviews/SEQUENTIAL_REVIEW.md",
+]) {
+  if (existsSync(resolve(ROOT, forbidden))) {
+    errors.push(`forbidden_readiness_bookkeeping:${forbidden}`);
+  }
+}
+
+console.log(JSON.stringify({ ok: errors.length === 0, errors, notes }, null, 2));
 process.exit(errors.length === 0 ? 0 : 1);
