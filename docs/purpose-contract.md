@@ -40,15 +40,15 @@ Silent coercion of live runs into mock success when credentials are missing is *
 |------|-------------|
 | Real-provider journey | Live job (`demo: false`) completes (or fails honestly) using Anthropic and/or OpenAI — **or** status is `BLOCKED` with the exact missing credential env var name(s) |
 | No fake-success | Live path never falls back to mock/stub; missing keys return a clear credential error |
-| Controls | Permanent `release:check`, `.github/workflows/production-readiness.yml`, machine-readable `docs/release-manifest.json` (schema + generator) |
-| Evidence | This file; portfolio evidence packet with SHAs |
-| Reviews | Independent functional + security + release reviews with zero unresolved P0/P1 |
+| Controls | Executable `release:check`, `.github/workflows/production-readiness.yml`, typechecking, and the complete automated test suite |
+| Evidence | This contract, final-SHA GitHub Actions results, and real-provider journey evidence |
+| Reviews | Independent functional, security, and release review is an owner-controlled external gate; implementation code must not self-attest it |
 | Identity | Exact default-branch SHA equals local launcher/runtime tree before Production Ready |
 
 ## Explicit blockers (honest)
 
 - Missing `ANTHROPIC_API_KEY` and/or `OPENAI_API_KEY` for the live path → **BLOCKED** (list exact missing names). Still finish all unblocked software + permanent gates.
-- Independent reviews pending → cannot be Production Ready; implementer max status is **RELEASE CANDIDATE**.
+- Independent reviews are owner-controlled and external to repository bookkeeping; implementation code must not create a readiness attestation.
 - Launcher/runtime SHA ≠ `main` tip → **BLOCKED** for Production Ready (sync required).
 
 ## Forbidden claims

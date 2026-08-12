@@ -26,7 +26,6 @@
     "proof:free-route": "tsx src/cli/proof-free-route.ts",
     "measure:free-route": "node scripts/measure-free-route.mjs",
     "release:check": "node scripts/release-check.mjs",
-    "release:manifest": "node scripts/generate-release-manifest.mjs",
     "icon": "tsx scripts/make-icon.ts",
     "install:desktop-icon": "powershell -ExecutionPolicy Bypass -File scripts/Install-Desktop-Icon.ps1",
     "test": "vitest run",

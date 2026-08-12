@@ -60,7 +60,6 @@ import { startRun } from "../orchestrator/runFactory.js";
 import { loadConfig, loadSecrets } from "../config.js";
 import type {
   LLMProvider,
-  GenerateTextInput,
   GenerateTextResult,
   GenerateJsonInput,
 } from "../../shared/types.js";
@@ -201,7 +200,7 @@ class HangingPaidProvider implements LLMProvider {
   async generateText(): Promise<GenerateTextResult> {
     return withRetry("test.hanging-paid", () => hang<GenerateTextResult>(), 3, this.signal);
   }
-  async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
+  async generateJson<T>(_input: GenerateJsonInput<T>): Promise<T> {
     return withRetry("test.hanging-paid", () => hang<T>(), 3, this.signal);
   }
 }
