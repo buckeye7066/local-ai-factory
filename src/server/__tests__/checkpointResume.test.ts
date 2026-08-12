@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { rm } from "node:fs/promises";
+import { mkdir, rm, symlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { freshStages } from "../../shared/schemas.js";
 import type { RunRecord } from "../../shared/schemas.js";
@@ -8,11 +8,13 @@ const DATA_DIR = ".test-factory-checkpoint-resume";
 process.env.FACTORY_DATA_DIR = DATA_DIR;
 const dataPath = resolve(process.cwd(), DATA_DIR);
 const workspaceRoot = resolve(process.cwd(), ".test-checkpoint-workspaces");
+const outsideRoot = resolve(process.cwd(), ".test-checkpoint-outside");
 
 afterAll(async () => {
   delete process.env.FACTORY_DATA_DIR;
   await rm(dataPath, { recursive: true, force: true });
   await rm(workspaceRoot, { recursive: true, force: true });
+  await rm(outsideRoot, { recursive: true, force: true });
 });
 
 describe("durable checkpoint continuation", () => {
@@ -165,8 +167,29 @@ describe("durable checkpoint continuation", () => {
 
     const config = { ...loadConfig({}), workspaceRoot };
     await expect(resumeFactory(id, config, loadSecrets({}))).rejects.toThrow(
-      /outside the current WORKSPACE_ROOT/i,
+      /WORKSPACE_ROOT/i,
     );
+
+    run.workspacePath = workspaceRoot;
+    await store.saveRun(run);
+    await expect(resumeFactory(id, config, loadSecrets({}))).rejects.toThrow(
+      /strict child/i,
+    );
+
+    await mkdir(workspaceRoot, { recursive: true });
+    await mkdir(outsideRoot, { recursive: true });
+    const linkedWorkspace = resolve(workspaceRoot, `linked-${id}`);
+    await symlink(
+      outsideRoot,
+      linkedWorkspace,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    run.workspacePath = linkedWorkspace;
+    await store.saveRun(run);
+    await expect(resumeFactory(id, config, loadSecrets({}))).rejects.toThrow(
+      /symlink|resolves outside/i,
+    );
+
     const preserved = await store.getRunForExecution(id);
     expect(preserved?.status).toBe("failed");
     expect(preserved?.resumable).toBe(true);
