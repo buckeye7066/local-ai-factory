@@ -85,8 +85,23 @@ describe("durable checkpoint continuation", () => {
       workspaceRoot,
       dryRunCommands: true,
     };
-    const resumed = await resumeFactory(id, config, loadSecrets({}));
+    const secrets = loadSecrets({});
+    const attempts = await Promise.allSettled([
+      resumeFactory(id, config, secrets),
+      resumeFactory(id, config, secrets),
+    ]);
+    const fulfilled = attempts.filter(
+      (result): result is PromiseFulfilledResult<RunRecord> =>
+        result.status === "fulfilled",
+    );
+    const rejected = attempts.filter(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0].reason)).toMatch(/already being claimed|not resumable/i);
 
+    const resumed = fulfilled[0].value;
     expect(resumed.status).toBe("completed");
     expect(resumed.resumable).toBe(false);
     expect(
