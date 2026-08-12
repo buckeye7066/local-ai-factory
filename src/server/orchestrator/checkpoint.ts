@@ -8,6 +8,7 @@ import {
   RunIdSchema,
   RunOptionsSchema,
   TaskPlanSchema,
+  TestPlanSchema,
 } from "../../shared/schemas.js";
 
 /**
@@ -24,6 +25,7 @@ export const FactoryCheckpointSchema = z.object({
   architecture: ArchitectureSchema.optional(),
   plan: TaskPlanSchema.optional(),
   build: FileBuildSchema.optional(),
+  testPlan: TestPlanSchema.optional(),
   files: z.array(FileContentSchema).default([]),
   testWriterComplete: z.boolean().default(false),
   commandOutput: z.string().default(""),
