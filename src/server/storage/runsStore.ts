@@ -175,9 +175,11 @@ export function putRunInMemory(run: RunRecord): void {
 async function normalizeLoaded(run: RunRecord): Promise<RunRecord> {
   if (run.status === "queued" || run.status === "running") {
     run.status = "failed";
-    run.resumable = Boolean(await getRunCheckpoint(run.id));
-    run.error =
-      "Interrupted: the backend restarted while this run was in progress. Resume continues from its last durable checkpoint.";
+    const hasCheckpoint = Boolean(await getRunCheckpoint(run.id));
+    run.resumable = hasCheckpoint;
+    run.error = hasCheckpoint
+      ? "Interrupted: the backend restarted while this run was in progress. Resume continues from its last durable checkpoint."
+      : "Interrupted: the backend restarted while this run was in progress, but no durable checkpoint was available. Start a new run.";
     run.currentStage = null;
     for (const stage of run.stages) {
       if (stage.status === "active") {
