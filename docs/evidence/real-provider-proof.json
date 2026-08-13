@@ -3,18 +3,21 @@
   "demo": false,
   "blocked": false,
   "status": "completed",
-  "runId": "242eaea8-4324-407e-a9c9-654d872b0545",
-  "codeProvider": "openai",
-  "reviewProvider": "openai",
-  "appName": "Sticky Count",
-  "workspacePath": "workspaces/sticky-count-242eaea8",
+  "runId": "8a3c2c72-ad9d-4697-971f-00e06f299eef",
+  "codeProvider": "anthropic",
+  "reviewProvider": "anthropic",
+  "appName": "TapTally",
+  "workspacePath": "C:\\Users\\firer\\local-ai-factory\\workspaces\\taptally-8a3c2c72",
   "repairLoops": 0,
   "providerUsage": {
-    "anthropic": {
+    "free": {
       "calls": 0
     },
-    "openai": {
+    "anthropic": {
       "calls": 7
+    },
+    "openai": {
+      "calls": 0
     },
     "stub": {
       "calls": 0
@@ -25,8 +28,5 @@
     "totalCalls": 7
   },
   "error": null,
-  "recorded_at": "2026-08-09T04:04:50Z",
-  "notes": [
-    "Live journey completed with OpenAI for code+review (ANTHROPIC_API_KEY present but Anthropic credit balance too low for default dual-provider path)."
-  ]
+  "recorded_at": "2026-08-12T20:30:09Z"
 }
