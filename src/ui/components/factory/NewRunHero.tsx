@@ -7,14 +7,18 @@ import {
   TriangleAlert,
   FlaskConical,
   ArrowRight,
+  MessageCircleQuestion,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "../../lib/cn.js";
 import { Button } from "../ui/Button.js";
 import { Textarea } from "../ui/Textarea.js";
 import { Badge } from "../ui/Badge.js";
+import { Tabs } from "../ui/Tabs.js";
 import { slideUp, staggerContainer, staggerItem } from "../../lib/motion.js";
 import { ProviderRoutingCards } from "./ProviderRoutingCards.js";
 import { SafetySettingsPreview } from "./SafetySettingsPreview.js";
+import { ExtendExistingPanel } from "./ExtendExistingPanel.js";
 import type { Health, RunOptions } from "../../../shared/schemas.js";
 
 const EXAMPLES = [
@@ -41,6 +45,7 @@ export function NewRunHero({
     (health?.anthropicConfigured ?? false) || (health?.openaiConfigured ?? false);
   const [idea, setIdea] = useState("");
   const [demo, setDemo] = useState(!hasAnyKey);
+  const [runMode, setRunMode] = useState<"new" | "extend">("new");
 
   const start = () => {
     const trimmed = idea.trim();
@@ -73,6 +78,64 @@ export function NewRunHero({
         </p>
       </motion.div>
 
+      <motion.div variants={slideUp} className="mt-6 flex justify-center">
+        <Tabs
+          items={[
+            {
+              id: "new",
+              label: "Build a New App",
+              icon: <Sparkles className="h-3.5 w-3.5" />,
+            },
+            {
+              id: "extend",
+              label: "Extend an Existing Program",
+              icon: <MessageCircleQuestion className="h-3.5 w-3.5" />,
+            },
+          ]}
+          active={runMode}
+          onChange={(id) => setRunMode(id as "new" | "extend")}
+        />
+      </motion.div>
+
+      {runMode === "extend" ? (
+        <ExtendExistingPanel starting={starting} onStart={onStart} />
+      ) : (
+        <NewAppPanel
+          idea={idea}
+          setIdea={setIdea}
+          demo={demo}
+          setDemo={setDemo}
+          hasAnyKey={hasAnyKey}
+          health={health}
+          starting={starting}
+          start={start}
+        />
+      )}
+    </motion.div>
+  );
+}
+
+function NewAppPanel({
+  idea,
+  setIdea,
+  demo,
+  setDemo,
+  hasAnyKey,
+  health,
+  starting,
+  start,
+}: {
+  idea: string;
+  setIdea: (v: string) => void;
+  demo: boolean;
+  setDemo: (v: boolean) => void;
+  hasAnyKey: boolean;
+  health: Health | null;
+  starting: boolean;
+  start: () => void;
+}) {
+  return (
+    <>
       {/* Prompt panel */}
       <motion.div variants={slideUp} className="glass mt-8 p-5 sm:p-6">
         <label htmlFor="idea" className="mb-2 block text-xs font-medium text-slate-400">
@@ -158,7 +221,7 @@ export function NewRunHero({
         Tip: press <kbd className="rounded bg-white/10 px-1">⌘/Ctrl</kbd> +{" "}
         <kbd className="rounded bg-white/10 px-1">Enter</kbd> to launch.
       </motion.p>
-    </motion.div>
+    </>
   );
 }
 

@@ -1,0 +1,109 @@
+{
+  "ok": false,
+  "recorded_at": "2026-08-13T00:26:13.778Z",
+  "runId": "f8be6ee1-9c3f-4064-8daa-7fc81e1e11cd",
+  "status": "failed",
+  "error": "Bad escaped character in JSON at position 3385 (line 17 column 1570)",
+  "appName": "futureu",
+  "workspacePath": "C:\\Users\\firer\\FutureU",
+  "elapsedMs": 2163670,
+  "repairLoops": 0,
+  "filesWritten": [
+    {
+      "path": "client/src/pages/ParentWeeklyDigest.jsx",
+      "status": "generated",
+      "size": 5755
+    },
+    {
+      "path": "client/src/styles.css",
+      "status": "modified",
+      "size": 228
+    },
+    {
+      "path": "client/src/styles/print-digest.css",
+      "status": "generated",
+      "size": 3048
+    },
+    {
+      "path": "server/routes/.digest-loader.js",
+      "status": "generated",
+      "size": 1478
+    },
+    {
+      "path": "server/routes/parentDigest-shim.js.txt",
+      "status": "generated",
+      "size": 155
+    },
+    {
+      "path": "server/routes/parentDigest.js",
+      "status": "generated",
+      "size": 5468
+    }
+  ],
+  "providerUsage": {
+    "free": {
+      "calls": 8
+    },
+    "anthropic": {
+      "calls": 0
+    },
+    "openai": {
+      "calls": 0
+    },
+    "stub": {
+      "calls": 0
+    },
+    "mock": {
+      "calls": 0
+    },
+    "totalCalls": 8
+  },
+  "finalReport": null,
+  "stages": [
+    {
+      "id": "intake",
+      "status": "completed",
+      "durationMs": 98
+    },
+    {
+      "id": "product_spec",
+      "status": "completed",
+      "durationMs": 45906
+    },
+    {
+      "id": "architect",
+      "status": "completed",
+      "durationMs": 64781
+    },
+    {
+      "id": "task_planner",
+      "status": "completed",
+      "durationMs": 98495
+    },
+    {
+      "id": "builder",
+      "status": "completed",
+      "durationMs": 1286090
+    },
+    {
+      "id": "test_writer",
+      "status": "failed",
+      "durationMs": 668219
+    },
+    {
+      "id": "qa_critic",
+      "status": "pending",
+      "durationMs": null
+    },
+    {
+      "id": "repair",
+      "status": "pending",
+      "durationMs": null
+    },
+    {
+      "id": "final_review",
+      "status": "pending",
+      "durationMs": null
+    }
+  ]
+}

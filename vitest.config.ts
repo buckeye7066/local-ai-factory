@@ -8,7 +8,11 @@ export default defineConfig({
     // into the user's real .factory/ history. runsStore reads FACTORY_DATA_DIR
     // at import time; vitest applies `env` before test modules load. The global
     // setup file removes this throwaway dir before and after the suite.
-    env: { FACTORY_DATA_DIR: ".vitest-factory-data" },
+    // Research does real, keyless internet calls (DuckDuckGo Lite search +
+    // arbitrary fetch) when enabled — off by default for the suite so
+    // `npm test` never depends on real network access; dedicated research
+    // tests stub `fetch` instead of relying on this flag.
+    env: { FACTORY_DATA_DIR: ".vitest-factory-data", FACTORY_RESEARCH_ENABLED: "0" },
     globalSetup: ["./vitest.globalSetup.ts"],
   },
 });

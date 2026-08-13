@@ -22,6 +22,17 @@ import { appendAuditEvent } from "./storage/auditLog.js";
 import { authorizeApiRequest, resolveBindHost } from "./security/access.js";
 import { snapshotRoute, getThresholds, probeLiveness } from "./providers/freeRoute.js";
 import { paidBudgetStatus } from "./providers/paidBudget.js";
+import { createProviderRegistry } from "./providers/index.js";
+import {
+  clarificationAgent,
+  type ClarificationHistoryItem,
+} from "./agents/clarificationAgent.js";
+import {
+  createSession,
+  getSession,
+  updateSession,
+  questionCap,
+} from "./storage/clarificationStore.js";
 
 /**
  * server/index.ts — the LOCAL backend API.
@@ -107,6 +118,124 @@ app.get("/api/route", (_req, res) => {
     res.json({ ...routeStatus(), liveness });
   })();
 });
+
+/**
+ * Clarification loop — the yes/no alternative to direct-prompt mode. The
+ * owner states what they want; the backend asks ONE yes/no question at a time
+ * (never open-ended) until it is confident, then hands back a refined goal
+ * list the client passes into POST /api/runs as options.goals with
+ * options.mode="extend".
+ */
+function clarificationProvider() {
+  const registry = createProviderRegistry(config, secrets);
+  return registry.resolveLive(undefined, config.defaultCodeProvider);
+}
+
+app.post(
+  "/api/clarify/start",
+  wrap(async (req, res) => {
+    const initialRequest =
+      typeof req.body?.initialRequest === "string"
+        ? req.body.initialRequest.trim()
+        : "";
+    if (!initialRequest) {
+      res.status(400).json({ error: "Field 'initialRequest' is required." });
+      return;
+    }
+    const session = createSession(initialRequest);
+    const turn = await clarificationAgent(
+      { provider: clarificationProvider() },
+      { initialRequest, history: [] },
+    );
+    updateSession(session.id, {
+      status: turn.confident ? "confident" : "active",
+      currentQuestion: turn.nextQuestion,
+      refinedGoals: turn.refinedGoals,
+    });
+    res.status(201).json({
+      sessionId: session.id,
+      confident: turn.confident,
+      question: turn.nextQuestion,
+      refinedGoals: turn.refinedGoals,
+    });
+  }),
+);
+
+app.post(
+  "/api/clarify/:sessionId/answer",
+  wrap(async (req, res) => {
+    const sessionId = String(req.params.sessionId);
+    const session = getSession(sessionId);
+    if (!session) {
+      res.status(404).json({ error: "Clarification session not found." });
+      return;
+    }
+    if (session.status !== "active") {
+      res.status(409).json({ error: `Session is already ${session.status}.` });
+      return;
+    }
+    const answerRaw = String(req.body?.answer ?? "")
+      .toLowerCase()
+      .trim();
+    const answer: "yes" | "no" | null =
+      answerRaw === "yes" || answerRaw === "y"
+        ? "yes"
+        : answerRaw === "no" || answerRaw === "n"
+          ? "no"
+          : null;
+    if (!answer) {
+      res.status(400).json({ error: "Field 'answer' must be 'yes' or 'no'." });
+      return;
+    }
+    if (!session.currentQuestion) {
+      res.status(409).json({ error: "No pending question on this session." });
+      return;
+    }
+    const history: ClarificationHistoryItem[] = [
+      ...session.history,
+      { question: session.currentQuestion, answer },
+    ];
+    const forceConfident = history.length >= questionCap();
+    const turn = forceConfident
+      ? {
+          confident: true,
+          nextQuestion: null,
+          rationale: `Reached the ${questionCap()}-question cap — proceeding with what's known.`,
+          refinedGoals: [
+            session.initialRequest,
+            ...history.map((h) => `${h.question} -> ${h.answer}`),
+          ],
+        }
+      : await clarificationAgent(
+          { provider: clarificationProvider() },
+          { initialRequest: session.initialRequest, history },
+        );
+    updateSession(sessionId, {
+      history,
+      status: turn.confident ? "confident" : "active",
+      currentQuestion: turn.nextQuestion,
+      refinedGoals: turn.refinedGoals,
+    });
+    res.json({
+      sessionId,
+      confident: turn.confident,
+      question: turn.nextQuestion,
+      refinedGoals: turn.refinedGoals,
+    });
+  }),
+);
+
+app.get(
+  "/api/clarify/:sessionId",
+  wrap(async (req, res) => {
+    const session = getSession(String(req.params.sessionId));
+    if (!session) {
+      res.status(404).json({ error: "Clarification session not found." });
+      return;
+    }
+    res.json(session);
+  }),
+);
 
 /** A `:runId` route param must be a well-formed run id or the route 404s. */
 function validRunIdParam(req: Request, res: Response): string | null {

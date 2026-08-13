@@ -80,6 +80,14 @@ export interface AppConfig {
   workspaceRoot: string;
   dryRunCommands: boolean;
   /**
+   * Real, keyless web-research step (search + fetch, no API key) between
+   * architecture and task planning. Defaults ON for real usage — "insert
+   * this as a real step... not a decorative feature nobody actually calls."
+   * Tests default it OFF (see vitest.config.ts) so `npm test` stays
+   * network-independent; demo runs skip it regardless of this flag.
+   */
+  enableResearch: boolean;
+  /**
    * Explicit approval to execute model-authored scripts (test/build/run/etc.).
    * Defaults to false: turning DRY_RUN off alone must not run untrusted code.
    */
@@ -142,6 +150,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // Always resolved under the project root; the workspace writer enforces this too.
     workspaceRoot: resolve(process.cwd(), env.WORKSPACE_ROOT || "./workspaces"),
     dryRunCommands: bool(env.DRY_RUN_COMMANDS, true),
+    enableResearch: bool(env.FACTORY_RESEARCH_ENABLED, true),
     allowUntrustedScripts: bool(env.ALLOW_UNTRUSTED_SCRIPTS, false),
     bindLan: bool(env.FACTORY_BIND_LAN, false),
     port: num(env.PORT, 5179),

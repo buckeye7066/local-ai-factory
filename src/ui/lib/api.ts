@@ -45,6 +45,26 @@ export const api = {
     jsonFetch<{ ok: true; runId: string }>(`/api/runs/${id}/resume`, {
       method: "POST",
     }),
+  startClarify: (initialRequest: string) =>
+    jsonFetch<{
+      sessionId: string;
+      confident: boolean;
+      question: string | null;
+      refinedGoals: string[];
+    }>("/api/clarify/start", {
+      method: "POST",
+      body: JSON.stringify({ initialRequest }),
+    }),
+  answerClarify: (sessionId: string, answer: "yes" | "no") =>
+    jsonFetch<{
+      sessionId: string;
+      confident: boolean;
+      question: string | null;
+      refinedGoals: string[];
+    }>(`/api/clarify/${sessionId}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ answer }),
+    }),
 };
 
 /** True when a run has reached a terminal state (no more polling needed). */

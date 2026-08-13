@@ -402,6 +402,22 @@ export const ProviderNameSchema = z.enum([
 ]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
+/**
+ * Where an EXISTING codebase to extend comes from. "path" is a local directory
+ * on this machine; "git" is a clonable URL. `inPlace` is an explicit, narrow
+ * opt-in to operate directly on that local path instead of Factory Deck's
+ * default (always copy/clone into an isolated workspace first) — it must never
+ * default to true, since it is the one setting that lets a run write into a
+ * real project tree the owner did not hand Factory Deck a throwaway copy of.
+ */
+export const RepoSourceSchema = z.object({
+  type: z.enum(["path", "git"]),
+  location: z.string().min(1),
+  /** Operate directly on `location` instead of an isolated copy. Default false. */
+  inPlace: z.boolean().optional(),
+});
+export type RepoSource = z.infer<typeof RepoSourceSchema>;
+
 export const RunOptionsSchema = z.object({
   codeProvider: ProviderNameSchema.optional(),
   reviewProvider: ProviderNameSchema.optional(),
@@ -411,6 +427,24 @@ export const RunOptionsSchema = z.object({
   idempotencyKey: z.string().min(1).max(200).optional(),
   /** Optional overall run timeout in ms (overrides FACTORY_RUN_TIMEOUT_MS). */
   timeoutMs: z.number().int().positive().max(3_600_000).optional(),
+  /**
+   * "new" (default) builds a fresh app from `idea`, exactly as before.
+   * "extend" ingests an existing codebase (from `repoSource`, or resolved
+   * automatically from free text in `idea` when `repoSource` is omitted) and
+   * implements `goals` (or, if empty, `idea` itself) against it in
+   * read-modify-write mode through the same pipeline + quality gates.
+   */
+  mode: z.enum(["new", "extend"]).optional(),
+  /** The TARGET repo — where output is written. */
+  repoSource: RepoSourceSchema.optional(),
+  /**
+   * ADDITIONAL, read-only SOURCE repos referenced alongside the target — e.g.
+   * "take the auth system from A and put it into B" (B = repoSource, A = one
+   * of these). Never written to; only read, understood, and ported from.
+   */
+  additionalRepoSources: z.array(RepoSourceSchema).max(5).optional(),
+  /** Finalized goal list (e.g. from the yes/no clarification loop). */
+  goals: z.array(z.string().min(1)).max(50).optional(),
 });
 export type RunOptions = z.infer<typeof RunOptionsSchema>;
 

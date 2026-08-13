@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ResearchFindingsSchema } from "../agents/researchAgent.js";
 import {
   ArchitectureSchema,
   FileBuildSchema,
@@ -25,6 +26,8 @@ export const FactoryCheckpointSchema = z.object({
   options: RunOptionsSchema,
   spec: ProductSpecSchema.optional(),
   architecture: ArchitectureSchema.optional(),
+  /** Keyless web research (extend-era feature) — persisted so a resume never replays it. */
+  research: ResearchFindingsSchema.optional(),
   plan: TaskPlanSchema.optional(),
   build: FileBuildSchema.optional(),
   testPlan: TestPlanSchema.optional(),

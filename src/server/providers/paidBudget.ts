@@ -1,5 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import type {
+  LLMProvider,
+  GenerateTextInput,
+  GenerateTextResult,
+  GenerateJsonInput,
+} from "../../shared/types.js";
+import type { ProviderName } from "../../shared/schemas.js";
 
 /**
  * paidBudget.ts — the blast radius around the paid rescue.
@@ -187,5 +194,49 @@ export class PaidBudgetExhaustedError extends Error {
         `raise FACTORY_PAID_RESCUES_PER_HOUR / _PER_DAY / FACTORY_PAID_MAX_USD_PER_DAY to allow more.`,
     );
     this.name = "PaidBudgetExhaustedError";
+  }
+}
+
+/**
+ * Wraps a PAID raw provider (anthropic/openai) with a per-call budget check.
+ *
+ * `FailoverProvider.runPaid()` already checks `canPayNow()` before every paid
+ * call it makes — but that gate lives INSIDE the failover chain. Any caller
+ * that reaches a raw paid provider directly (bypassing the chain — which is
+ * exactly what dispatching concurrent work across a pool of distinct
+ * backends does) would spend with no gate at all. This wrapper closes that
+ * gap at the one choke point every raw paid provider call goes through,
+ * regardless of caller, so "never spend past the cap" holds everywhere, not
+ * only on the one path that happened to remember to check.
+ *
+ * Re-checks on EVERY call (not once when the pool is built) so a burst of
+ * concurrent calls that would collectively blow the cap gets stopped
+ * mid-burst rather than only refused on the NEXT dispatch.
+ */
+export class BudgetGatedProvider implements LLMProvider {
+  constructor(
+    private inner: LLMProvider,
+    readonly name: ProviderName,
+  ) {}
+
+  isConfigured(): boolean {
+    return this.inner.isConfigured();
+  }
+
+  private assertBudget(): void {
+    const budget = canPayNow();
+    if (!budget.ok) {
+      throw new PaidBudgetExhaustedError(budget.reason ?? "budget exhausted");
+    }
+  }
+
+  async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
+    this.assertBudget();
+    return this.inner.generateText(input);
+  }
+
+  async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
+    this.assertBudget();
+    return this.inner.generateJson(input);
   }
 }

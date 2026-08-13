@@ -50,6 +50,7 @@ import {
   ModelBudgetError,
 } from "./stages.js";
 import { redactSecrets, redactDeep } from "../security/redact.js";
+import { BudgetGatedProvider } from "../providers/paidBudget.js";
 import {
   RunCancelledError,
   clearCancel,
@@ -66,6 +67,13 @@ import { testWriterAgent } from "../agents/testWriterAgent.js";
 import { qaCriticAgent } from "../agents/qaCriticAgent.js";
 import { repairAgent } from "../agents/repairAgent.js";
 import { finalReviewerAgent } from "../agents/finalReviewerAgent.js";
+import { repoResolverAgent, ResolveError } from "../agents/repoResolverAgent.js";
+import { ingestExistingRepo, IngestError } from "../workspace/ingestRepo.js";
+import { analyzeExistingCodebase } from "../workspace/analyzeExistingCodebase.js";
+import { composeExtendIdea, buildExistingContext } from "./composeExtendIdea.js";
+import { ingestAdditionalSource } from "./ingestAdditionalSource.js";
+import { buildFilesConcurrently } from "./concurrentBuild.js";
+import { researchAgent } from "../agents/researchAgent.js";
 
 export interface StartRunArgs {
   idea: string;
@@ -187,7 +195,9 @@ function throwIfTimedOut(deadline: number | null, limitMs: number): void {
  * `AbortSignal.any`, added in Node 20.3) because this project's declared
  * engine floor is `node >=20`.
  */
-function combineAbortSignals(signals: (AbortSignal | undefined)[]): AbortSignal | undefined {
+function combineAbortSignals(
+  signals: (AbortSignal | undefined)[],
+): AbortSignal | undefined {
   const active = signals.filter((s): s is AbortSignal => Boolean(s));
   if (active.length === 0) return undefined;
   if (active.length === 1) return active[0];
@@ -284,6 +294,32 @@ async function executeRun(
     config.maxModelCallsPerRun,
     attribution(rawReview),
   );
+  // Every distinct LIVE backend actually configured (free / anthropic / openai,
+  // never the failover chain itself), each still budget-metered — the pool the
+  // concurrent builder dispatches independent work across. Demo runs get just
+  // mock, so concurrency naturally degrades to the single-provider path.
+  //
+  // BUDGET GATE: unlike the failover chain (whose runPaid() checks canPayNow()
+  // before every paid call), a raw registry provider has no such gate built
+  // in — dispatching tasks to it directly would spend past
+  // FACTORY_PAID_RESCUES_PER_HOUR/_PER_DAY/FACTORY_PAID_MAX_USD_PER_DAY with
+  // no one asking first. BudgetGatedProvider re-checks canPayNow() on EVERY
+  // call (not just once when the pool is built), so a burst of concurrent
+  // paid calls that would collectively blow the cap gets stopped mid-burst,
+  // not only refused on the next dispatch.
+  const liveProviderPool: LLMProvider[] = run.demo
+    ? [registry.get("mock")]
+    : registry.availableLive().map((name) => {
+        const metered = new CountingProvider(
+          registry.get(name),
+          run,
+          config.maxModelCallsPerRun,
+          "declared",
+        );
+        return name === "anthropic" || name === "openai"
+          ? new BudgetGatedProvider(metered, name)
+          : metered;
+      });
 
   // The live in-memory view of the workspace, restored from the private
   // checkpoint so a resumed run never needs the redacted API copy.
@@ -372,12 +408,138 @@ async function executeRun(
     await flush();
 
     /* Stage 1 — Intake */
+    /* Stage 1 — Intake (greenfield, or extend-mode ingestion) */
+    // Options come from the CHECKPOINT (canonical on resume, identical to
+    // args.options on a fresh run) so a resumed extend run keeps its resolved
+    // target/goals instead of replaying the resolver.
+    const extendMode = checkpoint.options.mode === "extend";
+    let repoAnalysis: Awaited<ReturnType<typeof analyzeExistingCodebase>> | null = null;
+    let ingestedWorkspacePath: string | null = null;
+    let goalsForSpec: string[] = [];
+    let additionalSourceContexts: Awaited<ReturnType<typeof ingestAdditionalSource>>[] =
+      [];
     if (!stageDone("intake")) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "intake");
-      log("info", `Intake: "${run.idea}"`);
+      if (extendMode) {
+        log("info", `Intake (extend mode): "${run.idea}"`);
+        let repoSource = checkpoint.options.repoSource ?? null;
+        let additionalRepoSources = checkpoint.options.additionalRepoSources ?? [];
+        if (!repoSource) {
+          // Direct-prompt mode: nothing pre-resolved — figure out WHICH program(s)
+          // and WHAT to do from the free text itself (URL / project name /
+          // multiple programs to combine / instructions all mixed together),
+          // using real web + local-filesystem tools.
+          log(
+            "model_call",
+            `Repo Resolver agent (${code.name}) — resolving target(s) from free text…`,
+          );
+          let resolved;
+          try {
+            resolved = await repoResolverAgent({ provider: code }, checkpoint.idea);
+          } catch (err) {
+            if (err instanceof ResolveError) {
+              throw new IngestError(err.message);
+            }
+            throw err;
+          }
+          for (const line of resolved.transcript) log("info", `resolver: ${line}`);
+          repoSource = resolved.repoSource;
+          additionalRepoSources = resolved.additionalSources;
+          goalsForSpec = resolved.goals;
+          log(
+            "success",
+            `Resolved target: ${repoSource.type} "${repoSource.location}"` +
+              (resolved.additionalSources.length
+                ? ` + ${resolved.additionalSources.length} additional source(s) to combine/glean from`
+                : "") +
+              ` — ${resolved.goals.length} goal(s).`,
+          );
+        } else {
+          goalsForSpec = checkpoint.options.goals?.length
+            ? checkpoint.options.goals
+            : [checkpoint.idea];
+        }
+        log(
+          "info",
+          `Ingesting existing repo (${repoSource.type}): ${repoSource.location}`,
+        );
+        const ingested = await ingestExistingRepo(
+          config.workspaceRoot,
+          repoSource,
+          run.id,
+        );
+        for (const line of ingested.log) log("info", line);
+        ingestedWorkspacePath = ingested.path;
+        // Record the workspace NOW (not at builder time) so a crash between
+        // intake and builder still resumes into the SAME ingested copy.
+        run.workspacePath = ingested.path;
+        await appendAuditEvent({
+          type: "workspace.created",
+          runId: run.id,
+          detail: ingested.path,
+        });
+        log(
+          "success",
+          `Ingested into ${ingested.inPlace ? "the REAL repo (explicit inPlace opt-in)" : "an isolated workspace"}: ${ingested.path}${ingested.branch ? ` (branch ${ingested.branch})` : ""}.`,
+        );
+        repoAnalysis = await analyzeExistingCodebase(ingested.path);
+        log("info", `Detected stack: ${repoAnalysis.stackSummary}`);
+
+        // Multi-program combination: every ADDITIONAL reference — a git repo
+        // (owned or third-party), a plain local folder, or just a URL that
+        // isn't clonable at all — is ingested read-only and understood, never
+        // silently dropped in favor of just the primary target.
+        if (additionalRepoSources.length) {
+          log(
+            "info",
+            `Ingesting ${additionalRepoSources.length} additional source(s) to combine/glean from (read-only)…`,
+          );
+          additionalSourceContexts = await Promise.all(
+            additionalRepoSources.map((src, i) =>
+              ingestAdditionalSource(config, src, run.id, i),
+            ),
+          );
+          for (const ctx of additionalSourceContexts) {
+            log("success", `Additional source ready: "${ctx.label}".`);
+          }
+        }
+        // Persist the resolver's decisions so a resumed run never replays the
+        // resolver model call or loses the goal list.
+        await checkpointNow({
+          options: {
+            ...checkpoint.options,
+            repoSource,
+            additionalRepoSources,
+            goals: goalsForSpec,
+          },
+        });
+      } else {
+        log("info", `Intake: "${run.idea}"`);
+      }
       finishStage(run, "intake", "completed");
       await flush();
+    } else if (extendMode) {
+      // Resumed past intake: the ingested workspace lives on the run record and
+      // the resolver's decisions are in the checkpoint — re-derive the local
+      // analysis (pure filesystem work, zero model calls) instead of replaying
+      // ingestion.
+      ingestedWorkspacePath = run.workspacePath;
+      goalsForSpec = checkpoint.options.goals?.length
+        ? checkpoint.options.goals
+        : [checkpoint.idea];
+      if (ingestedWorkspacePath) {
+        repoAnalysis = await analyzeExistingCodebase(ingestedWorkspacePath);
+      }
+      // Additional read-only sources only matter while spec/build are still
+      // being produced; re-ingest them (local copy/clone, no model calls).
+      if (!checkpoint.build && checkpoint.options.additionalRepoSources?.length) {
+        additionalSourceContexts = await Promise.all(
+          checkpoint.options.additionalRepoSources.map((src, i) =>
+            ingestAdditionalSource(config, src, run.id, i),
+          ),
+        );
+      }
     }
 
     /* Stage 2 — Product Spec */
@@ -386,12 +548,31 @@ async function executeRun(
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "product_spec");
       log("model_call", `Product Spec agent (${code.name})…`);
-      spec = await productSpecAgent({ provider: code }, checkpoint.idea);
+      // Give the model the RAW idea (checkpoint.idea), not the redacted
+      // persisted copy. Extend mode composes a richer idea string (existing app
+      // name + stack + goals) so productSpecAgent stays completely unchanged.
+      const ideaForSpec =
+        extendMode && repoAnalysis
+          ? composeExtendIdea(
+              repoAnalysis,
+              goalsForSpec.length ? goalsForSpec : [checkpoint.idea],
+              additionalSourceContexts,
+            )
+          : checkpoint.idea;
+      spec = await productSpecAgent({ provider: code }, ideaForSpec);
+      if (extendMode && repoAnalysis) {
+        // Authoritative override: the existing app's real name is known from
+        // disk, not from what the model decided to call it — never trust the
+        // model here.
+        spec.appName = repoAnalysis.appNameGuess;
+      }
       // Persist the provider output before any later mutation: a crash after
       // this point resumes without paying for the same call again.
       await checkpointNow({ spec });
     }
     if (!stageDone("product_spec")) {
+      // appName is model-controlled and is served by /api/runs + /:runId + logs;
+      // redact the persisted/served copy (logs already go through makeLog).
       run.appName = redactSecrets(spec.appName);
       log(
         "success",
@@ -401,7 +582,7 @@ async function executeRun(
       await flush();
     }
 
-    /* Stage 3 — Architect */
+    /* Stage 3 — Architect (+ real keyless research) */
     let arch: Architecture | undefined = checkpoint.architecture;
     if (!arch) {
       throwIfTimedOut(deadline, timeoutMs);
@@ -410,11 +591,36 @@ async function executeRun(
       arch = await architectAgent({ provider: code }, spec);
       await checkpointNow({ architecture: arch });
     }
+    // Real research — "if there's a tool out there that can help build this,
+    // find it and use it" — genuine keyless web search + fetch, not a
+    // decorative aside. Runs after architecture (so it knows what's being
+    // built) and before the plan commits to an approach. Skipped for demo
+    // (offline by definition) and when explicitly disabled (tests; see
+    // vitest.config.ts) — everywhere else it's on by default. Checkpointed so
+    // a resume never replays it.
+    let research: Awaited<ReturnType<typeof researchAgent>> | undefined =
+      checkpoint.research;
     if (!stageDone("architect")) {
       log(
         "success",
         `Architecture set${arch.risks.length ? ` — ${arch.risks.length} risk(s) noted.` : "."}`,
       );
+      if (!run.demo && config.enableResearch) {
+        log(
+          "model_call",
+          `Research agent (${code.name}) — searching for tools/APIs that could help…`,
+        );
+        research = await researchAgent({ provider: code }, spec, arch);
+        await checkpointNow({ research });
+        log(
+          research.recommendations.length ? "success" : "info",
+          research.recommendations.length
+            ? `Research: ${research.recommendations.length} candidate(s) — ${research.recommendations.map((r) => r.name).join(", ")}.`
+            : `Research: nothing external recommended — ${research.summary}`,
+        );
+      } else {
+        log("info", "Research skipped (demo mode or FACTORY_RESEARCH_ENABLED=0).");
+      }
       finishStage(run, "architect", "completed");
       await flush();
     }
@@ -425,7 +631,19 @@ async function executeRun(
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "task_planner");
       log("model_call", `Task Planner agent (${code.name})…`);
-      plan = await taskPlannerAgent({ provider: code }, spec, arch);
+      // Research findings are folded into the architecture text fed to the
+      // planner — taskPlannerAgent itself stays completely unchanged, same
+      // trick as composeExtendIdea uses for the spec agent.
+      const archForPlanning =
+        research && research.recommendations.length
+          ? {
+              ...arch,
+              overview: `${arch.overview}\n\nExternal tools/APIs to use for this build: ${research.recommendations
+                .map((r) => `${r.name} (${r.why})`)
+                .join("; ")}`,
+            }
+          : arch;
+      plan = await taskPlannerAgent({ provider: code }, spec, archForPlanning);
       await checkpointNow({ plan });
     }
     if (!stageDone("task_planner")) {
@@ -435,6 +653,8 @@ async function executeRun(
     }
 
     /* Stage 5 + 6 — Builder (generate + write files) */
+    // Extend mode already recorded the ingested workspace during intake; a
+    // fresh "new app" run allocates one now, exactly as before.
     let workspacePath = run.workspacePath;
     if (!workspacePath) {
       const created = await createWorkspace(
@@ -456,8 +676,49 @@ async function executeRun(
     if (!build) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "builder");
-      log("model_call", `File Builder agent (${code.name})…`);
-      build = await fileBuilderAgent({ provider: code }, spec, arch, plan);
+      const existingContext =
+        extendMode && repoAnalysis ? buildExistingContext(repoAnalysis) : undefined;
+      if (extendMode) {
+        // Only extend-mode goes through the concurrent dispatcher: the task
+        // planner's categories are genuinely independent build units here, and
+        // there is a real multi-backend pool to spread them across. Greenfield
+        // "new app" runs keep the exact original single-call path below,
+        // unchanged, so the free->paid failover chain's resilience on the
+        // builder call is never lost.
+        log(
+          "model_call",
+          `File Builder agent — dispatching ${plan.tasks.length} task(s) across up to ${liveProviderPool.length} live backend(s)…`,
+        );
+        const concurrentResult = await buildFilesConcurrently(
+          code,
+          liveProviderPool,
+          spec,
+          arch,
+          plan,
+          existingContext,
+          research,
+          additionalSourceContexts.length ? additionalSourceContexts : undefined,
+        );
+        if (concurrentResult.usedConcurrency) {
+          log(
+            "success",
+            `Concurrent dispatch: ${Object.entries(concurrentResult.tasksByProvider)
+              .map(([name, n]) => `${name}=${n}`)
+              .join(", ")}.`,
+          );
+        }
+        build = concurrentResult.build;
+      } else {
+        log("model_call", `File Builder agent (${code.name})…`);
+        build = await fileBuilderAgent(
+          { provider: code },
+          spec,
+          arch,
+          plan,
+          undefined,
+          research,
+        );
+      }
       await checkpointNow({ build });
     }
     if (!stageDone("builder")) {
