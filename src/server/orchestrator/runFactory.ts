@@ -75,7 +75,7 @@ import { ingestAdditionalSource } from "./ingestAdditionalSource.js";
 import { buildFilesConcurrently } from "./concurrentBuild.js";
 import { researchAgent } from "../agents/researchAgent.js";
 import { deliverRun, planDestination } from "./deliverRun.js";
-import { githubLogin } from "../workspace/gitOps.js";
+import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
 
 export interface StartRunArgs {
   idea: string;
@@ -562,6 +562,36 @@ async function executeRun(
             ingestAdditionalSource(config, src, run.id, i),
           ),
         );
+      }
+      // A run that was STARTED before delivery existed (or simply crashed after
+      // intake) has no destination, and its workspace may have had `origin`
+      // stripped by the old ingest behaviour. Without this, such a run would
+      // finish and quietly leave the work in a scratch folder — the exact
+      // outcome the owner asked us to stop. Re-derive both from the repo the
+      // owner attached, which the checkpoint still records.
+      if (!run.destination && ingestedWorkspacePath) {
+        const attached = checkpoint.options.repoSource?.location ?? null;
+        const existing = await originUrl(ingestedWorkspacePath);
+        if (!existing && attached) {
+          const added = await git(
+            ["remote", "add", "origin", attached],
+            ingestedWorkspacePath,
+            15_000,
+          );
+          log(
+            added.code === 0 ? "info" : "warning",
+            added.code === 0
+              ? `Restored origin -> ${attached} so this run's branch can be saved back to it.`
+              : `Could not restore origin for delivery: ${added.stderr.slice(0, 200)}`,
+          );
+        }
+        run.destination = planDestination({
+          mode: "extend",
+          options: checkpoint.options,
+          originUrl: existing ?? attached,
+          branch: await currentBranch(ingestedWorkspacePath),
+        });
+        log("info", `Work will be saved to: ${describeDestination(run.destination)}`);
       }
     }
 
