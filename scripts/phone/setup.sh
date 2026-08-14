@@ -108,7 +108,15 @@ cd "$APP_DIR"
 # The dev deps that DO carry native binaries (esbuild, rollup) publish
 # android-arm64 builds, which is why the UI can be bundled on the phone.
 say "installing dependencies (this is the slow step; several minutes)"
-pnpm install --prod=false
+# strictDepBuilds is pnpm 11's new default, and it turns "I declined to run
+# esbuild's postinstall" into a FAILED install (ERR_PNPM_IGNORED_BUILDS, exit 1)
+# even though every package landed. Measured on an S25 Ultra with pnpm 11.21.0:
+# it aborted setup with a full node_modules on disk, including the
+# @esbuild/android-arm64 and @rollup/rollup-android-arm64 binaries the build
+# actually needs. Those come from the platform packages, not the postinstall,
+# so nothing is missing -- only pnpm's opinion of it. Relaxed here, and the
+# claim is checked below by requiring a real dist/ui/index.html.
+pnpm install --prod=false --config.strictDepBuilds=false
 
 # --- 5. UI bundle ---------------------------------------------------------
 # dist/ is gitignored, so a fresh clone has no UI. Build it here. If the
@@ -120,7 +128,11 @@ if [ -n "${FACTORY_UI_TARBALL:-}" ]; then
   tar -xzf "$FACTORY_UI_TARBALL" -C dist
 else
   say "building the UI bundle"
-  pnpm exec vite build || die "vite build failed on this device.
+  # `pnpm exec` first runs a dependency-status check that re-invokes
+  # `pnpm install` WITHOUT the flags above, so it fails the same way and takes
+  # the build with it. Calling vite's own entrypoint skips that check entirely;
+  # it is also one less layer between the failure and its cause.
+  node node_modules/vite/bin/vite.js build || die "vite build failed on this device.
 Recover by building dist/ui on the PC and copying it over, then re-run with:
   FACTORY_UI_TARBALL=/sdcard/Download/factory-ui.tgz bash setup.sh"
 fi
