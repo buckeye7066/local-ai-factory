@@ -19,7 +19,6 @@ export function attributionPathFor(runId: string): string {
 export function buildAttribution(
   run: RunRecord,
   opts: {
-    dryRunCommands: boolean;
     allowUntrustedScripts: boolean;
     testResult: RunAttribution["testResult"];
     auditSeq: number | null;
@@ -30,7 +29,6 @@ export function buildAttribution(
     jobId: run.id,
     worktreePath: worktree,
     approval: {
-      dryRunCommands: opts.dryRunCommands,
       allowUntrustedScripts: opts.allowUntrustedScripts,
     },
     testResult: opts.testResult,

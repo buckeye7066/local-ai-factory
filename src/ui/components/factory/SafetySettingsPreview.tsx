@@ -5,7 +5,7 @@ import type { Health } from "../../../shared/schemas.js";
 
 /**
  * SafetySettingsPreview — a compact, reassuring strip of the safety knobs in
- * effect for a run: max repair loops, max model calls, and the dry-run flag.
+ * effect for a run: max repair loops, max model calls, and live execution.
  */
 export function SafetySettingsPreview({ health }: { health: Health | null }) {
   const items = [
@@ -26,11 +26,9 @@ export function SafetySettingsPreview({ health }: { health: Health | null }) {
     {
       icon: TerminalSquare,
       label: "Command mode",
-      value: health ? (health.dryRunCommands ? "Dry run" : "Live") : "—",
-      hint: health?.dryRunCommands
-        ? "Commands are previewed, not executed (safe default)."
-        : "Allowlisted commands will actually run inside the workspace.",
-      tone: health?.dryRunCommands ? ("safe" as const) : ("warn" as const),
+      value: health ? "Live" : "—",
+      hint: "Allowlisted commands actually run inside the workspace — every run is real work.",
+      tone: "safe" as const,
     },
   ];
 
@@ -49,9 +47,7 @@ export function SafetySettingsPreview({ health }: { health: Health | null }) {
                 "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px]",
                 it.tone === "safe"
                   ? "border-aurora-emerald/25 bg-aurora-emerald/10 text-aurora-emerald"
-                  : it.tone === "warn"
-                    ? "border-rose-500/25 bg-rose-500/10 text-rose-300"
-                    : "border-white/10 bg-white/[0.04] text-slate-300",
+                  : "border-white/10 bg-white/[0.04] text-slate-300",
               )}
             >
               <Icon className="h-3.5 w-3.5" />

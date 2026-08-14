@@ -57,7 +57,7 @@ afterAll(async () => {
 });
 
 function demoConfig() {
-  return { ...loadConfig({}), workspaceRoot: tmpRoot, dryRunCommands: true };
+  return { ...loadConfig({}), workspaceRoot: tmpRoot, allowUntrustedScripts: false };
 }
 
 describe("Round-9 #2 cancel mid writeBuild stops remaining writes", () => {

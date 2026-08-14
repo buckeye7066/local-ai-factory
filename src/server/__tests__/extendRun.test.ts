@@ -40,7 +40,7 @@ describe("extend mode (end-to-end, offline mock)", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-extend-ws-"));
     cleanupPaths.push(workspaceRoot);
 
-    const config = { ...loadConfig({}), workspaceRoot };
+    const config = { ...loadConfig({}), workspaceRoot, allowUntrustedScripts: false };
     const run = await runFactory({
       idea: "Add a parent-visible progress dashboard",
       options: {
@@ -79,7 +79,7 @@ describe("extend mode (end-to-end, offline mock)", () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-extend-ws2-"));
     cleanupPaths.push(workspaceRoot);
 
-    const config = { ...loadConfig({}), workspaceRoot };
+    const config = { ...loadConfig({}), workspaceRoot, allowUntrustedScripts: false };
     const run = await runFactory({
       idea: "Add a parent-visible progress dashboard",
       options: {
@@ -105,7 +105,7 @@ describe("extend mode (end-to-end, offline mock)", () => {
   it("greenfield 'new' mode is unaffected — same behavior as before extend mode existed", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-new-ws-"));
     cleanupPaths.push(workspaceRoot);
-    const config = { ...loadConfig({}), workspaceRoot };
+    const config = { ...loadConfig({}), workspaceRoot, allowUntrustedScripts: false };
     const run = await runFactory({
       idea: "Build a Bible reading habit tracker",
       options: { demo: true },

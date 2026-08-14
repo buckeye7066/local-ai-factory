@@ -52,20 +52,20 @@ describe("command allowlist", () => {
   it("does not execute non-allowlisted commands", async () => {
     const res = await runCommand(
       { bin: "rm", args: ["-rf", "."], cwd: ROOT },
-      { workspaceRoot: ROOT, dryRun: false },
+      { workspaceRoot: ROOT },
     );
     expect(res.allowed).toBe(false);
     expect(res.executed).toBe(false);
   });
 
-  it("dry-run reports intent without executing", async () => {
+  it("refuses script-executing commands when script execution is disabled", async () => {
     const res = await runCommand(
       { bin: "pnpm", args: ["install"], cwd: ROOT },
-      { workspaceRoot: ROOT, dryRun: true },
+      { workspaceRoot: ROOT }, // allowScriptExecution unset → hermetic refusal
     );
-    expect(res.allowed).toBe(true);
+    expect(res.allowed).toBe(false);
     expect(res.executed).toBe(false);
-    expect(res.reason).toContain("DRY_RUN");
+    expect(res.reason).toContain("ALLOW_UNTRUSTED_SCRIPTS");
   });
 });
 

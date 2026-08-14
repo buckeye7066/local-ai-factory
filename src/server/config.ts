@@ -78,7 +78,6 @@ export interface AppConfig {
   /** Overall run wall-clock timeout in ms (0 = disabled). */
   runTimeoutMs: number;
   workspaceRoot: string;
-  dryRunCommands: boolean;
   /**
    * Real, keyless web-research step (search + fetch, no API key) between
    * architecture and task planning. Defaults ON for real usage — "insert
@@ -88,8 +87,10 @@ export interface AppConfig {
    */
   enableResearch: boolean;
   /**
-   * Explicit approval to execute model-authored scripts (test/build/run/etc.).
-   * Defaults to false: turning DRY_RUN off alone must not run untrusted code.
+   * Execute model-authored scripts (test/build/run/etc.). Defaults to TRUE:
+   * every run does real work (owner order 2026-08-13 — dry-run removed
+   * entirely; the command allowlist and workspace jail remain the safety
+   * boundary). ALLOW_UNTRUSTED_SCRIPTS=0 is only used by hermetic tests.
    */
   allowUntrustedScripts: boolean;
   /**
@@ -149,9 +150,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     runTimeoutMs: num(env.FACTORY_RUN_TIMEOUT_MS, 14_400_000),
     // Always resolved under the project root; the workspace writer enforces this too.
     workspaceRoot: resolve(process.cwd(), env.WORKSPACE_ROOT || "./workspaces"),
-    dryRunCommands: bool(env.DRY_RUN_COMMANDS, true),
     enableResearch: bool(env.FACTORY_RESEARCH_ENABLED, true),
-    allowUntrustedScripts: bool(env.ALLOW_UNTRUSTED_SCRIPTS, false),
+    allowUntrustedScripts: bool(env.ALLOW_UNTRUSTED_SCRIPTS, true),
     bindLan: bool(env.FACTORY_BIND_LAN, false),
     port: num(env.PORT, 5179),
   };
@@ -217,7 +217,6 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
     maxModelCallsPerRun: config.maxModelCallsPerRun,
     runTimeoutMs: config.runTimeoutMs,
     workspaceRoot: config.workspaceRoot,
-    dryRunCommands: config.dryRunCommands,
     allowUntrustedScripts: config.allowUntrustedScripts,
   };
 }

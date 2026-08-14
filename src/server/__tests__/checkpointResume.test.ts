@@ -85,7 +85,7 @@ describe("durable checkpoint continuation", () => {
     const config = {
       ...loadConfig({}),
       workspaceRoot,
-      dryRunCommands: true,
+      allowUntrustedScripts: false,
     };
     const secrets = loadSecrets({});
     const attempts = await Promise.allSettled([

@@ -31,7 +31,11 @@ describe("cancellation primitives", () => {
 
 describe("cancelling a run", () => {
   it("stops a demo run cleanly with status 'cancelled'", async () => {
-    const config = { ...loadConfig({}), workspaceRoot: tmpRoot, dryRunCommands: true };
+    const config = {
+      ...loadConfig({}),
+      workspaceRoot: tmpRoot,
+      allowUntrustedScripts: false,
+    };
     const run = startRun({
       idea: "Build a chore tracker",
       options: { demo: true },

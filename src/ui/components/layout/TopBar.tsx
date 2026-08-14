@@ -77,7 +77,7 @@ function LiveRouteBadge({ health }: { health: Health | null }) {
 }
 
 /**
- * TopBar — provider/key status, dry-run badge, theme toggle, and the mobile
+ * TopBar — provider/key status, live-execution badge, theme toggle, and the mobile
  * menu button. Key indicators show ONLY configured/missing, never values.
  */
 export function TopBar({
@@ -150,21 +150,12 @@ export function TopBar({
           </span>
         </Tooltip>
 
-        {/* Dry-run mode badge */}
+        {/* Execution badge — Factory Deck always does real work (dry-run removed). */}
         {health && (
-          <Tooltip
-            content={
-              health.dryRunCommands
-                ? "Commands previewed, not executed"
-                : "Allowlisted commands will execute"
-            }
-          >
+          <Tooltip content="Allowlisted commands execute for real inside workspaces">
             <span>
-              <Badge
-                tone={health.dryRunCommands ? "cyan" : "rose"}
-                icon={<ShieldCheck className="h-3 w-3" />}
-              >
-                {health.dryRunCommands ? "Dry run" : "Live"}
+              <Badge tone="emerald" icon={<ShieldCheck className="h-3 w-3" />}>
+                Live
               </Badge>
             </span>
           </Tooltip>

@@ -40,14 +40,14 @@ describe("Round-7 #1 pnpm install is gated + pnpmfile neutralized", () => {
     expect(isScriptExecuting("npm", ["ci"])).toBe(true);
   });
 
-  it("refuses `pnpm install` (dry-run OFF, no approval) so a workspace .pnpmfile.cjs never runs", async () => {
+  it("refuses `pnpm install` (script execution disabled) so a workspace .pnpmfile.cjs never runs", async () => {
     const ws = tmp();
     const sentinel = join(ws, "PWNED.txt");
     plantHostilePnpmfile(ws, sentinel);
 
     const res = await runCommand(
       { bin: "pnpm", args: ["install"], cwd: ws },
-      { workspaceRoot: ws, dryRun: false }, // dry-run off, but NOT approved
+      { workspaceRoot: ws }, // allowScriptExecution unset → refused
     );
 
     expect(res.executed).toBe(false);

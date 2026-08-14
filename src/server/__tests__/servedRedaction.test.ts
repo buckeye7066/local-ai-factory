@@ -62,7 +62,11 @@ afterAll(async () => {
 
 describe("Round-10 #4 + #5 served idea + finalReport are redacted; model gets raw idea", () => {
   it("redacts run.idea and every finalReport string, but passes the raw idea to the model", async () => {
-    const config = { ...loadConfig({}), workspaceRoot: tmpRoot, dryRunCommands: true };
+    const config = {
+      ...loadConfig({}),
+      workspaceRoot: tmpRoot,
+      allowUntrustedScripts: false,
+    };
     const run = startRun({
       idea: `Build a tracker OPENAI_API_KEY=${IDEA_SECRET}`,
       options: { demo: true },

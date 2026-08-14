@@ -9,13 +9,14 @@ import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
  * SECURITY BOUNDARY (defense-in-depth — no single flag opens all holes):
  *  - ALLOWLIST: only specific package-manager subcommands may run, and only
  *    inside a workspace directory (never the project root).
- *  - DRY RUN: when DRY_RUN_COMMANDS is true (default) nothing is executed — we
- *    only report what *would* run.
- *  - APPROVAL GATE: even with DRY_RUN off, ANY allowlisted command is refused
- *    unless `allowScriptExecution` is explicitly enabled — including dependency
- *    installs. An install is NOT safe by itself: a generated `.pnpmfile.cjs`
- *    runs project-controlled code during resolution, and `--ignore-scripts` does
- *    NOT disable it. So installs are gated too (fail closed); when approved they
+ *  - SCRIPT GATE: any allowlisted command is refused unless
+ *    `allowScriptExecution` is enabled — including dependency installs. The
+ *    server enables it by default (real execution is the product default,
+ *    owner order 2026-08-13; dry-run mode was removed the same day); hermetic
+ *    tests leave it off so they never spawn package managers. An install is
+ *    NOT safe by itself: a generated `.pnpmfile.cjs` runs project-controlled
+ *    code during resolution, and `--ignore-scripts` does NOT disable it. So
+ *    installs are gated with everything else, and when executed they
  *    additionally get `--ignore-scripts` + (for pnpm) `--ignore-pnpmfile`.
  *  - NO SHELL INJECTION: callers pass an argv array; POSIX uses no shell, and on
  *    Windows every token is validated against a strict character allowlist.
@@ -32,9 +33,8 @@ import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
  *
  * NOTE: `isInsideWorkspace` is a cwd BOUNDARY check, not a runtime filesystem
  * sandbox — a script that is actually executed can still read/write outside the
- * workspace via absolute or `../` paths. That residual risk is why executing
- * model code is gated behind explicit approval (see APPROVAL GATE above); true
- * containment requires an OS sandbox and is out of scope for this module.
+ * workspace via absolute or `../` paths. True containment requires an OS
+ * sandbox and is out of scope for this module.
  */
 
 /** (binary, firstArg) pairs that are permitted. */
@@ -271,10 +271,11 @@ export function resolvePmBinary(
 
 export interface RunCommandOptions {
   workspaceRoot: string;
-  dryRun: boolean;
   /**
-   * Explicit approval to execute model-authored scripts/binaries (test, build,
-   * run, typecheck, npx). Defaults to false: turning DRY_RUN off is NOT enough.
+   * Approval to execute model-authored scripts/binaries (test, build, run,
+   * typecheck, npx). The server passes config.allowUntrustedScripts, which
+   * defaults to TRUE (real execution is the product default); hermetic tests
+   * leave it unset/false so they never spawn package managers.
    */
   allowScriptExecution?: boolean;
   /**
@@ -317,9 +318,9 @@ function spawnPm(
 }
 
 /**
- * Run a command subject to the allowlist, workspace jail, dry-run flag, and the
- * script-execution approval gate. Returns a structured result instead of
- * throwing on non-zero exit, so the orchestrator can feed failures to QA/repair.
+ * Run a command subject to the allowlist, workspace jail, and the
+ * script-execution gate. Returns a structured result instead of throwing on
+ * non-zero exit, so the orchestrator can feed failures to QA/repair.
  */
 export async function runCommand(
   req: CommandRequest,
@@ -344,25 +345,12 @@ export async function runCommand(
     return refuse("Refused: command cwd is outside the workspace boundary.");
   }
 
-  // DRY RUN: report intent, do not execute.
-  if (opts.dryRun) {
-    return {
-      command,
-      allowed: true,
-      executed: false,
-      exitCode: null,
-      stdout: "",
-      stderr: "",
-      reason: `DRY_RUN_COMMANDS=true — would run: ${command}`,
-    };
-  }
-
-  // APPROVAL GATE: executing model-authored code needs explicit opt-in beyond
-  // merely turning dry-run off.
+  // SCRIPT GATE: only hermetic tests run with this off; the product default
+  // is real execution (allowlist + workspace jail remain the safety boundary).
   if (isScriptExecuting(req.bin, req.args) && !opts.allowScriptExecution) {
     return refuse(
-      `Refused: '${command}' executes untrusted project code and requires explicit ` +
-        `approval (ALLOW_UNTRUSTED_SCRIPTS=true). Turning DRY_RUN off is not sufficient.`,
+      `Refused: '${command}' executes untrusted project code and script ` +
+        `execution is disabled (ALLOW_UNTRUSTED_SCRIPTS=0).`,
     );
   }
 

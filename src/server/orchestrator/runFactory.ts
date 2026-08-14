@@ -368,7 +368,6 @@ async function executeRun(
     auditSeq: number | null,
   ) => {
     const attr = buildAttribution(run, {
-      dryRunCommands: config.dryRunCommands,
       allowUntrustedScripts: config.allowUntrustedScripts,
       testResult,
       auditSeq,
@@ -745,8 +744,9 @@ async function executeRun(
         await writeBuild(workspacePath, testPlan.files, "test_writer");
       }
 
-      // Install + test, subject to the allowlist + dry-run flag. Command replay
-      // after a crash is allowed; the expensive provider result above is not.
+      // Install + test, subject to the allowlist (real execution). Command
+      // replay after a crash is allowed; the expensive provider result above
+      // is not.
       commandOutput = "";
       testsExecuted = false;
       testExit = null;
@@ -760,8 +760,9 @@ async function executeRun(
           { bin: cmd.bin, args: cmd.args, cwd: workspacePath },
           {
             workspaceRoot: config.workspaceRoot,
-            dryRun: config.dryRunCommands,
+            // Real execution by default; hermetic tests disable it via config.
             allowScriptExecution: config.allowUntrustedScripts,
+            // Force-kill an in-flight child if the run is cancelled mid-command.
             shouldCancel: () => isCancelRequested(run.id),
           },
         );

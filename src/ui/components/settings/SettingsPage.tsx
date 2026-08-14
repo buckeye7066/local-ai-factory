@@ -240,26 +240,18 @@ export function SettingsPage({ health }: { health: Health | null }) {
                 value={health ? String(health.maxModelCallsPerRun) : DASH}
               />
 
-              {/* DRY-RUN row — the single most safety-critical signal. */}
+              {/* Execution row — Factory Deck always does real work (dry-run removed). */}
               <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
                 <span className="text-xs text-slate-400">Command execution</span>
                 {!health ? (
                   <Badge tone="neutral">{DASH}</Badge>
-                ) : health.dryRunCommands ? (
+                ) : (
                   <Badge
                     tone="emerald"
                     icon={<ShieldCheck className="h-3 w-3" />}
                     className="text-right"
                   >
-                    DRY RUN — commands are previewed, not executed (safe default)
-                  </Badge>
-                ) : (
-                  <Badge
-                    tone="rose"
-                    icon={<AlertTriangle className="h-3 w-3" />}
-                    className="text-right"
-                  >
-                    LIVE — allowlisted commands will execute in workspaces
+                    LIVE — allowlisted commands execute in workspaces
                   </Badge>
                 )}
               </div>
@@ -316,7 +308,7 @@ export function SettingsPage({ health }: { health: Health | null }) {
                 "API keys live only on the local backend and are never sent to the browser.",
                 "Model calls happen server-side only.",
                 "Generated files are written only inside the workspace folder.",
-                "Shell commands are limited to an allowlist (install/build/test/typecheck) and respect DRY_RUN_COMMANDS.",
+                "Shell commands are limited to an allowlist (install/build/test/typecheck) and run only inside workspaces.",
                 ".env is git-ignored; never commit it.",
               ].map((line) => (
                 <li key={line} className="flex items-start gap-2">

@@ -19,7 +19,7 @@ import {
 
 /**
  * Defense-in-depth sandbox tests (Codex follow-up). These prove the boundaries
- * hold even when DRY_RUN is OFF — without ever executing an untrusted product.
+ * hold with the script gate disabled — without ever executing an untrusted product.
  */
 
 const scratch: string[] = [];
@@ -88,11 +88,11 @@ describe("#2/#3 model-authored scripts require explicit approval", () => {
     expect(isScriptExecuting("npx", ["tsc"])).toBe(true);
   });
 
-  it("refuses `pnpm test` when dry-run is OFF and no approval given", async () => {
+  it("refuses `pnpm test` when script execution is disabled", async () => {
     const ws = tmp();
     const res = await runCommand(
       { bin: "pnpm", args: ["test"], cwd: ws },
-      { workspaceRoot: ws, dryRun: false }, // dry-run off, but NOT approved
+      { workspaceRoot: ws }, // allowScriptExecution unset → refused
     );
     expect(res.executed).toBe(false);
     expect(res.allowed).toBe(false);

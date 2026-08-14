@@ -453,7 +453,6 @@ export const RunAttributionSchema = z.object({
   jobId: z.string().uuid(),
   worktreePath: z.string().nullable().default(null),
   approval: z.object({
-    dryRunCommands: z.boolean(),
     allowUntrustedScripts: z.boolean(),
   }),
   testResult: z
@@ -625,7 +624,6 @@ export const HealthSchema = z.object({
   maxModelCallsPerRun: z.number(),
   runTimeoutMs: z.number(),
   workspaceRoot: z.string(),
-  dryRunCommands: z.boolean(),
   allowUntrustedScripts: z.boolean().optional(),
 });
 export type Health = z.infer<typeof HealthSchema>;

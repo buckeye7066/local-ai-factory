@@ -3,7 +3,6 @@ import { motion } from "framer-motion";
 import {
   Rocket,
   Wand2,
-  Info,
   TriangleAlert,
   FlaskConical,
   ArrowRight,
@@ -29,8 +28,8 @@ const EXAMPLES = [
 
 /**
  * NewRunHero — the landing / new-run screen. Owns the idea text and the
- * live/demo provider choice, and surfaces helpful warnings (missing keys,
- * dry-run mode) before the user starts a run.
+ * live/demo provider choice, and surfaces helpful warnings (missing keys)
+ * before the user starts a run.
  */
 export function NewRunHero({
   health,
@@ -187,12 +186,6 @@ function NewAppPanel({
             <Helper tone="violet" icon={<FlaskConical className="h-3.5 w-3.5" />}>
               Demo mode selected — this run uses the offline mock provider (no API
               calls).
-            </Helper>
-          )}
-          {health?.dryRunCommands && !demo && (
-            <Helper tone="cyan" icon={<Info className="h-3.5 w-3.5" />}>
-              <code>DRY_RUN_COMMANDS=true</code> — install/test commands are previewed,
-              not executed. Flip it in <code>.env</code> to run them.
             </Helper>
           )}
         </div>

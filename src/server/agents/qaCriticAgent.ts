@@ -14,7 +14,7 @@ export async function qaCriticAgent(
   return deps.provider.generateJson<QaReport>({
     system: `${SYSTEM_PREAMBLE}\nYou are the QA CRITIC agent. Be strict but fair. Only flag issues that genuinely block the app from running or passing tests.`,
     prompt: `Review this build.\n\nFILES:\n${fileList}\n\nCOMMAND / TEST OUTPUT:\n${
-      commandOutput || "(no commands executed — dry run)"
+      commandOutput || "(no commands executed)"
     }\n\nReturn { summary, passed, issues:[{severity,title,detail,file,repairInstruction}] }. Set passed=true only if there are no high or critical issues.`,
     schema: QaReportSchema,
     schemaName: "QaReport",

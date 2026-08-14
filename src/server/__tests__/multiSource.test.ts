@@ -51,7 +51,7 @@ describe("ingestAdditionalSource", () => {
     const src = await makeTmpGitRepo("source-app");
     const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-multisrc-ws-"));
     cleanupPaths.push(workspaceRoot);
-    const config = { ...loadConfig({}), workspaceRoot };
+    const config = { ...loadConfig({}), workspaceRoot, allowUntrustedScripts: false };
 
     const ctx = await ingestAdditionalSource(
       config,
@@ -111,7 +111,7 @@ describe("ingestAdditionalSource", () => {
     );
     const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-multisrc-ws2-"));
     cleanupPaths.push(workspaceRoot);
-    const config = { ...loadConfig({}), workspaceRoot };
+    const config = { ...loadConfig({}), workspaceRoot, allowUntrustedScripts: false };
 
     const ctx = await ingestAdditionalSource(
       config,

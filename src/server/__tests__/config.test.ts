@@ -14,13 +14,16 @@ describe("config", () => {
     expect(cfg.openaiModel).toBe("gpt-5.5");
     expect(cfg.maxRepairLoops).toBe(3);
     expect(cfg.maxModelCallsPerRun).toBe(30);
-    expect(cfg.dryRunCommands).toBe(true); // safe default
+    // Real execution is the default — dry-run was removed entirely
+    // (owner order 2026-08-13). The config has NO dry-run field at all.
+    expect(cfg.allowUntrustedScripts).toBe(true);
+    expect("dryRunCommands" in cfg).toBe(false);
   });
 
   it("parses numbers and booleans from env", () => {
-    const cfg = loadConfig({ MAX_REPAIR_LOOPS: "5", DRY_RUN_COMMANDS: "false" });
+    const cfg = loadConfig({ MAX_REPAIR_LOOPS: "5", ALLOW_UNTRUSTED_SCRIPTS: "0" });
     expect(cfg.maxRepairLoops).toBe(5);
-    expect(cfg.dryRunCommands).toBe(false);
+    expect(cfg.allowUntrustedScripts).toBe(false);
   });
 
   it("detects configured keys", () => {

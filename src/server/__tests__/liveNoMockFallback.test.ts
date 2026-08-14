@@ -83,7 +83,11 @@ describe("live path forbids silent mock fallback", () => {
     const run = await runFactory({
       idea: "Build a Bible reading habit tracker",
       options: { demo: true },
-      config: { ...cfg, workspaceRoot: `${process.cwd()}/.test-workspaces-live-gate` },
+      config: {
+        ...cfg,
+        workspaceRoot: `${process.cwd()}/.test-workspaces-live-gate`,
+        allowUntrustedScripts: false,
+      },
       secrets: loadSecrets({}),
     });
     expect(run.status).toBe("completed");

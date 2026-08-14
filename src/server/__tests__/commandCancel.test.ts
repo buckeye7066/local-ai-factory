@@ -36,7 +36,6 @@ describe("Round-7 #3 runCommand honors cancellation", () => {
       { bin: "pnpm", args: ["install"], cwd: ws },
       {
         workspaceRoot: ws,
-        dryRun: false,
         allowScriptExecution: true, // approval granted…
         shouldCancel: () => true, // …but a cancel is pending → must not spawn
       },

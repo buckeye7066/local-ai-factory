@@ -32,8 +32,8 @@ describe("runCommand shell safety on Windows", () => {
       const res = await runCommand(
         { bin: "pnpm", args: ["run", "build && del /q *"], cwd: process.cwd() },
         // allowScriptExecution granted so we reach (and prove) the shell-safety
-        // check itself, rather than being stopped earlier by the approval gate.
-        { workspaceRoot: process.cwd(), dryRun: false, allowScriptExecution: true },
+        // check itself, rather than being stopped earlier by the script gate.
+        { workspaceRoot: process.cwd(), allowScriptExecution: true },
       );
       expect(res.executed).toBe(false);
       expect(res.allowed).toBe(false);

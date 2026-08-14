@@ -28,7 +28,11 @@ afterAll(async () => {
 
 describe("Round-9 #7 run.error is redacted before persistence/serving", () => {
   it("masks a secret-shaped token in the failed run's error", async () => {
-    const config = { ...loadConfig({}), workspaceRoot: tmpRoot, dryRunCommands: true };
+    const config = {
+      ...loadConfig({}),
+      workspaceRoot: tmpRoot,
+      allowUntrustedScripts: false,
+    };
     const run = startRun({
       idea: "Build a chore tracker",
       options: { demo: true },

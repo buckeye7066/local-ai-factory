@@ -75,7 +75,7 @@ describe("mock end-to-end job (#242)", () => {
     const config = {
       ...loadConfig({}),
       workspaceRoot: tmpRoot,
-      dryRunCommands: true,
+      allowUntrustedScripts: false,
       runTimeoutMs: 120_000,
     };
     const run = await runFactory({
@@ -101,7 +101,7 @@ describe("mock end-to-end job (#242)", () => {
     expect(run.attribution).not.toBeNull();
     expect(run.attribution?.jobId).toBe(run.id);
     expect(run.attribution?.worktreePath).toBe(run.workspacePath);
-    expect(run.attribution?.approval.dryRunCommands).toBe(true);
+    expect(run.attribution?.approval.allowUntrustedScripts).toBe(false);
     expect(run.attribution?.testResult).toBe("passing");
     expect(run.attribution?.commitPath).toBeTruthy();
     expect(run.attribution?.rollbackPath).toBe(run.workspacePath);
@@ -120,7 +120,7 @@ describe("resilience (#243)", () => {
     const config = {
       ...loadConfig({}),
       workspaceRoot: tmpRoot,
-      dryRunCommands: true,
+      allowUntrustedScripts: false,
       maxModelCallsPerRun: 1,
       runTimeoutMs: 60_000,
     };
@@ -141,7 +141,7 @@ describe("resilience (#243)", () => {
     const config = {
       ...loadConfig({}),
       workspaceRoot: tmpRoot,
-      dryRunCommands: true,
+      allowUntrustedScripts: false,
       runTimeoutMs: 1,
     };
     const run = await runFactory({
@@ -158,7 +158,7 @@ describe("resilience (#243)", () => {
     const config = {
       ...loadConfig({}),
       workspaceRoot: tmpRoot,
-      dryRunCommands: true,
+      allowUntrustedScripts: false,
     };
     const run = await runFactory({
       idea: "Build a Bible reading habit tracker",

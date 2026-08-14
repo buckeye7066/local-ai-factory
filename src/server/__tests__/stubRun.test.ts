@@ -12,7 +12,11 @@ afterAll(async () => {
 
 describe("stub demo run (end-to-end, offline)", () => {
   it("completes the full assembly line with one repair loop", async () => {
-    const config = { ...loadConfig({}), workspaceRoot: tmpRoot, dryRunCommands: true };
+    const config = {
+      ...loadConfig({}),
+      workspaceRoot: tmpRoot,
+      allowUntrustedScripts: false,
+    };
     const run = await runFactory({
       idea: "Build a Bible reading habit tracker",
       options: { demo: true },
@@ -41,8 +45,12 @@ describe("stub demo run (end-to-end, offline)", () => {
     expect(run.codeProvider).toBe("mock");
   });
 
-  it("does not execute commands under dry-run", async () => {
-    const config = { ...loadConfig({}), workspaceRoot: tmpRoot, dryRunCommands: true };
+  it("does not execute commands when script execution is disabled (hermetic)", async () => {
+    const config = {
+      ...loadConfig({}),
+      workspaceRoot: tmpRoot,
+      allowUntrustedScripts: false,
+    };
     const run = await runFactory({
       idea: "Build a chore tracker",
       options: { demo: true },
@@ -51,6 +59,8 @@ describe("stub demo run (end-to-end, offline)", () => {
     });
     const commandLogs = run.logs.filter((l) => l.kind === "command_run");
     expect(commandLogs.length).toBeGreaterThan(0);
-    expect(commandLogs.every((l) => /DRY_RUN|would run/i.test(l.message))).toBe(true);
+    expect(
+      commandLogs.every((l) => /ALLOW_UNTRUSTED_SCRIPTS|Refused/i.test(l.message)),
+    ).toBe(true);
   });
 });

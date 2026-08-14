@@ -96,8 +96,9 @@ async function main() {
       },
       config: {
         ...config,
-        // Keep commands dry-run for proof safety unless explicitly opted in.
-        dryRunCommands: process.env.FACTORY_PROOF_ALLOW_COMMANDS === "1" ? false : true,
+        // Proof runs skip command execution unless explicitly opted in — the
+        // proof is about the PROVIDER being real, not about running installs.
+        allowUntrustedScripts: process.env.FACTORY_PROOF_ALLOW_COMMANDS === "1",
       },
       secrets,
     });
