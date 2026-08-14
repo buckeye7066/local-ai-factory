@@ -5,7 +5,7 @@ import type {
   GenerateTextResult,
   GenerateJsonInput,
 } from "../../shared/types.js";
-import { extractJson } from "./types.js";
+import { extractJson, generateJsonWithRepair } from "./types.js";
 import {
   FreeRouteStallError,
   FreeRouteBackpressureError,
@@ -311,28 +311,23 @@ export class FreeProvider implements LLMProvider {
 You MUST respond with a single valid JSON object matching the "${input.schemaName}" shape.
 Do not include markdown fences, comments, or any prose outside the JSON.`;
 
-    const callOnce = async (prompt: string): Promise<unknown> => {
-      const msg = await this.streamWithProgress({
-        model: this.opts.model,
-        max_tokens: input.maxTokens ?? 8192,
-        system,
-        messages: [{ role: "user", content: prompt }],
-      });
-      return extractJson(this.textOf(msg));
-    };
-
-    const raw = await callOnce(input.prompt);
-    const first = input.schema.safeParse(raw);
-    if (first.success) return first.data;
-
-    // One schema-repair pass. Local/free models wander off-shape more often
-    // than frontier ones, and a repair round-trip on the free tier is free.
-    const repairPrompt = `${input.prompt}
-
-Your previous JSON failed schema validation for "${input.schemaName}".
-Issues (truncated): ${JSON.stringify(first.error.issues.slice(0, 12))}
-Return corrected JSON only.`;
-    const repaired = await callOnce(repairPrompt);
-    return input.schema.parse(repaired);
+    // THREE attempts on the free route. A local/free model answering with a
+    // reasoning preamble ("I'll research the existing architecture first…")
+    // instead of JSON is a HABIT, not a one-off, and a repair round-trip here
+    // costs nothing — unlike a dead run, which costs the whole run.
+    return generateJsonWithRepair({
+      input,
+      attempts: 3,
+      baseMaxTokens: input.maxTokens ?? 8192,
+      call: async (prompt, maxTokens) => {
+        const msg = await this.streamWithProgress({
+          model: this.opts.model,
+          max_tokens: maxTokens,
+          system,
+          messages: [{ role: "user", content: prompt }],
+        });
+        return extractJson(this.textOf(msg));
+      },
+    });
   }
 }

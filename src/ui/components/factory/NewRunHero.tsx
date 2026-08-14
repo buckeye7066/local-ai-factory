@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Rocket,
@@ -8,16 +8,20 @@ import {
   ArrowRight,
   MessageCircleQuestion,
   Sparkles,
+  GitBranch,
 } from "lucide-react";
 import { cn } from "../../lib/cn.js";
 import { Button } from "../ui/Button.js";
 import { Textarea } from "../ui/Textarea.js";
+import { Input } from "../ui/Input.js";
 import { Badge } from "../ui/Badge.js";
 import { Tabs } from "../ui/Tabs.js";
 import { slideUp, staggerContainer, staggerItem } from "../../lib/motion.js";
 import { ProviderRoutingCards } from "./ProviderRoutingCards.js";
 import { SafetySettingsPreview } from "./SafetySettingsPreview.js";
 import { ExtendExistingPanel } from "./ExtendExistingPanel.js";
+import { api } from "../../lib/api.js";
+import { repoNameProblem } from "../../../shared/schemas.js";
 import type { Health, RunOptions } from "../../../shared/schemas.js";
 
 const EXAMPLES = [
@@ -45,11 +49,19 @@ export function NewRunHero({
   const [idea, setIdea] = useState("");
   const [demo, setDemo] = useState(!hasAnyKey);
   const [runMode, setRunMode] = useState<"new" | "extend">("new");
+  // The owner names a brand-new app/repo up front. Factory Deck never invents
+  // one and never buries the build in an anonymous workspace folder.
+  const [repoName, setRepoName] = useState("");
+  const nameCheck = useRepoNameCheck(repoName);
 
   const start = () => {
     const trimmed = idea.trim();
     if (!trimmed) return;
-    onStart(trimmed, { demo });
+    onStart(trimmed, {
+      demo,
+      mode: "new",
+      newRepo: { name: repoName.trim(), private: true },
+    });
   };
 
   return (
@@ -102,6 +114,9 @@ export function NewRunHero({
         <NewAppPanel
           idea={idea}
           setIdea={setIdea}
+          repoName={repoName}
+          setRepoName={setRepoName}
+          nameCheck={nameCheck}
           demo={demo}
           setDemo={setDemo}
           hasAnyKey={hasAnyKey}
@@ -114,9 +129,83 @@ export function NewRunHero({
   );
 }
 
+interface NameCheck {
+  /** Client-side format problem, or null when the name is well formed. */
+  problem: string | null;
+  availability: "exists" | "free" | "unknown" | "idle";
+  /** owner/name once the backend has resolved the GitHub owner. */
+  fullName: string | null;
+  reason: string | null;
+  checking: boolean;
+}
+
+/**
+ * Validate the repo name as it is typed, then ask the backend whether GitHub
+ * already has it. Debounced so typing does not fire a `gh` call per keystroke.
+ *
+ * "unknown" is surfaced as unknown — never rendered as "available". A name we
+ * could not check may still collide, and saying otherwise would be a claim the
+ * UI did not verify.
+ */
+function useRepoNameCheck(name: string): NameCheck {
+  const trimmed = name.trim();
+  const problem = trimmed ? repoNameProblem(trimmed) : null;
+  const [state, setState] = useState<Omit<NameCheck, "problem">>({
+    availability: "idle",
+    fullName: null,
+    reason: null,
+    checking: false,
+  });
+
+  useEffect(() => {
+    if (!trimmed || problem) {
+      setState({
+        availability: "idle",
+        fullName: null,
+        reason: null,
+        checking: false,
+      });
+      return;
+    }
+    let active = true;
+    setState((s) => ({ ...s, checking: true }));
+    const timer = setTimeout(() => {
+      api
+        .checkRepoName(trimmed)
+        .then((res) => {
+          if (!active) return;
+          setState({
+            availability: res.valid ? res.availability : "unknown",
+            fullName: res.fullName ?? null,
+            reason: res.reason,
+            checking: false,
+          });
+        })
+        .catch(() => {
+          if (!active) return;
+          setState({
+            availability: "unknown",
+            fullName: null,
+            reason: "Could not reach the backend to check this name.",
+            checking: false,
+          });
+        });
+    }, 450);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [trimmed, problem]);
+
+  return { problem, ...state };
+}
+
 function NewAppPanel({
   idea,
   setIdea,
+  repoName,
+  setRepoName,
+  nameCheck,
   demo,
   setDemo,
   hasAnyKey,
@@ -126,6 +215,9 @@ function NewAppPanel({
 }: {
   idea: string;
   setIdea: (v: string) => void;
+  repoName: string;
+  setRepoName: (v: string) => void;
+  nameCheck: NameCheck;
   demo: boolean;
   setDemo: (v: boolean) => void;
   hasAnyKey: boolean;
@@ -133,11 +225,54 @@ function NewAppPanel({
   starting: boolean;
   start: () => void;
 }) {
+  const nameReady =
+    repoName.trim().length > 0 &&
+    !nameCheck.problem &&
+    nameCheck.availability !== "exists";
+
   return (
     <>
       {/* Prompt panel */}
       <motion.div variants={slideUp} className="glass mt-8 p-5 sm:p-6">
-        <label htmlFor="idea" className="mb-2 block text-xs font-medium text-slate-400">
+        {/* Name FIRST: the owner names the app/repo before describing it, and
+            that name becomes the workspace folder AND the created repo. */}
+        <label
+          htmlFor="repo-name"
+          className="mb-2 block text-xs font-medium text-slate-400"
+        >
+          Name your app / repo (a private GitHub repo is created with this name)
+        </label>
+        <Input
+          id="repo-name"
+          value={repoName}
+          onChange={(e) => setRepoName(e.target.value)}
+          placeholder="e.g. bible-habit-tracker"
+          aria-label="App and repository name"
+        />
+        <div className="mt-2 min-h-[1.25rem] text-[11px]">
+          {nameCheck.problem ? (
+            <span className="text-red-300">{nameCheck.problem}</span>
+          ) : nameCheck.checking ? (
+            <span className="text-slate-500">Checking GitHub…</span>
+          ) : nameCheck.availability === "exists" ? (
+            <span className="text-red-300">
+              {nameCheck.fullName} already exists — pick a different name.
+            </span>
+          ) : nameCheck.availability === "free" ? (
+            <span className="inline-flex items-center gap-1.5 text-emerald-300">
+              <GitBranch className="h-3 w-3" />
+              Will create {nameCheck.fullName} (private) and push the finished work
+              there.
+            </span>
+          ) : nameCheck.availability === "unknown" && nameCheck.reason ? (
+            <span className="text-amber-300">{nameCheck.reason}</span>
+          ) : null}
+        </div>
+
+        <label
+          htmlFor="idea"
+          className="mb-2 mt-5 block text-xs font-medium text-slate-400"
+        >
           Describe the app you want
         </label>
         <Textarea
@@ -197,7 +332,7 @@ function NewAppPanel({
             size="lg"
             onClick={start}
             loading={starting}
-            disabled={!idea.trim()}
+            disabled={!idea.trim() || !nameReady}
             icon={<Rocket className="h-4.5 w-4.5" />}
             className="group"
           >

@@ -263,6 +263,19 @@ export async function listRuns(): Promise<RunSummary[]> {
       appName: r.appName == null ? r.appName : redactSecrets(r.appName),
       workspacePath:
         r.workspacePath == null ? r.workspacePath : redactSecrets(r.workspacePath),
+      // SERVE BOUNDARY: `detail` carries git/gh output, which can quote a
+      // remote URL containing credentials — redact it like every other
+      // model/tool-controlled string in the summary.
+      destination: r.destination
+        ? {
+            ...r.destination,
+            target: redactSecrets(r.destination.target),
+            detail:
+              r.destination.detail == null
+                ? null
+                : redactSecrets(r.destination.detail),
+          }
+        : r.destination,
       repairLoops: r.repairLoops,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
@@ -313,6 +326,35 @@ export async function pruneOldRuns(keep = 200): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+/**
+ * Delete ONE run's persisted state: its record, its saved file contents, its
+ * private checkpoint, and its in-memory copies.
+ *
+ * Every path goes through `safeStorePath`, so a crafted id can neither escape
+ * the data root nor be followed through a symlink — the same containment the
+ * write paths use. Deleting a run that does not exist is not an error; the
+ * caller decides whether "no such run" matters (the API 404s before getting
+ * here). The WORKSPACE is deliberately not touched here: that lives outside the
+ * data root and is removed by the caller through `rollbackWorkspace`, which has
+ * its own WORKSPACE_ROOT jail.
+ */
+export async function deleteRun(id: string): Promise<boolean> {
+  if (!isValidRunId(id)) return false;
+  await ensureDirs();
+  const existed =
+    memory.has(id) ||
+    (await readFile(await safeStorePath(STORE_DIR, id), "utf8").then(
+      () => true,
+      () => false,
+    ));
+  memory.delete(id);
+  fileContents.delete(id);
+  await rm(await safeStorePath(STORE_DIR, id), { force: true });
+  await rm(await safeStorePath(FILES_DIR, id), { force: true });
+  await rm(await safeStorePath(CHECKPOINTS_DIR, id), { force: true });
+  return existed;
 }
 
 /** Persist private continuation state; never served by an API route. */

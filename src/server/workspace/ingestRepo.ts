@@ -18,6 +18,15 @@ import type { RepoSource } from "../../shared/schemas.js";
  * to touch a dirty working tree, and it still works on a dedicated branch
  * rather than main, so "in place" never means "silently rewrite main with
  * uncommitted collateral damage."
+ *
+ * ORIGIN IS KEPT (owner order 2026-08-13: "whichever git repo I add prior to
+ * the prompt is the one that the work should be saved in"). The clone keeps its
+ * `origin` so the finished run can push its own `factory-deck/<id>` branch back
+ * to the repo the owner attached. That delivery is the ONLY thing allowed to
+ * push, it happens once at the end of a completed run, it is never a
+ * force-push, and it never targets main/master — see workspace/gitOps.ts and
+ * orchestrator/deliverRun.ts. Model-authored commands still cannot push at all:
+ * `git push` remains off commandRunner's allowlist.
  */
 
 export class IngestError extends Error {
@@ -37,6 +46,12 @@ export interface IngestResult {
   branch: string | null;
   /** True when `path` IS the original source location (no copy was made). */
   inPlace: boolean;
+  /**
+   * The repo this workspace can push back to (the attached git URL, or the
+   * local checkout a clone came from). null when there is nowhere to deliver —
+   * a plain folder copy with no git at all.
+   */
+  originUrl: string | null;
   log: string[];
 }
 
@@ -102,8 +117,10 @@ export async function ingestExistingRepo(
     );
     await mkdir(workspaceRoot, { recursive: true });
     log.push(`Cloning ${source.location} -> ${dest}`);
+    // Full history (no --depth): a shallow clone is what a remote rejects with
+    // "shallow update not allowed" when the run later pushes its branch back.
     const res = await runGit(
-      ["clone", "--no-tags", "--depth", "50", source.location, dest],
+      ["clone", "--no-tags", source.location, dest],
       workspaceRoot,
     );
     if (res.code !== 0) {
@@ -111,18 +128,17 @@ export async function ingestExistingRepo(
         `git clone failed (exit ${res.code}): ${res.stderr.slice(0, 800)}`,
       );
     }
-    // Sever any push path back to the real remote — this copy is read-modify-write
-    // scratch space; nothing in the pipeline should ever be able to push anywhere.
-    await runGit(["remote", "remove", "origin"], dest, 15_000).catch(() => {});
     const branch = `factory-deck/${runId.slice(0, 8)}`;
     await runGit(["checkout", "-b", branch], dest, 15_000);
     log.push(`Checked out branch ${branch} in the isolated clone.`);
+    log.push(`origin kept as ${source.location} — the run's branch is pushed back there.`);
     return {
       path: dest,
       slug: slugify(source.location),
       isGitRepo: true,
       branch,
       inPlace: false,
+      originUrl: source.location,
       log,
     };
   }
@@ -164,12 +180,18 @@ export async function ingestExistingRepo(
         `Could not create branch ${branch} in ${src} (exit ${res.code}): ${res.stderr.slice(0, 500)}`,
       );
     }
+    // In place, the repo IS the destination; its own origin (if any) is where
+    // the branch is published.
+    const inPlaceOrigin = await runGit(["remote", "get-url", "origin"], src, 15_000)
+      .then((r) => (r.code === 0 && r.stdout.trim() ? r.stdout.trim() : src))
+      .catch(() => src);
     return {
       path: src,
       slug: slugify(src),
       isGitRepo: true,
       branch,
       inPlace: true,
+      originUrl: inPlaceOrigin,
       log,
     };
   }
@@ -186,16 +208,19 @@ export async function ingestExistingRepo(
         `git clone (local) failed (exit ${res.code}): ${res.stderr.slice(0, 800)}`,
       );
     }
-    await runGit(["remote", "remove", "origin"], dest, 15_000).catch(() => {});
     const branch = `factory-deck/${runId.slice(0, 8)}`;
     await runGit(["checkout", "-b", branch], dest, 15_000);
     log.push(`Checked out branch ${branch} in the isolated clone.`);
+    log.push(
+      `origin kept as ${src} — the run's branch is pushed back into that checkout.`,
+    );
     return {
       path: dest,
       slug: slugify(src),
       isGitRepo: true,
       branch,
       inPlace: false,
+      originUrl: src,
       log,
     };
   }
@@ -228,6 +253,9 @@ export async function ingestExistingRepo(
     isGitRepo: false,
     branch: null,
     inPlace: false,
+    // A plain folder copy has no git anywhere, so there is nothing to push
+    // back to — the run's output stays in its workspace and says so.
+    originUrl: null,
     log,
   };
 }

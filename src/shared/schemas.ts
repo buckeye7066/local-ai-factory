@@ -418,6 +418,71 @@ export const RepoSourceSchema = z.object({
 });
 export type RepoSource = z.infer<typeof RepoSourceSchema>;
 
+/**
+ * A NEW app's repo identity. The owner names the app/repo up front (Factory
+ * Deck never invents a name and never buries a from-scratch build in an
+ * anonymous workspace folder); the run then git-inits that workspace and, when
+ * `createRemote` is not explicitly false, creates `owner/name` on GitHub and
+ * pushes the finished work there.
+ */
+export const NewRepoSchema = z.object({
+  name: z.string().min(1).max(100),
+  /** GitHub owner (user or org). Defaults to FACTORY_GITHUB_OWNER / gh's user. */
+  owner: z.string().min(1).max(39).optional(),
+  /** Create the repo private. Default true. */
+  private: z.boolean().optional(),
+  /** Create the GitHub repo at all. Default true; false = local git only. */
+  createRemote: z.boolean().optional(),
+});
+export type NewRepo = z.infer<typeof NewRepoSchema>;
+
+/**
+ * GitHub's own repo-name rule: letters, digits, `.`, `-`, `_`. Anything else is
+ * silently rewritten by GitHub (which would hand the owner a repo they did not
+ * ask for), so it is refused here instead — up front, in the UI and again on
+ * the server.
+ */
+export function repoNameProblem(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return "Name is required.";
+  if (trimmed.length > 100) return "Name must be 100 characters or fewer.";
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
+    return "Use only letters, digits, dots, dashes and underscores.";
+  }
+  if (trimmed === "." || trimmed === "..") return "Name cannot be '.' or '..'.";
+  if (trimmed.startsWith("-") || trimmed.startsWith(".")) {
+    return "Name cannot start with '-' or '.'.";
+  }
+  if (trimmed.endsWith(".git")) return "Name cannot end with '.git'.";
+  return null;
+}
+
+export function isValidRepoName(name: string): boolean {
+  return repoNameProblem(name) === null;
+}
+
+/**
+ * WHERE THE FINISHED WORK IS SAVED. The owner's rule: "whichever git repo I add
+ * prior to the prompt is the one that the work should be saved in." This is set
+ * on the run BEFORE any building happens (so the UI can show the destination up
+ * front) and updated once delivery has actually been attempted — `status` is
+ * the honest record of whether the push/creation really happened.
+ */
+export const RunDestinationSchema = z.object({
+  kind: z.enum(["existing-repo", "new-repo", "workspace-only"]),
+  /** Git URL, local repo path, or `owner/name` for a repo to be created. */
+  target: z.string(),
+  /** Branch the work is committed onto (null for a brand-new repo's default). */
+  branch: z.string().nullable().default(null),
+  status: z.enum(["planned", "delivered", "failed", "skipped"]).default("planned"),
+  /** Human-readable outcome or the exact git/gh failure. */
+  detail: z.string().nullable().default(null),
+  /** Browsable URL once known (repo page, or a compare/PR link). */
+  url: z.string().nullable().default(null),
+  deliveredAt: z.number().nullable().default(null),
+});
+export type RunDestination = z.infer<typeof RunDestinationSchema>;
+
 export const RunOptionsSchema = z.object({
   codeProvider: ProviderNameSchema.optional(),
   reviewProvider: ProviderNameSchema.optional(),
@@ -445,6 +510,18 @@ export const RunOptionsSchema = z.object({
   additionalRepoSources: z.array(RepoSourceSchema).max(5).optional(),
   /** Finalized goal list (e.g. from the yes/no clarification loop). */
   goals: z.array(z.string().min(1)).max(50).optional(),
+  /**
+   * For mode "new": the app/repo name the owner chose, and whether to create
+   * it on GitHub. Required by the UI for a from-scratch app.
+   */
+  newRepo: NewRepoSchema.optional(),
+  /**
+   * For mode "extend": push the run's `factory-deck/<id>` branch back to the
+   * attached repo's origin when the run completes. Default TRUE — the whole
+   * point of attaching a repo is that the work lands in it. Never a
+   * force-push, and never onto main/master: only the run's own branch.
+   */
+  pushToOrigin: z.boolean().optional(),
 });
 export type RunOptions = z.infer<typeof RunOptionsSchema>;
 
@@ -509,6 +586,13 @@ export const RunRecordSchema = z.object({
   finalReport: FinalReportSchema.nullable().default(null),
   appName: z.string().nullable().default(null),
   workspacePath: z.string().nullable().default(null),
+  /**
+   * Where the finished work is (or was) saved. Set before building starts.
+   * Optional as well as nullable so run records written before this field
+   * existed still load instead of failing validation and vanishing from
+   * history.
+   */
+  destination: RunDestinationSchema.nullable().optional(),
   error: z.string().nullable().default(null),
   /** Populated as the run progresses; full attribution written at completion. */
   attribution: RunAttributionSchema.nullable().default(null),
@@ -528,6 +612,7 @@ export const RunSummarySchema = RunRecordSchema.pick({
   reviewProvider: true,
   appName: true,
   workspacePath: true,
+  destination: true,
   repairLoops: true,
   createdAt: true,
   updatedAt: true,

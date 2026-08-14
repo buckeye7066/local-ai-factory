@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { History } from "lucide-react";
+import { History, Trash2 } from "lucide-react";
 import { Badge } from "../ui/Badge.js";
+import { Button } from "../ui/Button.js";
 import { Card } from "../ui/Card.js";
 import { EmptyState } from "../ui/EmptyState.js";
 import { Skeleton } from "../ui/Skeleton.js";
@@ -36,20 +38,55 @@ export function RunHistory({
   runs,
   onOpen,
   onContinue,
+  onDelete,
+  onDeleteFinished,
   loading,
 }: {
   runs: RunSummary[];
   onOpen: (id: string) => void;
   /** Resume a stopped-but-resumable run straight from its card. */
   onContinue?: (id: string) => Promise<void> | void;
+  /** Delete one stopped run (record + workspace). */
+  onDelete?: (id: string) => Promise<void> | void;
+  /** Delete every finished run at once. */
+  onDeleteFinished?: () => Promise<void> | void;
   loading?: boolean;
 }) {
+  const [clearing, setClearing] = useState(false);
+  const finishedCount = runs.filter(
+    (r) =>
+      r.status === "completed" || r.status === "failed" || r.status === "cancelled",
+  ).length;
+
+  const clearFinished = async () => {
+    if (!onDeleteFinished || clearing) return;
+    setClearing(true);
+    try {
+      await onDeleteFinished();
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <section className="space-y-5">
-      {/* Header: title + a count badge. */}
+      {/* Header: title + a count badge + the bulk cleanup action. */}
       <header className="flex items-center gap-3">
         <h2 className="text-lg font-semibold text-white">Run History</h2>
         {!loading && <Badge tone="cyan">{runs.length}</Badge>}
+        {!loading && finishedCount > 0 && onDeleteFinished && (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Trash2 className="h-3.5 w-3.5" />}
+            onClick={clearFinished}
+            disabled={clearing}
+            aria-label="Delete all finished runs"
+            className="ml-auto text-slate-400 hover:text-red-300"
+          >
+            {clearing ? "Deleting…" : `Delete ${finishedCount} finished`}
+          </Button>
+        )}
       </header>
 
       {loading ? (
@@ -72,7 +109,13 @@ export function RunHistory({
           className="grid grid-cols-1 gap-4 lg:grid-cols-2"
         >
           {runs.map((run) => (
-            <RunCard key={run.id} run={run} onOpen={onOpen} onContinue={onContinue} />
+            <RunCard
+              key={run.id}
+              run={run}
+              onOpen={onOpen}
+              onContinue={onContinue}
+              onDelete={onDelete}
+            />
           ))}
         </motion.div>
       )}

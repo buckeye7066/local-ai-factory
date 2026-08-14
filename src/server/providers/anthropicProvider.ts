@@ -5,7 +5,7 @@ import type {
   GenerateTextResult,
   GenerateJsonInput,
 } from "../../shared/types.js";
-import { withRetry, extractJson } from "./types.js";
+import { withRetry, extractJson, generateJsonWithRepair } from "./types.js";
 
 /**
  * anthropicProvider.ts — Claude via the official SDK.
@@ -102,11 +102,11 @@ put that text INSIDE the appropriate JSON string field -- never emit it as bare 
 fenced code block outside the JSON object. Your entire response must be parseable by
 JSON.parse() as-is.`;
 
-    const callOnce = async (prompt: string): Promise<unknown> => {
+    const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> => {
       const res = await client.messages.create(
         {
           model: this.model,
-          max_tokens: input.maxTokens ?? 8192,
+          max_tokens: maxTokens,
           system,
           messages: [{ role: "user", content: prompt }],
         },
@@ -122,20 +122,17 @@ JSON.parse() as-is.`;
       return extractJson(text);
     };
 
+    // Two attempts: a frontier model rarely answers in prose, and every extra
+    // attempt here is billed. `withRetry` still wraps this for transport faults.
     return withRetry(
       "anthropic.generateJson",
-      async () => {
-        const raw = await callOnce(input.prompt);
-        const first = input.schema.safeParse(raw);
-        if (first.success) return first.data;
-        const repairPrompt = `${input.prompt}
-
-Your previous JSON failed schema validation for "${input.schemaName}".
-Issues (truncated): ${JSON.stringify(first.error.issues.slice(0, 12))}
-Return corrected JSON only.`;
-        const repaired = await callOnce(repairPrompt);
-        return input.schema.parse(repaired);
-      },
+      () =>
+        generateJsonWithRepair({
+          input,
+          attempts: 2,
+          baseMaxTokens: input.maxTokens ?? 8192,
+          call: callOnce,
+        }),
       3,
       this.signal,
     );

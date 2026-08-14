@@ -20,5 +20,11 @@ export async function architectAgent(
     schema: ArchitectureSchema,
     schemaName: "Architecture",
     temperature: 0.3,
+    // The prompt embeds the ENTIRE spec, which for an extend run against a real
+    // repo is routinely 20-30 core features, and the answer (overview +
+    // frontend + backend + dataModel + risks) scales with it. On the free
+    // route's old 8192 default the model spent its budget and got cut off —
+    // one of the two shapes that killed the architect stage on 2026-08-13.
+    maxTokens: 16_000,
   });
 }

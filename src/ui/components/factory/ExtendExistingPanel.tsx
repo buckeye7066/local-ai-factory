@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Rocket, ArrowRight, CheckCircle2, XCircle, FolderGit2 } from "lucide-react";
+import {
+  Rocket,
+  ArrowRight,
+  CheckCircle2,
+  XCircle,
+  FolderGit2,
+  GitBranch,
+} from "lucide-react";
+import { cn } from "../../lib/cn.js";
 import { Button } from "../ui/Button.js";
 import { Textarea } from "../ui/Textarea.js";
 import { Input } from "../ui/Input.js";
@@ -68,6 +76,33 @@ export function ExtendExistingPanel({
           aria-label="Existing program path or URL"
           className="flex-1"
         />
+      </div>
+
+      {/* WHERE THE WORK LANDS — stated before the run starts, not after.
+          The repo attached above IS the destination: the run commits onto its
+          own factory-deck/* branch and pushes that branch back to this repo. */}
+      <div
+        className={cn(
+          "mt-3 flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px] leading-relaxed",
+          repoSource
+            ? "border-aurora-cyan/25 bg-aurora-cyan/[0.06] text-cyan-100"
+            : "border-white/10 bg-white/[0.03] text-slate-400",
+        )}
+      >
+        <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        {repoSource ? (
+          <span>
+            The finished work is saved in{" "}
+            <strong className="font-mono">{repoSource.location}</strong> — committed
+            on this run's own <code>factory-deck/&lt;run-id&gt;</code> branch and
+            pushed back there. Never a force-push, and never onto main.
+          </span>
+        ) : (
+          <span>
+            No repo attached yet. Factory Deck will resolve one from your prompt
+            below, and the work will be saved back into whichever repo it resolves.
+          </span>
+        )}
       </div>
 
       <div className="mt-6">

@@ -28,7 +28,15 @@ export type AuditEventType =
   | "workspace.created"
   | "attribution.written"
   | "idempotency.hit"
-  | "cleanup.workspace";
+  | "cleanup.workspace"
+  // Deleting a run is a destructive, owner-initiated action — it belongs in the
+  // tamper-evident chain alongside the run's own lifecycle.
+  | "run.deleted"
+  // Delivery: where a completed run's work was saved, and whether it landed.
+  | "run.delivery.delivered"
+  | "run.delivery.failed"
+  | "run.delivery.skipped"
+  | "run.delivery.planned";
 
 export interface AuditEventInput {
   type: AuditEventType;

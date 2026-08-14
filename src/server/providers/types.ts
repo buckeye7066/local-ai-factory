@@ -11,6 +11,8 @@ export type {
 
 export type { ProviderName } from "../../shared/schemas.js";
 
+import type { GenerateJsonInput } from "../../shared/types.js";
+
 /** Small helper: sleep used by retry/backoff (kept here so all providers share it). */
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -113,10 +115,215 @@ export async function withRetry<T>(
 }
 
 /**
+ * Raised when a response could not be read as JSON at all — neither by direct
+ * parsing nor by truncation salvage.
+ *
+ * Typed on purpose: a provider must be able to tell "the model's TEXT was not
+ * JSON" apart from "the transport failed". The first is worth one cheap retry
+ * with a bigger output budget; the second must propagate untouched to the
+ * failover layer, which owns the stall/backpressure/rescue policy.
+ */
+export class JsonExtractionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "JsonExtractionError";
+  }
+}
+
+/**
+ * Salvage a TRUNCATED JSON value — the response that stopped mid-structure
+ * because the model hit its max_tokens ceiling.
+ *
+ * Walk the text tracking string/escape state, remember every index at which a
+ * complete container just closed, then rebuild `prefix + missing closers` from
+ * the LAST such point backwards until one parses. The trailing incomplete
+ * element is dropped, so the result is deliberately PARTIAL.
+ *
+ * Ported from the proven `_salvage_truncated_json` in flexfactor.py.
+ *
+ * PARTIAL IS NOT AUTOMATICALLY OK. This is a recovery mechanism, not an
+ * acceptance one: every caller still runs the salvaged value through its Zod
+ * schema, so a half-built object that is missing required fields fails exactly
+ * as loudly as it does today. What salvage buys is the common case where the
+ * cut landed inside the LAST element of an already-satisfied array — the run
+ * continues on real content instead of dying on a truncated stream.
+ */
+export function salvageTruncatedJson(text: string): unknown | undefined {
+  if (!text) return undefined;
+  let s = text.trim();
+  // A truncated response can OPEN a ```json fence and never close it, so the
+  // closing-fence-anchored strip used on well-formed text cannot apply here.
+  // Only strip a fence the response actually STARTS with.
+  const fence = /^```[a-zA-Z0-9_-]*[ \t]*\r?\n?/.exec(s);
+  if (fence) s = s.slice(fence[0].length).trim();
+
+  const starts = [s.indexOf("{"), s.indexOf("[")].filter((i) => i >= 0);
+  if (!starts.length) return undefined;
+  const start = Math.min(...starts);
+
+  const closers: string[] = [];
+  let inStr = false;
+  let esc = false;
+  /** (endIndex, suffix) pairs recorded each time a container closed cleanly. */
+  const candidates: { end: number; suffix: string }[] = [];
+
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') {
+        inStr = false;
+        // A string just closed cleanly. Inside a container that is also a safe
+        // cut point — it rescues the very common `["a","b","cc<CUT>` shape,
+        // where no nested container ever closes and container-close candidates
+        // alone would salvage nothing. Cutting after a KEY string yields
+        // invalid JSON (`{"a":1,"b"}`), which simply fails to parse and falls
+        // through to an earlier candidate, so over-offering costs nothing.
+        if (closers.length) {
+          candidates.push({ end: i + 1, suffix: [...closers].reverse().join("") });
+        }
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+    } else if (ch === "{" || ch === "[") {
+      closers.push(ch === "{" ? "}" : "]");
+    } else if (ch === "}" || ch === "]") {
+      if (!closers.length || ch !== closers[closers.length - 1]) break; // malformed
+      closers.pop();
+      // A complete object/array just closed — a safe cut point. Only container
+      // closes qualify: cutting mid-string or mid-number would salvage a
+      // fragment element with most of its keys missing.
+      candidates.push({ end: i + 1, suffix: [...closers].reverse().join("") });
+      if (!closers.length) break; // top level closed — the rest is trailing junk
+    }
+  }
+
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const { end, suffix } = candidates[i];
+    const frag = s.slice(start, end).replace(/\s+$/, "").replace(/,+$/, "");
+    try {
+      return JSON.parse(frag + suffix);
+    } catch {
+      /* try an earlier, shorter candidate */
+    }
+  }
+  return undefined;
+}
+
+/**
  * Best-effort extraction of a JSON object/array from a model's text response.
- * Models sometimes wrap JSON in prose or ```json fences; this strips both.
+ * Models sometimes wrap JSON in prose or ```json fences; this strips both. A
+ * response cut off at the output-token ceiling is salvaged (see
+ * {@link salvageTruncatedJson}) rather than thrown away.
  */
 export function extractJson(text: string): unknown {
+  try {
+    return extractJsonStrict(text);
+  } catch (err) {
+    const salvaged = salvageTruncatedJson(text);
+    if (salvaged !== undefined) return salvaged;
+    throw new JsonExtractionError(
+      err instanceof Error ? err.message : "Response was not JSON.",
+    );
+  }
+}
+
+/**
+ * Widen an output budget for a repair round: a response that got cut off
+ * needs room, and a response that narrated before answering needs room too.
+ */
+function widenBudget(current: number): number {
+  return Math.min(Math.max(current * 2, 16_000), 32_000);
+}
+
+/**
+ * Run a JSON generation with a bounded REPAIR LOOP, shared by every provider.
+ *
+ * THE BUG THIS EXISTS TO KILL (2026-08-13, three dead runs): the old shape was
+ *
+ *     const raw = await callOnce(prompt);      // extractJson THROWS here
+ *     const first = schema.safeParse(raw);     // never reached
+ *     ...one repair pass...                    // never reached
+ *
+ * Because `callOnce` ends in `extractJson`, a response containing NO JSON at
+ * all ("I'll research the existing architecture before…") threw straight out of
+ * generateJson. The repair round-trip — the one mechanism built to recover a
+ * wandering free/local model — could only ever fire when extraction SUCCEEDED
+ * and the schema then failed. So the single most common free-model failure mode
+ * got zero retries and killed the run outright: the incognito run twice and the
+ * iplay run once, all at the architect stage.
+ *
+ * Here BOTH failure modes are repairable and share one attempt budget:
+ *  - no JSON in the response (prose, preamble, or a cut-off stream) → a repair
+ *    prompt that names THAT problem, not a misleading "schema validation" one;
+ *  - JSON that parsed but does not match the schema → the issue list, as before.
+ * Each retry also widens the output budget, since burning the budget narrating
+ * and then being truncated produces exactly the prose-only output above.
+ *
+ * A non-JSON error (transport, stall, abort) is NEVER caught here — it belongs
+ * to the failover layer, which owns patience, backpressure and paid rescue.
+ * The final attempt fails LOUDLY, naming the schema so the run log says which
+ * stage gave up.
+ */
+export async function generateJsonWithRepair<T>(args: {
+  input: GenerateJsonInput<T>;
+  /** Perform one call and return the extracted value (may throw). */
+  call: (prompt: string, maxTokens: number) => Promise<unknown>;
+  /** Total attempts, INCLUDING the first. Free/local models want 3. */
+  attempts: number;
+  /** Output-token budget for the first attempt. */
+  baseMaxTokens: number;
+}): Promise<T> {
+  const { input, call, attempts, baseMaxTokens } = args;
+  let prompt = input.prompt;
+  let maxTokens = baseMaxTokens;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const last = attempt === attempts;
+    let raw: unknown;
+    try {
+      raw = await call(prompt, maxTokens);
+    } catch (err) {
+      // Only a JSON-level failure is repairable. Everything else propagates.
+      if (!(err instanceof JsonExtractionError)) throw err;
+      if (last) {
+        throw new JsonExtractionError(
+          `${input.schemaName}: the model returned no usable JSON after ${attempts} attempt(s). Last parse error: ${err.message}`,
+        );
+      }
+      prompt = `${input.prompt}
+
+Your previous response contained NO JSON and could not be parsed (${err.message}).
+Do NOT explain what you are about to do. Do NOT write a preamble, a plan, or any
+prose. Respond with the "${input.schemaName}" JSON value ONLY — your very first
+character must be "{" and your very last character must be "}". Keep every string
+short so the whole value fits comfortably in the response limit.`;
+      maxTokens = widenBudget(maxTokens);
+      continue;
+    }
+
+    const parsed = input.schema.safeParse(raw);
+    if (parsed.success) return parsed.data;
+    // Out of attempts: parse again so the caller gets the real ZodError.
+    if (last) return input.schema.parse(raw);
+
+    prompt = `${input.prompt}
+
+Your previous JSON failed schema validation for "${input.schemaName}".
+Issues (truncated): ${JSON.stringify(parsed.error.issues.slice(0, 12))}
+Return the corrected JSON only — no prose, no markdown fences.`;
+    maxTokens = widenBudget(maxTokens);
+  }
+
+  // Unreachable: the loop either returns or throws on its final iteration.
+  throw new JsonExtractionError(`${input.schemaName}: repair loop exhausted.`);
+}
+
+/** The original, exact-parse path. Kept separate so salvage is a fallback only. */
+function extractJsonStrict(text: string): unknown {
   const trimmed = text.trim();
   // Strip a code fence ONLY when the response itself is fenced (starts with
   // ```), anchored to the start/end. Models tag fences with whatever language

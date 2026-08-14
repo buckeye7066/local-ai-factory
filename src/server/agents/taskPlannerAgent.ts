@@ -27,5 +27,8 @@ ${JSON.stringify(arch)}`,
     schema: TaskPlanSchema,
     schemaName: "TaskPlan",
     temperature: 0.2,
+    // Spec + architecture in, an ordered task list out: the other big-output
+    // agent that inherited the 8192 default. See architectAgent.
+    maxTokens: 16_000,
   });
 }

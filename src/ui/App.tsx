@@ -174,6 +174,57 @@ export function App() {
     [openRun, refreshRuns],
   );
 
+  // Delete a stopped run: its history record AND its workspace directory. One
+  // click does the work — no confirmation step (the server is the only thing
+  // that refuses, and only for a run that is still executing).
+  const deleteRunById = useCallback(
+    async (id: string) => {
+      try {
+        const res = await api.deleteRun(id);
+        if (activeRunId === id) {
+          setActiveRunId(null);
+          setFiles([]);
+          setView("history");
+        }
+        toast.success("Run deleted", { description: res.workspaceNote });
+      } catch (e) {
+        toast.error("Could not delete run", {
+          description: e instanceof Error ? e.message : undefined,
+        });
+      } finally {
+        void refreshRuns();
+      }
+    },
+    [activeRunId, refreshRuns],
+  );
+
+  const deleteFinishedRuns = useCallback(async () => {
+    try {
+      const res = await api.deleteFinishedRuns();
+      // Report the real numbers, including a zero-work outcome and anything
+      // deliberately skipped — never a bare "done".
+      const skipped = res.skippedRunning.length
+        ? ` ${res.skippedRunning.length} still running and were kept.`
+        : "";
+      if (res.deleted === 0) {
+        toast.message("Nothing to delete", {
+          description: `No finished runs.${skipped}`,
+        });
+      } else {
+        toast.success(`Deleted ${res.deleted} of ${res.candidates} finished run(s)`, {
+          description: `${res.workspacesRemoved} workspace folder(s) removed.${skipped}`,
+        });
+      }
+      setActiveRunId(null);
+    } catch (e) {
+      toast.error("Could not delete finished runs", {
+        description: e instanceof Error ? e.message : undefined,
+      });
+    } finally {
+      void refreshRuns();
+    }
+  }, [refreshRuns]);
+
   return (
     <AppShell
       active={view}
@@ -201,6 +252,8 @@ export function App() {
               loading={runsLoading}
               onOpen={openRun}
               onContinue={continueRun}
+              onDelete={deleteRunById}
+              onDeleteFinished={deleteFinishedRuns}
             />
           )}
 

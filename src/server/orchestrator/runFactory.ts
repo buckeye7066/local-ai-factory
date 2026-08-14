@@ -74,6 +74,8 @@ import { composeExtendIdea, buildExistingContext } from "./composeExtendIdea.js"
 import { ingestAdditionalSource } from "./ingestAdditionalSource.js";
 import { buildFilesConcurrently } from "./concurrentBuild.js";
 import { researchAgent } from "../agents/researchAgent.js";
+import { deliverRun, planDestination } from "./deliverRun.js";
+import { githubLogin } from "../workspace/gitOps.js";
 
 export interface StartRunArgs {
   idea: string;
@@ -155,11 +157,25 @@ function createRecord(args: StartRunArgs): RunRecord {
     finalReport: null,
     appName: null,
     workspacePath: null,
+    // Filled in at intake (extend) or at workspace creation (new) — BEFORE any
+    // building — so the UI can show where the work will be saved up front.
+    destination: null,
     error: null,
     attribution: null,
     createdAt: nowMs(),
     updatedAt: nowMs(),
   };
+}
+
+/** One-line, log-safe summary of where a run's output goes. */
+function describeDestination(dest: {
+  kind: string;
+  target: string;
+  branch: string | null;
+}): string {
+  if (dest.kind === "workspace-only") return `its workspace folder (${dest.target})`;
+  if (dest.kind === "new-repo") return `a new repo ${dest.target}`;
+  return `${dest.target}${dest.branch ? ` on branch ${dest.branch}` : ""}`;
 }
 
 /** Mutable helpers bound to one run. */
@@ -482,6 +498,14 @@ async function executeRun(
           "success",
           `Ingested into ${ingested.inPlace ? "the REAL repo (explicit inPlace opt-in)" : "an isolated workspace"}: ${ingested.path}${ingested.branch ? ` (branch ${ingested.branch})` : ""}.`,
         );
+        // The attached repo IS the destination (owner order 2026-08-13).
+        run.destination = planDestination({
+          mode: "extend",
+          options: checkpoint.options,
+          originUrl: ingested.originUrl,
+          branch: ingested.branch,
+        });
+        log("info", `Work will be saved to: ${describeDestination(run.destination)}`);
         repoAnalysis = await analyzeExistingCodebase(ingested.path);
         log("info", `Detected stack: ${repoAnalysis.stackSummary}`);
 
@@ -656,13 +680,28 @@ async function executeRun(
     // fresh "new app" run allocates one now, exactly as before.
     let workspacePath = run.workspacePath;
     if (!workspacePath) {
+      // The owner's chosen repo name wins over whatever the model called the
+      // app: "If it is a new app altogether, it should ask me what to name the
+      // app/repo, then create it" — so the folder, the repo and the name the
+      // owner typed are all the same thing.
+      const newRepo = checkpoint.options.newRepo;
       const created = await createWorkspace(
         config.workspaceRoot,
-        spec.appName,
+        newRepo?.name ?? spec.appName,
         run.id,
       );
       workspacePath = created.path;
       run.workspacePath = workspacePath;
+      if (!run.destination) {
+        run.destination = planDestination({
+          mode: "new",
+          options: checkpoint.options,
+          githubOwner: newRepo
+            ? (newRepo.owner ?? (await githubLogin(process.cwd())))
+            : null,
+        });
+        log("info", `Work will be saved to: ${describeDestination(run.destination)}`);
+      }
       await appendAuditEvent({
         type: "workspace.created",
         runId: run.id,
@@ -922,6 +961,41 @@ async function executeRun(
     throwIfTimedOut(deadline, timeoutMs);
     run.finalReport = redactDeep(report);
     finishStage(run, "final_review", "completed");
+
+    /* Delivery — save the work where the owner said to save it. */
+    // Runs only for a build that actually got here: a cancelled or failed run
+    // never pushes. Delivery NEVER throws (see deliverRun), so a rejected push
+    // downgrades the destination to "failed" with the exact git/gh error and
+    // leaves the completed run completed — the code is built either way, and
+    // claiming otherwise would be a lie in both directions.
+    if (run.destination) {
+      log("info", `Saving the work to ${describeDestination(run.destination)}…`);
+      const delivered = await deliverRun({
+        destination: run.destination,
+        workspacePath,
+        filePaths: [...files.keys()],
+        runId: run.id,
+        appName: run.appName,
+        options: checkpoint.options,
+      });
+      run.destination = {
+        ...delivered,
+        detail: delivered.detail == null ? null : redactSecrets(delivered.detail),
+      };
+      log(
+        delivered.status === "delivered"
+          ? "success"
+          : delivered.status === "failed"
+            ? "warning"
+            : "info",
+        `Destination (${delivered.status}): ${run.destination.detail ?? delivered.target}`,
+      );
+      await appendAuditEvent({
+        type: `run.delivery.${delivered.status}`,
+        runId: run.id,
+        detail: delivered.target,
+      });
+    }
 
     run.status = "completed";
     run.resumable = false;

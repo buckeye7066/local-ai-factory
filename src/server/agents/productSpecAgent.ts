@@ -23,5 +23,8 @@ Return JSON with:
     schema: ProductSpecSchema,
     schemaName: "ProductSpec",
     temperature: 0.3,
+    // Extend-mode composes a long idea (existing app + stack + goals), and a
+    // real repo's spec comes back with 20-30 features across seven arrays.
+    maxTokens: 16_000,
   });
 }

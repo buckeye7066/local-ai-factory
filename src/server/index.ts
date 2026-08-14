@@ -4,7 +4,12 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 import { getConfig, getSecrets, toHealth, isFactoryHealthPayload } from "./config.js";
-import { RunOptionsSchema, isValidRunId } from "../shared/schemas.js";
+import {
+  RunOptionsSchema,
+  isValidRunId,
+  repoNameProblem,
+  type RunSummary,
+} from "../shared/schemas.js";
 import {
   startRun,
   resumeRun,
@@ -12,7 +17,15 @@ import {
   RunNotResumableError,
 } from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
-import { getRun, listRuns, getRunFiles, pruneOldRuns } from "./storage/runsStore.js";
+import {
+  getRun,
+  listRuns,
+  getRunFiles,
+  pruneOldRuns,
+  deleteRun,
+} from "./storage/runsStore.js";
+import { rollbackWorkspace } from "./workspace/cleanup.js";
+import { githubLogin, githubRepoExists } from "./workspace/gitOps.js";
 import {
   lookupIdempotency,
   rememberIdempotency,
@@ -296,6 +309,40 @@ app.post(
       }
     }
 
+    // A from-scratch app must be named by the owner, and the name has to be
+    // one GitHub will actually accept and is not already taken — checked HERE,
+    // before a multi-hour build, not at delivery time when it is too late to
+    // ask. A check we could not perform is never treated as a pass; it is
+    // allowed through with the collision reported at delivery instead.
+    const newRepo = parsed.data.newRepo;
+    if (newRepo) {
+      const problem = repoNameProblem(newRepo.name);
+      if (problem) {
+        res.status(400).json({ error: `Invalid repo name: ${problem}` });
+        return;
+      }
+      if (newRepo.createRemote !== false) {
+        const owner =
+          newRepo.owner?.trim() ||
+          process.env.FACTORY_GITHUB_OWNER?.trim() ||
+          (await githubLogin(process.cwd())) ||
+          "";
+        if (owner) {
+          const { existence } = await githubRepoExists(
+            `${owner}/${newRepo.name}`,
+            process.cwd(),
+          );
+          if (existence === "exists") {
+            res.status(409).json({
+              error: `The repo ${owner}/${newRepo.name} already exists. Pick a different name.`,
+              nameTaken: true,
+            });
+            return;
+          }
+        }
+      }
+    }
+
     const options = { ...parsed.data, idempotencyKey };
     let run;
     try {
@@ -388,6 +435,167 @@ app.post(
       }
       throw err;
     }
+  }),
+);
+
+/* ------------------------------------------------------------------ */
+/* Deleting runs (owner request: "give me a way to delete old runs")    */
+/* ------------------------------------------------------------------ */
+
+/** A run whose work is over — safe to delete without stopping anything. */
+function isFinished(status: string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+/**
+ * Remove one run's persisted state AND its workspace directory.
+ *
+ * The workspace goes too by default, on purpose: "delete old runs" that left
+ * multi-gigabyte clones behind under `workspaces/` would not have deleted
+ * anything that matters. `rollbackWorkspace` only ever removes a directory
+ * jailed under WORKSPACE_ROOT, so an inPlace run pointed at the owner's real
+ * checkout is refused by construction and reported as kept — deleting a run
+ * record must never delete the owner's actual repo.
+ *
+ * The single guard here is a genuine one, not a confirmation gate: a workspace
+ * that a currently RUNNING run is writing into is never removed.
+ */
+async function deleteRunAndWorkspace(
+  run: { id: string; workspacePath: string | null },
+  liveWorkspaces: Set<string>,
+): Promise<{ runId: string; workspaceRemoved: boolean; workspaceNote: string }> {
+  let workspaceRemoved = false;
+  let workspaceNote = "No workspace directory recorded.";
+  if (run.workspacePath) {
+    if (liveWorkspaces.has(resolve(run.workspacePath))) {
+      workspaceNote = "Workspace kept: an active run is using it.";
+    } else {
+      const res = await rollbackWorkspace(config.workspaceRoot, run.workspacePath);
+      workspaceRemoved = res.ok;
+      workspaceNote = res.ok
+        ? `Workspace deleted: ${run.workspacePath}`
+        : `Workspace kept (${res.reason ?? "unknown"}): ${run.workspacePath}`;
+    }
+  }
+  await deleteRun(run.id);
+  await appendAuditEvent({
+    type: "run.deleted",
+    runId: run.id,
+    detail: workspaceNote,
+  });
+  return { runId: run.id, workspaceRemoved, workspaceNote };
+}
+
+/** Workspaces currently owned by a queued/running run — never delete these. */
+function liveWorkspacePaths(runs: RunSummary[]): Set<string> {
+  return new Set(
+    runs
+      .filter((r) => !isFinished(r.status) && r.workspacePath)
+      .map((r) => resolve(r.workspacePath!)),
+  );
+}
+
+app.delete(
+  "/api/runs/:runId",
+  wrap(async (req, res) => {
+    const runId = validRunIdParam(req, res);
+    if (runId === null) return;
+    const run = await getRun(runId);
+    if (!run) {
+      res.status(404).json({ error: "Run not found." });
+      return;
+    }
+    // The ONE case that is refused: a run that is still doing work. Deleting
+    // its state out from under the executing orchestrator would leave an
+    // orphaned in-flight run writing to a directory that no longer exists.
+    // Everything stopped — completed, failed, cancelled — deletes on one click.
+    if (!isFinished(run.status)) {
+      res.status(409).json({
+        error: `This run is still ${run.status}. Stop it first, then delete it.`,
+        running: true,
+      });
+      return;
+    }
+    const result = await deleteRunAndWorkspace(run, liveWorkspacePaths(await listRuns()));
+    res.json({ ok: true, ...result });
+  }),
+);
+
+/**
+ * Bulk cleanup: delete EVERY finished run (and its workspace) in one action.
+ * Runs still in flight are skipped and reported by id, never silently ignored.
+ */
+app.post(
+  "/api/runs/delete-finished",
+  wrap(async (_req, res) => {
+    const runs = await listRuns();
+    const live = liveWorkspacePaths(runs);
+    const candidates = runs.filter((r) => isFinished(r.status));
+    const skipped = runs.filter((r) => !isFinished(r.status)).map((r) => r.id);
+    const deleted: string[] = [];
+    const workspacesRemoved: string[] = [];
+    for (const run of candidates) {
+      const result = await deleteRunAndWorkspace(run, live);
+      deleted.push(result.runId);
+      if (result.workspaceRemoved) workspacesRemoved.push(result.workspaceNote);
+    }
+    res.json({
+      ok: true,
+      // candidates == deleted + failed, and skipped is reported separately, so
+      // a zero-work run is visibly zero rather than quietly "successful".
+      candidates: candidates.length,
+      deleted: deleted.length,
+      workspacesRemoved: workspacesRemoved.length,
+      skippedRunning: skipped,
+    });
+  }),
+);
+
+/* ------------------------------------------------------------------ */
+/* New-app repo naming                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Validate a proposed app/repo name and say whether it is already taken.
+ * Called by the UI as the owner types, and again server-side at run start.
+ *
+ * "unknown" availability is reported honestly rather than assumed free: if gh
+ * cannot answer, telling the owner a name is available would be a claim we did
+ * not verify.
+ */
+app.post(
+  "/api/repo/check-name",
+  wrap(async (req, res) => {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const problem = repoNameProblem(name);
+    if (problem) {
+      res.json({ valid: false, availability: "unknown", reason: problem });
+      return;
+    }
+    const owner =
+      (typeof req.body?.owner === "string" ? req.body.owner.trim() : "") ||
+      process.env.FACTORY_GITHUB_OWNER?.trim() ||
+      (await githubLogin(process.cwd())) ||
+      "";
+    if (!owner) {
+      res.json({
+        valid: true,
+        availability: "unknown",
+        fullName: name,
+        reason:
+          "Could not determine a GitHub owner (gh not authenticated). The repo will be created locally only.",
+      });
+      return;
+    }
+    const fullName = `${owner}/${name}`;
+    const { existence, detail } = await githubRepoExists(fullName, process.cwd());
+    res.json({
+      valid: true,
+      owner,
+      fullName,
+      availability: existence,
+      reason: detail,
+    });
   }),
 );
 

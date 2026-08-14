@@ -1,7 +1,18 @@
 import { useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import { motion } from "framer-motion";
-import { ChevronRight, Cpu, Play, Sparkles, Wrench, FolderGit2 } from "lucide-react";
+import {
+  ChevronRight,
+  Cpu,
+  Play,
+  Sparkles,
+  Wrench,
+  FolderGit2,
+  Trash2,
+  GitBranch,
+  CircleCheck,
+  CircleAlert,
+} from "lucide-react";
 import { cn } from "../../lib/cn.js";
 import { formatRelative, formatDateTime } from "../../lib/format.js";
 import { Card } from "../ui/Card.js";
@@ -31,18 +42,37 @@ export function RunCard({
   run,
   onOpen,
   onContinue,
+  onDelete,
 }: {
   run: RunSummary;
   onOpen: (id: string) => void;
   /** Resume a stopped run straight from the list (shown when `resumable`). */
   onContinue?: (id: string) => Promise<void> | void;
+  /** Delete a stopped run and its workspace. Hidden while a run is in flight. */
+  onDelete?: (id: string) => Promise<void> | void;
 }) {
   const title = run.appName ?? "Untitled app";
   const codeLabel = PROVIDER_LABELS[run.codeProvider];
   const reviewLabel = PROVIDER_LABELS[run.reviewProvider];
   const [continuing, setContinuing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // A run that is still working cannot be deleted — the server refuses it too.
+  // Every stopped run deletes on ONE click, with no confirmation dialog.
+  const stopped =
+    run.status === "completed" || run.status === "failed" || run.status === "cancelled";
 
   const open = () => onOpen(run.id);
+
+  const handleDelete = async (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (!onDelete || deleting) return;
+    setDeleting(true);
+    try {
+      await onDelete(run.id);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   // One click = work: call resume immediately, no confirmation step. Stop the
   // event so the card's own click-to-open doesn't also fire.
@@ -119,6 +149,10 @@ export function RunCard({
           </span>
         </div>
 
+        {/* Where the work is saved — visible before the run finishes, so the
+            owner can see the destination rather than discover it afterwards. */}
+        {run.destination && <DestinationLine destination={run.destination} />}
+
         {/* Workspace path footer + a chevron that nudges right on hover. */}
         <div className="flex items-center justify-between gap-3 pt-1">
           {run.workspacePath ? (
@@ -130,6 +164,20 @@ export function RunCard({
             <span />
           )}
           <span className="flex shrink-0 items-center gap-2">
+            {stopped && onDelete && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Trash2 className="h-3.5 w-3.5" />}
+                onClick={handleDelete}
+                onKeyDown={(e) => e.stopPropagation()}
+                disabled={deleting}
+                aria-label={`Delete run: ${title}`}
+                className="text-slate-400 hover:text-red-300"
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </Button>
+            )}
             {run.resumable && onContinue && (
               <Button
                 size="sm"
@@ -154,5 +202,59 @@ export function RunCard({
         </div>
       </Card>
     </motion.div>
+  );
+}
+
+/**
+ * The destination strip: WHERE this run's work is saved.
+ *
+ * Shown from the moment the run knows its target (before any code is written),
+ * and it reports the honest delivery outcome afterwards — a push that was
+ * rejected reads as a failure with the git error, never as a quiet success.
+ */
+function DestinationLine({
+  destination,
+}: {
+  destination: NonNullable<RunSummary["destination"]>;
+}) {
+  const { kind, target, branch, status, detail, url } = destination;
+  const tone =
+    status === "delivered"
+      ? "border-emerald-400/25 bg-emerald-400/[0.06] text-emerald-200"
+      : status === "failed"
+        ? "border-red-400/25 bg-red-400/[0.06] text-red-200"
+        : "border-white/10 bg-white/[0.03] text-slate-300";
+  const label =
+    kind === "workspace-only"
+      ? "Saved in its workspace folder"
+      : kind === "new-repo"
+        ? `New repo ${target}`
+        : `${target}${branch ? ` · ${branch}` : ""}`;
+
+  return (
+    <div className={cn("rounded-lg border px-2.5 py-1.5 text-[11px]", tone)}>
+      <div className="flex items-center gap-1.5">
+        {status === "delivered" ? (
+          <CircleCheck className="h-3 w-3 shrink-0" />
+        ) : status === "failed" ? (
+          <CircleAlert className="h-3 w-3 shrink-0" />
+        ) : (
+          <GitBranch className="h-3 w-3 shrink-0" />
+        )}
+        <span className="truncate font-medium">{label}</span>
+        {url && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="ml-auto shrink-0 underline underline-offset-2 hover:text-white"
+          >
+            open
+          </a>
+        )}
+      </div>
+      {detail && <p className="mt-0.5 line-clamp-2 text-slate-400">{detail}</p>}
+    </div>
   );
 }

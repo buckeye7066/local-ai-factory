@@ -45,6 +45,35 @@ export const api = {
     jsonFetch<{ ok: true; runId: string }>(`/api/runs/${id}/resume`, {
       method: "POST",
     }),
+  /** Delete one stopped run: its history record AND its workspace folder. */
+  deleteRun: (id: string) =>
+    jsonFetch<{
+      ok: true;
+      runId: string;
+      workspaceRemoved: boolean;
+      workspaceNote: string;
+    }>(`/api/runs/${id}`, { method: "DELETE" }),
+  /** Delete every finished run in one action; in-flight runs are skipped. */
+  deleteFinishedRuns: () =>
+    jsonFetch<{
+      ok: true;
+      candidates: number;
+      deleted: number;
+      workspacesRemoved: number;
+      skippedRunning: string[];
+    }>("/api/runs/delete-finished", { method: "POST" }),
+  /** Validate a new app/repo name and check GitHub for a collision. */
+  checkRepoName: (name: string) =>
+    jsonFetch<{
+      valid: boolean;
+      owner?: string;
+      fullName?: string;
+      availability: "exists" | "free" | "unknown";
+      reason: string;
+    }>("/api/repo/check-name", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
   startClarify: (initialRequest: string) =>
     jsonFetch<{
       sessionId: string;

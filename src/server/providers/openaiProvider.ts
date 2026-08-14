@@ -5,7 +5,12 @@ import type {
   GenerateTextResult,
   GenerateJsonInput,
 } from "../../shared/types.js";
-import { withRetry, extractJson } from "./types.js";
+import {
+  withRetry,
+  extractJson,
+  generateJsonWithRepair,
+  JsonExtractionError,
+} from "./types.js";
 import type { UsageSink } from "./anthropicProvider.js";
 
 /**
@@ -91,7 +96,7 @@ export class OpenAIProvider implements LLMProvider {
 You MUST respond with a single valid JSON object matching the "${input.schemaName}" shape.
 Do not include markdown fences, comments, or any prose outside the JSON.`;
 
-    const callOnce = async (prompt: string): Promise<unknown> => {
+    const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> => {
       // Prefer json_object when the Responses API accepts it; fall back plain.
       try {
         const res = await client.responses.create(
@@ -99,7 +104,7 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
             model: this.model,
             instructions,
             input: prompt,
-            max_output_tokens: input.maxTokens ?? 8192,
+            max_output_tokens: maxTokens,
             text: { format: { type: "json_object" } },
           },
           { signal: this.signal },
@@ -113,6 +118,11 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
         // An aborted call must propagate as-is — the format-fallback retry
         // below is for a 400 on `text.format`, not for a deliberate abort.
         if (this.signal?.aborted) throw err;
+        // A JSON-level failure is the repair loop's business, not the
+        // format-fallback's: re-issuing the same request unformatted would
+        // waste a call, and a parse message that happens to contain the word
+        // "format" would otherwise trigger exactly that.
+        if (err instanceof JsonExtractionError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         if (/format|json_object|text\.format|unsupported/i.test(msg)) {
           const res = await client.responses.create(
@@ -120,7 +130,7 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
               model: this.model,
               instructions,
               input: prompt,
-              max_output_tokens: input.maxTokens ?? 8192,
+              max_output_tokens: maxTokens,
             },
             { signal: this.signal },
           );
@@ -134,22 +144,16 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
       }
     };
 
+    // Two attempts (see anthropicProvider): every extra attempt is billed.
     return withRetry(
       "openai.generateJson",
-      async () => {
-        const raw = await callOnce(input.prompt);
-        const first = input.schema.safeParse(raw);
-        if (first.success) return first.data;
-
-        // One schema-repair pass — common for live models that invent nested shapes.
-        const repairPrompt = `${input.prompt}
-
-Your previous JSON failed schema validation for "${input.schemaName}".
-Issues (truncated): ${JSON.stringify(first.error.issues.slice(0, 12))}
-Return corrected JSON only.`;
-        const repaired = await callOnce(repairPrompt);
-        return input.schema.parse(repaired);
-      },
+      () =>
+        generateJsonWithRepair({
+          input,
+          attempts: 2,
+          baseMaxTokens: input.maxTokens ?? 8192,
+          call: callOnce,
+        }),
       3,
       this.signal,
     );

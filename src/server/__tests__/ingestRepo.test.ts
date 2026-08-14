@@ -55,11 +55,29 @@ describe("ingestExistingRepo", () => {
     // Content actually cloned.
     const pkg = await readFile(join(result.path, "package.json"), "utf8");
     expect(JSON.parse(pkg).name).toBe("existing-app");
-    // origin severed — nothing in the pipeline can push back to the source.
-    expect(() =>
-      execFileSync("git", ["remote", "get-url", "origin"], { cwd: result.path }),
-    ).toThrow();
-  });
+    // ORIGIN IS KEPT (contract changed 2026-08-13 by owner order: "whichever
+    // git repo I add prior to the prompt is the one that the work should be
+    // saved in"). It used to be severed so nothing could ever push back; that
+    // is precisely what stranded every run's output in a scratch folder. What
+    // protects the source now is not the absence of a remote but WHAT may be
+    // pushed to it: only this run's own factory-deck/* branch, only once, only
+    // at the end of a completed run, never --force, and never main/master
+    // (gitOps.pushBranch refuses a protected branch outright). Model-authored
+    // commands still cannot push at all — `git push` is not on commandRunner's
+    // allowlist.
+    const remote = execFileSync("git", ["remote", "get-url", "origin"], {
+      cwd: result.path,
+      encoding: "utf8",
+    }).trim();
+    expect(resolve(remote)).toBe(resolve(src));
+    expect(result.originUrl).toBe(src);
+    // The checked-out branch is the run's own, never the source's trunk.
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: result.path,
+      encoding: "utf8",
+    }).trim();
+    expect(branch).toBe("factory-deck/11111111");
+  }, 30_000);
 
   it("clones a git working tree found at a local path when type: path (no inPlace)", async () => {
     const src = await makeTmpGitRepo();
