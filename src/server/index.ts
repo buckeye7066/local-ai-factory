@@ -416,7 +416,14 @@ const uiDist = resolve(process.cwd(), "dist", "ui");
 const servesUi = existsSync(resolve(uiDist, "index.html"));
 if (servesUi) {
   app.use(express.static(uiDist));
-  app.get(/^\/(?!api\/).*/, (_req, res) => {
+  app.get(/^\/(?!api\/).*/, (req, res) => {
+    // Never SPA-fallback asset requests: a stale cached index.html referencing
+    // a rebuilt (renamed) bundle must fail loudly as 404 — serving index.html
+    // as JS renders a silent blank page instead.
+    if (req.path.startsWith("/assets/") || /\.[a-z0-9]+$/i.test(req.path)) {
+      res.status(404).end();
+      return;
+    }
     res.sendFile(resolve(uiDist, "index.html"));
   });
 }
@@ -457,7 +464,11 @@ const server = app.listen(config.port, bind.host, () => {
     console.log(`[factory] serving built UI from ${uiDist}`);
   }
   console.log(
-    `[factory] dry-run commands: ${config.dryRunCommands ? "ON (safe)" : "OFF"} | workspace: ${config.workspaceRoot}`,
+    `[factory] command execution: ${
+      config.allowUntrustedScripts
+        ? "REAL (allowlisted commands run in workspaces)"
+        : "DISABLED (ALLOW_UNTRUSTED_SCRIPTS=0 — hermetic/test mode)"
+    } | workspace: ${config.workspaceRoot}`,
   );
 });
 

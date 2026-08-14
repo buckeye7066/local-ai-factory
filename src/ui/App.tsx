@@ -48,19 +48,36 @@ export function App() {
   );
   const lastStatus = useRef<string | null>(null);
 
-  const refreshRuns = useCallback(async () => {
+  const refreshRuns = useCallback(async (): Promise<boolean> => {
     try {
       const { runs: list } = await api.listRuns();
       setRuns(list);
-    } catch {
-      /* backend offline — keep what we have */
-    } finally {
       setRunsLoading(false);
+      return true;
+    } catch {
+      /* backend offline — keep what we have and let the poll retry */
+      return false;
     }
   }, []);
 
+  // Keep the run/workspace lists ALIVE, not one-shot. A single fetch on mount
+  // silently raced backend startup (launcher opens the browser while the
+  // server boots): the catch swallowed the failure and Runs/Workspaces stayed
+  // empty forever. Retry fast until the backend answers once, then poll slowly
+  // so the lists can never go permanently stale while a run is in flight.
   useEffect(() => {
-    refreshRuns();
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      const ok = await refreshRuns();
+      if (!active) return;
+      timer = setTimeout(poll, ok ? 5000 : 1500);
+    };
+    void poll();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
   }, [refreshRuns]);
 
   // Start a run (live or demo).
