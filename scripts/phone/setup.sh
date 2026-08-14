@@ -115,7 +115,14 @@ if [ ! -f .env ]; then
 fi
 
 # --- 7. supervisor on PATH ------------------------------------------------
+# chmod is not belt-and-braces, it is the fix for a defect this hit on a real
+# phone: these files were committed 100644, so the symlink resolved to a
+# non-executable target and `factory-engine start` died with "Permission
+# denied" -- which reads like an Android sandbox problem, not a mode bit. The
+# blobs are 100755 now; this keeps it working if anyone's umask, filesystem or
+# zip-based copy loses the bit again.
 mkdir -p "$HOME/.local/bin"
+chmod +x "$APP_DIR/scripts/phone/engine.sh" "$APP_DIR/scripts/phone/setup.sh"
 ln -sf "$APP_DIR/scripts/phone/engine.sh" "$HOME/.local/bin/factory-engine"
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) : ;;
