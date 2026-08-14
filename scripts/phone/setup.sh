@@ -49,10 +49,29 @@ NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 [ "$NODE_MAJOR" -ge 20 ] || die "node $NODE_MAJOR is too old; Factory Deck needs >= 20"
 say "node $(node -v), git $(git --version | awk '{print $3}')"
 
-if ! command -v pnpm >/dev/null; then
+# pnpm is installed through npm, and npm writes `#!/usr/bin/env node` into the
+# global shim. Android has no /usr/bin/env, so the shim dies with
+#   pnpm: cannot execute: required file not found
+# which names pnpm and not the interpreter, so it reads like a broken install.
+# Measured on an S25 Ultra with Termux node v24.18.0. termux-fix-shebang is the
+# supported repair; the sed is the fallback for a Termux without termux-tools.
+if ! pnpm --version >/dev/null 2>&1; then
   say "installing pnpm"
   npm install -g pnpm
+  target="$(readlink -f "$PREFIX/bin/pnpm" 2>/dev/null || true)"
+  if [ -n "$target" ] && head -1 "$target" | grep -q '/usr/bin/env'; then
+    say "repairing the pnpm shebang for Android"
+    if command -v termux-fix-shebang >/dev/null; then
+      termux-fix-shebang "$target"
+    else
+      sed -i "1s|.*|#!$PREFIX/bin/node|" "$target"
+    fi
+  fi
+  # Never proceed on an unproven fix: run it, do not assume the repair worked.
+  pnpm --version >/dev/null 2>&1 || die "pnpm still will not run after repairing its shebang:
+  $( "$PREFIX/bin/pnpm" --version 2>&1 | head -3 )"
 fi
+say "pnpm $(pnpm --version)"
 
 # --- 2. GitHub auth -------------------------------------------------------
 # Both repos are PRIVATE, so an unauthenticated clone fails with a confusing
@@ -89,7 +108,15 @@ cd "$APP_DIR"
 # The dev deps that DO carry native binaries (esbuild, rollup) publish
 # android-arm64 builds, which is why the UI can be bundled on the phone.
 say "installing dependencies (this is the slow step; several minutes)"
-pnpm install --prod=false
+# strictDepBuilds is pnpm 11's new default, and it turns "I declined to run
+# esbuild's postinstall" into a FAILED install (ERR_PNPM_IGNORED_BUILDS, exit 1)
+# even though every package landed. Measured on an S25 Ultra with pnpm 11.21.0:
+# it aborted setup with a full node_modules on disk, including the
+# @esbuild/android-arm64 and @rollup/rollup-android-arm64 binaries the build
+# actually needs. Those come from the platform packages, not the postinstall,
+# so nothing is missing -- only pnpm's opinion of it. Relaxed here, and the
+# claim is checked below by requiring a real dist/ui/index.html.
+pnpm install --prod=false --config.strictDepBuilds=false
 
 # --- 5. UI bundle ---------------------------------------------------------
 # dist/ is gitignored, so a fresh clone has no UI. Build it here. If the
@@ -101,7 +128,11 @@ if [ -n "${FACTORY_UI_TARBALL:-}" ]; then
   tar -xzf "$FACTORY_UI_TARBALL" -C dist
 else
   say "building the UI bundle"
-  pnpm exec vite build || die "vite build failed on this device.
+  # `pnpm exec` first runs a dependency-status check that re-invokes
+  # `pnpm install` WITHOUT the flags above, so it fails the same way and takes
+  # the build with it. Calling vite's own entrypoint skips that check entirely;
+  # it is also one less layer between the failure and its cause.
+  node node_modules/vite/bin/vite.js build || die "vite build failed on this device.
 Recover by building dist/ui on the PC and copying it over, then re-run with:
   FACTORY_UI_TARBALL=/sdcard/Download/factory-ui.tgz bash setup.sh"
 fi
