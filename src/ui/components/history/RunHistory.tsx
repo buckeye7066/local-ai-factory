@@ -35,10 +35,13 @@ function RunCardSkeleton() {
 export function RunHistory({
   runs,
   onOpen,
+  onContinue,
   loading,
 }: {
   runs: RunSummary[];
   onOpen: (id: string) => void;
+  /** Resume a stopped-but-resumable run straight from its card. */
+  onContinue?: (id: string) => Promise<void> | void;
   loading?: boolean;
 }) {
   return (
@@ -69,7 +72,7 @@ export function RunHistory({
           className="grid grid-cols-1 gap-4 lg:grid-cols-2"
         >
           {runs.map((run) => (
-            <RunCard key={run.id} run={run} onOpen={onOpen} />
+            <RunCard key={run.id} run={run} onOpen={onOpen} onContinue={onContinue} />
           ))}
         </motion.div>
       )}

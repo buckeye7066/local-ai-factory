@@ -152,6 +152,28 @@ export function App() {
     lastStatus.current = null;
   }, []);
 
+  // Continue a stopped run straight from the Runs list: resume it, then jump
+  // into the detail view so the live progress is immediately visible.
+  const continueRun = useCallback(
+    async (id: string) => {
+      try {
+        await api.resumeRun(id);
+        toast.success("Run resumed", {
+          description: "Continuing from the last durable stage checkpoint.",
+        });
+        openRun(id);
+        void refreshRuns();
+      } catch (e) {
+        toast.error("Could not resume", {
+          description: e instanceof Error ? e.message : undefined,
+        });
+        // The flag may be stale (e.g. another tab already resumed) — resync.
+        void refreshRuns();
+      }
+    },
+    [openRun, refreshRuns],
+  );
+
   return (
     <AppShell
       active={view}
@@ -174,7 +196,12 @@ export function App() {
           )}
 
           {view === "history" && (
-            <RunHistory runs={runs} loading={runsLoading} onOpen={openRun} />
+            <RunHistory
+              runs={runs}
+              loading={runsLoading}
+              onOpen={openRun}
+              onContinue={continueRun}
+            />
           )}
 
           {view === "workspaces" && (

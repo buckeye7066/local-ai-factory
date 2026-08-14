@@ -1,10 +1,12 @@
-import type { KeyboardEvent } from "react";
+import { useState } from "react";
+import type { KeyboardEvent, MouseEvent } from "react";
 import { motion } from "framer-motion";
-import { ChevronRight, Cpu, Sparkles, Wrench, FolderGit2 } from "lucide-react";
+import { ChevronRight, Cpu, Play, Sparkles, Wrench, FolderGit2 } from "lucide-react";
 import { cn } from "../../lib/cn.js";
 import { formatRelative, formatDateTime } from "../../lib/format.js";
 import { Card } from "../ui/Card.js";
 import { Badge } from "../ui/Badge.js";
+import { Button } from "../ui/Button.js";
 import { StatusPill } from "../ui/StatusPill.js";
 import { staggerItem } from "../../lib/motion.js";
 import type { RunSummary } from "../../../shared/schemas.js";
@@ -28,15 +30,32 @@ const PROVIDER_LABELS: Record<RunSummary["codeProvider"], string> = {
 export function RunCard({
   run,
   onOpen,
+  onContinue,
 }: {
   run: RunSummary;
   onOpen: (id: string) => void;
+  /** Resume a stopped run straight from the list (shown when `resumable`). */
+  onContinue?: (id: string) => Promise<void> | void;
 }) {
   const title = run.appName ?? "Untitled app";
   const codeLabel = PROVIDER_LABELS[run.codeProvider];
   const reviewLabel = PROVIDER_LABELS[run.reviewProvider];
+  const [continuing, setContinuing] = useState(false);
 
   const open = () => onOpen(run.id);
+
+  // One click = work: call resume immediately, no confirmation step. Stop the
+  // event so the card's own click-to-open doesn't also fire.
+  const handleContinue = async (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (!onContinue || continuing) return;
+    setContinuing(true);
+    try {
+      await onContinue(run.id);
+    } finally {
+      setContinuing(false);
+    }
+  };
 
   // Treat Enter/Space like a click so the card is fully keyboard accessible.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -110,12 +129,28 @@ export function RunCard({
           ) : (
             <span />
           )}
-          <ChevronRight
-            className={cn(
-              "h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200",
-              "group-hover:translate-x-0.5 group-hover:text-aurora-cyan",
+          <span className="flex shrink-0 items-center gap-2">
+            {run.resumable && onContinue && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Play className="h-3.5 w-3.5" />}
+                onClick={handleContinue}
+                onKeyDown={(e) => e.stopPropagation()}
+                disabled={continuing}
+                aria-label={`Continue run: ${title}`}
+                className="text-aurora-cyan hover:text-white"
+              >
+                {continuing ? "Continuing…" : "Continue"}
+              </Button>
             )}
-          />
+            <ChevronRight
+              className={cn(
+                "h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200",
+                "group-hover:translate-x-0.5 group-hover:text-aurora-cyan",
+              )}
+            />
+          </span>
         </div>
       </Card>
     </motion.div>
