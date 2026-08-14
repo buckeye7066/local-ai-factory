@@ -45,7 +45,32 @@ if (!run.workspacePath || !isGitWorkingTree(run.workspacePath)) {
 
 const checkpoint = await getRunCheckpoint(runId);
 const options = checkpoint?.options ?? {};
-const attached = options.repoSource?.location ?? null;
+
+/**
+ * Which repo did this run actually ingest?
+ *
+ * The checkpoint is the first choice, but it is DELETED when a run completes
+ * successfully (runFactory calls deleteRunCheckpoint at the end), so for
+ * exactly the runs this script exists to serve it is usually already gone.
+ * The run's own log is the durable record of what it cloned, and it is
+ * authoritative: it was written by the ingest step itself, naming the location
+ * it really used. Fall back to that rather than reporting "no repo attached"
+ * and stranding the work — which is the failure this script exists to prevent.
+ */
+function attachedRepoFromLogs(): string | null {
+  for (const line of run!.logs) {
+    const m =
+      /^Ingesting existing repo \((?:git|path)\):\s*(.+?)\s*$/.exec(line.message) ??
+      /^Cloning\s+(.+?)\s+->\s/.exec(line.message);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+const attached = options.repoSource?.location ?? attachedRepoFromLogs();
+if (!options.repoSource?.location && attached) {
+  console.log(`Recovered attached repo from the run log: ${attached}`);
+}
 
 let remote = await originUrl(run.workspacePath);
 if (!remote && attached) {
@@ -59,9 +84,15 @@ if (!remote && attached) {
 }
 
 const branch = await currentBranch(run.workspacePath);
+// Re-plan whenever we now know a real target the stored destination does not.
+// A previously recorded "workspace-only" is a CONCLUSION reached without the
+// repo, not a decision to honour — reusing it would permanently strand the work
+// on the strength of an earlier failed lookup.
+const stored = run.destination;
 const destination =
-  run.destination ??
-  planDestination({ mode: "extend", options, originUrl: remote, branch });
+  stored && !(stored.kind === "workspace-only" && remote)
+    ? stored
+    : planDestination({ mode: "extend", options, originUrl: remote, branch });
 
 console.log(`Run       : ${run.id} (${run.appName ?? "unnamed"})`);
 console.log(`Workspace : ${run.workspacePath}`);
