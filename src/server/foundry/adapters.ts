@@ -548,19 +548,19 @@ export class FoundryAdapters {
       "publisher-readiness.json",
       { health, stores, submissions, releaseArtifacts },
     );
-    if (!releaseArtifacts.length) {
-      return {
-        status: "needs_attention",
-        summary: "App Store Publisher is available, but no signed release artifact was produced by an earlier station.",
-        artifacts: [artifact],
-        evidence: { publisherHealthy: true, releaseArtifacts: 0 },
-      };
-    }
     return {
-      status: "completed",
-      summary: `App Store Publisher verified ${releaseArtifacts.length} release artifact reference(s) and recorded current store readiness.`,
+      status: "needs_attention",
+      summary: releaseArtifacts.length
+        ? `App Store Publisher is available and ${releaseArtifacts.length} release artifact reference(s) were found, but the Foundry adapter has not uploaded, byte-verified, or submitted them. Open App Store Publisher to complete the release.`
+        : "App Store Publisher is available, but no signed release artifact was produced by an earlier station.",
       artifacts: [artifact, ...releaseArtifacts],
-      evidence: { publisherHealthy: true, releaseArtifacts: releaseArtifacts.length },
+      evidence: {
+        publisherHealthy: true,
+        releaseArtifacts: releaseArtifacts.length,
+        uploaded: false,
+        submitted: false,
+        reason: "Native upload and submission handoff is not implemented.",
+      },
     };
   }
 
