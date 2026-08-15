@@ -53,6 +53,27 @@ const ALLOWLIST: ReadonlyArray<readonly [string, string]> = [
   ["npx", "tsc"],
 ];
 
+/** Python entrypoints Factory Deck itself may schedule for verification. */
+const PYTHON_BINS = new Set(["python", "python3"]);
+const PYTHON_CHECK_MODULES = new Set(["compileall", "pytest", "unittest"]);
+
+function isAllowedPython(args: string[]): boolean {
+  if (args[0] !== "-m") return false;
+  const module = args[1] ?? "";
+  if (PYTHON_CHECK_MODULES.has(module)) return true;
+  // Dependency installation is deliberately narrow: only a requirements file
+  // in the workspace, with pip's version check disabled. The script-execution
+  // approval gate still applies because Python packages may execute build hooks.
+  return (
+    module === "pip" &&
+    args.length === 6 &&
+    args[2] === "install" &&
+    args[3] === "--disable-pip-version-check" &&
+    args[4] === "-r" &&
+    args[5] === "requirements.txt"
+  );
+}
+
 export interface CommandRequest {
   bin: string;
   args: string[];
@@ -71,6 +92,7 @@ export interface CommandResult {
 }
 
 export function isAllowed(bin: string, args: string[]): boolean {
+  if (PYTHON_BINS.has(bin)) return isAllowedPython(args);
   const first = args[0] ?? "";
   return ALLOWLIST.some(([b, a]) => b === bin && a === first);
 }
