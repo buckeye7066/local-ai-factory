@@ -1,5 +1,18 @@
 import { execFile } from "node:child_process";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { lstat, readdir, realpath } from "node:fs/promises";
+import { Readable } from "node:stream";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { z } from "zod";
 import { getConfig, getSecrets } from "../config.js";
 import { createProviderRegistry } from "../providers/index.js";
@@ -57,10 +70,58 @@ const CrucibleResultSchema = z.object({
 
 const MAX_HTTP_BYTES = 2_000_000;
 const MAX_PROCESS_OUTPUT = 4 * 1024 * 1024;
+const RELEASE_EXTENSIONS = new Set([".aab", ".apk", ".ipa"]);
+const MAX_RELEASE_SCAN_ENTRIES = 5_000;
+
+type PublisherStore = {
+  id: string;
+  label?: string;
+  configured: boolean;
+  hint?: string;
+};
+type PublisherPreset = {
+  id: string;
+  label: string;
+  repo?: string;
+  packageName?: string;
+  appleBundleId?: string;
+  galaxyContentId?: string;
+};
+type ReleaseArtifact = {
+  path: string;
+  extension: ".aab" | ".apk" | ".ipa";
+  size: number;
+  mtimeMs: number;
+};
+
+const PublisherStoresSchema = z.object({
+  stores: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string().optional(),
+      configured: z.boolean(),
+      hint: z.string().optional(),
+    }),
+  ),
+});
+const PublisherPresetsSchema = z.object({
+  presets: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+      repo: z.string().optional(),
+      packageName: z.string().optional(),
+      appleBundleId: z.string().optional(),
+      galaxyContentId: z.string().optional(),
+    }),
+  ),
+});
 
 function boolEnv(name: string, fallback = false): boolean {
   const value = process.env[name];
-  return value === undefined ? fallback : /^(1|true|yes|on)$/i.test(value.trim());
+  return value === undefined
+    ? fallback
+    : /^(1|true|yes|on)$/i.test(value.trim());
 }
 
 function numberEnv(name: string, fallback: number): number {
@@ -70,6 +131,188 @@ function numberEnv(name: string, fallback: number): number {
 
 function trimSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function normalizedIdentity(value: string): string {
+  let result = value
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, "/")
+    .replace(/\.git$/, "");
+  try {
+    const url = new URL(result);
+    result = `${url.hostname}${url.pathname}`.replace(/^www\./, "");
+  } catch {
+    // Project names and owner/repository references are not URLs.
+  }
+  return result.replace(/^github\.com\//, "").replace(/^\/+|\/+$/g, "");
+}
+
+export function publisherPresetForProject(
+  project: FoundryProject,
+  presets: PublisherPreset[],
+): PublisherPreset | null {
+  const identities = [project.name, ...project.constitution.targets]
+    .map(normalizedIdentity)
+    .filter(Boolean);
+  const exactRepo = presets.find(
+    (preset) =>
+      preset.repo && identities.includes(normalizedIdentity(preset.repo)),
+  );
+  if (exactRepo) return exactRepo;
+  const byName = presets.filter((preset) => {
+    const candidates = [preset.id, preset.label].map(normalizedIdentity);
+    return candidates.some((candidate) => identities.includes(candidate));
+  });
+  return byName.length === 1 ? byName[0] : null;
+}
+
+function pathWithin(candidate: string, root: string): boolean {
+  const rel = relative(root, candidate);
+  return (
+    rel === "" ||
+    (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
+  );
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolvePromise(hash.digest("hex")));
+  });
+}
+
+async function releaseRoots(project: FoundryProject): Promise<string[]> {
+  const candidates = [
+    getConfig().workspaceRoot,
+    ...project.constitution.targets.filter(
+      (item) => /^[A-Za-z]:[\\/]/.test(item.trim()) || isAbsolute(item.trim()),
+    ),
+  ];
+  const roots: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const canonical = await realpath(resolve(candidate));
+      const info = await lstat(canonical);
+      if (info.isDirectory() && !roots.includes(canonical))
+        roots.push(canonical);
+    } catch {
+      // A target may be a future path or remote repository; it is not a release root yet.
+    }
+  }
+  return roots;
+}
+
+async function discoverReleaseArtifacts(
+  project: FoundryProject,
+): Promise<ReleaseArtifact[]> {
+  const roots = await releaseRoots(project);
+  if (!roots.length) return [];
+  const references = [
+    ...new Set(project.stations.flatMap((station) => station.artifacts)),
+  ];
+  const found = new Map<string, ReleaseArtifact>();
+  let visited = 0;
+
+  const inspectPath = async (candidate: string): Promise<void> => {
+    if (visited++ >= MAX_RELEASE_SCAN_ENTRIES) return;
+    let canonical: string;
+    let info;
+    try {
+      const original = await lstat(candidate);
+      if (original.isSymbolicLink()) return;
+      canonical = await realpath(candidate);
+      if (!roots.some((root) => pathWithin(canonical, root))) return;
+      info = await lstat(canonical);
+    } catch {
+      return;
+    }
+    if (info.isFile()) {
+      const extension = extname(canonical).toLowerCase();
+      if (RELEASE_EXTENSIONS.has(extension) && info.size > 0) {
+        found.set(canonical, {
+          path: canonical,
+          extension: extension as ReleaseArtifact["extension"],
+          size: info.size,
+          mtimeMs: info.mtimeMs,
+        });
+      }
+      return;
+    }
+    if (!info.isDirectory()) return;
+    let entries;
+    try {
+      entries = await readdir(canonical, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (visited >= MAX_RELEASE_SCAN_ENTRIES) break;
+      if (
+        entry.isSymbolicLink() ||
+        [".git", ".factory", "node_modules"].includes(entry.name)
+      )
+        continue;
+      if (
+        entry.isDirectory() ||
+        (entry.isFile() &&
+          RELEASE_EXTENSIONS.has(extname(entry.name).toLowerCase()))
+      ) {
+        await inspectPath(join(canonical, entry.name));
+      }
+    }
+  };
+
+  for (const reference of references) {
+    if (/^https?:\/\//i.test(reference)) continue;
+    await inspectPath(resolve(reference));
+  }
+  return [...found.values()].sort(
+    (a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path),
+  );
+}
+
+function multipartUploadBody(
+  artifact: ReleaseArtifact,
+  sha256: string,
+): {
+  body: Readable;
+  contentType: string;
+  contentLength: number;
+} {
+  const boundary = `purpose-foundry-${createHash("sha256").update(`${artifact.path}:${sha256}`).digest("hex").slice(0, 24)}`;
+  const safeName = basename(artifact.path).replace(/["\r\n]/g, "_");
+  const expected = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="expectedSha256"\r\n\r\n${sha256}\r\n`,
+  );
+  const fileHeader = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="binary"; filename="${safeName}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+  );
+  const ending = Buffer.from(`\r\n--${boundary}--\r\n`);
+  const body = Readable.from(
+    (async function* () {
+      yield expected;
+      yield fileHeader;
+      yield* createReadStream(artifact.path);
+      yield ending;
+    })(),
+  );
+  return {
+    body,
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    contentLength:
+      expected.length + fileHeader.length + artifact.size + ending.length,
+  };
+}
+
+function publisherEvidenceBody(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const { approvalToken: _approvalToken, ...safe } = body;
+  return safe;
 }
 
 function safeUrl(value: string, label: string): string {
@@ -105,17 +348,28 @@ function defaultProcessRunner(
           // Child output can contain provider diagnostics or secret-shaped
           // environment values. A failed process is recorded generically;
           // raw stdout/stderr is never copied into the evidence ledger.
-          reject(new Error(`Process exited ${code}. Inspect FlexFactor's local run log.`));
+          reject(
+            new Error(
+              `Process exited ${code}. Inspect FlexFactor's local run log.`,
+            ),
+          );
           return;
         }
-        resolvePromise({ stdout: String(stdout), stderr: String(stderr), exitCode: 0 });
+        resolvePromise({
+          stdout: String(stdout),
+          stderr: String(stderr),
+          exitCode: 0,
+        });
       },
     );
   });
 }
 
 function firstTarget(project: FoundryProject): string | null {
-  return project.constitution.targets.map((item) => item.trim()).find(Boolean) ?? null;
+  return (
+    project.constitution.targets.map((item) => item.trim()).find(Boolean) ??
+    null
+  );
 }
 
 /** Convert explicit local paths and GitHub references into Factory Deck input. */
@@ -132,7 +386,11 @@ export function repoSourceFromTarget(
   }
   try {
     const url = new URL(value);
-    if (url.protocol === "https:" || url.protocol === "http:" || url.protocol === "ssh:") {
+    if (
+      url.protocol === "https:" ||
+      url.protocol === "http:" ||
+      url.protocol === "ssh:"
+    ) {
       return { type: "git", location: value };
     }
   } catch {
@@ -142,8 +400,11 @@ export function repoSourceFromTarget(
 }
 
 export function repoRewardsQuery(project: FoundryProject): string {
-  const criteria = project.constitution.successCriteria.join("; ") || "fulfill its stated purpose";
-  const constraints = project.constitution.constraints.join("; ") || "preserve existing behavior";
+  const criteria =
+    project.constitution.successCriteria.join("; ") ||
+    "fulfill its stated purpose";
+  const constraints =
+    project.constitution.constraints.join("; ") || "preserve existing behavior";
   return [
     `Find reusable open-source repositories for ${project.name}.`,
     `Purpose: ${project.constitution.purpose}`,
@@ -155,7 +416,9 @@ export function repoRewardsQuery(project: FoundryProject): string {
 
 function compactOutput(value: string): string {
   const clean = value.replace(/\u001b\[[0-9;]*m/g, "").trim();
-  return clean.length <= 500_000 ? clean : `${clean.slice(0, 500_000)}\n[truncated]`;
+  return clean.length <= 500_000
+    ? clean
+    : `${clean.slice(0, 500_000)}\n[truncated]`;
 }
 
 export class FoundryAdapters {
@@ -168,7 +431,9 @@ export class FoundryAdapters {
     this.dependencies = {
       fetch: dependencies.fetch ?? fetch,
       processRunner: dependencies.processRunner ?? defaultProcessRunner,
-      sleep: dependencies.sleep ?? ((ms) => new Promise((done) => setTimeout(done, ms))),
+      sleep:
+        dependencies.sleep ??
+        ((ms) => new Promise((done) => setTimeout(done, ms))),
     };
   }
 
@@ -183,8 +448,16 @@ export class FoundryAdapters {
       config.defaultReviewProvider,
     );
     const map: Record<StationId, Omit<AdapterDescriptor, "stationId">> = {
-      "factory-deck": { mode: "internal", configured: true, destination: "Factory Deck run API" },
-      scout: { mode: "process", configured: Boolean(flexScript), destination: flexScript },
+      "factory-deck": {
+        mode: "internal",
+        configured: true,
+        destination: "Factory Deck run API",
+      },
+      scout: {
+        mode: "process",
+        configured: Boolean(flexScript),
+        destination: flexScript,
+      },
       "repo-rewards": {
         mode: "http",
         configured: true,
@@ -194,12 +467,18 @@ export class FoundryAdapters {
       },
       "promo-pilot": {
         mode: "http",
-        configured: Boolean(process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN?.trim()),
+        configured: Boolean(
+          process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN?.trim(),
+        ),
         destination:
           process.env.PURPOSE_FOUNDRY_PROMOPILOT_URL?.trim() ||
           "https://promopilot-production-6370.up.railway.app",
       },
-      flexfactor: { mode: "process", configured: Boolean(flexScript), destination: flexScript },
+      flexfactor: {
+        mode: "process",
+        configured: Boolean(flexScript),
+        destination: flexScript,
+      },
       crucible: {
         mode: "internal",
         configured: reviewProvider.isConfigured(),
@@ -207,7 +486,9 @@ export class FoundryAdapters {
       },
       "app-store-publisher": {
         mode: "http",
-        configured: true,
+        configured: Boolean(
+          process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN?.trim(),
+        ),
         destination:
           process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim() ||
           "http://127.0.0.1:4000",
@@ -215,13 +496,21 @@ export class FoundryAdapters {
       watchtower: {
         mode: "http",
         configured: Boolean(process.env.PURPOSE_FOUNDRY_WATCH_URLS?.trim()),
-        destination: process.env.PURPOSE_FOUNDRY_WATCH_URLS?.trim() || "No watch URLs configured",
+        destination:
+          process.env.PURPOSE_FOUNDRY_WATCH_URLS?.trim() ||
+          "No watch URLs configured",
       },
     };
-    return STATIONS.map((station) => ({ stationId: station.id, ...map[station.id] }));
+    return STATIONS.map((station) => ({
+      stationId: station.id,
+      ...map[station.id],
+    }));
   }
 
-  async execute(project: FoundryProject, stationId: StationId): Promise<AdapterOutcome> {
+  async execute(
+    project: FoundryProject,
+    stationId: StationId,
+  ): Promise<AdapterOutcome> {
     switch (stationId) {
       case "factory-deck":
         return this.factoryDeck(project);
@@ -242,7 +531,10 @@ export class FoundryAdapters {
     }
   }
 
-  private async fetchJson(url: string, init: RequestInit = {}): Promise<unknown> {
+  private async fetchJson(
+    url: string,
+    init: RequestInit = {},
+  ): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(),
@@ -250,11 +542,48 @@ export class FoundryAdapters {
     );
     timeout.unref();
     try {
-      const response = await this.dependencies.fetch(url, { ...init, signal: controller.signal });
+      const response = await this.dependencies.fetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
       const body = await response.text();
-      if (body.length > MAX_HTTP_BYTES) throw new Error("Adapter response exceeded 2 MB.");
-      if (!response.ok) throw new Error(`Adapter returned HTTP ${response.status}.`);
+      if (body.length > MAX_HTTP_BYTES)
+        throw new Error("Adapter response exceeded 2 MB.");
+      if (!response.ok)
+        throw new Error(`Adapter returned HTTP ${response.status}.`);
       return body ? (JSON.parse(body) as unknown) : {};
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async publisherJson(
+    url: string,
+    init: RequestInit = {},
+  ): Promise<{ status: number; ok: boolean; body: Record<string, unknown> }> {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      numberEnv("PURPOSE_FOUNDRY_PUBLISH_TIMEOUT_MS", 14_400_000),
+    );
+    timeout.unref();
+    try {
+      const response = await this.dependencies.fetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      if (text.length > MAX_HTTP_BYTES)
+        throw new Error("Publisher response exceeded 2 MB.");
+      let body: Record<string, unknown> = {};
+      try {
+        body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+      } catch {
+        throw new Error(
+          `App Store Publisher returned non-JSON HTTP ${response.status}.`,
+        );
+      }
+      return { status: response.status, ok: response.ok, body };
     } finally {
       clearTimeout(timeout);
     }
@@ -266,7 +595,11 @@ export class FoundryAdapters {
     const target = firstTarget(project);
     const repoSource = target ? repoSourceFromTarget(target) : null;
     const upstreamEvidence = project.stations
-      .filter((station) => station.status === "completed" && station.stationId !== "factory-deck")
+      .filter(
+        (station) =>
+          station.status === "completed" &&
+          station.stationId !== "factory-deck",
+      )
       .map((station) => ({
         stationId: station.stationId,
         summary: station.summary,
@@ -274,7 +607,9 @@ export class FoundryAdapters {
       }));
     const goals = [
       project.constitution.purpose,
-      ...project.constitution.successCriteria.map((item) => `Success criterion: ${item}`),
+      ...project.constitution.successCriteria.map(
+        (item) => `Success criterion: ${item}`,
+      ),
       ...project.constitution.constraints.map((item) => `Constraint: ${item}`),
       ...project.constitution.nonGoals.map((item) => `Non-goal: ${item}`),
       ...(upstreamEvidence.length
@@ -312,21 +647,29 @@ export class FoundryAdapters {
       `Constraints: ${project.constitution.constraints.join("; ") || "none specified"}`,
       `Upstream specialist handoffs: ${upstreamEvidence.length ? JSON.stringify(upstreamEvidence) : "none"}`,
     ].join("\n");
-    const runStart = (await this.fetchJson(`http://127.0.0.1:${config.port}/api/runs`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "idempotency-key": `purpose-foundry:${project.id}:factory-deck`,
-        ...(secrets.authToken ? { authorization: `Bearer ${secrets.authToken}` } : {}),
+    const runStart = (await this.fetchJson(
+      `http://127.0.0.1:${config.port}/api/runs`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `purpose-foundry:${project.id}:factory-deck`,
+          ...(secrets.authToken
+            ? { authorization: `Bearer ${secrets.authToken}` }
+            : {}),
+        },
+        body: JSON.stringify({ idea, options }),
       },
-      body: JSON.stringify({ idea, options }),
-    })) as { runId?: unknown };
-    if (typeof runStart.runId !== "string") throw new Error("Factory Deck did not return a run id.");
+    )) as { runId?: unknown };
+    if (typeof runStart.runId !== "string")
+      throw new Error("Factory Deck did not return a run id.");
 
-    const deadline = Date.now() + numberEnv("PURPOSE_FOUNDRY_FACTORY_TIMEOUT_MS", 14_400_000);
+    const deadline =
+      Date.now() + numberEnv("PURPOSE_FOUNDRY_FACTORY_TIMEOUT_MS", 14_400_000);
     let run = await getRun(runStart.runId);
     while (run && (run.status === "queued" || run.status === "running")) {
-      if (Date.now() >= deadline) throw new Error("Factory Deck run exceeded the Foundry timeout.");
+      if (Date.now() >= deadline)
+        throw new Error("Factory Deck run exceeded the Foundry timeout.");
       await this.dependencies.sleep(2_000);
       run = await getRun(runStart.runId);
     }
@@ -347,9 +690,18 @@ export class FoundryAdapters {
     }
     return {
       status: "completed",
-      summary: run.finalReport?.summary || `Factory Deck completed run ${run.id}.`,
-      artifacts: [artifact, ...(run.workspacePath ? [run.workspacePath] : []), ...(run.destination?.url ? [run.destination.url] : [])],
-      evidence: { runId: run.id, status: run.status, destination: run.destination ?? null },
+      summary:
+        run.finalReport?.summary || `Factory Deck completed run ${run.id}.`,
+      artifacts: [
+        artifact,
+        ...(run.workspacePath ? [run.workspacePath] : []),
+        ...(run.destination?.url ? [run.destination.url] : []),
+      ],
+      evidence: {
+        runId: run.id,
+        status: run.status,
+        destination: run.destination ?? null,
+      },
     };
   }
 
@@ -372,9 +724,13 @@ export class FoundryAdapters {
     const python = process.env.PURPOSE_FOUNDRY_PYTHON?.trim() || "python";
     const provider =
       process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER?.trim() ||
-      (getConfig().defaultCodeProvider === "free" ? "ollama" : getConfig().defaultCodeProvider);
+      (getConfig().defaultCodeProvider === "free"
+        ? "ollama"
+        : getConfig().defaultCodeProvider);
     if (!/^(ollama|anthropic|openai)$/.test(provider)) {
-      throw new Error("PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER must be ollama, anthropic, or openai.");
+      throw new Error(
+        "PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER must be ollama, anthropic, or openai.",
+      );
     }
     const args = [script, mode, "--program", target, "--provider", provider];
     if (mode === "scout") {
@@ -401,7 +757,9 @@ export class FoundryAdapters {
       cwd: dirname(resolve(script)),
       timeoutMs: numberEnv("PURPOSE_FOUNDRY_FLEXFACTOR_TIMEOUT_MS", 14_400_000),
     });
-    const output = compactOutput([result.stdout, result.stderr].filter(Boolean).join("\n"));
+    const output = compactOutput(
+      [result.stdout, result.stderr].filter(Boolean).join("\n"),
+    );
     const artifact = await this.store.writeArtifact(
       project.id,
       mode === "scout" ? "scout" : "flexfactor",
@@ -412,7 +770,12 @@ export class FoundryAdapters {
       status: "completed",
       summary: `${mode === "scout" ? "Scout" : "FlexFactor"} completed for ${target}.`,
       artifacts: [artifact],
-      evidence: { exitCode: result.exitCode, provider, target, outputTail: output.slice(-2_000) },
+      evidence: {
+        exitCode: result.exitCode,
+        provider,
+        target,
+        outputTail: output.slice(-2_000),
+      },
     };
   }
 
@@ -439,9 +802,10 @@ export class FoundryAdapters {
       : null;
     const count = rows?.length ?? null;
     const topCandidates = (rows ?? []).slice(0, 5).map((row) => {
-      const repo = row.repo && typeof row.repo === "object"
-        ? (row.repo as Record<string, unknown>)
-        : row;
+      const repo =
+        row.repo && typeof row.repo === "object"
+          ? (row.repo as Record<string, unknown>)
+          : row;
       return {
         fullName: typeof repo.fullName === "string" ? repo.fullName : null,
         score: typeof row.finalScore === "number" ? row.finalScore : null,
@@ -461,7 +825,8 @@ export class FoundryAdapters {
     if (!token) {
       return {
         status: "needs_attention",
-        summary: "PromoPilot is reachable, but PURPOSE_FOUNDRY_PROMOPILOT_TOKEN is not configured for advertisement data.",
+        summary:
+          "PromoPilot is reachable, but PURPOSE_FOUNDRY_PROMOPILOT_TOKEN is not configured for advertisement data.",
         artifacts: [],
         evidence: { missing: "PURPOSE_FOUNDRY_PROMOPILOT_TOKEN" },
       };
@@ -480,13 +845,22 @@ export class FoundryAdapters {
       project.id,
       "promo-pilot",
       "advertisement-data.json",
-      { project: project.name, collectedAt: Date.now(), controlPlane, overview },
+      {
+        project: project.name,
+        collectedAt: Date.now(),
+        controlPlane,
+        overview,
+      },
     );
     return {
       status: "completed",
-      summary: "PromoPilot supplied current campaign, attribution, destination, and advertisement evidence.",
+      summary:
+        "PromoPilot supplied current campaign, attribution, destination, and advertisement evidence.",
       artifacts: [artifact],
-      evidence: { sources: ["/api/control-plane", "/api/overview"], authenticated: true },
+      evidence: {
+        sources: ["/api/control-plane", "/api/overview"],
+        authenticated: true,
+      },
     };
   }
 
@@ -499,16 +873,18 @@ export class FoundryAdapters {
     const result = await provider.generateJson({
       system:
         "You are The Crucible, an independent adversarial release reviewer. Assume the project is not ready. Try to disprove every success claim using only supplied evidence. Never reward effort, optimism, or self-attestation. A claim without evidence is a finding.",
-      prompt: `Review this Purpose Foundry project.\n\nPROJECT:\n${JSON.stringify({
-        name: project.name,
-        constitution: project.constitution,
-        stationEvidence: project.stations.map((station) => ({
-          stationId: station.stationId,
-          status: station.status,
-          summary: station.summary,
-          artifacts: station.artifacts,
-        })),
-      })}\n\nReturn hardened only when there are no critical/high unresolved findings and every stated success criterion has concrete evidence. Otherwise return needs_work with exact required fixes.`,
+      prompt: `Review this Purpose Foundry project.\n\nPROJECT:\n${JSON.stringify(
+        {
+          name: project.name,
+          constitution: project.constitution,
+          stationEvidence: project.stations.map((station) => ({
+            stationId: station.stationId,
+            status: station.status,
+            summary: station.summary,
+            artifacts: station.artifacts,
+          })),
+        },
+      )}\n\nReturn hardened only when there are no critical/high unresolved findings and every stated success criterion has concrete evidence. Otherwise return needs_work with exact required fixes.`,
       schema: CrucibleResultSchema,
       schemaName: "CrucibleResult",
       temperature: 0.1,
@@ -524,42 +900,366 @@ export class FoundryAdapters {
       status: result.verdict === "hardened" ? "completed" : "needs_attention",
       summary: result.summary,
       artifacts: [artifact],
-      evidence: { verdict: result.verdict, findings: result.findings, testedClaims: result.testedClaims },
+      evidence: {
+        verdict: result.verdict,
+        findings: result.findings,
+        testedClaims: result.testedClaims,
+      },
     };
   }
 
-  private async appStorePublisher(project: FoundryProject): Promise<AdapterOutcome> {
+  private async appStorePublisher(
+    project: FoundryProject,
+  ): Promise<AdapterOutcome> {
     const base = safeUrl(
       process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim() ||
         "http://127.0.0.1:4000",
       "App Store Publisher URL",
     );
-    const [health, stores, submissions] = await Promise.all([
+    const token = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN?.trim();
+    if (!token || token.length < 32) {
+      return {
+        status: "needs_attention",
+        summary:
+          "App Store Publisher needs a shared integration token of at least 32 characters before Purpose Foundry may upload or submit builds.",
+        artifacts: [],
+        evidence: {
+          missing: "PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN",
+          uploaded: false,
+          submitted: false,
+        },
+      };
+    }
+    const [health, rawStores, rawPresets, submissions] = await Promise.all([
       this.fetchJson(`${base}/api/health`),
       this.fetchJson(`${base}/api/stores`),
+      this.fetchJson(`${base}/api/presets`),
       this.fetchJson(`${base}/api/submissions`),
     ]);
-    const releaseArtifacts = project.stations
-      .flatMap((station) => station.artifacts)
-      .filter((item) => /\.(aab|apk|ipa|msix|appx|zip)$/i.test(item));
-    const artifact = await this.store.writeArtifact(
+    const stores = PublisherStoresSchema.parse(rawStores).stores;
+    const presets = PublisherPresetsSchema.parse(rawPresets).presets;
+    const preset = publisherPresetForProject(project, presets);
+    const releaseArtifacts = await discoverReleaseArtifacts(project);
+    const configured = new Map(
+      stores
+        .filter((store) => store.configured)
+        .map((store) => [store.id, store]),
+    );
+    const unresolved: string[] = [];
+
+    for (const storeId of ["google_play", "galaxy_store", "app_store"]) {
+      const store = stores.find((candidate) => candidate.id === storeId);
+      if (store && !store.configured) {
+        unresolved.push(
+          `${store.label || store.id} is not configured in App Store Publisher.`,
+        );
+      }
+    }
+
+    if (!preset)
+      unresolved.push(
+        "No exact App Store Publisher preset matches the project name or target repository.",
+      );
+    if (!releaseArtifacts.length)
+      unresolved.push(
+        "No real .aab, .apk, or .ipa file was found inside an approved project/workspace root.",
+      );
+    if (!configured.size)
+      unresolved.push("No app store is configured in App Store Publisher.");
+
+    const newest = (extension: ReleaseArtifact["extension"]) =>
+      releaseArtifacts.find((artifact) => artifact.extension === extension);
+    const assignments = new Map<
+      string,
+      { artifact: ReleaseArtifact; stores: PublisherStore[] }
+    >();
+    const assign = (
+      store: PublisherStore,
+      artifact: ReleaseArtifact | undefined,
+    ) => {
+      if (!artifact) {
+        unresolved.push(
+          `${store.label || store.id} is configured but its required release artifact is missing.`,
+        );
+        return;
+      }
+      const group = assignments.get(artifact.path) || { artifact, stores: [] };
+      group.stores.push(store);
+      assignments.set(artifact.path, group);
+    };
+
+    if (preset) {
+      const google = configured.get("google_play");
+      if (google) {
+        if (!preset.packageName)
+          unresolved.push(`${preset.label} preset has no Google packageName.`);
+        else assign(google, newest(".aab") || newest(".apk"));
+      }
+      const galaxy = configured.get("galaxy_store");
+      if (galaxy) {
+        if (!preset.galaxyContentId)
+          unresolved.push(
+            `${preset.label} preset has no Galaxy Store contentId.`,
+          );
+        else assign(galaxy, newest(".apk"));
+      }
+      const apple = configured.get("app_store");
+      if (apple) {
+        if (!preset.appleBundleId)
+          unresolved.push(`${preset.label} preset has no Apple bundleId.`);
+        else assign(apple, newest(".ipa"));
+      }
+    }
+
+    const handoffs: Array<Record<string, unknown>> = [];
+    for (const {
+      artifact: release,
+      stores: targetStores,
+    } of assignments.values()) {
+      const sha256 = await sha256File(release.path);
+      const multipart = multipartUploadBody(release, sha256);
+      const upload = await this.publisherJson(`${base}/api/upload`, {
+        method: "POST",
+        headers: {
+          "content-type": multipart.contentType,
+          "content-length": String(multipart.contentLength),
+          "x-purpose-foundry-token": token,
+        },
+        body: multipart.body,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" });
+      if (!upload.ok) {
+        unresolved.push(
+          `Upload of ${basename(release.path)} failed: ${String(upload.body.error || `HTTP ${upload.status}`)}`,
+        );
+        handoffs.push({
+          artifact: release.path,
+          sha256,
+          upload: upload.body,
+          submitted: false,
+        });
+        continue;
+      }
+      const uploadId =
+        typeof upload.body.uploadId === "string" ? upload.body.uploadId : null;
+      if (!uploadId || upload.body.sha256 !== sha256) {
+        unresolved.push(
+          `Publisher did not prove the uploaded bytes for ${basename(release.path)}.`,
+        );
+        handoffs.push({
+          artifact: release.path,
+          sha256,
+          upload: upload.body,
+          submitted: false,
+        });
+        continue;
+      }
+
+      const inspection =
+        upload.body.inspection && typeof upload.body.inspection === "object"
+          ? (upload.body.inspection as Record<string, unknown>)
+          : {};
+      const fields =
+        inspection.fields && typeof inspection.fields === "object"
+          ? (inspection.fields as Record<string, unknown>)
+          : {};
+      const metadata: Record<string, Record<string, unknown>> = {};
+      const selected: string[] = [];
+      for (const store of targetStores) {
+        if (store.id === "google_play" && preset?.packageName) {
+          selected.push(store.id);
+          metadata[store.id] = {
+            packageName: preset.packageName,
+            track:
+              process.env.PURPOSE_FOUNDRY_GOOGLE_PLAY_TRACK?.trim() ||
+              "internal",
+          };
+        } else if (store.id === "galaxy_store" && preset?.galaxyContentId) {
+          selected.push(store.id);
+          metadata[store.id] = {
+            contentId: preset.galaxyContentId,
+            ...(process.env.PURPOSE_FOUNDRY_GALAXY_GMS?.trim()
+              ? { gms: process.env.PURPOSE_FOUNDRY_GALAXY_GMS.trim() }
+              : {}),
+          };
+        } else if (store.id === "app_store" && preset?.appleBundleId) {
+          const versionString =
+            typeof fields.versionName === "string"
+              ? fields.versionName.trim()
+              : "";
+          if (!versionString) {
+            unresolved.push(
+              `Apple could not read CFBundleShortVersionString from ${basename(release.path)}; it was uploaded but not submitted.`,
+            );
+            continue;
+          }
+          selected.push(store.id);
+          metadata[store.id] = {
+            bundleId: preset.appleBundleId,
+            versionString,
+            platform: "IOS",
+          };
+        }
+      }
+      if (!selected.length) {
+        handoffs.push({
+          artifact: release.path,
+          sha256,
+          upload: upload.body,
+          submitted: false,
+        });
+        continue;
+      }
+
+      const idempotencyKey = `purpose-foundry:${project.id}:${sha256}:${selected.sort().join(",")}`;
+      const request = { uploadId, stores: selected, metadata, idempotencyKey };
+      const dryRun = await this.publisherJson(`${base}/api/submit`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-purpose-foundry-token": token,
+        },
+        body: JSON.stringify({ ...request, dryRun: true }),
+      });
+      const approvalToken =
+        typeof dryRun.body.approvalToken === "string"
+          ? dryRun.body.approvalToken
+          : null;
+      if (!dryRun.ok || !approvalToken) {
+        unresolved.push(
+          `Publisher dry run failed for ${basename(release.path)}: ${String(dryRun.body.error || `HTTP ${dryRun.status}`)}`,
+        );
+        handoffs.push({
+          artifact: release.path,
+          sha256,
+          upload: upload.body,
+          dryRun: publisherEvidenceBody(dryRun.body),
+          submitted: false,
+        });
+        continue;
+      }
+
+      const evidenceStores =
+        dryRun.body.artifactEvidence &&
+        typeof dryRun.body.artifactEvidence === "object"
+          ? (
+              dryRun.body.artifactEvidence as {
+                stores?: Array<{
+                  unknowns?: unknown[];
+                  mismatches?: unknown[];
+                }>;
+              }
+            ).stores || []
+          : [];
+      const unverified = evidenceStores.some(
+        (store) =>
+          (store.unknowns?.length || 0) > 0 ||
+          (store.mismatches?.length || 0) > 0,
+      );
+      if (unverified) {
+        unresolved.push(
+          `Publisher could not fully verify ${basename(release.path)} against its store identity; automatic acknowledgement was refused.`,
+        );
+        handoffs.push({
+          artifact: release.path,
+          sha256,
+          upload: upload.body,
+          dryRun: publisherEvidenceBody(dryRun.body),
+          submitted: false,
+        });
+        continue;
+      }
+
+      const production = metadata.google_play?.track === "production";
+      const submission = await this.publisherJson(`${base}/api/submit`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-purpose-foundry-token": token,
+        },
+        body: JSON.stringify({
+          ...request,
+          confirm: true,
+          approvalToken,
+          ...(production ? { confirmProduction: "PUBLISH TO PRODUCTION" } : {}),
+        }),
+      });
+      const effective =
+        submission.status === 409 &&
+        submission.body.duplicate === true &&
+        submission.body.result
+          ? (submission.body.result as Record<string, unknown>)
+          : submission.body;
+      const results = Array.isArray(effective.results)
+        ? (effective.results as Array<Record<string, unknown>>)
+        : [];
+      const accepted =
+        results.length === selected.length &&
+        results.every(
+          (result) =>
+            result.status === "success" &&
+            ["processing", "submitted", "approved", "published"].includes(
+              String(result.state),
+            ),
+        );
+      if (!accepted) {
+        unresolved.push(
+          `One or more stores did not accept ${basename(release.path)} for processing/review.`,
+        );
+      }
+      handoffs.push({
+        artifact: release.path,
+        sha256,
+        upload: upload.body,
+        dryRun: publisherEvidenceBody(dryRun.body),
+        submission: effective,
+        submitted: accepted,
+      });
+    }
+
+    const report = await this.store.writeArtifact(
       project.id,
       "app-store-publisher",
-      "publisher-readiness.json",
-      { health, stores, submissions, releaseArtifacts },
+      "publisher-handoff.json",
+      {
+        health,
+        stores,
+        preset: preset ?? null,
+        previousSubmissions: submissions,
+        releaseArtifacts,
+        handoffs,
+        unresolved,
+      },
     );
+    const submittedStores = handoffs.reduce((count, handoff) => {
+      const submission = handoff.submission as
+        { results?: unknown[] } | undefined;
+      return (
+        count +
+        (handoff.submitted && Array.isArray(submission?.results)
+          ? submission.results.length
+          : 0)
+      );
+    }, 0);
     return {
-      status: "needs_attention",
-      summary: releaseArtifacts.length
-        ? `App Store Publisher is available and ${releaseArtifacts.length} release artifact reference(s) were found, but the Foundry adapter has not uploaded, byte-verified, or submitted them. Open App Store Publisher to complete the release.`
-        : "App Store Publisher is available, but no signed release artifact was produced by an earlier station.",
-      artifacts: [artifact, ...releaseArtifacts],
+      status: unresolved.length ? "needs_attention" : "completed",
+      summary: unresolved.length
+        ? `App Store Publisher completed ${submittedStores} store handoff(s), with ${unresolved.length} issue(s) requiring attention.`
+        : `App Store Publisher checksum-verified and submitted ${submittedStores} store handoff(s).`,
+      artifacts: [report, ...releaseArtifacts.map((artifact) => artifact.path)],
       evidence: {
         publisherHealthy: true,
+        preset: preset?.id ?? null,
         releaseArtifacts: releaseArtifacts.length,
-        uploaded: false,
-        submitted: false,
-        reason: "Native upload and submission handoff is not implemented.",
+        uploaded: handoffs.some((handoff) => {
+          const upload = handoff.upload as Record<string, unknown> | undefined;
+          return typeof upload?.uploadId === "string";
+        }),
+        submitted:
+          handoffs.length > 0 &&
+          handoffs.every((handoff) => handoff.submitted === true),
+        submittedStores,
+        unresolved,
       },
     };
   }
@@ -572,7 +1272,8 @@ export class FoundryAdapters {
     if (!configured.length) {
       return {
         status: "needs_attention",
-        summary: "Watchtower needs at least one explicit PURPOSE_FOUNDRY_WATCH_URLS endpoint.",
+        summary:
+          "Watchtower needs at least one explicit PURPOSE_FOUNDRY_WATCH_URLS endpoint.",
         artifacts: [],
         evidence: { missing: "PURPOSE_FOUNDRY_WATCH_URLS" },
       };
@@ -585,9 +1286,16 @@ export class FoundryAdapters {
           const response = await this.dependencies.fetch(url, {
             method: "GET",
             redirect: "manual",
-            signal: AbortSignal.timeout(numberEnv("PURPOSE_FOUNDRY_WATCH_TIMEOUT_MS", 20_000)),
+            signal: AbortSignal.timeout(
+              numberEnv("PURPOSE_FOUNDRY_WATCH_TIMEOUT_MS", 20_000),
+            ),
           });
-          return { url, ok: response.ok, status: response.status, latencyMs: Date.now() - started };
+          return {
+            url,
+            ok: response.ok,
+            status: response.status,
+            latencyMs: Date.now() - started,
+          };
         } catch (error) {
           return {
             url,
