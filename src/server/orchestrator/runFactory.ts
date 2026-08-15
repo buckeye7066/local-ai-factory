@@ -61,6 +61,7 @@ import {
 } from "./cancellation.js";
 import { runRepairLoop } from "./repairLoop.js";
 import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
+import { classifyEnvironmentFailure } from "./envFailure.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
 import { architectAgent } from "../agents/architectAgent.js";
 import { taskPlannerAgent } from "../agents/taskPlannerAgent.js";
@@ -836,6 +837,14 @@ async function executeRun(
             allowScriptExecution: config.allowUntrustedScripts,
             // Force-kill an in-flight child if the run is cancelled mid-command.
             shouldCancel: () => isCancelRequested(run.id),
+            // REAL suites need real time. The runner's 120s default silently
+            // guaranteed failure for any mature repository: GrantFlow's full
+            // `npm test` (lint + typecheck + build + unit) takes ~20 minutes
+            // in its own CI, so run d687f5fd's verification could NEVER have
+            // passed regardless of code quality — the timeout kill then left
+            // a Windows zombie grandchild holding the pipes for 19 more
+            // minutes. Installs get 15 minutes; test commands get 45.
+            timeoutMs: cmd.isTest ? 45 * 60_000 : 15 * 60_000,
           },
         );
         log(
@@ -940,8 +949,34 @@ async function executeRun(
         log(qa.passed ? "success" : "warning", `QA: ${qa.summary}`, "repair");
       }
       const remainingLoops = Math.max(0, maxLoops - run.repairLoops);
+      // ENVIRONMENT GATE. The repair loop's only tool is writing project
+      // files; an environment-class failure (missing native binding, ABI
+      // mismatch, missing binary) cannot be fixed that way, so looping burns
+      // paid provider calls patching innocent files and hands the QA critic a
+      // failure it then misdiagnoses (run d687f5fd: three loops, ~$2.60, and
+      // a final review blaming the Node version for a skipped-install-scripts
+      // binding). Classification is deterministic signature matching over the
+      // EXECUTED commands' real output — never model judgment.
+      const envFailure = qa.passed
+        ? null
+        : classifyEnvironmentFailure(verification);
       if (qa.passed) {
         log("success", "No high-severity issues — repair loop skipped.");
+        finishStage(run, "repair", "skipped");
+      } else if (envFailure) {
+        log(
+          "warning",
+          `Environment failure (${envFailure.signature}) in \`${envFailure.command}\` — ` +
+            `file repairs cannot fix this, so the repair loop is skipped. ${envFailure.remedy}`,
+          "repair",
+        );
+        qa = {
+          ...qa,
+          summary:
+            `[environment: ${envFailure.signature} — a runner/environment condition, ` +
+            `not a defect in the generated files; ${envFailure.remedy}] ` +
+            qa.summary,
+        };
         finishStage(run, "repair", "skipped");
       } else {
         const loopResult = await runRepairLoop({

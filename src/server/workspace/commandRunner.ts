@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
 
@@ -439,16 +439,34 @@ export async function runCommand(
     let stdout = "";
     let stderr = "";
     let cancelled = false;
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-    }, opts.timeoutMs ?? 120_000);
+    // Kill the whole PROCESS TREE, not just the immediate child. On Windows the
+    // immediate child is a cmd.exe wrapper: `child.kill("SIGKILL")` terminates
+    // cmd while the npm→node grandchildren keep running AND keep the inherited
+    // stdio pipes open, so `close` never fires and the "killed" command hangs
+    // for as long as the grandchild lives (run d687f5fd: a 120s timeout kill
+    // produced a 19.5-minute zombie `npm test`). taskkill /T reaps the tree —
+    // the same fix the EVA launcher uses for the identical problem.
+    const killTree = () => {
+      if (process.platform === "win32" && child.pid) {
+        try {
+          spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+            stdio: "ignore",
+          });
+        } catch {
+          child.kill("SIGKILL");
+        }
+      } else {
+        child.kill("SIGKILL");
+      }
+    };
+    const timeout = setTimeout(killTree, opts.timeoutMs ?? 120_000);
     // Poll for a cancel request and force-kill the child if it arrives, so a
     // cancelled run does not keep a child alive until it finishes / times out.
     const cancelPoll = opts.shouldCancel
       ? setInterval(() => {
           if (opts.shouldCancel!()) {
             cancelled = true;
-            child.kill("SIGKILL");
+            killTree();
           }
         }, 200)
       : null;
