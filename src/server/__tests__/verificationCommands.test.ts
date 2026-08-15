@@ -89,10 +89,37 @@ describe("verificationCommandsForWorkspace", () => {
     expect(commands.map((command) => command.bin)).toEqual([
       "pnpm",
       "pnpm",
+      "pnpm",
       "python",
       "python",
     ]);
     expect(commands.filter((command) => command.isTest)).toHaveLength(2);
+  });
+
+  it("rebuilds native modules after npm/pnpm installs (the skipped-install-scripts class)", () => {
+    // GrantFlow run d687f5fd (2026-08-15): npm 11.17's allow-scripts default
+    // silently skipped better-sqlite3's install script, so `npm ci` exited 0
+    // with NO compiled binding — 20 auth-test failures, a 1080s hang, three
+    // paid repair loops patching innocent files, and a final review that
+    // blamed the Node version. The rebuild step between install and test is
+    // the fix; it must sit BEFORE the test command and never count as a test.
+    const npmPath = workspace();
+    writeFileSync(join(npmPath, "package.json"), "{}\n");
+    writeFileSync(join(npmPath, "package-lock.json"), "{}\n");
+    expect(verificationCommandsForWorkspace(npmPath)).toEqual([
+      { bin: "npm", args: ["ci"], isTest: false },
+      { bin: "npm", args: ["rebuild"], isTest: false },
+      { bin: "npm", args: ["test"], isTest: true },
+    ]);
+
+    const pnpmPath = workspace();
+    writeFileSync(join(pnpmPath, "package.json"), "{}\n");
+    writeFileSync(join(pnpmPath, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    expect(verificationCommandsForWorkspace(pnpmPath)).toEqual([
+      { bin: "pnpm", args: ["install"], isTest: false },
+      { bin: "pnpm", args: ["rebuild"], isTest: false },
+      { bin: "pnpm", args: ["test"], isTest: true },
+    ]);
   });
 
   it("returns no commands for an unknown stack", () => {

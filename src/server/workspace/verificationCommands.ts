@@ -29,17 +29,33 @@ function javascriptCommands(workspacePath: string): VerificationCommand[] {
       { bin: "yarn", args: ["test"], isTest: true },
     ];
   }
+  // REBUILD AFTER INSTALL — the skipped-native-scripts class (measured twice).
+  // Modern package managers skip dependency install scripts by default as a
+  // supply-chain posture: npm 11.17 ships `allow-scripts` pinned to an EMPTY
+  // allowlist, and pnpm v9 skips build scripts for unapproved packages. A
+  // fresh install in an isolated workspace therefore leaves native modules
+  // (better-sqlite3) with NO compiled binding, and every downstream test that
+  // touches the database fails with "Could not locate the bindings file".
+  // That is exactly what killed GrantFlow run d687f5fd (2026-08-15): npm ci
+  // exit 0 → 20 auth-test failures + a 1080s hang, three paid repair loops
+  // patching innocent files, and a final review that mis-blamed the Node
+  // version. `rebuild` compiles the already-installed packages' native code
+  // (it executes even for packages the allowlist has not approved — verified
+  // live in that workspace: the warning prints, the binding builds, the auth
+  // suite goes green) and is an idempotent no-op when nothing needs building.
   if (
     exists(workspacePath, "package-lock.json") ||
     exists(workspacePath, "npm-shrinkwrap.json")
   ) {
     return [
       { bin: "npm", args: ["ci"], isTest: false },
+      { bin: "npm", args: ["rebuild"], isTest: false },
       { bin: "npm", args: ["test"], isTest: true },
     ];
   }
   return [
     { bin: "pnpm", args: ["install"], isTest: false },
+    { bin: "pnpm", args: ["rebuild"], isTest: false },
     { bin: "pnpm", args: ["test"], isTest: true },
   ];
 }
