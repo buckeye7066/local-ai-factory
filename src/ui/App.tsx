@@ -20,6 +20,7 @@ import { FilesPanel } from "./components/files/FilesPanel.js";
 import { FinalReport } from "./components/reports/FinalReport.js";
 import { RunHistory } from "./components/history/RunHistory.js";
 import { SettingsPage } from "./components/settings/SettingsPage.js";
+import { FoundryFloor } from "./components/foundry/FoundryFloor.js";
 import { Card, CardHeader } from "./components/ui/Card.js";
 import { Tabs } from "./components/ui/Tabs.js";
 import { Badge } from "./components/ui/Badge.js";
@@ -36,7 +37,11 @@ export function App() {
   const { theme, toggle } = useTheme();
   const { health } = useHealth();
 
-  const [view, setView] = useState<View>("new");
+  const [view, setView] = useState<View>(() =>
+    new URLSearchParams(window.location.search).get("mode") === "foundry"
+      ? "foundry"
+      : "new",
+  );
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [runs, setRuns] = useState<RunSummary[]>([]);
@@ -242,6 +247,8 @@ export function App() {
           animate="show"
           exit="exit"
         >
+          {view === "foundry" && <FoundryFloor />}
+
           {view === "new" && (
             <NewRunHero health={health} starting={starting} onStart={startRun} />
           )}

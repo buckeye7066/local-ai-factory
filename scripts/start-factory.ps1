@@ -9,6 +9,9 @@ Set-Location -Path (Split-Path -Parent $PSScriptRoot)  # repo root
 $backendHost = "127.0.0.1"
 $backendPort = 5179
 $backendUrl = "http://${backendHost}:${backendPort}"
+$startPath = if ($env:FACTORY_START_PATH) { $env:FACTORY_START_PATH.TrimStart("/") } else { "" }
+$launchUrl = if ($startPath) { "$backendUrl/$startPath" } else { $backendUrl }
+$devLaunchUrl = if ($startPath) { "http://localhost:5180/$startPath" } else { "http://localhost:5180" }
 $distIndex = "dist\ui\index.html"
 
 # True iff a TCP connection to the port can actually be ESTABLISHED (i.e. some
@@ -62,7 +65,7 @@ if ($portBusy) {
     if ($health) { try { $marker = ($health | ConvertFrom-Json).service } catch { $marker = $null } }
     if ($marker -eq "factory-deck") {
         Write-Host "Factory Deck is already running at $backendUrl - opening it." -ForegroundColor Green
-        Start-Process $backendUrl
+        Start-Process $launchUrl
         exit 0
     }
     Write-Host "Port $backendPort is in use by another (non-Factory Deck) service." -ForegroundColor Red
@@ -95,7 +98,7 @@ if ($needBuild) {
             # is present - a foreign 200 on :5180 (non-JSON or marker-less) is
             # never opened. Same check as the production preflight + poller.
             Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", `
-                "for (`$i = 0; `$i -lt 240; `$i++) { try { `$r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 'http://localhost:5180/api/health'; if ((`$r.Content | ConvertFrom-Json).service -eq 'factory-deck') { Start-Process 'http://localhost:5180'; break } } catch { }; Start-Sleep -Milliseconds 250 }"
+                "for (`$i = 0; `$i -lt 240; `$i++) { try { `$r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 'http://localhost:5180/api/health'; if ((`$r.Content | ConvertFrom-Json).service -eq 'factory-deck') { Start-Process '$devLaunchUrl'; break } } catch { }; Start-Sleep -Milliseconds 250 }"
             & pnpm dev
             exit $LASTEXITCODE
         }
@@ -107,11 +110,11 @@ if ($needBuild) {
 # service:"factory-deck" marker - so a foreign service answering the port (incl.
 # a 200 with a non-JSON body) is never opened. Same marker check as the preflight.
 Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", `
-    "for (`$i = 0; `$i -lt 240; `$i++) { try { `$r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 '$backendUrl/api/health'; if ((`$r.Content | ConvertFrom-Json).service -eq 'factory-deck') { Start-Process '$backendUrl'; break } } catch { }; Start-Sleep -Milliseconds 250 }"
+    "for (`$i = 0; `$i -lt 240; `$i++) { try { `$r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 '$backendUrl/api/health'; if ((`$r.Content | ConvertFrom-Json).service -eq 'factory-deck') { Start-Process '$launchUrl'; break } } catch { }; Start-Sleep -Milliseconds 250 }"
 
 Write-Host ""
 Write-Host "Starting Factory Deck (local AI software factory)..."
-Write-Host "App: $backendUrl  (single process; browser opens when ready)"
+Write-Host "App: $launchUrl  (single process; browser opens when ready)"
 Write-Host "(Close this window to stop the factory.)"
 Write-Host ""
 
