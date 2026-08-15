@@ -145,4 +145,27 @@ describe("Purpose Foundry", () => {
       store.writeArtifact(project.id, "watchtower", "health.json", {}),
     ).rejects.toThrow("escapes the Foundry data root");
   });
+
+  it("does not mistake an artifact filename for an App Store submission", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown("# IPlay\nShip the mobile app.", "C:/Vault/IPlay.md"),
+    );
+    project.stations.find((station) => station.stationId === "factory-deck")!.artifacts = [
+      "C:/build/IPlay.aab",
+    ];
+    const adapters = new FoundryAdapters(store, {
+      fetch: async () =>
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const outcome = await adapters.execute(project, "app-store-publisher");
+    expect(outcome.status).toBe("needs_attention");
+    expect(outcome.evidence).toMatchObject({ uploaded: false, submitted: false });
+    expect(outcome.summary).toContain("has not uploaded");
+  });
 });

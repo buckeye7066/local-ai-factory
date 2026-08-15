@@ -21,7 +21,7 @@ their implementations:
 | Factory Deck | local run API | Receives the completed discovery and market handoffs, builds or extends the named target, and waits for its durable run result. |
 | FlexFactor | local CLI | Runs the production-readiness repair workflow against the target. |
 | The Crucible | independent review provider | Assumes the result is wrong and returns evidence-backed findings or a hardened verdict. |
-| App Store Publisher | local HTTP API | Checks stores, submissions, and release-artifact readiness. It stops visibly when no signed artifact exists. |
+| App Store Publisher | local HTTP API | Checks stores, submissions, and release-artifact references, then pauses visibly. It never equates a filename with byte validation, upload, or submission. |
 | Watchtower | HTTP probes | Measures the explicitly configured deployment endpoints and returns failures to the line. |
 
 An adapter that lacks credentials, a target, a release artifact, or a deployed
