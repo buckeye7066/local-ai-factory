@@ -10,7 +10,9 @@ export interface RepairLoopOptions {
   initialQa: QaReport;
   /** Apply a repair for the current QA report (writes files). */
   repair: (qa: QaReport) => Promise<void>;
-  /** Re-run QA after a repair and return the new report. */
+  /** Refresh executable command/test evidence after files are repaired. */
+  verify?: () => Promise<void>;
+  /** Re-run QA after verification and return the new report. */
   reverify: () => Promise<QaReport>;
   /** Called at the start of each repair iteration (1-based). */
   onLoop?: (loopNumber: number) => void | Promise<void>;
@@ -31,6 +33,7 @@ export async function runRepairLoop(
     loops += 1;
     await opts.onLoop?.(loops);
     await opts.repair(qa);
+    await opts.verify?.();
     qa = await opts.reverify();
   }
 

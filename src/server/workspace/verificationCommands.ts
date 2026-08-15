@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export interface VerificationCommand {
@@ -44,6 +44,47 @@ function javascriptCommands(workspacePath: string): VerificationCommand[] {
   ];
 }
 
+const DIRECT_TEST_PATH =
+  /^(?:[A-Za-z0-9_.-]+\/)*test_[A-Za-z0-9_.-]+\.py$/;
+
+function workflowPythonTests(workspacePath: string): VerificationCommand[] {
+  const workflowDir = join(workspacePath, ".github", "workflows");
+  let workflowFiles: string[];
+  try {
+    workflowFiles = readdirSync(workflowDir)
+      .filter((name) => /\.ya?ml$/i.test(name))
+      .sort();
+  } catch {
+    return [];
+  }
+
+  const commands: VerificationCommand[] = [];
+  const seen = new Set<string>();
+  for (const workflowFile of workflowFiles) {
+    let source: string;
+    try {
+      source = readFileSync(join(workflowDir, workflowFile), "utf8");
+    } catch {
+      continue;
+    }
+    for (const rawLine of source.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      const match =
+        /^(?:python|python3(?:\.\d+)?)\s+((?:\.\/)?(?:[A-Za-z0-9_.-]+\/)*test_[A-Za-z0-9_.-]+\.py)\s*$/.exec(
+          line,
+        );
+      if (!match) continue;
+      const testPath = match[1]!.replace(/^\.\//, "");
+      if (!DIRECT_TEST_PATH.test(testPath)) continue;
+      if (!existsSync(join(workspacePath, testPath))) continue;
+      if (seen.has(testPath)) continue;
+      seen.add(testPath);
+      commands.push({ bin: "python", args: [testPath], isTest: true });
+    }
+  }
+  return commands;
+}
+
 function pythonCommands(workspacePath: string): VerificationCommand[] {
   const isPython =
     exists(workspacePath, "pyproject.toml") ||
@@ -77,7 +118,18 @@ function pythonCommands(workspacePath: string): VerificationCommand[] {
     args: ["-m", "compileall", "-q", "."],
     isTest: false,
   });
-  commands.push({ bin, args: ["-m", "pytest", "-q"], isTest: true });
+
+  // Some mature Python repositories intentionally run script-style regression
+  // programs from Actions. Global pytest collection can execute diagnostics
+  // that were never written as pytest tests (for example, camera probes that
+  // exit when hardware is absent). Reuse the repository's explicit CI tests
+  // when present; otherwise retain the conventional pytest fallback.
+  const ciTests = workflowPythonTests(workspacePath);
+  commands.push(
+    ...(ciTests.length
+      ? ciTests
+      : [{ bin, args: ["-m", "pytest", "-q"], isTest: true }]),
+  );
   return commands;
 }
 

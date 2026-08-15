@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { verificationCommandsForWorkspace } from "../workspace/verificationCommands.js";
@@ -48,6 +48,37 @@ describe("verificationCommandsForWorkspace", () => {
     ]);
   });
 
+  it("replays explicit script-style Python tests from GitHub Actions", () => {
+    const path = workspace();
+    mkdirSync(join(path, ".github", "workflows"), { recursive: true });
+    mkdirSync(join(path, "iplay"), { recursive: true });
+    writeFileSync(join(path, "requirements.txt"), "numpy>=1.26\n");
+    writeFileSync(join(path, "test_root.py"), "print('root ok')\n");
+    writeFileSync(join(path, "iplay", "test_suite.py"), "print('suite ok')\n");
+    writeFileSync(join(path, "iplay", "test_camera.py"), "raise SystemExit(1)\n");
+    writeFileSync(
+      join(path, ".github", "workflows", "test.yml"),
+      [
+        "steps:",
+        "  - run: |",
+        "      python3.11 test_root.py",
+        "      python iplay/test_suite.py",
+        "      python3.11 test_root.py",
+      ].join("\n"),
+    );
+
+    const commands = verificationCommandsForWorkspace(path);
+    expect(commands.filter((command) => command.isTest)).toEqual([
+      { bin: "python", args: ["test_root.py"], isTest: true },
+      { bin: "python", args: ["iplay/test_suite.py"], isTest: true },
+    ]);
+    expect(commands).not.toContainEqual({
+      bin: "python",
+      args: ["-m", "pytest", "-q"],
+      isTest: true,
+    });
+  });
+
   it("keeps JavaScript verification and supports polyglot repositories", () => {
     const path = workspace();
     writeFileSync(join(path, "package.json"), "{}\n");
@@ -87,6 +118,9 @@ describe("Python command sandbox", () => {
       ]),
     ).toBe(true);
 
+    expect(isAllowed("python", ["test_sync.py"])).toBe(true);
+    expect(isAllowed("python", ["iplay/test_scenes.py"])).toBe(true);
+    expect(isAllowed("python", ["../test_escape.py"])).toBe(false);
     expect(isAllowed("python", ["malicious.py"])).toBe(false);
     expect(isAllowed("python", ["-m", "http.server"])).toBe(false);
     expect(isAllowed("python", ["-m", "pip", "install", "attacker-package"])).toBe(

@@ -801,22 +801,14 @@ async function executeRun(
     let commandOutput = checkpoint.commandOutput;
     let testsExecuted = checkpoint.testsExecuted;
     let testExit = checkpoint.testExit;
-    if (!checkpoint.testWriterComplete) {
-      throwIfTimedOut(deadline, timeoutMs);
-      startStage(run, "test_writer");
-      let testPlan = checkpoint.testPlan;
-      if (!testPlan) {
-        log("model_call", `Test Writer agent (${review.name})…`);
-        testPlan = await testWriterAgent({ provider: review }, spec, build);
-        await checkpointNow({ testPlan });
-      }
-      if (testPlan.files.length) {
-        await writeBuild(workspacePath, testPlan.files, "test_writer");
-      }
 
-      // Install + test, subject to the allowlist (real execution). Command
-      // replay after a crash is allowed; the expensive provider result above
-      // is not.
+    /**
+     * Execute the current workspace verification plan and replace all prior
+     * command evidence. Repairs may change source files and dependencies, so
+     * reusing pre-repair output would let QA judge a build that no longer
+     * exists on disk.
+     */
+    const verifyWorkspace = async (): Promise<void> => {
       commandOutput = "";
       testsExecuted = false;
       testExit = null;
@@ -857,12 +849,25 @@ async function executeRun(
           }
         }
       }
-      await checkpointNow({
-        testWriterComplete: true,
-        commandOutput,
-        testsExecuted,
-        testExit,
-      });
+      await checkpointNow({ commandOutput, testsExecuted, testExit });
+    };
+    if (!checkpoint.testWriterComplete) {
+      throwIfTimedOut(deadline, timeoutMs);
+      startStage(run, "test_writer");
+      let testPlan = checkpoint.testPlan;
+      if (!testPlan) {
+        log("model_call", `Test Writer agent (${review.name})…`);
+        testPlan = await testWriterAgent({ provider: review }, spec, build);
+        await checkpointNow({ testPlan });
+      }
+      if (testPlan.files.length) {
+        await writeBuild(workspacePath, testPlan.files, "test_writer");
+      }
+
+      // Verify the files written by the test writer. The same helper is used
+      // after every repair so QA always receives fresh executable evidence.
+      await verifyWorkspace();
+      await checkpointNow({ testWriterComplete: true });
     }
     if (!stageDone("test_writer")) {
       finishStage(run, "test_writer", "completed");
@@ -906,6 +911,8 @@ async function executeRun(
           await writeBuild(workspacePath, pending.files, "repair");
         }
         log("info", pending.notes || "Applied checkpointed repair.", "repair");
+        log("info", "Re-running executable verification after repair.", "repair");
+        await verifyWorkspace();
         log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
         qa = await qaCriticAgent({ provider: review }, fullBuild(), commandOutput);
         await checkpointNow({ qa, pendingRepair: undefined });
@@ -947,6 +954,7 @@ async function executeRun(
             }
             log("info", fix.notes || "Applied repairs.", "repair");
           },
+          verify: verifyWorkspace,
           reverify: async () => {
             throwIfTimedOut(deadline, timeoutMs);
             log("model_call", `Re-running QA Critic (${review.name})…`, "repair");

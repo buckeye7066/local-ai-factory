@@ -57,7 +57,20 @@ const ALLOWLIST: ReadonlyArray<readonly [string, string]> = [
 const PYTHON_BINS = new Set(["python", "python3"]);
 const PYTHON_CHECK_MODULES = new Set(["compileall", "pytest", "unittest"]);
 
+const DIRECT_PYTHON_TEST =
+  /^(?:[A-Za-z0-9_.-]+\\/)*test_[A-Za-z0-9_.-]+\\.py$/;
+
+function isSafeDirectPythonTest(arg: string): boolean {
+  const normalized = arg.replace(/\\\\/g, "/");
+  return (
+    !normalized.startsWith("/") &&
+    !normalized.split("/").includes("..") &&
+    DIRECT_PYTHON_TEST.test(normalized)
+  );
+}
+
 function isAllowedPython(args: string[]): boolean {
+  if (args.length === 1 && isSafeDirectPythonTest(args[0]!)) return true;
   if (args[0] !== "-m") return false;
   const module = args[1] ?? "";
   if (PYTHON_CHECK_MODULES.has(module)) return true;
