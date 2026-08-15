@@ -28,7 +28,7 @@
     "measure:free-route": "node scripts/measure-free-route.mjs",
     "release:check": "node scripts/release-check.mjs",
     "icon": "tsx scripts/make-icon.ts",
-    "install:desktop-icon": "powershell -ExecutionPolicy Bypass -File scripts/Install-Desktop-Icon.ps1",
+    "install:desktop-icon": "powershell -File scripts/Install-Desktop-Icon.ps1",
     "test": "vitest run",
     "test:release-gates": "vitest run src/server/__tests__/liveNoMockFallback.test.ts src/server/__tests__/productSpecCoercion.test.ts src/server/__tests__/mockProductionReady.test.ts src/server/__tests__/providers.test.ts src/server/__tests__/stubRun.test.ts src/server/__tests__/cancellation.test.ts src/server/__tests__/commandSandbox.test.ts src/server/__tests__/commandEnvHardening.test.ts",
     "test:production-ready": "pnpm test:release-gates",
@@ -36,7 +36,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.ui.json --noEmit",
     "lint": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
-    "install:purpose-foundry-icon": "powershell -ExecutionPolicy Bypass -File scripts/Install-Purpose-Foundry-Icon.ps1"
+    "install:purpose-foundry-icon": "powershell -File scripts/Install-Purpose-Foundry-Icon.ps1"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 
@@ -97,7 +105,7 @@ export const FoundryProjectSchema = z.object({
 export type FoundryProject = z.infer<typeof FoundryProjectSchema>;
 
 export const StationEventSchema = z.object({
-  status: StationRunStatusSchema,
+  status: z.enum(["active", "needs_attention", "completed", "failed"]),
   summary: z.string().trim().max(20_000).default(""),
   artifacts: z.array(z.string().trim().min(1).max(2_000)).max(100).default([]),
   evidence: z.record(z.unknown()).default({}),
@@ -158,6 +166,7 @@ export class FoundryStore {
   readonly root: string;
   private readonly projectsRoot: string;
   private readonly ledgerPath: string;
+  private projectCreates: Promise<unknown> = Promise.resolve();
   private ledgerWrites: Promise<unknown> = Promise.resolve();
 
   constructor(root = resolve(process.cwd(), ".factory", "foundry")) {
@@ -201,6 +210,12 @@ export class FoundryStore {
   }
 
   async create(input: FoundryIntake): Promise<FoundryProject> {
+    const create = this.projectCreates.then(() => this.createUnlocked(input));
+    this.projectCreates = create.catch(() => undefined);
+    return create;
+  }
+
+  private async createUnlocked(input: FoundryIntake): Promise<FoundryProject> {
     await this.ready();
     if (input.sourcePath) {
       const existing = (await this.list()).find((project) => project.source.path === input.sourcePath);
@@ -295,21 +310,26 @@ export class FoundryStore {
     let unchanged = 0;
     const errors: string[] = [];
     const existing = await this.list();
-    for (const name of await readdir(root)) {
-      if (!name.toLowerCase().endsWith(".md")) continue;
-      const path = resolve(root, name);
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      if (!entry.name.toLowerCase().endsWith(".md")) continue;
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        errors.push(`${entry.name}: symbolic links and non-files are not imported`);
+        continue;
+      }
+      const path = resolve(root, entry.name);
       if (!path.startsWith(`${root}${process.platform === "win32" ? "\\" : "/"}`)) continue;
       try {
         const markdown = await readFile(path, "utf8");
-        const contentHash = hashText(markdown);
+        const normalized = markdown.replace(/\r\n/g, "\n");
+        const contentHash = hashText(normalized);
         if (existing.some((project) => project.source.path === path && project.source.contentHash === contentHash)) {
           unchanged += 1;
           continue;
         }
-        await this.create(intakeFromMarkdown(markdown, path));
+        await this.create(intakeFromMarkdown(normalized, path));
         imported += 1;
       } catch (error) {
-        errors.push(`${name}: ${error instanceof Error ? error.message : "import failed"}`);
+        errors.push(`${entry.name}: ${error instanceof Error ? error.message : "import failed"}`);
       }
     }
     return { imported, unchanged, errors };

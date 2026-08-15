@@ -37,6 +37,15 @@ function asyncRoute(
 export function createFoundryRouter(store = new FoundryStore()): Router {
   const router = Router();
   const obsidianInbox = process.env.PURPOSE_FOUNDRY_OBSIDIAN_INBOX?.trim() || null;
+  let transitionWrites: Promise<unknown> = Promise.resolve();
+  const serialTransition = (
+    handler: (req: Request, res: Response) => Promise<void>,
+  ) =>
+    asyncRoute(async (req, res) => {
+      const transition = transitionWrites.then(() => handler(req, res));
+      transitionWrites = transition.catch(() => undefined);
+      await transition;
+    });
 
   // Obsidian remains an independent application. Purpose Foundry watches only
   // the explicitly configured inbox folder and imports changed Markdown notes.
@@ -91,7 +100,7 @@ export function createFoundryRouter(store = new FoundryStore()): Router {
     res.json(await store.importObsidianInbox(inbox));
   }));
 
-  router.post("/projects/:projectId/start", asyncRoute(async (req, res) => {
+  router.post("/projects/:projectId/start", serialTransition(async (req, res) => {
     const project = await store.get(String(req.params.projectId));
     if (!project) {
       res.status(404).json({ error: "Purpose Foundry project not found." });
@@ -103,6 +112,12 @@ export function createFoundryRouter(store = new FoundryStore()): Router {
     }
     if (project.status === "completed") {
       res.status(409).json({ error: "This project has already completed its selected stations." });
+      return;
+    }
+    if (project.status === "failed" || project.status === "needs_attention") {
+      res.status(409).json({
+        error: "Resume the failed or attention-required station instead of skipping it.",
+      });
       return;
     }
     const first = project.stations.find((station) => station.status === "queued");
@@ -122,7 +137,7 @@ export function createFoundryRouter(store = new FoundryStore()): Router {
     res.status(202).json(project);
   }));
 
-  router.post("/projects/:projectId/stations/:stationId/events", asyncRoute(async (req, res) => {
+  router.post("/projects/:projectId/stations/:stationId/events", serialTransition(async (req, res) => {
     const stationId = StationIdSchema.parse(req.params.stationId);
     const event = StationEventSchema.parse(req.body);
     const project = await store.get(String(req.params.projectId));
@@ -151,11 +166,29 @@ export function createFoundryRouter(store = new FoundryStore()): Router {
       });
       return;
     }
+    if (event.status === "active" && station.status !== "active") {
+      if (station.status !== "needs_attention" && station.status !== "failed") {
+        res.status(409).json({
+          error: "Only a failed or attention-required station may be resumed.",
+        });
+        return;
+      }
+      if (
+        project.stations.some(
+          (item) => item.stationId !== stationId && item.status === "active",
+        )
+      ) {
+        res.status(409).json({ error: "Another station is already active." });
+        return;
+      }
+    }
+    const previousStatus = station.status;
     station.status = event.status;
     station.summary = event.summary;
     station.artifacts = event.artifacts;
-    if (event.status === "active" && !station.startedAt) {
+    if (event.status === "active" && previousStatus !== "active") {
       station.startedAt = Date.now();
+      station.endedAt = null;
       station.attempt += 1;
     }
     if (["completed", "failed", "needs_attention"].includes(event.status)) {

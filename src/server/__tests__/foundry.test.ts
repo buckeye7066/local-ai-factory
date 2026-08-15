@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -58,5 +58,34 @@ describe("Purpose Foundry", () => {
       expect(event.sequence).toBe(index + 1);
       expect(event.previousHash).toBe(index === 0 ? null : lines[index - 1].hash);
     });
+  });
+
+  it("deduplicates simultaneous project creation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const intake = intakeFromMarkdown("# GeneMap\nMap evidence to genes.", "C:/Vault/GeneMap.md");
+    const projects = await Promise.all(
+      Array.from({ length: 8 }, () => store.create(intake)),
+    );
+    expect(new Set(projects.map((project) => project.id)).size).toBe(1);
+    expect(await store.list()).toHaveLength(1);
+  });
+
+  it("normalizes Windows notes and refuses a symlink outside the inbox", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const inbox = await mkdtemp(join(tmpdir(), "purpose-foundry-inbox-"));
+    const outside = join(root, "outside.md");
+    await writeFile(join(inbox, "GrantFlow.md"), "# GrantFlow\r\nFind funding.\r\n", "utf8");
+    await writeFile(outside, "# Private\nDo not import.\n", "utf8");
+    await symlink(outside, join(inbox, "outside.md"));
+    const store = new FoundryStore(root);
+
+    const first = await store.importObsidianInbox(inbox);
+    const second = await store.importObsidianInbox(inbox);
+    expect(first.imported).toBe(1);
+    expect(first.errors.some((error) => error.startsWith("outside.md:"))).toBe(true);
+    expect(second.imported).toBe(0);
+    expect(second.unchanged).toBe(1);
+    expect(await store.list()).toHaveLength(1);
   });
 });

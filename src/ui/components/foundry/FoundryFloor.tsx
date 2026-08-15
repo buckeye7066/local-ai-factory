@@ -154,7 +154,9 @@ export function FoundryFloor() {
           nonGoals: [],
           targets: split(targets),
           source: "manual",
-          selectedStations: stations.map((station) => station.id),
+          ...(stations.length
+            ? { selectedStations: stations.map((station) => station.id) }
+            : {}),
         }),
       });
       setName("");
@@ -310,7 +312,11 @@ export function FoundryFloor() {
                 </div>
                 <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-400">{active?.constitution.purpose ?? "Select a project to see every station and handoff."}</p>
               </div>
-              {active && <Button size="sm" loading={busy} onClick={startProject} icon={<Play className="h-3.5 w-3.5" />}>Start line</Button>}
+              {active && (active.status === "draft" || active.status === "queued") && (
+                <Button size="sm" loading={busy} onClick={startProject} icon={<Play className="h-3.5 w-3.5" />}>
+                  Start line
+                </Button>
+              )}
             </div>
 
             <div className="relative grid gap-3 md:grid-cols-2 2xl:grid-cols-4">

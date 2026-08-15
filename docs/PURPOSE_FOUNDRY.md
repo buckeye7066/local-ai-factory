@@ -1,9 +1,11 @@
 # Purpose Foundry
 
 Purpose Foundry is an optional orchestration mode in Factory Deck. It does not
-replace or absorb the specialist applications. Factory Deck, FlexFactor, Scout a
-Program, Repo Rewards, PromoPilot, and App Store Publisher remain independently
-launchable and retain their own repositories, data, credentials, and interfaces.
+replace or absorb the specialist applications. Factory Deck, Scout a Program,
+Repo Rewards, PromoPilot, FlexFactor, The Crucible, App Store Publisher, and
+Watchtower remain independently addressable. The six standalone applications
+retain their own repositories, data, credentials, and interfaces; The Crucible
+and Watchtower operate as Foundry services.
 
 ## Station contract
 
@@ -28,8 +30,10 @@ are appended to `.factory/foundry/evidence.jsonl` in a SHA-256 hash chain.
 
 ## Obsidian intake
 
-Set `PURPOSE_FOUNDRY_OBSIDIAN_INBOX` to a folder inside an Obsidian vault, then
-choose **Scan inbox**. Markdown uses a small, deterministic frontmatter subset:
+Set `PURPOSE_FOUNDRY_OBSIDIAN_INBOX` to a folder inside an Obsidian vault. The
+server scans once at startup and then every five seconds; unsetting the variable
+disables automatic polling. **Scan inbox** remains available for an immediate
+manual scan. Markdown uses a small, deterministic frontmatter subset:
 
 ```markdown
 ---
@@ -54,3 +58,7 @@ Run `scripts\Install-Purpose-Foundry-Icon.ps1` once. The resulting **Purpose
 Foundry** desktop shortcut starts the same dependable Factory Deck backend but
 opens `?mode=foundry`. The existing Factory Deck shortcut continues to open its
 normal New Run screen.
+
+The launchers do not bypass Windows execution policy. If a downloaded checkout
+is marked as blocked, inspect the scripts and explicitly run
+`Get-ChildItem scripts\*.ps1 | Unblock-File` once.
