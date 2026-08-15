@@ -184,6 +184,35 @@ export class FoundryStore {
     return join(this.projectsRoot, `${id}.json`);
   }
 
+  /**
+   * Persist one station artifact inside the Foundry's own jailed data root.
+   * Adapter output is evidence, not executable source: callers supply a short
+   * filename and this method owns the final path and atomic write.
+   */
+  async writeArtifact(
+    projectId: string,
+    stationId: StationId,
+    filename: string,
+    value: unknown,
+  ): Promise<string> {
+    if (!z.string().uuid().safeParse(projectId).success) {
+      throw new Error("Invalid project id.");
+    }
+    StationIdSchema.parse(stationId);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(filename)) {
+      throw new Error("Invalid artifact filename.");
+    }
+    const directory = join(this.root, "artifacts", projectId, stationId);
+    await mkdir(directory, { recursive: true });
+    const target = join(directory, filename);
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    const contents =
+      typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`;
+    await writeFile(temporary, contents, { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, target);
+    return target;
+  }
+
   async list(): Promise<FoundryProject[]> {
     await this.ready();
     const names = (await readdir(this.projectsRoot)).filter((name) => name.endsWith(".json"));

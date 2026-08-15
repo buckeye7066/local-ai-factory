@@ -2,6 +2,7 @@ import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { FoundryAdapters, repoRewardsQuery, repoSourceFromTarget } from "../foundry/adapters.js";
 import { FoundryStore, STATIONS, intakeFromMarkdown } from "../foundry/model.js";
 
 describe("Purpose Foundry", () => {
@@ -87,5 +88,50 @@ describe("Purpose Foundry", () => {
     expect(second.imported).toBe(0);
     expect(second.unchanged).toBe(1);
     expect(await store.list()).toHaveLength(1);
+  });
+
+  it("classifies explicit repository targets without guessing prose", () => {
+    expect(repoSourceFromTarget("buckeye7066/GrantFlow")).toEqual({
+      type: "git",
+      location: "https://github.com/buckeye7066/GrantFlow.git",
+    });
+    expect(repoSourceFromTarget("C:\\Users\\firer\\GrantFlow")).toEqual({
+      type: "path",
+      location: "C:\\Users\\firer\\GrantFlow",
+    });
+    expect(repoSourceFromTarget("the grant program on my desktop")).toBeNull();
+  });
+
+  it("runs the Repo Rewards adapter and persists its evidence inside the artifact jail", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown(
+        "---\nproject: GrantFlow\npurpose: Match people to real funding\nsuccess: verified live opportunities\n---\n# GrantFlow",
+        "C:/Vault/GrantFlow.md",
+      ),
+    );
+    let posted: unknown = null;
+    const adapters = new FoundryAdapters(store, {
+      fetch: async (_url, init) => {
+        posted = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ results: [{ name: "useful/repo" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    const outcome = await adapters.execute(project, "repo-rewards");
+
+    expect(outcome.status).toBe("completed");
+    expect(posted).toMatchObject({ lens: "best", sessionId: project.id });
+    expect(repoRewardsQuery(project)).toContain("verified live opportunities");
+    expect(outcome.artifacts[0]).toContain(join(project.id, "repo-rewards"));
+    expect(JSON.parse(await readFile(outcome.artifacts[0], "utf8"))).toEqual({
+      results: [{ name: "useful/repo" }],
+    });
+    await expect(
+      store.writeArtifact(project.id, "repo-rewards", "../escape.json", {}),
+    ).rejects.toThrow("Invalid artifact filename");
   });
 });

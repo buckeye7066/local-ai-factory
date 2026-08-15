@@ -7,6 +7,7 @@ import {
   Hammer,
   Megaphone,
   PackageCheck,
+  PlugZap,
   Play,
   Radar,
   RadioTower,
@@ -67,6 +68,13 @@ type FoundryProject = {
   updatedAt: number;
 };
 
+type Adapter = {
+  stationId: StationId;
+  mode: "internal" | "http" | "process";
+  configured: boolean;
+  destination: string;
+};
+
 const ICONS: Record<StationId, ComponentType<{ className?: string }>> = {
   "factory-deck": Factory,
   scout: Radar,
@@ -105,6 +113,7 @@ function split(value: string): string[] {
 
 export function FoundryFloor() {
   const [stations, setStations] = useState<Station[]>([]);
+  const [adapters, setAdapters] = useState<Adapter[]>([]);
   const [projects, setProjects] = useState<FoundryProject[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -115,11 +124,13 @@ export function FoundryFloor() {
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [stationResult, projectResult] = await Promise.all([
+    const [stationResult, adapterResult, projectResult] = await Promise.all([
       request<{ stations: Station[] }>("/api/foundry/stations"),
+      request<{ adapters: Adapter[] }>("/api/foundry/adapters"),
       request<{ projects: FoundryProject[] }>("/api/foundry/projects"),
     ]);
     setStations(stationResult.stations.sort((a, b) => a.order - b.order));
+    setAdapters(adapterResult.adapters);
     setProjects(projectResult.projects);
     setActiveId((current) => current ?? projectResult.projects[0]?.id ?? null);
   }, []);
@@ -232,6 +243,24 @@ export function FoundryFloor() {
     }
   };
 
+  const runStation = async (stationId: StationId) => {
+    if (!active) return;
+    setBusy(true);
+    try {
+      await request(`/api/foundry/projects/${active.id}/stations/${stationId}/run`, {
+        method: "POST",
+      });
+      await refresh();
+      toast.success("Station adapter started");
+    } catch (error) {
+      toast.error("Could not run station adapter", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <section className="relative overflow-hidden rounded-3xl border border-cyan-300/15 bg-gradient-to-br from-cyan-400/[0.08] via-blue-500/[0.04] to-violet-500/[0.07] p-6 md:p-8">
@@ -324,6 +353,7 @@ export function FoundryFloor() {
               {stations.map((station, index) => {
                 const Icon = ICONS[station.id];
                 const run = active?.stations.find((item) => item.stationId === station.id);
+                const adapter = adapters.find((item) => item.stationId === station.id);
                 const status = run?.status ?? "queued";
                 return (
                   <motion.div key={station.id} className={cn("relative z-10 rounded-2xl border p-4", STATUS_STYLE[status])} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.035 }}>
@@ -338,6 +368,17 @@ export function FoundryFloor() {
                     <div className="mt-3 flex items-center justify-between text-[10px] text-slate-600">
                       <span>{station.standalone ? "Standalone + Foundry" : "Foundry service"}</span>
                       {run?.attempt ? <span>Attempt {run.attempt}</span> : null}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2 border-t border-white/[0.05] pt-2 text-[10px]">
+                      <span className={cn("flex min-w-0 items-center gap-1", adapter?.configured ? "text-emerald-400" : "text-amber-400")} title={adapter?.destination}>
+                        <PlugZap className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{adapter?.configured ? `${adapter.mode} configured` : "setup needed"}</span>
+                      </span>
+                      {run && (run.status === "needs_attention" || run.status === "failed") && (
+                        <button disabled={busy} onClick={() => void runStation(station.id)} className="shrink-0 rounded-md bg-white/5 px-2 py-1 text-slate-300 hover:bg-white/10 disabled:opacity-40">
+                          Retry
+                        </button>
+                      )}
                     </div>
                   </motion.div>
                 );
