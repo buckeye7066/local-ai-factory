@@ -35,7 +35,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.ui.json --noEmit",
     "lint": "prettier --check \"src/**/*.{ts,tsx,css}\"",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+    "install:purpose-foundry-icon": "powershell -ExecutionPolicy Bypass -File scripts/Install-Purpose-Foundry-Icon.ps1"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

@@ -46,6 +46,7 @@ import {
   updateSession,
   questionCap,
 } from "./storage/clarificationStore.js";
+import { createFoundryRouter } from "./foundry/router.js";
 
 /**
  * server/index.ts — the LOCAL backend API.
@@ -614,6 +615,9 @@ app.get(
     res.json({ files: files.length ? files : run.files });
   }),
 );
+
+/** Purpose Foundry is additive: existing Factory Deck routes and standalone tools remain intact. */
+app.use("/api/foundry", createFoundryRouter());
 
 /**
  * Production mode: if the UI has been built (pnpm build → dist/ui), serve it

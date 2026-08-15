@@ -6,18 +6,20 @@ import {
   FolderGit2,
   Settings as SettingsIcon,
   FlaskConical,
+  Network,
   X,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { cn } from "../../lib/cn.js";
 
-export type NavKey = "new" | "history" | "workspaces" | "settings";
+export type NavKey = "foundry" | "new" | "history" | "workspaces" | "settings";
 
 const NAV: {
   key: NavKey;
   label: string;
   icon: ComponentType<{ className?: string }>;
 }[] = [
+  { key: "foundry", label: "Purpose Foundry", icon: Network },
   { key: "new", label: "New Run", icon: Plus },
   { key: "history", label: "Runs", icon: History },
   { key: "workspaces", label: "Workspaces", icon: FolderGit2 },

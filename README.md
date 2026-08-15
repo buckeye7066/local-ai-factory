@@ -199,3 +199,10 @@ pnpm exec tsx scripts/make-icon.ts   # or run scripts\Install-Desktop-Icon.ps1
 ```
 
 Double-clicking it launches `pnpm dev` and opens the UI in your browser.
+
+
+## Purpose Foundry
+
+Purpose Foundry is the optional portfolio assembly-line mode. It coordinates Factory Deck, Scout a Program, Repo Rewards, PromoPilot, FlexFactor, The Crucible, App Store Publisher, and Watchtower through a durable station contract and hash-chained evidence ledger. Every existing application remains independently launchable.
+
+Set `PURPOSE_FOUNDRY_OBSIDIAN_INBOX` to an Obsidian folder to ingest saved Markdown project notes automatically. Run `pnpm install:purpose-foundry-icon` once to create the separate **Purpose Foundry** desktop shortcut; the existing Factory Deck shortcut is unchanged. See [`docs/PURPOSE_FOUNDRY.md`](docs/PURPOSE_FOUNDRY.md).
