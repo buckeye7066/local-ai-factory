@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -133,5 +133,13 @@ describe("Purpose Foundry", () => {
     await expect(
       store.writeArtifact(project.id, "repo-rewards", "../escape.json", {}),
     ).rejects.toThrow("Invalid artifact filename");
+
+    const outside = await mkdtemp(join(tmpdir(), "purpose-foundry-artifact-outside-"));
+    const stationParent = join(root, "artifacts", project.id);
+    await mkdir(stationParent, { recursive: true });
+    await symlink(outside, join(stationParent, "watchtower"), "dir");
+    await expect(
+      store.writeArtifact(project.id, "watchtower", "health.json", {}),
+    ).rejects.toThrow("escapes the Foundry data root");
   });
 });

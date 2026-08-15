@@ -102,11 +102,10 @@ function defaultProcessRunner(
       (error, stdout, stderr) => {
         if (error) {
           const code = typeof error.code === "number" ? error.code : 1;
-          reject(
-            new Error(
-              `Process exited ${code}: ${String(stderr || stdout || error.message).slice(0, 1_000)}`,
-            ),
-          );
+          // Child output can contain provider diagnostics or secret-shaped
+          // environment values. A failed process is recorded generically;
+          // raw stdout/stderr is never copied into the evidence ledger.
+          reject(new Error(`Process exited ${code}. Inspect FlexFactor's local run log.`));
           return;
         }
         resolvePromise({ stdout: String(stdout), stderr: String(stderr), exitCode: 0 });

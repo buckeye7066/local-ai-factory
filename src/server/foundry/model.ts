@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFile,
+  lstat,
   mkdir,
   readFile,
+  realpath,
   readdir,
   rename,
   stat,
@@ -204,7 +206,22 @@ export class FoundryStore {
     }
     const directory = join(this.root, "artifacts", projectId, stationId);
     await mkdir(directory, { recursive: true });
+    const [rootReal, directoryReal] = await Promise.all([
+      realpath(this.root),
+      realpath(directory),
+    ]);
+    const separator = process.platform === "win32" ? "\\" : "/";
+    if (directoryReal !== rootReal && !directoryReal.startsWith(`${rootReal}${separator}`)) {
+      throw new Error("Artifact directory escapes the Foundry data root.");
+    }
     const target = join(directory, filename);
+    try {
+      if ((await lstat(target)).isSymbolicLink()) {
+        throw new Error("Artifact target may not be a symbolic link.");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
     const temporary = `${target}.${randomUUID()}.tmp`;
     const contents =
       typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`;
