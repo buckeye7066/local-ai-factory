@@ -209,47 +209,39 @@ describe("Purpose Foundry", () => {
     project.stations.find(
       (station) => station.stationId === "factory-deck",
     )!.artifacts = ["C:/build/IPlay.aab"];
-    const previous = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
-    process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = "x".repeat(32);
-    try {
-      const adapters = new FoundryAdapters(store, {
-        fetch: async (url) => {
-          const path = new URL(String(url)).pathname;
-          const body =
-            path === "/api/stores"
-              ? { stores: [{ id: "google_play", configured: true }] }
-              : path === "/api/presets"
-                ? {
-                    presets: [
-                      {
-                        id: "iplay",
-                        label: "IPlay",
-                        packageName: "com.iplay.app",
-                      },
-                    ],
-                  }
-                : path === "/api/submissions"
-                  ? { submissions: [] }
-                  : { ok: true };
-          return new Response(JSON.stringify(body), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        },
-      });
+    const adapters = new FoundryAdapters(store, {
+      fetch: async (url) => {
+        const path = new URL(String(url)).pathname;
+        const body =
+          path === "/api/stores"
+            ? { stores: [{ id: "google_play", configured: true }] }
+            : path === "/api/presets"
+              ? {
+                  presets: [
+                    {
+                      id: "iplay",
+                      label: "IPlay",
+                      packageName: "com.iplay.app",
+                    },
+                  ],
+                }
+              : path === "/api/submissions"
+                ? { submissions: [] }
+                : { ok: true };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
 
-      const outcome = await adapters.execute(project, "app-store-publisher");
-      expect(outcome.status).toBe("needs_attention");
-      expect(outcome.evidence).toMatchObject({
-        uploaded: false,
-        submitted: false,
-      });
-      expect(outcome.summary).toContain("requiring attention");
-    } finally {
-      if (previous === undefined)
-        delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
-      else process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = previous;
-    }
+    const outcome = await adapters.execute(project, "app-store-publisher");
+    expect(outcome.status).toBe("needs_attention");
+    expect(outcome.evidence).toMatchObject({
+      uploaded: false,
+      submitted: false,
+    });
+    expect(outcome.summary).toContain("requiring attention");
   });
 
   it("streams, checksum-verifies, dry-runs, and submits a real build through Publisher", async () => {
@@ -270,95 +262,85 @@ describe("Purpose Foundry", () => {
       (station) => station.stationId === "factory-deck",
     )!.artifacts = [release];
     const calls: string[] = [];
-    const previous = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
-    process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = "p".repeat(32);
-    try {
-      const adapters = new FoundryAdapters(store, {
-        fetch: async (url, init) => {
-          const path = new URL(String(url)).pathname;
-          calls.push(`${init?.method || "GET"} ${path}`);
-          let body: Record<string, unknown>;
-          if (path === "/api/stores") {
-            body = {
-              stores: [
-                { id: "google_play", label: "Google Play", configured: true },
-              ],
-            };
-          } else if (path === "/api/presets") {
-            body = {
-              presets: [
-                {
-                  id: "grantflow",
-                  label: "GrantFlow",
-                  repo: "buckeye7066/GrantFlow",
-                  packageName: "com.grantflow.app",
-                },
-              ],
-            };
-          } else if (path === "/api/submissions") {
-            body = { submissions: [] };
-          } else if (path === "/api/upload") {
-            const chunks: Buffer[] = [];
-            for await (const chunk of init?.body as AsyncIterable<Uint8Array>)
-              chunks.push(Buffer.from(chunk));
-            const multipart = Buffer.concat(chunks);
-            expect(multipart.includes(bytes)).toBe(true);
-            expect(multipart.toString("latin1")).toContain(sha256);
-            expect(init?.headers).toMatchObject({
-              "x-purpose-foundry-token": "p".repeat(32),
-            });
-            body = {
-              uploadId: "upload-1",
-              fileName: "grantflow-release.aab",
-              sha256,
-              inspection: { fields: { packageId: "com.grantflow.app" } },
-            };
-          } else if (path === "/api/submit") {
-            const request = JSON.parse(String(init?.body)) as {
-              dryRun?: boolean;
-            };
-            body = request.dryRun
-              ? {
-                  approvalToken: "approval-1",
-                  artifactEvidence: {
-                    stores: [{ unknowns: [], mismatches: [] }],
-                  },
-                  plannedMutations: [],
-                }
-              : {
-                  results: [
-                    {
-                      store: "google_play",
-                      status: "success",
-                      state: "published",
-                    },
-                  ],
-                };
-          } else {
-            body = { ok: true };
-          }
-          return new Response(JSON.stringify(body), {
-            status: 200,
-            headers: { "content-type": "application/json" },
+    const adapters = new FoundryAdapters(store, {
+      fetch: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        calls.push(`${init?.method || "GET"} ${path}`);
+        let body: Record<string, unknown>;
+        if (path === "/api/stores") {
+          body = {
+            stores: [
+              { id: "google_play", label: "Google Play", configured: true },
+            ],
+          };
+        } else if (path === "/api/presets") {
+          body = {
+            presets: [
+              {
+                id: "grantflow",
+                label: "GrantFlow",
+                repo: "buckeye7066/GrantFlow",
+                packageName: "com.grantflow.app",
+              },
+            ],
+          };
+        } else if (path === "/api/submissions") {
+          body = { submissions: [] };
+        } else if (path === "/api/upload") {
+          const chunks: Buffer[] = [];
+          for await (const chunk of init?.body as AsyncIterable<Uint8Array>)
+            chunks.push(Buffer.from(chunk));
+          const multipart = Buffer.concat(chunks);
+          expect(multipart.includes(bytes)).toBe(true);
+          expect(multipart.toString("latin1")).toContain(sha256);
+          expect(init?.headers).toMatchObject({
+            "x-purpose-foundry-client": "purpose-foundry",
           });
-        },
-      });
+          body = {
+            uploadId: "upload-1",
+            fileName: "grantflow-release.aab",
+            sha256,
+            inspection: { fields: { packageId: "com.grantflow.app" } },
+          };
+        } else if (path === "/api/submit") {
+          const request = JSON.parse(String(init?.body)) as {
+            dryRun?: boolean;
+          };
+          body = request.dryRun
+            ? {
+                approvalToken: "approval-1",
+                artifactEvidence: {
+                  stores: [{ unknowns: [], mismatches: [] }],
+                },
+                plannedMutations: [],
+              }
+            : {
+                results: [
+                  {
+                    store: "google_play",
+                    status: "success",
+                    state: "published",
+                  },
+                ],
+              };
+        } else {
+          body = { ok: true };
+        }
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
 
-      const outcome = await adapters.execute(project, "app-store-publisher");
-      expect(outcome.status).toBe("completed");
-      expect(outcome.evidence).toMatchObject({
-        uploaded: true,
-        submitted: true,
-        submittedStores: 1,
-      });
-      expect(calls).toContain("POST /api/upload");
-      expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(
-        2,
-      );
-    } finally {
-      if (previous === undefined)
-        delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
-      else process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = previous;
-    }
+    const outcome = await adapters.execute(project, "app-store-publisher");
+    expect(outcome.status).toBe("completed");
+    expect(outcome.evidence).toMatchObject({
+      uploaded: true,
+      submitted: true,
+      submittedStores: 1,
+    });
+    expect(calls).toContain("POST /api/upload");
+    expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(2);
   });
 });
