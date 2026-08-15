@@ -640,7 +640,7 @@ app.use("/api/foundry", createFoundryRouter());
 /**
  * Production mode: if the UI has been built (pnpm build → dist/ui), serve it
  * directly so the whole app runs as a single process on config.port — no Vite
- * dev server required. The dev flow (pnpm dev on :5180) is unaffected.
+ * dev server required. The dev flow (pnpm dev on :5190) is unaffected.
  */
 const uiDist = resolve(process.cwd(), "dist", "ui");
 const servesUi = existsSync(resolve(uiDist, "index.html"));

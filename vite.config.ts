@@ -9,7 +9,12 @@ export default defineConfig({
   root: fileURLToPath(new URL("./src/ui", import.meta.url)),
   plugins: [react()],
   server: {
-    port: 5180,
+    // 5190, not 5180: Docker Desktop publishes 5180 machine-wide for
+    // family-stewardship-navigator's web container (com.docker.backend owns
+    // it), so Factory Deck's dev UI could never bind while Docker ran — the
+    // exact "PORT HELD BY A PROTECTED PROCESS" class EVA reported nightly for
+    // are-we-mice/mind-over-math on 3001.
+    port: 5190,
     proxy: {
       "/api": {
         target: "http://127.0.0.1:5179",

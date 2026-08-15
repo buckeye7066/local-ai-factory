@@ -11,7 +11,7 @@ $backendPort = 5179
 $backendUrl = "http://${backendHost}:${backendPort}"
 $startPath = if ($env:FACTORY_START_PATH) { $env:FACTORY_START_PATH.TrimStart("/") } else { "" }
 $launchUrl = if ($startPath) { "$backendUrl/$startPath" } else { $backendUrl }
-$devLaunchUrl = if ($startPath) { "http://localhost:5180/$startPath" } else { "http://localhost:5180" }
+$devLaunchUrl = if ($startPath) { "http://localhost:5190/$startPath" } else { "http://localhost:5190" }
 $distIndex = "dist\ui\index.html"
 
 # True iff a TCP connection to the port can actually be ESTABLISHED (i.e. some
@@ -93,12 +93,12 @@ if ($needBuild) {
         } else {
             # No usable UI at all: fall back to the old two-process dev mode.
             Write-Host "Build FAILED and no previous build exists - falling back to dev mode." -ForegroundColor Red
-            # Vite (:5180) proxies /api to the backend, so /api/health carries the
+            # Vite (:5190) proxies /api to the backend, so /api/health carries the
             # factory-deck marker here too. Open the dev UI ONLY when that marker
-            # is present - a foreign 200 on :5180 (non-JSON or marker-less) is
+            # is present - a foreign 200 on :5190 (non-JSON or marker-less) is
             # never opened. Same check as the production preflight + poller.
             Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", `
-                "for (`$i = 0; `$i -lt 240; `$i++) { try { `$r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 'http://localhost:5180/api/health'; if ((`$r.Content | ConvertFrom-Json).service -eq 'factory-deck') { Start-Process '$devLaunchUrl'; break } } catch { }; Start-Sleep -Milliseconds 250 }"
+                "for (`$i = 0; `$i -lt 240; `$i++) { try { `$r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 'http://localhost:5190/api/health'; if ((`$r.Content | ConvertFrom-Json).service -eq 'factory-deck') { Start-Process '$devLaunchUrl'; break } } catch { }; Start-Sleep -Milliseconds 250 }"
             & pnpm dev
             exit $LASTEXITCODE
         }
