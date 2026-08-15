@@ -28,6 +28,7 @@ export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 import { runCommand } from "../workspace/commandRunner.js";
+import { verificationCommandsForWorkspace } from "../workspace/verificationCommands.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -819,10 +820,15 @@ async function executeRun(
       commandOutput = "";
       testsExecuted = false;
       testExit = null;
-      for (const cmd of [
-        { bin: "pnpm", args: ["install"] },
-        { bin: "pnpm", args: ["test"] },
-      ]) {
+      const verificationCommands =
+        verificationCommandsForWorkspace(workspacePath);
+      if (!verificationCommands.length) {
+        log(
+          "warning",
+          "No supported project manifest detected; command verification skipped.",
+        );
+      }
+      for (const cmd of verificationCommands) {
         throwIfCancelled(run.id);
         throwIfTimedOut(deadline, timeoutMs);
         const res = await runCommand(
@@ -843,9 +849,11 @@ async function executeRun(
         );
         if (res.executed) {
           commandOutput += `\n$ ${res.command}\n${res.stdout}\n${res.stderr}`;
-          if (cmd.args[0] === "test") {
+          if (cmd.isTest) {
             testsExecuted = true;
-            testExit = res.exitCode;
+            if (res.exitCode !== 0 || testExit === null) {
+              testExit = res.exitCode;
+            }
           }
         }
       }
