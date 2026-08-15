@@ -29,7 +29,15 @@ import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
  *    value is redacted, and workspace dirs are stripped from PATH.
  *  - NO LIFECYCLE SCRIPTS: install/ci get `--ignore-scripts` injected, and pnpm
  *    installs also get `--ignore-pnpmfile` so a generated `.pnpmfile.cjs` in the
- *    workspace is never loaded.
+ *    workspace is never loaded. DELIBERATE EXCEPTION (2026-08-15): `rebuild`
+ *    runs the native build hooks of ALREADY-LOCKED registry dependencies —
+ *    without it, every repo with a native module (better-sqlite3) fails
+ *    verification structurally: GrantFlow run d687f5fd installed with skipped
+ *    scripts, got no compiled binding, failed 20 auth tests + a 1080s hang,
+ *    and burned three paid repair loops on a misdiagnosis. A guardrail that
+ *    makes verification impossible for native-dep repos breaks the product's
+ *    purpose; rebuild's exposure is bounded to lockfile packages' own gyp
+ *    builds (no `.pnpmfile.cjs`, no arbitrary workspace scripts).
  *
  * NOTE: `isInsideWorkspace` is a cwd BOUNDARY check, not a runtime filesystem
  * sandbox — a script that is actually executed can still read/write outside the
@@ -43,11 +51,18 @@ const ALLOWLIST: ReadonlyArray<readonly [string, string]> = [
   ["npm", "ci"],
   ["npm", "run"],
   ["npm", "test"],
+  // `rebuild` compiles ALREADY-INSTALLED dependencies' native code (the
+  // skipped-install-scripts class: npm 11.17 allow-scripts / pnpm v9 leave
+  // better-sqlite3 with no binding after a clean install — GrantFlow run
+  // d687f5fd). It executes only package install scripts the install itself
+  // would have run, against the locked tree — no new code enters.
+  ["npm", "rebuild"],
   ["pnpm", "install"],
   ["pnpm", "run"],
   ["pnpm", "test"],
   ["pnpm", "build"],
   ["pnpm", "typecheck"],
+  ["pnpm", "rebuild"],
   ["yarn", "install"],
   ["yarn", "test"],
   ["npx", "tsc"],
