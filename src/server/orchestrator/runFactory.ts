@@ -29,6 +29,7 @@ import { createWorkspace } from "../workspace/createWorkspace.js";
 import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import { verificationCommandsForWorkspace } from "../workspace/verificationCommands.js";
+import { findUnwiredNewFiles, unwiredCaveat } from "../workspace/unwiredFiles.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -1062,6 +1063,28 @@ async function executeRun(
         providerUsage: run.providerUsage,
         testStatus,
       });
+      // SCAFFOLDING HONESTY (extend runs). Three consecutive GrantFlow
+      // deliveries generated pages/modules that NOTHING pre-existing imports —
+      // features on paper, unreachable in the product — and each read as
+      // delivered work until a human traced imports by hand. The trace now
+      // runs mechanically: generated source files with no pre-existing
+      // referrer are named in the caveats, so an unwired delivery can never
+      // present itself as wired. Purely additive — no verdict changes, no
+      // file is blocked from delivery.
+      try {
+        const unwired = findUnwiredNewFiles(workspacePath, [...files.keys()]);
+        const caveat = unwiredCaveat(unwired);
+        if (caveat) {
+          report = { ...report, caveats: [...report.caveats, caveat] };
+          log("warning", caveat, "final_review");
+        }
+      } catch (err) {
+        log(
+          "warning",
+          `Unwired-file scan failed (non-fatal): ${String((err as Error)?.message ?? err)}`,
+          "final_review",
+        );
+      }
       await checkpointNow({ finalReport: report });
     }
     throwIfCancelled(run.id);
