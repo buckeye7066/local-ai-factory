@@ -663,7 +663,7 @@ async function executeRun(
           "model_call",
           `Research agent (${code.name}) — searching for tools/APIs that could help…`,
         );
-        research = await researchAgent({ provider: code }, spec, arch);
+        research = await researchAgent({ provider: code }, spec, arch, { competitive: true });
         await checkpointNow({ research });
         log(
           research.recommendations.length ? "success" : "info",

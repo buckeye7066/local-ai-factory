@@ -29,6 +29,19 @@ Idea
   forever — see `src/server/orchestrator/repairLoop.ts`.
 - Every model call is metered against `MAX_MODEL_CALLS_PER_RUN` (a cost guard).
 
+### Autonomous competitive intelligence
+
+Live runs now research beyond named dependencies. Before planning is finalized, Factory Deck:
+
+1. derives multiple discovery queries from the product specification;
+2. finds and deduplicates relevant open-source products, libraries, APIs, and documentation;
+3. inspects repository metadata, maintenance signals, file trees, and the most relevant source files;
+4. records deterministic license evidence and classifies reuse as direct-use, conditional-review, or reference-only;
+5. produces an evidence-linked feature comparison and selects specific elements to integrate; and
+6. passes the selected approach and enforced reuse mode into planning and file generation.
+
+Unknown, proprietary, or reciprocal licenses cannot be promoted to direct source reuse by a model response. Those candidates remain reference-only or are implemented as clean-room patterns. The crawl is bounded by query, candidate, file, byte, and timeout budgets so research cannot run indefinitely.
+
 \* Commands only run when you opt out of dry-run mode (see Security below).
 
 ---

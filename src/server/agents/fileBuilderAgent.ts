@@ -116,15 +116,19 @@ export async function fileBuilderAgent(
 
   if (research?.recommendations.length) {
     systemParts.push(
-      `Real research already identified external tools/libraries/APIs worth using for this build (found via a ` +
-        `live web search, not invented) — actually integrate the ones that fit rather than reinventing them, ` +
-        `including real API calls where the recommendation specifies an endpoint.`,
+      `Real research already identified external tools/libraries/APIs and competing implementations worth ` +
+        `using for this build (found through live search and source inspection, not invented). Integrate only ` +
+        `according to each recommendation's reuse mode. Never copy source marked conditional-review or ` +
+        `reference-only; implement those ideas clean-room from documented behavior and evidence.`,
     );
     promptParts.push(
       `RESEARCH FINDINGS:\n${research.summary}\n${research.recommendations
         .map(
           (r) =>
-            `- ${r.name}: ${r.why} (source: ${r.sourceUrl})\n  How to integrate: ${r.howToIntegrate}`,
+            `- ${r.name}: ${r.why} (source: ${r.sourceUrl})\n` +
+            `  License: ${r.licenseSpdx}; policy: ${r.licensePolicy}; reuse: ${r.reuseMode}; score: ${r.score}\n` +
+            `  Evidence: ${r.evidenceUrls.join(", ") || r.sourceUrl}\n` +
+            `  How to integrate: ${r.howToIntegrate}`,
         )
         .join("\n")}`,
     );

@@ -2,34 +2,82 @@ import { z } from "zod";
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 import { webSearchTool } from "../tools/webSearch.js";
 import { webFetchTool } from "../tools/webFetch.js";
+import {
+  buildCompetitiveDossier,
+  type CompetitiveCandidate,
+  type CompetitiveDossier,
+} from "../tools/competitiveIntelligence.js";
 import type { ProductSpec, Architecture } from "../../shared/schemas.js";
 
-/**
- * researchAgent.ts — "if there is a tool out there that it can use, it can
- * find it and use it to properly build the thing." A bounded ReAct-style loop
- * with two real tools — web_search (genuine, keyless DuckDuckGo Lite search)
- * and web_fetch (read a specific page/API doc it found) — that decides
- * whether an existing library/API would help build the spec, evaluates what
- * it finds, and returns concrete, actionable recommendations the builder
- * stage can actually wire in (not a decorative "consider using X" aside).
- *
- * Runs after architecture is set (so it knows what's being built) and before
- * the task planner commits to an implementation approach, per the design
- * goal of feeding real findings into planning rather than bolting research on
- * after the fact.
- */
+const LicensePolicySchema = z.enum([
+  "direct-use",
+  "conditional-review",
+  "reference-only",
+  "not-applicable",
+]);
+const ReuseModeSchema = z.enum([
+  "dependency",
+  "direct-code",
+  "clean-room-pattern",
+  "api-integration",
+  "reference-only",
+]);
 
 const RecommendationSchema = z.object({
   name: z.string(),
   why: z.string().default(""),
   sourceUrl: z.string().default(""),
   howToIntegrate: z.string().default(""),
+  candidateId: z.string().default(""),
+  licenseSpdx: z.string().default("NOASSERTION"),
+  licensePolicy: LicensePolicySchema.default("not-applicable"),
+  reuseMode: ReuseModeSchema.default("api-integration"),
+  evidenceUrls: z.array(z.string()).default([]),
+  score: z.number().min(0).max(100).default(0),
 });
 export type ResearchRecommendation = z.infer<typeof RecommendationSchema>;
+
+const CandidateComparisonSchema = z.object({
+  candidateId: z.string(),
+  name: z.string().default(""),
+  score: z.number().min(0).max(100).default(0),
+  matchedFeatures: z.array(z.string()).default([]),
+  strengths: z.array(z.string()).default([]),
+  gaps: z.array(z.string()).default([]),
+  evidenceUrls: z.array(z.string()).default([]),
+  decision: z.enum(["integrate", "adapt", "reference", "reject"]),
+  rationale: z.string().default(""),
+});
+
+const CompetitiveAuditSchema = z.object({
+  queries: z.array(z.string()).default([]),
+  discoveredCount: z.number().int().nonnegative().default(0),
+  inspectedCount: z.number().int().nonnegative().default(0),
+  generatedAt: z.string().default(""),
+  candidates: z
+    .array(
+      z.object({
+        candidateId: z.string(),
+        name: z.string(),
+        url: z.string(),
+        licenseSpdx: z.string(),
+        licensePolicy: z.enum([
+          "direct-use",
+          "conditional-review",
+          "reference-only",
+        ]),
+        inspectedFiles: z.number().int().nonnegative(),
+        inspectionError: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
 
 export const ResearchFindingsSchema = z.object({
   summary: z.string().default(""),
   recommendations: z.array(RecommendationSchema).default([]),
+  comparisons: z.array(CandidateComparisonSchema).default([]),
+  competitiveAudit: CompetitiveAuditSchema.nullable().default(null),
 });
 export type ResearchFindings = z.infer<typeof ResearchFindingsSchema>;
 
@@ -42,6 +90,30 @@ const ResearchActionSchema = z.object({
   findings: ResearchFindingsSchema.nullable().optional(),
 });
 type ResearchAction = z.infer<typeof ResearchActionSchema>;
+
+const CompetitiveSelectionSchema = z.object({
+  summary: z.string().default(""),
+  comparisons: z.array(CandidateComparisonSchema).default([]),
+  selected: z
+    .array(
+      z.object({
+        candidateId: z.string(),
+        element: z.string(),
+        why: z.string().default(""),
+        howToIntegrate: z.string().default(""),
+        reuseMode: ReuseModeSchema,
+        evidenceUrls: z.array(z.string()).default([]),
+        score: z.number().min(0).max(100).default(0),
+      }),
+    )
+    .default([]),
+});
+type CompetitiveSelection = z.infer<typeof CompetitiveSelectionSchema>;
+
+export interface ResearchOptions {
+  /** Preserve the small legacy research loop for tests and constrained callers. */
+  competitive?: boolean;
+}
 
 const MAX_STEPS = 5;
 
@@ -61,7 +133,7 @@ function buildPrompt(spec: ProductSpec, arch: Architecture, toolLog: string[]): 
   ].join("\n\n");
 }
 
-export async function researchAgent(
+async function runToolResearch(
   deps: AgentDeps,
   spec: ProductSpec,
   arch: Architecture,
@@ -78,15 +150,15 @@ export async function researchAgent(
       schema: ResearchActionSchema,
       schemaName: "ResearchAction",
       temperature: 0.2,
-      maxTokens: 1400,
+      maxTokens: 1800,
     });
 
     if (turn.action === "conclude") {
-      return (
+      return ResearchFindingsSchema.parse(
         turn.findings ?? {
           summary: "No specific external tool identified.",
           recommendations: [],
-        }
+        },
       );
     }
 
@@ -112,14 +184,159 @@ export async function researchAgent(
         `web_fetch(${turn.url}) -> ok=${res.ok} status=${res.status}\n` +
           (res.error ? `error: ${res.error}` : res.textExcerpt.slice(0, 1200)),
       );
-      continue;
     }
   }
 
-  // Bounded — never block the pipeline indefinitely on research. An honest
-  // "didn't reach a conclusion" is safer than fabricating one this late.
-  return {
+  return ResearchFindingsSchema.parse({
     summary: `Research did not reach a conclusion within ${MAX_STEPS} steps — proceeding without external recommendations.`,
     recommendations: [],
+  });
+}
+
+function compactCandidate(candidate: CompetitiveCandidate) {
+  return {
+    id: candidate.id,
+    kind: candidate.kind,
+    name: candidate.name,
+    url: candidate.url,
+    description: candidate.description,
+    stars: candidate.stars,
+    archived: candidate.archived,
+    updatedAt: candidate.updatedAt,
+    discoveryEvidence: candidate.discoveryEvidence,
+    license: candidate.license,
+    inspectionError: candidate.inspectionError,
+    fileTree: candidate.fileTree.slice(0, 160),
+    sourceEvidence: candidate.sourceEvidence.slice(0, 12),
   };
+}
+
+function auditFrom(dossier: CompetitiveDossier) {
+  return {
+    queries: dossier.queries,
+    discoveredCount: dossier.discoveredCount,
+    inspectedCount: dossier.inspectedCount,
+    generatedAt: dossier.generatedAt,
+    candidates: dossier.candidates.map((candidate) => ({
+      candidateId: candidate.id,
+      name: candidate.name,
+      url: candidate.url,
+      licenseSpdx: candidate.license.spdxId,
+      licensePolicy: candidate.license.policy,
+      inspectedFiles: candidate.sourceEvidence.length,
+      inspectionError: candidate.inspectionError,
+    })),
+  };
+}
+
+export function enforceReuseMode(
+  requested: z.infer<typeof ReuseModeSchema>,
+  candidate: CompetitiveCandidate,
+): z.infer<typeof ReuseModeSchema> {
+  if (candidate.kind === "web" && requested === "direct-code") return "api-integration";
+  if (
+    candidate.license.policy !== "direct-use" &&
+    (requested === "direct-code" || requested === "dependency")
+  ) {
+    return "clean-room-pattern";
+  }
+  return requested;
+}
+
+async function evaluateCompetitiveDossier(
+  deps: AgentDeps,
+  spec: ProductSpec,
+  arch: Architecture,
+  dossier: CompetitiveDossier,
+): Promise<CompetitiveSelection> {
+  return deps.provider.generateJson<CompetitiveSelection>({
+    system:
+      `${SYSTEM_PREAMBLE}\nYou are the COMPETITIVE INTELLIGENCE reviewer. Compare only the supplied, ` +
+      `evidence-backed candidates. Score feature fit, implementation quality, maintenance, and integration cost. ` +
+      `Never invent a candidate, file, feature, or license. License policy is authoritative: direct code reuse is ` +
+      `allowed only when policy=direct-use; otherwise choose clean-room-pattern or reference-only.`,
+    prompt: [
+      `TARGET SPEC:\n${JSON.stringify(spec)}`,
+      `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
+      `DISCOVERY DOSSIER:\n${JSON.stringify(dossier.candidates.map(compactCandidate))}`,
+      `Return a feature-by-feature comparison for every credible candidate and a selected list of concrete elements ` +
+        `worth integrating. Every selected candidateId must exactly match the dossier. Cite file/page URLs in evidenceUrls. ` +
+        `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
+    ].join("\n\n"),
+    schema: CompetitiveSelectionSchema,
+    schemaName: "CompetitiveSelection",
+    temperature: 0.1,
+    maxTokens: 8000,
+  });
+}
+
+function mergeCompetitiveResults(
+  base: ResearchFindings,
+  dossier: CompetitiveDossier,
+  selection: CompetitiveSelection,
+): ResearchFindings {
+  const candidates = new Map(dossier.candidates.map((candidate) => [candidate.id, candidate]));
+  const validComparisons = selection.comparisons.filter((item) => candidates.has(item.candidateId));
+  const competitiveRecommendations: ResearchRecommendation[] = [];
+
+  for (const selected of selection.selected) {
+    const candidate = candidates.get(selected.candidateId);
+    if (!candidate) continue;
+    const reuseMode = enforceReuseMode(selected.reuseMode, candidate);
+    const legalPrefix =
+      reuseMode !== selected.reuseMode
+        ? `License gate changed requested ${selected.reuseMode} to ${reuseMode}. `
+        : "";
+    competitiveRecommendations.push({
+      name: `${candidate.name}: ${selected.element}`,
+      why: selected.why,
+      sourceUrl: candidate.url,
+      howToIntegrate: `${legalPrefix}${selected.howToIntegrate}`.trim(),
+      candidateId: candidate.id,
+      licenseSpdx: candidate.license.spdxId,
+      licensePolicy: candidate.license.policy,
+      reuseMode,
+      evidenceUrls: [
+        ...new Set([
+          ...selected.evidenceUrls,
+          candidate.license.evidenceUrl,
+          ...candidate.sourceEvidence.slice(0, 4).map((item) => item.url),
+        ].filter(Boolean)),
+      ],
+      score: selected.score,
+    });
+  }
+
+  return ResearchFindingsSchema.parse({
+    summary: [base.summary, selection.summary].filter(Boolean).join("\n\n"),
+    recommendations: [...base.recommendations, ...competitiveRecommendations],
+    comparisons: validComparisons,
+    competitiveAudit: auditFrom(dossier),
+  });
+}
+
+/**
+ * Research existing tools plus, when requested by the production pipeline,
+ * autonomously discover and compare competing open-source implementations.
+ */
+export async function researchAgent(
+  deps: AgentDeps,
+  spec: ProductSpec,
+  arch: Architecture,
+  options: ResearchOptions = {},
+): Promise<ResearchFindings> {
+  const base = await runToolResearch(deps, spec, arch);
+  if (!options.competitive) return base;
+
+  const dossier = await buildCompetitiveDossier(spec, arch);
+  if (!dossier.candidates.length) {
+    return ResearchFindingsSchema.parse({
+      ...base,
+      summary: `${base.summary}\n\nCompetitive discovery found no inspectable candidates.`,
+      competitiveAudit: auditFrom(dossier),
+    });
+  }
+
+  const selection = await evaluateCompetitiveDossier(deps, spec, arch, dossier);
+  return mergeCompetitiveResults(base, dossier, selection);
 }
