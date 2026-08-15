@@ -58,10 +58,10 @@ const PYTHON_BINS = new Set(["python", "python3"]);
 const PYTHON_CHECK_MODULES = new Set(["compileall", "pytest", "unittest"]);
 
 const DIRECT_PYTHON_TEST =
-  /^(?:[A-Za-z0-9_.-]+\\/)*test_[A-Za-z0-9_.-]+\\.py$/;
+  /^(?:[A-Za-z0-9_.-]+\/)*test_[A-Za-z0-9_.-]+\.py$/;
 
 function isSafeDirectPythonTest(arg: string): boolean {
-  const normalized = arg.replace(/\\\\/g, "/");
+  const normalized = arg.replace(/\\/g, "/");
   return (
     !normalized.startsWith("/") &&
     !normalized.split("/").includes("..") &&
