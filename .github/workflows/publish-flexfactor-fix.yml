@@ -1,0 +1,94 @@
+name: Publish verified FlexFactor fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-flexfactor-fix.yml"
+      - "automation/flexfactor-publication-gate.patch"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-verified-flexfactor-fix
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout publication payload
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Clone current FlexFactor main and apply exact patch
+        shell: bash
+        env:
+          FLEXFACTOR_DEPLOY_KEY: ${{ secrets.FLEXFACTOR_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$FLEXFACTOR_DEPLOY_KEY"
+          mkdir -p "$HOME/.ssh"
+          install -m 600 /dev/null "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$FLEXFACTOR_DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          git clone git@github.com:buckeye7066/flexfactor.git flexfactor
+          cd flexfactor
+          git fetch origin main
+          git checkout main
+          git rebase origin/main
+          echo "VERIFIED_BASE=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
+          git apply --check "$GITHUB_WORKSPACE/automation/flexfactor-publication-gate.patch"
+          git apply "$GITHUB_WORKSPACE/automation/flexfactor-publication-gate.patch"
+          git config user.name "OpenAI Codex"
+          git config user.email "codex@openai.com"
+          git add -- flexfactor.py flexfactor_tests.py
+          git diff --cached --check
+          git commit -m "Require project tests before publication"
+
+      - name: Verify rebased FlexFactor tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd flexfactor
+          python flexfactor_tests.py
+          python -m py_compile flexfactor.py flexfactor_tests.py
+          git diff --check
+
+      - name: Rebase again if main advanced, publish, and SHA-verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd flexfactor
+          git fetch origin main
+          current_remote="$(git rev-parse origin/main)"
+          if [ "$current_remote" != "$VERIFIED_BASE" ]; then
+            echo "origin/main advanced during verification; rebasing and rerunning the suite."
+            git rebase origin/main
+            python flexfactor_tests.py
+            python -m py_compile flexfactor.py flexfactor_tests.py
+            git diff --check
+          fi
+          git push origin HEAD:main
+          local_sha="$(git rev-parse HEAD)"
+          remote_sha="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$local_sha" = "$remote_sha"
+          echo "### FlexFactor publication verified" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Final main SHA: \`$remote_sha\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Full suite: passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Python compilation: passed" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary private key
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$HOME/.ssh/id_ed25519" ]; then
+            shred -u "$HOME/.ssh/id_ed25519" 2>/dev/null || rm -f "$HOME/.ssh/id_ed25519"
+          fi
