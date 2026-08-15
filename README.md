@@ -86,7 +86,7 @@ pnpm dev
 ```
 
 This starts the local backend (`http://127.0.0.1:5179`) and the Factory Deck UI
-(`http://localhost:5180`). Open the UI, type an idea (or click **Demo Mode** in
+(`http://localhost:5190`). Open the UI, type an idea (or click **Demo Mode** in
 the sidebar), and watch the assembly line run.
 
 - **New Run** — the hero screen with provider-routing cards and safety preview.
