@@ -13,16 +13,16 @@ Starting a project now dispatches the active station automatically. Purpose
 Foundry uses the programs' existing public interfaces rather than absorbing
 their implementations:
 
-| Station | Adapter | Work performed |
-| --- | --- | --- |
-| Scout | FlexFactor CLI | Profiles the target and produces a Repo Rewards scouting report. |
-| Repo Rewards | HTTP search API | Searches for maintained, relevant open-source components and records the result set. |
-| PromoPilot | authenticated HTTP API | Collects control-plane, campaign, attribution, destination, and advertisement data. |
-| Factory Deck | local run API | Receives the completed discovery and market handoffs, builds or extends the named target, and waits for its durable run result. |
-| FlexFactor | local CLI | Runs the production-readiness repair workflow against the target. |
-| The Crucible | independent review provider | Assumes the result is wrong and returns evidence-backed findings or a hardened verdict. |
+| Station             | Adapter                      | Work performed                                                                                                                                                                                                                                                       |
+| ------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scout               | FlexFactor CLI               | Profiles the target and produces a Repo Rewards scouting report.                                                                                                                                                                                                     |
+| Repo Rewards        | HTTP search API              | Searches for maintained, relevant open-source components and records the result set.                                                                                                                                                                                 |
+| PromoPilot          | authenticated HTTP API       | Collects control-plane, campaign, attribution, destination, and advertisement data.                                                                                                                                                                                  |
+| Factory Deck        | local run API                | Receives the completed discovery and market handoffs, builds or extends the named target, and waits for its durable run result.                                                                                                                                      |
+| FlexFactor          | local CLI                    | Runs the production-readiness repair workflow against the target.                                                                                                                                                                                                    |
+| The Crucible        | independent review provider  | Assumes the result is wrong and returns evidence-backed findings or a hardened verdict.                                                                                                                                                                              |
 | App Store Publisher | authenticated local HTTP API | Finds real release files inside approved workspace roots, streams and SHA-256 verifies their bytes, selects exact project presets/stores, reviews the Publisher dry-run, and performs idempotent Google Play, Apple App Review, and Galaxy Store Review submissions. |
-| Watchtower | HTTP probes | Measures the explicitly configured deployment endpoints and returns failures to the line. |
+| Watchtower          | HTTP probes                  | Measures the explicitly configured deployment endpoints and returns failures to the line.                                                                                                                                                                            |
 
 An adapter that lacks credentials, a target, a release artifact, or a deployed
 endpoint moves to **needs attention** instead of pretending its work passed.
@@ -45,7 +45,6 @@ PURPOSE_FOUNDRY_REPO_REWARDS_URL=https://web-production-d7db7.up.railway.app
 PURPOSE_FOUNDRY_PROMOPILOT_URL=https://promopilot-production-6370.up.railway.app
 PURPOSE_FOUNDRY_PROMOPILOT_TOKEN=the-existing-promopilot-admin-token
 PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL=http://127.0.0.1:4000
-PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN=same-32-character-secret-as-publisher
 PURPOSE_FOUNDRY_GOOGLE_PLAY_TRACK=internal
 # PURPOSE_FOUNDRY_GALAXY_GMS=N
 
@@ -65,11 +64,13 @@ Factory Deck selection maps to the corresponding FlexFactor provider. Cloud
 Scout does not send program context unless
 `PURPOSE_FOUNDRY_ALLOW_REMOTE_PROGRAM_CONTEXT=1` is explicitly configured.
 
-App Store Publisher must set the same secret as `PUBLISHER_INTEGRATION_TOKEN`.
-That token is accepted only for its upload and submit endpoints; Publisher's
-loopback/Host checks, dry-run approval token, artifact identity gate,
-production confirmation, durable idempotency ledger, and per-store checkpoint
-state remain enforced. Foundry never auto-acknowledges unknown artifact identity.
+No Purpose Foundry/Publisher shared secret is required. Foundry sends a fixed
+non-secret client marker that Publisher accepts only in local loopback mode and
+only for its upload and submit endpoints. Publisher's loopback/Host/Origin checks,
+browser CSRF, dry-run approval token, artifact identity gate, production
+confirmation, durable idempotency ledger, and per-store checkpoint state remain
+enforced. Foundry never auto-acknowledges unknown artifact identity, and the local
+marker cannot replace remote-mode authentication.
 
 The Publisher matches a project to one exact preset by target repository first,
 then by project name. It never guesses a package, bundle, or Galaxy content ID.
