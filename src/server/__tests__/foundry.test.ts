@@ -19,6 +19,9 @@ describe("Purpose Foundry", () => {
     expect(project.constitution.targetUsers).toEqual(["musicians", "creators"]);
     expect(project.constitution.targets).toEqual(["buckeye7066/IPlay"]);
     expect(project.stations).toHaveLength(STATIONS.length);
+    expect(project.stations[0].stationId).toBe("scout");
+    expect(project.stations.findIndex((station) => station.stationId === "factory-deck"))
+      .toBeGreaterThan(project.stations.findIndex((station) => station.stationId === "promo-pilot"));
     expect(project.stations.every((station) => station.status === "queued")).toBe(true);
   });
 

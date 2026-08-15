@@ -265,11 +265,23 @@ export class FoundryAdapters {
     const secrets = getSecrets();
     const target = firstTarget(project);
     const repoSource = target ? repoSourceFromTarget(target) : null;
+    const upstreamEvidence = project.stations
+      .filter((station) => station.status === "completed" && station.stationId !== "factory-deck")
+      .map((station) => ({
+        stationId: station.stationId,
+        summary: station.summary,
+        artifacts: station.artifacts,
+      }));
     const goals = [
       project.constitution.purpose,
       ...project.constitution.successCriteria.map((item) => `Success criterion: ${item}`),
       ...project.constitution.constraints.map((item) => `Constraint: ${item}`),
       ...project.constitution.nonGoals.map((item) => `Non-goal: ${item}`),
+      ...(upstreamEvidence.length
+        ? [
+            `Use these completed specialist handoffs as implementation evidence: ${JSON.stringify(upstreamEvidence)}`,
+          ]
+        : []),
     ];
     const options = target
       ? RunOptionsSchema.parse({
@@ -298,6 +310,7 @@ export class FoundryAdapters {
       `Target users: ${project.constitution.targetUsers.join(", ") || "not specified"}`,
       `Success criteria: ${project.constitution.successCriteria.join("; ") || "not specified"}`,
       `Constraints: ${project.constitution.constraints.join("; ") || "none specified"}`,
+      `Upstream specialist handoffs: ${upstreamEvidence.length ? JSON.stringify(upstreamEvidence) : "none"}`,
     ].join("\n");
     const runStart = (await this.fetchJson(`http://127.0.0.1:${config.port}/api/runs`, {
       method: "POST",
@@ -421,14 +434,25 @@ export class FoundryAdapters {
       "repo-rewards.json",
       result,
     );
-    const count = Array.isArray((result as { results?: unknown }).results)
-      ? (result as { results: unknown[] }).results.length
+    const rows = Array.isArray((result as { results?: unknown }).results)
+      ? (result as { results: Array<Record<string, unknown>> }).results
       : null;
+    const count = rows?.length ?? null;
+    const topCandidates = (rows ?? []).slice(0, 5).map((row) => {
+      const repo = row.repo && typeof row.repo === "object"
+        ? (row.repo as Record<string, unknown>)
+        : row;
+      return {
+        fullName: typeof repo.fullName === "string" ? repo.fullName : null,
+        score: typeof row.finalScore === "number" ? row.finalScore : null,
+        license: typeof repo.licenseSpdx === "string" ? repo.licenseSpdx : null,
+      };
+    });
     return {
       status: "completed",
-      summary: `Repo Rewards completed its search${count === null ? "" : ` and returned ${count} candidate(s)`}.`,
+      summary: `Repo Rewards completed its search${count === null ? "" : ` and returned ${count} candidate(s)`}${topCandidates.length ? `; leading matches: ${topCandidates.map((item) => item.fullName || "unnamed").join(", ")}` : ""}.`,
       artifacts: [artifact],
-      evidence: { query, resultCount: count },
+      evidence: { query, resultCount: count, topCandidates },
     };
   }
 

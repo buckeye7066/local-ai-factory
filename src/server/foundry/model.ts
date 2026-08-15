@@ -36,10 +36,10 @@ export type StationDefinition = {
 };
 
 export const STATIONS: StationDefinition[] = [
-  { id: "factory-deck", name: "Factory Deck", department: "Control Tower", purpose: "Resolve purpose, plan the work, and coordinate every handoff.", standalone: true, order: 10, color: "cyan" },
-  { id: "scout", name: "Scout a Program", department: "Discovery Wing", purpose: "Find programs, patterns, and capabilities that could improve the project.", standalone: true, order: 20, color: "blue" },
-  { id: "repo-rewards", name: "Repo Rewards", department: "Discovery Wing", purpose: "Find and evaluate reusable open-source repositories and components.", standalone: true, order: 30, color: "violet" },
-  { id: "promo-pilot", name: "PromoPilot", department: "Market Laboratory", purpose: "Supply market, campaign, attribution, and advertisement evidence.", standalone: true, order: 40, color: "amber" },
+  { id: "scout", name: "Scout a Program", department: "Discovery Wing", purpose: "Find programs, patterns, and capabilities that could improve the project.", standalone: true, order: 10, color: "blue" },
+  { id: "repo-rewards", name: "Repo Rewards", department: "Discovery Wing", purpose: "Find and evaluate reusable open-source repositories and components.", standalone: true, order: 20, color: "violet" },
+  { id: "promo-pilot", name: "PromoPilot", department: "Market Laboratory", purpose: "Supply market, campaign, attribution, and advertisement evidence.", standalone: true, order: 30, color: "amber" },
+  { id: "factory-deck", name: "Factory Deck", department: "Control Tower", purpose: "Turn the constitution and upstream evidence into the coordinated implementation.", standalone: true, order: 40, color: "cyan" },
   { id: "flexfactor", name: "FlexFactor", department: "Engineering Floor", purpose: "Inspect, improve, test, repair, and align implementation with purpose.", standalone: true, order: 50, color: "emerald" },
   { id: "crucible", name: "The Crucible", department: "Adversarial Chamber", purpose: "Assume the work is wrong and independently try to disprove readiness.", standalone: false, order: 60, color: "rose" },
   { id: "app-store-publisher", name: "App Store Publisher", department: "Shipping Department", purpose: "Package, verify, submit, and record release artifacts.", standalone: true, order: 70, color: "indigo" },

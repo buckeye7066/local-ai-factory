@@ -15,10 +15,10 @@ their implementations:
 
 | Station | Adapter | Work performed |
 | --- | --- | --- |
-| Factory Deck | local run API | Builds or extends the named target and waits for its durable run result. |
 | Scout | FlexFactor CLI | Profiles the target and produces a Repo Rewards scouting report. |
 | Repo Rewards | HTTP search API | Searches for maintained, relevant open-source components and records the result set. |
 | PromoPilot | authenticated HTTP API | Collects control-plane, campaign, attribution, destination, and advertisement data. |
+| Factory Deck | local run API | Receives the completed discovery and market handoffs, builds or extends the named target, and waits for its durable run result. |
 | FlexFactor | local CLI | Runs the production-readiness repair workflow against the target. |
 | The Crucible | independent review provider | Assumes the result is wrong and returns evidence-backed findings or a hardened verdict. |
 | App Store Publisher | local HTTP API | Checks stores, submissions, and release-artifact readiness. It stops visibly when no signed artifact exists. |
@@ -29,6 +29,10 @@ endpoint moves to **needs attention** instead of pretending its work passed.
 Correct the configuration and use **Retry** on that station. Adapter output is
 stored under `.factory/foundry/artifacts/<project>/<station>/` and referenced
 from the hash-chained evidence ledger.
+
+New projects run discovery and market evidence before Factory Deck so the
+implementation receives those findings instead of researching after the build.
+Existing project records retain their stored station order for continuity.
 
 ## Adapter configuration
 
