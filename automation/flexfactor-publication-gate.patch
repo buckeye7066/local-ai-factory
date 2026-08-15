@@ -159,11 +159,6 @@ index 0a189f4..3a1d2ac 100644
      print(f"  files now clean:   {len(a.get('clean_files') or [])} (remembered; skipped next run)")
      print(f"  cycles run:       {a.get('cycles', 1)}")
      print(f"  providers:        {', '.join(a.get('providers') or []) or '(unknown)'}")
-@@ -12021,4 +12098,3 @@ if __name__ == "__main__":
-         _mark_run_finished()  # argparse exit-2 etc. are intentional too
-         raise
- 
--
 diff --git a/flexfactor_tests.py b/flexfactor_tests.py
 index 0bd77f1..7e27eb7 100644
 --- a/flexfactor_tests.py
