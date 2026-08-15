@@ -341,7 +341,14 @@ function spawnPm(
 ) {
   if (process.platform === "win32") {
     const comspec = process.env.COMSPEC || "cmd.exe";
-    const line = [absBin, ...runArgs].map(winQuote).join(" ");
+    // cmd /S /C strips the FIRST and LAST quote character from the line, so a
+    // bin path quoted for its spaces ("C:\Program Files\nodejs\npm.cmd" ci)
+    // arrives UNQUOTED and cmd runs 'C:\Program'. The canonical fix is one
+    // extra outer quote pair, which /S consumes, leaving the inner quoting
+    // intact. This single bug made every npm/pnpm verification on this
+    // machine fail before the workspace was ever exercised — feeding the QA
+    // critic a useless error it then embellished into phantom code blockers.
+    const line = `"${[absBin, ...runArgs].map(winQuote).join(" ")}"`;
     return spawn(comspec, ["/d", "/s", "/c", line], {
       cwd,
       shell: false,
