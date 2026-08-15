@@ -1,0 +1,32 @@
+{
+  "piano": {
+    "file": "piano_raw.webm",
+    "stroke_hz": 3.5714,
+    "first_stroke_s": 0.12,
+    "strokes_per_beat": 1.0,
+    "license": "CC BY 3.0",
+    "source_url": "https://commons.wikimedia.org/wiki/File:Piano-Diabelli_4_mani_op.149_N.26_Allegro.webm",
+    "autocorr_r": 0.7923,
+    "stroke_hz_estimated": false
+  },
+  "guitar": {
+    "file": "guitar_raw.webm",
+    "stroke_hz": 1.5984,
+    "first_stroke_s": 0.1668,
+    "strokes_per_beat": 1.0,
+    "license": "Pexels License (free to use)",
+    "source_url": "https://www.pexels.com/video/a-person-strumming-the-guitar-string-with-his-fingers-3064251/",
+    "autocorr_r": 0.5947,
+    "stroke_hz_estimated": false
+  },
+  "violin": {
+    "file": "violin_raw.webm",
+    "stroke_hz": 2.7245,
+    "first_stroke_s": 0.0667,
+    "strokes_per_beat": 1.0,
+    "license": "CC BY 3.0",
+    "source_url": "https://commons.wikimedia.org/wiki/File:Swallowtail_Jig_-_Irish_Fiddle_Tune!.webm",
+    "autocorr_r": 0.6568,
+    "stroke_hz_estimated": false
+  }
+}

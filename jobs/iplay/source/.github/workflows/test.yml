@@ -1,0 +1,61 @@
+name: Offline tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Verify FFmpeg, Python 3.11, and install Python dependencies
+        run: |
+          if ! command -v python3.11 >/dev/null; then
+            mkdir -p "${RUNNER_TEMP}/pybin"
+            ln -sf "$(command -v python)" "${RUNNER_TEMP}/pybin/python3.11"
+            export PATH="${RUNNER_TEMP}/pybin:${PATH}"
+            echo "${RUNNER_TEMP}/pybin" >> "${GITHUB_PATH}"
+          fi
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update \
+              -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" \
+              -o Dir::Etc::sourceparts="-" \
+              -o APT::Get::List-Cleanup="0"
+            sudo apt-get install --yes --no-install-recommends ffmpeg \
+              -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" \
+              -o Dir::Etc::sourceparts="-"
+          fi
+          command -v ffmpeg
+          command -v ffprobe
+          python3.11 --version
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+          python3.11 -m pip install --upgrade pip
+          python3.11 -m pip install -r requirements.txt
+      - name: Compile supported modules
+        run: |
+          python3.11 -m py_compile motionsync.py sync.py iplay/media.py iplay/performance_source.py iplay/scenes.py iplay/pipeline.py iplay/iplay_app.py iplay/ytadapter.py iplay/performance_qa.py iplay/performance_transfer.py iplay/wan_replace_worker.py iplay/exact_avatar_app.py iplay/iplay.pyw iplay/performance_timeline.py iplay/instrument_solvers.py iplay/audio_authority.py iplay/consent_records.py iplay/render_checkpoint.py iplay/preview_timeline.py iplay.pyw
+      - name: Run offline unit and media regressions
+        run: |
+          python3.11 test_choose_policy.py
+          python3.11 test_motionsync.py
+          python3.11 iplay/test_repo_hygiene.py
+          python3.11 iplay/test_pipeline_resilience.py
+          python3.11 iplay/test_performance_source.py
+          python3.11 iplay/test_scenes.py
+          python3.11 iplay/test_performance_transfer.py
+          python3.11 iplay/test_production_bridge.py
