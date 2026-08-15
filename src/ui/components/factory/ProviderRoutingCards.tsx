@@ -5,23 +5,36 @@ import { Badge } from "../ui/Badge.js";
 import { staggerContainer, staggerItem } from "../../lib/motion.js";
 import type { Health } from "../../../shared/schemas.js";
 
+/** Which provider a NEW run pins as its primary. "auto" = free-first. */
+export type PaidRouting = "auto" | "anthropic" | "openai";
+
 /**
- * ProviderRoutingCards — how work actually flows across providers.
+ * ProviderRoutingCards — how work actually flows across providers, and the
+ * owner's control over it.
  *
- * The FREE local route is the primary and is shown first; Claude and OpenAI
- * are labelled as what they now are, a rescue tier that only runs when the
- * free route is proven wedged. The card for whoever is serving right now
- * carries a live marker, so the routing shown here can never disagree with
- * what the deck is doing.
+ * The FREE local route is the default primary. Clicking Claude or OpenAI PINS
+ * that paid provider as the PRIMARY for runs started from this screen (the
+ * server honors an explicitly requested paid provider; without the pin it
+ * always prefers the free route no matter which keys are configured — the
+ * checkmarks alone never meant "paid"). Clicking Free returns to free-first.
+ * The card for whoever is serving right now carries a live marker, so the
+ * routing shown here can never disagree with what the deck is doing.
  */
 export function ProviderRoutingCards({
   health,
   demo,
   onToggleDemo,
+  routing,
+  onRoutingChange,
+  allowDemo = true,
 }: {
   health: Health | null;
   demo: boolean;
   onToggleDemo: (demo: boolean) => void;
+  routing: PaidRouting;
+  onRoutingChange: (routing: PaidRouting) => void;
+  /** Hide the mock card where demo mode does not apply (extend mode). */
+  allowDemo?: boolean;
 }) {
   const freeReady = health?.freeConfigured ?? false;
   const anthropicReady = health?.anthropicConfigured ?? false;
@@ -33,51 +46,76 @@ export function ProviderRoutingCards({
     {
       key: "free",
       title: "Free (Ollama / FCC)",
-      role: "Primary — zero cost",
+      role:
+        routing === "auto"
+          ? "Primary — zero cost"
+          : "Click to return to free-first",
       icon: Gift,
       ready: freeReady,
-      live: !demo,
+      selected: !demo && routing === "auto",
       accent: "emerald" as const,
       serving: serving === "free",
       calls: counts?.free,
-      onClick: () => freeReady && onToggleDemo(false),
+      onClick: () => {
+        if (!freeReady) return;
+        onToggleDemo(false);
+        onRoutingChange("auto");
+      },
     },
     {
       key: "code",
       title: "Claude",
-      role: "Paid rescue only",
+      role:
+        routing === "anthropic"
+          ? "Paid PRIMARY — pinned for new runs"
+          : "Paid rescue — click to pin as primary",
       icon: Sparkles,
       ready: anthropicReady,
-      live: !demo,
+      selected: !demo && routing === "anthropic",
       accent: "violet" as const,
       serving: serving === "anthropic",
       calls: counts?.anthropic,
-      onClick: () => anthropicReady && onToggleDemo(false),
+      onClick: () => {
+        if (!anthropicReady) return;
+        onToggleDemo(false);
+        onRoutingChange("anthropic");
+      },
     },
     {
       key: "review",
       title: "OpenAI",
-      role: "Paid rescue only",
+      role:
+        routing === "openai"
+          ? "Paid PRIMARY — pinned for new runs"
+          : "Paid rescue — click to pin as primary",
       icon: Cpu,
       ready: openaiReady,
-      live: !demo,
+      selected: !demo && routing === "openai",
       accent: "cyan" as const,
       serving: serving === "openai",
       calls: counts?.openai,
-      onClick: () => openaiReady && onToggleDemo(false),
+      onClick: () => {
+        if (!openaiReady) return;
+        onToggleDemo(false);
+        onRoutingChange("openai");
+      },
     },
-    {
-      key: "mock",
-      title: "Mock Demo",
-      role: "Offline, deterministic",
-      icon: FlaskConical,
-      ready: true,
-      live: demo,
-      accent: "emerald" as const,
-      serving: false,
-      calls: undefined,
-      onClick: () => onToggleDemo(true),
-    },
+    ...(allowDemo
+      ? [
+          {
+            key: "mock",
+            title: "Mock Demo",
+            role: "Offline, deterministic",
+            icon: FlaskConical,
+            ready: true,
+            selected: demo,
+            accent: "emerald" as const,
+            serving: false,
+            calls: undefined,
+            onClick: () => onToggleDemo(true),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -85,11 +123,14 @@ export function ProviderRoutingCards({
       variants={staggerContainer}
       initial="hidden"
       animate="show"
-      className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
+      className={cn(
+        "grid grid-cols-1 gap-3 sm:grid-cols-2",
+        cards.length === 4 ? "lg:grid-cols-4" : "lg:grid-cols-3",
+      )}
     >
       {cards.map((c) => {
         const Icon = c.icon;
-        const selected = c.key === "mock" ? demo : !demo;
+        const selected = c.selected;
         const disabled = !c.ready;
         return (
           <motion.button

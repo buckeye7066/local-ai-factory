@@ -17,7 +17,7 @@ import { Input } from "../ui/Input.js";
 import { Badge } from "../ui/Badge.js";
 import { Tabs } from "../ui/Tabs.js";
 import { slideUp, staggerContainer, staggerItem } from "../../lib/motion.js";
-import { ProviderRoutingCards } from "./ProviderRoutingCards.js";
+import { ProviderRoutingCards, type PaidRouting } from "./ProviderRoutingCards.js";
 import { SafetySettingsPreview } from "./SafetySettingsPreview.js";
 import { ExtendExistingPanel } from "./ExtendExistingPanel.js";
 import { api } from "../../lib/api.js";
@@ -49,15 +49,32 @@ export function NewRunHero({
   const [idea, setIdea] = useState("");
   const [demo, setDemo] = useState(!hasAnyKey);
   const [runMode, setRunMode] = useState<"new" | "extend">("new");
+  // Which provider is PRIMARY for runs started from this screen. "auto" is
+  // the free-first default; pinning Claude/OpenAI sends an explicit
+  // codeProvider/reviewProvider, which is the ONLY thing that makes the
+  // server prefer a paid provider (configured keys alone never do — the
+  // owner read the checkmarks as "paid" on 2026-08-14 and got a free run).
+  const [routing, setRouting] = useState<PaidRouting>("auto");
   // The owner names a brand-new app/repo up front. Factory Deck never invents
   // one and never buries the build in an anonymous workspace folder.
   const [repoName, setRepoName] = useState("");
   const nameCheck = useRepoNameCheck(repoName);
 
+  // EVERY submission path (new app, extend direct, extend clarify) flows
+  // through this wrapper so a pinned paid primary is never silently dropped
+  // by a panel that forgot to include it.
+  const startWithRouting = (ideaText: string, options: RunOptions) =>
+    onStart(
+      ideaText,
+      routing !== "auto" && !options.demo
+        ? { ...options, codeProvider: routing, reviewProvider: routing }
+        : options,
+    );
+
   const start = () => {
     const trimmed = idea.trim();
     if (!trimmed) return;
-    onStart(trimmed, {
+    startWithRouting(trimmed, {
       demo,
       mode: "new",
       newRepo: { name: repoName.trim(), private: true },
@@ -108,8 +125,23 @@ export function NewRunHero({
         />
       </motion.div>
 
+      {/* Provider routing governs BOTH modes — it used to live inside the
+          new-app panel only, so extend-mode runs (the common case for real
+          repos) had no provider control at all. */}
+      <motion.div variants={slideUp} className="mx-auto mt-6 max-w-3xl">
+        <p className="mb-2 text-xs font-medium text-slate-400">Provider routing</p>
+        <ProviderRoutingCards
+          health={health}
+          demo={demo}
+          onToggleDemo={setDemo}
+          routing={routing}
+          onRoutingChange={setRouting}
+          allowDemo={runMode === "new"}
+        />
+      </motion.div>
+
       {runMode === "extend" ? (
-        <ExtendExistingPanel starting={starting} onStart={onStart} />
+        <ExtendExistingPanel starting={starting} onStart={startWithRouting} />
       ) : (
         <NewAppPanel
           idea={idea}
@@ -118,7 +150,6 @@ export function NewRunHero({
           setRepoName={setRepoName}
           nameCheck={nameCheck}
           demo={demo}
-          setDemo={setDemo}
           hasAnyKey={hasAnyKey}
           health={health}
           starting={starting}
@@ -207,7 +238,6 @@ function NewAppPanel({
   setRepoName,
   nameCheck,
   demo,
-  setDemo,
   hasAnyKey,
   health,
   starting,
@@ -219,7 +249,6 @@ function NewAppPanel({
   setRepoName: (v: string) => void;
   nameCheck: NameCheck;
   demo: boolean;
-  setDemo: (v: boolean) => void;
   hasAnyKey: boolean;
   health: Health | null;
   starting: boolean;
@@ -302,13 +331,8 @@ function NewAppPanel({
           ))}
         </div>
 
-        {/* Provider routing */}
-        <div className="mt-6">
-          <p className="mb-2 text-xs font-medium text-slate-400">Provider routing</p>
-          <ProviderRoutingCards health={health} demo={demo} onToggleDemo={setDemo} />
-        </div>
-
-        {/* Warnings / helpers */}
+        {/* Warnings / helpers (provider routing renders above, shared with
+            extend mode) */}
         <div className="mt-5 space-y-2">
           {!hasAnyKey && (
             <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
