@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFile,
+  lstat,
   mkdir,
   readFile,
+  realpath,
   readdir,
   rename,
   stat,
@@ -34,10 +36,10 @@ export type StationDefinition = {
 };
 
 export const STATIONS: StationDefinition[] = [
-  { id: "factory-deck", name: "Factory Deck", department: "Control Tower", purpose: "Resolve purpose, plan the work, and coordinate every handoff.", standalone: true, order: 10, color: "cyan" },
-  { id: "scout", name: "Scout a Program", department: "Discovery Wing", purpose: "Find programs, patterns, and capabilities that could improve the project.", standalone: true, order: 20, color: "blue" },
-  { id: "repo-rewards", name: "Repo Rewards", department: "Discovery Wing", purpose: "Find and evaluate reusable open-source repositories and components.", standalone: true, order: 30, color: "violet" },
-  { id: "promo-pilot", name: "PromoPilot", department: "Market Laboratory", purpose: "Supply market, campaign, attribution, and advertisement evidence.", standalone: true, order: 40, color: "amber" },
+  { id: "scout", name: "Scout a Program", department: "Discovery Wing", purpose: "Find programs, patterns, and capabilities that could improve the project.", standalone: true, order: 10, color: "blue" },
+  { id: "repo-rewards", name: "Repo Rewards", department: "Discovery Wing", purpose: "Find and evaluate reusable open-source repositories and components.", standalone: true, order: 20, color: "violet" },
+  { id: "promo-pilot", name: "PromoPilot", department: "Market Laboratory", purpose: "Supply market, campaign, attribution, and advertisement evidence.", standalone: true, order: 30, color: "amber" },
+  { id: "factory-deck", name: "Factory Deck", department: "Control Tower", purpose: "Turn the constitution and upstream evidence into the coordinated implementation.", standalone: true, order: 40, color: "cyan" },
   { id: "flexfactor", name: "FlexFactor", department: "Engineering Floor", purpose: "Inspect, improve, test, repair, and align implementation with purpose.", standalone: true, order: 50, color: "emerald" },
   { id: "crucible", name: "The Crucible", department: "Adversarial Chamber", purpose: "Assume the work is wrong and independently try to disprove readiness.", standalone: false, order: 60, color: "rose" },
   { id: "app-store-publisher", name: "App Store Publisher", department: "Shipping Department", purpose: "Package, verify, submit, and record release artifacts.", standalone: true, order: 70, color: "indigo" },
@@ -182,6 +184,50 @@ export class FoundryStore {
   private projectPath(id: string): string {
     if (!z.string().uuid().safeParse(id).success) throw new Error("Invalid project id.");
     return join(this.projectsRoot, `${id}.json`);
+  }
+
+  /**
+   * Persist one station artifact inside the Foundry's own jailed data root.
+   * Adapter output is evidence, not executable source: callers supply a short
+   * filename and this method owns the final path and atomic write.
+   */
+  async writeArtifact(
+    projectId: string,
+    stationId: StationId,
+    filename: string,
+    value: unknown,
+  ): Promise<string> {
+    if (!z.string().uuid().safeParse(projectId).success) {
+      throw new Error("Invalid project id.");
+    }
+    StationIdSchema.parse(stationId);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(filename)) {
+      throw new Error("Invalid artifact filename.");
+    }
+    const directory = join(this.root, "artifacts", projectId, stationId);
+    await mkdir(directory, { recursive: true });
+    const [rootReal, directoryReal] = await Promise.all([
+      realpath(this.root),
+      realpath(directory),
+    ]);
+    const separator = process.platform === "win32" ? "\\" : "/";
+    if (directoryReal !== rootReal && !directoryReal.startsWith(`${rootReal}${separator}`)) {
+      throw new Error("Artifact directory escapes the Foundry data root.");
+    }
+    const target = join(directory, filename);
+    try {
+      if ((await lstat(target)).isSymbolicLink()) {
+        throw new Error("Artifact target may not be a symbolic link.");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    const contents =
+      typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`;
+    await writeFile(temporary, contents, { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, target);
+    return target;
   }
 
   async list(): Promise<FoundryProject[]> {
