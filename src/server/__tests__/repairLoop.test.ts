@@ -38,6 +38,26 @@ describe("bounded repair loop", () => {
     expect(res.finalQa.passed).toBe(true);
   });
 
+  it("refreshes executable evidence before QA after every repair", async () => {
+    const order: string[] = [];
+    let reviews = 0;
+    const res = await runRepairLoop({
+      maxLoops: 2,
+      initialQa: failing,
+      repair: async () => void order.push("repair"),
+      verify: async () => void order.push("verify"),
+      reverify: async () => {
+        order.push("qa");
+        reviews += 1;
+        return reviews === 2 ? passing : failing;
+      },
+    });
+
+    expect(res.loops).toBe(2);
+    expect(order).toEqual(["repair", "verify", "qa", "repair", "verify", "qa"]);
+    expect(res.finalQa.passed).toBe(true);
+  });
+
   it("NEVER exceeds maxLoops even if QA keeps failing", async () => {
     let calls = 0;
     const res = await runRepairLoop({
