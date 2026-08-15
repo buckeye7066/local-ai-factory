@@ -1,5 +1,5 @@
 diff --git a/flexfactor.py b/flexfactor.py
-index 0a189f4..821df7d 100644
+index 0a189f4..3a1d2ac 100644
 --- a/flexfactor.py
 +++ b/flexfactor.py
 @@ -7868,6 +7868,35 @@ def _full_gate(project_dir: str, stack: dict) -> tuple[bool | None, str]:
@@ -159,14 +159,13 @@ index 0a189f4..821df7d 100644
      print(f"  files now clean:   {len(a.get('clean_files') or [])} (remembered; skipped next run)")
      print(f"  cycles run:       {a.get('cycles', 1)}")
      print(f"  providers:        {', '.join(a.get('providers') or []) or '(unknown)'}")
-@@ -12020,5 +12097,3 @@ if __name__ == "__main__":
-     except SystemExit:
+@@ -12021,4 +12098,3 @@ if __name__ == "__main__":
          _mark_run_finished()  # argparse exit-2 etc. are intentional too
          raise
--
+ 
 -
 diff --git a/flexfactor_tests.py b/flexfactor_tests.py
-index 0bd77f1..f9489e3 100644
+index 0bd77f1..7e27eb7 100644
 --- a/flexfactor_tests.py
 +++ b/flexfactor_tests.py
 @@ -9913,6 +9913,43 @@ class VacuousGateTests(unittest.TestCase):
@@ -236,8 +235,3 @@ index 0bd77f1..f9489e3 100644
      def test_genuinely_clean_repo_exits_zero(self):
          results = [{"name": "A", "error": None, "defects": 0, "fixed": 0}]
          self.assertEqual(ff._audit_exit_code(results, apply_requested=True), 0)
-@@ -11144,4 +11197,3 @@ class CheckpointPhaseWiringTests(unittest.TestCase):
- 
- if __name__ == "__main__":
-     unittest.main(verbosity=2)
--
