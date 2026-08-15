@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessLicense,
   buildDiscoveryQueries,
+  detectLicenseFromText,
   parseGitHubRepoUrl,
   rankRelevantPaths,
   type CompetitiveCandidate,
@@ -44,6 +45,18 @@ describe("competitive intelligence licensing", () => {
     expect(assessLicense("MPL-2.0").policy).toBe("conditional-review");
     expect(assessLicense("AGPL-3.0").policy).toBe("reference-only");
     expect(assessLicense(null).policy).toBe("reference-only");
+  });
+
+  it("recognizes canonical license text independently of repository metadata", () => {
+    expect(
+      detectLicenseFromText(
+        'MIT License Permission is hereby granted, free of charge. THE SOFTWARE IS PROVIDED "AS IS".',
+      ),
+    ).toBe("MIT");
+    expect(
+      detectLicenseFromText("GNU AFFERO GENERAL PUBLIC LICENSE Version 3"),
+    ).toBe("AGPL-3.0");
+    expect(detectLicenseFromText("Copyright only. All rights reserved.")).toBeNull();
   });
 
   it("cannot let a model override the deterministic license gate", () => {
