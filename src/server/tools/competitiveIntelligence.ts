@@ -288,9 +288,17 @@ export function rankRelevantPaths(paths: string[], terms: string[]): string[] {
   return paths
     .filter((path) => {
       const lower = path.toLowerCase();
+      const basename = lower.split("/").pop() ?? "";
       if (IGNORED_PATH_PARTS.some((part) => lower.includes(part))) return false;
       if (/\.(min|map|lock)$/i.test(lower)) return false;
-      return TEXT_EXTENSIONS.has(extension(lower)) || PRIORITY_FILENAMES.has(lower.split("/").pop() ?? "");
+      if (
+        /^(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.ya?ml|yarn\.lock|bun\.lockb?|cargo\.lock|composer\.lock|gemfile\.lock|poetry\.lock|uv\.lock)$/i.test(
+          basename,
+        )
+      ) {
+        return false;
+      }
+      return TEXT_EXTENSIONS.has(extension(lower)) || PRIORITY_FILENAMES.has(basename);
     })
     .map((path) => {
       const lower = path.toLowerCase();
