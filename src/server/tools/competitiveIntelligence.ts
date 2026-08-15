@@ -142,6 +142,36 @@ function normalizedSpdx(value: string | null | undefined): string {
   return (value ?? "NOASSERTION").trim().toUpperCase();
 }
 
+/** Identify common licenses from their canonical notice text. */
+export function detectLicenseFromText(text: string): string | null {
+  const normalized = text.toLowerCase().replace(/\s+/g, " ");
+  if (normalized.includes("gnu affero general public license")) return "AGPL-3.0";
+  if (normalized.includes("gnu lesser general public license")) return "LGPL-3.0";
+  if (normalized.includes("mozilla public license") && normalized.includes("2.0")) {
+    return "MPL-2.0";
+  }
+  if (normalized.includes("apache license") && normalized.includes("version 2.0")) {
+    return "APACHE-2.0";
+  }
+  if (normalized.includes("gnu general public license")) return "GPL-3.0";
+  if (
+    normalized.includes("permission is hereby granted, free of charge") &&
+    normalized.includes("the software is provided \"as is\"")
+  ) {
+    return "MIT";
+  }
+  if (
+    normalized.includes("redistribution and use in source and binary forms") &&
+    normalized.includes("neither the name")
+  ) {
+    return "BSD-3-CLAUSE";
+  }
+  if (normalized.includes("isc license") && normalized.includes("permission to use, copy")) {
+    return "ISC";
+  }
+  return null;
+}
+
 /**
  * Conservative code-reuse policy. This is an engineering gate, not legal
  * advice: anything that is not plainly permissive is prevented from direct
@@ -343,9 +373,41 @@ async function inspectGitHubRepository(
     }
   }
 
-  const licenseUrl = metadata.license?.url
-    ? String(metadata.license.url).replace("api.github.com/repos", "github.com").replace("/license", "/blob/HEAD/LICENSE")
-    : `${ref.canonicalUrl}/tree/${branch}`;
+  const licensePath = blobPaths.find((path) =>
+    /(^|\/)(license|licence|copying|notice)(\.[a-z0-9]+)?$/i.test(path),
+  );
+  const licenseUrl = licensePath
+    ? `${ref.canonicalUrl}/blob/${branch}/${licensePath}`
+    : metadata.license?.url || `${ref.canonicalUrl}/tree/${branch}`;
+  let declaredSpdx = metadata.license?.spdx_id;
+  let detectedSpdx: string | null = null;
+  if (licensePath) {
+    try {
+      const licenseText = await fetchText(rawGitHubUrl(ref, branch, licensePath), 80_000);
+      detectedSpdx = detectLicenseFromText(licenseText);
+      if (!declaredSpdx || normalizedSpdx(declaredSpdx) === "NOASSERTION") {
+        declaredSpdx = detectedSpdx ?? declaredSpdx;
+      }
+    } catch {
+      // Missing evidence is handled conservatively by assessLicense below.
+    }
+  }
+  let license = assessLicense(
+    declaredSpdx,
+    metadata.license?.name || metadata.license?.key || detectedSpdx || "Unknown license",
+    String(licenseUrl),
+  );
+  if (
+    detectedSpdx &&
+    declaredSpdx &&
+    normalizedSpdx(declaredSpdx) !== normalizedSpdx(detectedSpdx)
+  ) {
+    license = {
+      ...license,
+      policy: "reference-only",
+      reason: `License conflict: repository metadata declares ${declaredSpdx}, but the inspected license text resembles ${detectedSpdx}. Direct reuse is prohibited pending review.`,
+    };
+  }
   return {
     id: `${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}`,
     kind: "repository",
@@ -356,11 +418,7 @@ async function inspectGitHubRepository(
     archived: metadata.archived ?? false,
     updatedAt: metadata.pushed_at ?? "",
     discoveryEvidence,
-    license: assessLicense(
-      metadata.license?.spdx_id,
-      metadata.license?.name || metadata.license?.key || "Unknown license",
-      licenseUrl,
-    ),
+    license,
     fileTree: blobPaths.slice(0, 500),
     sourceEvidence,
     inspectionError: tree.truncated
