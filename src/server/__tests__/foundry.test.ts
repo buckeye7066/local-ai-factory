@@ -37,4 +37,26 @@ describe("Purpose Foundry", () => {
     expect(lines).toHaveLength(2);
     expect(lines[1].previousHash).toBe(lines[0].hash);
   });
+
+  it("serializes simultaneous evidence writes without losing the chain", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown("# FutureU\nBuild a complete curriculum platform.", "C:/Vault/FutureU.md"),
+    );
+    await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        store.appendEvidence(project.id, "crucible", "challenge.recorded", { index }),
+      ),
+    );
+    const lines = (await readFile(join(root, "evidence.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { sequence: number; hash: string; previousHash: string | null });
+    expect(lines).toHaveLength(13);
+    lines.forEach((event, index) => {
+      expect(event.sequence).toBe(index + 1);
+      expect(event.previousHash).toBe(index === 0 ? null : lines[index - 1].hash);
+    });
+  });
 });

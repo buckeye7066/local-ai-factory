@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 
@@ -158,6 +158,7 @@ export class FoundryStore {
   readonly root: string;
   private readonly projectsRoot: string;
   private readonly ledgerPath: string;
+  private ledgerWrites: Promise<unknown> = Promise.resolve();
 
   constructor(root = resolve(process.cwd(), ".factory", "foundry")) {
     this.root = root;
@@ -251,6 +252,16 @@ export class FoundryStore {
   }
 
   async appendEvidence(projectId: string, stationId: StationId, type: string, payload: unknown): Promise<EvidenceEvent> {
+    const write = this.ledgerWrites.then(() =>
+      this.appendEvidenceUnlocked(projectId, stationId, type, payload),
+    );
+    // Preserve serialization after either success or failure; a rejected write
+    // must not permanently poison every future ledger append.
+    this.ledgerWrites = write.catch(() => undefined);
+    return write;
+  }
+
+  private async appendEvidenceUnlocked(projectId: string, stationId: StationId, type: string, payload: unknown): Promise<EvidenceEvent> {
     await this.ready();
     let previous: EvidenceEvent | null = null;
     try {
@@ -269,8 +280,10 @@ export class FoundryStore {
       previousHash: previous?.hash ?? null,
     };
     const event: EvidenceEvent = { ...unsigned, hash: hashText(JSON.stringify(unsigned)) };
-    const previousText = previous ? await readFile(this.ledgerPath, "utf8") : "";
-    await writeFile(this.ledgerPath, `${previousText}${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
+    await appendFile(this.ledgerPath, `${JSON.stringify(event)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     return event;
   }
 

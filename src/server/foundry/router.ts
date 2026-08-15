@@ -97,6 +97,14 @@ export function createFoundryRouter(store = new FoundryStore()): Router {
       res.status(404).json({ error: "Purpose Foundry project not found." });
       return;
     }
+    if (project.status === "running" || project.stations.some((station) => station.status === "active")) {
+      res.status(409).json({ error: "This project assembly line is already running." });
+      return;
+    }
+    if (project.status === "completed") {
+      res.status(409).json({ error: "This project has already completed its selected stations." });
+      return;
+    }
     const first = project.stations.find((station) => station.status === "queued");
     if (!first) {
       res.status(409).json({ error: "This project has no queued stations." });
@@ -125,6 +133,22 @@ export function createFoundryRouter(store = new FoundryStore()): Router {
     const station = project.stations.find((item) => item.stationId === stationId);
     if (!station || station.status === "not_selected") {
       res.status(409).json({ error: "That station is not selected for this project." });
+      return;
+    }
+    // Network retries are idempotent: the same terminal report is returned
+    // without creating a duplicate ledger event or advancing twice.
+    if (
+      station.status === event.status &&
+      station.summary === event.summary &&
+      JSON.stringify(station.artifacts) === JSON.stringify(event.artifacts)
+    ) {
+      res.json(project);
+      return;
+    }
+    if (station.status !== "active" && event.status !== "active") {
+      res.status(409).json({
+        error: `Station ${stationId} is ${station.status}; only the active station may complete or fail.`,
+      });
       return;
     }
     station.status = event.status;
