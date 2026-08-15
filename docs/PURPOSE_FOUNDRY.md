@@ -21,7 +21,7 @@ their implementations:
 | Factory Deck | local run API | Receives the completed discovery and market handoffs, builds or extends the named target, and waits for its durable run result. |
 | FlexFactor | local CLI | Runs the production-readiness repair workflow against the target. |
 | The Crucible | independent review provider | Assumes the result is wrong and returns evidence-backed findings or a hardened verdict. |
-| App Store Publisher | local HTTP API | Checks stores, submissions, and release-artifact references, then pauses visibly. It never equates a filename with byte validation, upload, or submission. |
+| App Store Publisher | authenticated local HTTP API | Finds real release files inside approved workspace roots, streams and SHA-256 verifies their bytes, selects exact project presets/stores, reviews the Publisher dry-run, and performs idempotent Google Play, Apple App Review, and Galaxy Store Review submissions. |
 | Watchtower | HTTP probes | Measures the explicitly configured deployment endpoints and returns failures to the line. |
 
 An adapter that lacks credentials, a target, a release artifact, or a deployed
@@ -45,6 +45,9 @@ PURPOSE_FOUNDRY_REPO_REWARDS_URL=https://web-production-d7db7.up.railway.app
 PURPOSE_FOUNDRY_PROMOPILOT_URL=https://promopilot-production-6370.up.railway.app
 PURPOSE_FOUNDRY_PROMOPILOT_TOKEN=the-existing-promopilot-admin-token
 PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL=http://127.0.0.1:4000
+PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN=same-32-character-secret-as-publisher
+PURPOSE_FOUNDRY_GOOGLE_PLAY_TRACK=internal
+# PURPOSE_FOUNDRY_GALAXY_GMS=N
 
 # Existing FlexFactor installation
 PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT=C:\Users\firer\flexfactor\flexfactor.py
@@ -61,6 +64,19 @@ PURPOSE_FOUNDRY_WATCH_URLS=https://example.app/health,https://api.example.app/he
 Factory Deck selection maps to the corresponding FlexFactor provider. Cloud
 Scout does not send program context unless
 `PURPOSE_FOUNDRY_ALLOW_REMOTE_PROGRAM_CONTEXT=1` is explicitly configured.
+
+App Store Publisher must set the same secret as `PUBLISHER_INTEGRATION_TOKEN`.
+That token is accepted only for its upload and submit endpoints; Publisher's
+loopback/Host checks, dry-run approval token, artifact identity gate,
+production confirmation, durable idempotency ledger, and per-store checkpoint
+state remain enforced. Foundry never auto-acknowledges unknown artifact identity.
+
+The Publisher matches a project to one exact preset by target repository first,
+then by project name. It never guesses a package, bundle, or Galaxy content ID.
+Google prefers an `.aab` and falls back to `.apk`; Galaxy requires `.apk`; Apple
+requires `.ipa`. Apple uses the IPA's inspected marketing version and build
+number. A missing preset, credential, signed artifact, Transporter installation,
+or verifiable identity moves the station to **needs attention**.
 
 ## Station contract
 
