@@ -58,6 +58,13 @@ export interface FreeProviderOptions {
   /** How long to wait before retrying after a backpressure signal. */
   backpressureRetryMs: number;
   enabled: boolean;
+  /**
+   * Run deadline + cancellation, the SAME signal the paid providers honor.
+   * Without it a cancelled run's in-flight free generation keeps the ollama
+   * backend busy until the generation finishes on its own (10+ minutes on
+   * CPU) — the "cancel ignores me" defect.
+   */
+  signal?: AbortSignal;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -131,7 +138,13 @@ export class FreeProvider implements LLMProvider {
 
     enterFreeCall();
     try {
-      const stream = client.messages.stream(args as Anthropic.MessageStreamParams);
+      // The run's cancel/deadline signal aborts the in-flight HTTP request —
+      // finalMessage() then rejects, the race below settles, and the shared
+      // catch runs stream.abort(). Same contract as the paid providers.
+      const stream = client.messages.stream(
+        args as Anthropic.MessageStreamParams,
+        this.opts.signal ? { signal: this.opts.signal } : undefined,
+      );
 
       let lastEventAt = Date.now();
       let sawFirstEvent = false;

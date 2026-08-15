@@ -60,6 +60,7 @@ import {
   getCancelSignal,
 } from "./cancellation.js";
 import { runRepairLoop } from "./repairLoop.js";
+import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
 import { architectAgent } from "../agents/architectAgent.js";
 import { taskPlannerAgent } from "../agents/taskPlannerAgent.js";
@@ -799,6 +800,9 @@ async function executeRun(
 
     /* Stage 7 — Test Writer (+ optional install/test commands) */
     let commandOutput = checkpoint.commandOutput;
+    let verification: VerificationEvidence = checkpoint.verification ?? {
+      executed: [],
+    };
     let testsExecuted = checkpoint.testsExecuted;
     let testExit = checkpoint.testExit;
 
@@ -810,6 +814,7 @@ async function executeRun(
      */
     const verifyWorkspace = async (): Promise<void> => {
       commandOutput = "";
+      verification = { executed: [] };
       testsExecuted = false;
       testExit = null;
       const verificationCommands =
@@ -841,6 +846,11 @@ async function executeRun(
         );
         if (res.executed) {
           commandOutput += `\n$ ${res.command}\n${res.stdout}\n${res.stderr}`;
+          verification.executed.push({
+            command: res.command,
+            exitCode: res.exitCode,
+            outputTail: `${res.stdout}\n${res.stderr}`,
+          });
           if (cmd.isTest) {
             testsExecuted = true;
             if (res.exitCode !== 0 || testExit === null) {
@@ -849,7 +859,12 @@ async function executeRun(
           }
         }
       }
-      await checkpointNow({ commandOutput, testsExecuted, testExit });
+      await checkpointNow({
+        commandOutput,
+        verification,
+        testsExecuted,
+        testExit,
+      });
     };
     if (!checkpoint.testWriterComplete) {
       throwIfTimedOut(deadline, timeoutMs);
@@ -888,7 +903,10 @@ async function executeRun(
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "qa_critic");
       log("model_call", `QA Critic agent (${review.name})…`);
-      qa = await qaCriticAgent({ provider: review }, fullBuild(), commandOutput);
+      qa = groundQaReport(
+        await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
+        verification,
+      );
       await checkpointNow({ qa });
     }
     if (!stageDone("qa_critic")) {
@@ -914,7 +932,10 @@ async function executeRun(
         log("info", "Re-running executable verification after repair.", "repair");
         await verifyWorkspace();
         log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
-        qa = await qaCriticAgent({ provider: review }, fullBuild(), commandOutput);
+        qa = groundQaReport(
+          await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
+          verification,
+        );
         await checkpointNow({ qa, pendingRepair: undefined });
         log(qa.passed ? "success" : "warning", `QA: ${qa.summary}`, "repair");
       }
@@ -958,10 +979,13 @@ async function executeRun(
           reverify: async () => {
             throwIfTimedOut(deadline, timeoutMs);
             log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
-            const next = await qaCriticAgent(
-              { provider: review },
-              fullBuild(),
-              commandOutput,
+            const next = groundQaReport(
+              await qaCriticAgent(
+                { provider: review },
+                fullBuild(),
+                commandOutput,
+              ),
+              verification,
             );
             await checkpointNow({ qa: next, pendingRepair: undefined });
             log(next.passed ? "success" : "warning", `QA: ${next.summary}`, "repair");
@@ -983,13 +1007,15 @@ async function executeRun(
     }
 
     /* Stage — Final Review */
+    // "passing" may ONLY be claimed when a test command actually executed and
+    // exited 0. The old fallback promoted a bare model verdict to "passing"
+    // with zero tests run — the fabricated-pass defect (run c72fdb26 claimed
+    // 278/278 with no repo clone). No execution = "unknown", always.
     const testStatus = testsExecuted
       ? testExit === 0
         ? "passing"
         : "failing"
-      : qa.passed
-        ? "passing"
-        : "unknown";
+      : "unknown";
     let report = checkpoint.finalReport;
     if (!report) {
       throwIfTimedOut(deadline, timeoutMs);

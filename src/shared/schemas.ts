@@ -522,7 +522,12 @@ export const RunOptionsSchema = z.object({
    * force-push, and never onto main/master: only the run's own branch.
    */
   pushToOrigin: z.boolean().optional(),
-});
+})
+  // Unknown option keys FAIL LOUD instead of being silently stripped. A
+  // misplaced or misspelled field (the FutureU `destination` class) used to
+  // vanish here, silently turning an extend-a-repo run into a from-scratch
+  // app whose report then fabricated pass counts (run c72fdb26).
+  .strict();
 export type RunOptions = z.infer<typeof RunOptionsSchema>;
 
 /** Per-job attribution so every generated change is traceable (acceptance #244). */

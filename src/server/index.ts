@@ -278,10 +278,28 @@ app.post(
       res.status(400).json({ error: "Field 'idea' is required." });
       return;
     }
+    // Unknown TOP-LEVEL fields fail loud. A `destination` (or any run
+    // setting) placed beside `idea` instead of inside `options` used to be
+    // silently ignored, turning an extend run into a from-scratch app.
+    const allowedTopLevel = new Set(["idea", "options"]);
+    const strayKeys = Object.keys(
+      (req.body ?? {}) as Record<string, unknown>,
+    ).filter((k) => !allowedTopLevel.has(k));
+    if (strayKeys.length) {
+      res.status(400).json({
+        error:
+          `Unknown top-level field(s): ${strayKeys.join(", ")}. ` +
+          `Run settings must be nested inside 'options' ` +
+          `(e.g. options.mode, options.repoSource, options.goals).`,
+      });
+      return;
+    }
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      const where = first?.path?.length ? ` at '${first.path.join(".")}'` : "";
       res.status(400).json({
-        error: `Invalid options: ${parsed.error.issues[0]?.message ?? "bad shape"}`,
+        error: `Invalid options${where}: ${first?.message ?? "bad shape"}`,
       });
       return;
     }

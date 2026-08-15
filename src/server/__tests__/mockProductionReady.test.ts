@@ -102,7 +102,9 @@ describe("mock end-to-end job (#242)", () => {
     expect(run.attribution?.jobId).toBe(run.id);
     expect(run.attribution?.worktreePath).toBe(run.workspacePath);
     expect(run.attribution?.approval.allowUntrustedScripts).toBe(false);
-    expect(run.attribution?.testResult).toBe("passing");
+    // Scripts are disabled in this hermetic job, so no test command ever
+    // executed — claiming "passing" here was the fabricated-pass defect.
+    expect(run.attribution?.testResult).toBe("unknown");
     expect(run.attribution?.commitPath).toBeTruthy();
     expect(run.attribution?.rollbackPath).toBe(run.workspacePath);
     await access(run.attribution!.commitPath!);

@@ -117,6 +117,8 @@ export function createProviderRegistry(
     maxConcurrency: config.free.maxConcurrency,
     backpressureRetryMs: config.free.retrySpacingMs,
     enabled: config.free.enabled,
+    // Cancel/deadline reaches FREE calls too, not only paid SDK calls.
+    signal,
   });
 
   /** The chain the deck actually runs on: free primary, paid rescue. */

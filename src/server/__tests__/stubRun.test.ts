@@ -36,7 +36,9 @@ describe("stub demo run (end-to-end, offline)", () => {
     // Files were generated and a report produced.
     expect(run.files.length).toBeGreaterThan(3);
     expect(run.finalReport).not.toBeNull();
-    expect(run.finalReport?.testStatus).toBe("passing");
+    // A hermetic stub run executes NO commands, so "passing" would be a
+    // fabricated claim — testStatus is honestly "unknown" (qaGrounding.ts).
+    expect(run.finalReport?.testStatus).toBe("unknown");
     // Demo run used only the stub — no real provider calls counted.
     expect(run.providerUsage.anthropic.calls).toBe(0);
     expect(run.providerUsage.openai.calls).toBe(0);

@@ -34,6 +34,25 @@ export const FactoryCheckpointSchema = z.object({
   files: z.array(FileContentSchema).default([]),
   testWriterComplete: z.boolean().default(false),
   commandOutput: z.string().default(""),
+  /**
+   * Structured record of the commands that actually EXECUTED in the last
+   * verification pass — the evidence that grounds every QA verdict
+   * (qaGrounding.ts). Kept beside commandOutput so a resumed run judges the
+   * same evidence a fresh one would.
+   */
+  verification: z
+    .object({
+      executed: z
+        .array(
+          z.object({
+            command: z.string(),
+            exitCode: z.number().int().nullable(),
+            outputTail: z.string().default(""),
+          }),
+        )
+        .default([]),
+    })
+    .optional(),
   testsExecuted: z.boolean().default(false),
   testExit: z.number().int().nullable().default(null),
   qa: QaReportSchema.optional(),
