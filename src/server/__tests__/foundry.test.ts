@@ -209,9 +209,7 @@ describe("Purpose Foundry", () => {
     project.stations.find(
       (station) => station.stationId === "factory-deck",
     )!.artifacts = ["C:/build/IPlay.aab"];
-    const previous = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
-    process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = "x".repeat(32);
-    try {
+    {
       const adapters = new FoundryAdapters(store, {
         fetch: async (url) => {
           const path = new URL(String(url)).pathname;
@@ -245,10 +243,6 @@ describe("Purpose Foundry", () => {
         submitted: false,
       });
       expect(outcome.summary).toContain("requiring attention");
-    } finally {
-      if (previous === undefined)
-        delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
-      else process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = previous;
     }
   });
 
@@ -270,9 +264,7 @@ describe("Purpose Foundry", () => {
       (station) => station.stationId === "factory-deck",
     )!.artifacts = [release];
     const calls: string[] = [];
-    const previous = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
-    process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = "p".repeat(32);
-    try {
+    {
       const adapters = new FoundryAdapters(store, {
         fetch: async (url, init) => {
           const path = new URL(String(url)).pathname;
@@ -305,7 +297,7 @@ describe("Purpose Foundry", () => {
             expect(multipart.includes(bytes)).toBe(true);
             expect(multipart.toString("latin1")).toContain(sha256);
             expect(init?.headers).toMatchObject({
-              "x-purpose-foundry-token": "p".repeat(32),
+              "x-purpose-foundry-client": "purpose-foundry",
             });
             body = {
               uploadId: "upload-1",
@@ -355,10 +347,6 @@ describe("Purpose Foundry", () => {
       expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(
         2,
       );
-    } finally {
-      if (previous === undefined)
-        delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
-      else process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = previous;
     }
   });
 });
