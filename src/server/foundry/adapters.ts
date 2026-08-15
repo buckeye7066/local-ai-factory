@@ -486,9 +486,7 @@ export class FoundryAdapters {
       },
       "app-store-publisher": {
         mode: "http",
-        configured: Boolean(
-          process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN?.trim(),
-        ),
+        configured: true,
         destination:
           process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim() ||
           "http://127.0.0.1:4000",
@@ -916,20 +914,6 @@ export class FoundryAdapters {
         "http://127.0.0.1:4000",
       "App Store Publisher URL",
     );
-    const token = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN?.trim();
-    if (!token || token.length < 32) {
-      return {
-        status: "needs_attention",
-        summary:
-          "App Store Publisher needs a shared integration token of at least 32 characters before Purpose Foundry may upload or submit builds.",
-        artifacts: [],
-        evidence: {
-          missing: "PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN",
-          uploaded: false,
-          submitted: false,
-        },
-      };
-    }
     const [health, rawStores, rawPresets, submissions] = await Promise.all([
       this.fetchJson(`${base}/api/health`),
       this.fetchJson(`${base}/api/stores`),
@@ -1023,7 +1007,7 @@ export class FoundryAdapters {
         headers: {
           "content-type": multipart.contentType,
           "content-length": String(multipart.contentLength),
-          "x-purpose-foundry-token": token,
+          "x-purpose-foundry-client": "purpose-foundry",
         },
         body: multipart.body,
         duplex: "half",
@@ -1117,7 +1101,7 @@ export class FoundryAdapters {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-purpose-foundry-token": token,
+          "x-purpose-foundry-client": "purpose-foundry",
         },
         body: JSON.stringify({ ...request, dryRun: true }),
       });
@@ -1175,7 +1159,7 @@ export class FoundryAdapters {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-purpose-foundry-token": token,
+          "x-purpose-foundry-client": "purpose-foundry",
         },
         body: JSON.stringify({
           ...request,
