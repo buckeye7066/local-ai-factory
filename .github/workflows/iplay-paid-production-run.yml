@@ -60,8 +60,11 @@ jobs:
           ALLOW_UNTRUSTED_SCRIPTS: "true"
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
           FACTORY_RUN_TIMEOUT_MS: "21000000"
-          MAX_MODEL_CALLS_PER_RUN: "30"
+          MAX_MODEL_CALLS_PER_RUN: "60"
           MAX_REPAIR_LOOPS: "3"
+          FACTORY_PAID_RESCUES_PER_HOUR: "60"
+          FACTORY_PAID_RESCUES_PER_DAY: "60"
+          FACTORY_PAID_MAX_USD_PER_DAY: "35"
           CI: "true"
         run: pnpm exec tsx scripts/ci/run-iplay-job.ts
 
@@ -69,8 +72,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: iplay-factory-deck-${{ github.run_id }}
+          name: iplay-factory-deck-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 14
           path: |
             jobs/iplay/run-result.json
