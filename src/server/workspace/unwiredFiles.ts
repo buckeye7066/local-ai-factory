@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join, relative } from "node:path";
 
 /**
  * unwiredFiles.ts — mechanical honesty about SCAFFOLDING in extend runs.
