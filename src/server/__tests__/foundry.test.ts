@@ -1,9 +1,18 @@
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FoundryAdapters, repoRewardsQuery, repoSourceFromTarget } from "../foundry/adapters.js";
-import { FoundryStore, STATIONS, intakeFromMarkdown } from "../foundry/model.js";
+import {
+  FoundryAdapters,
+  repoRewardsQuery,
+  repoSourceFromTarget,
+} from "../foundry/adapters.js";
+import {
+  FoundryStore,
+  STATIONS,
+  intakeFromMarkdown,
+} from "../foundry/model.js";
 
 describe("Purpose Foundry", () => {
   it("turns an Obsidian note into a versioned project constitution", async () => {
@@ -20,24 +29,41 @@ describe("Purpose Foundry", () => {
     expect(project.constitution.targets).toEqual(["buckeye7066/IPlay"]);
     expect(project.stations).toHaveLength(STATIONS.length);
     expect(project.stations[0].stationId).toBe("scout");
-    expect(project.stations.findIndex((station) => station.stationId === "factory-deck"))
-      .toBeGreaterThan(project.stations.findIndex((station) => station.stationId === "promo-pilot"));
-    expect(project.stations.every((station) => station.status === "queued")).toBe(true);
+    expect(
+      project.stations.findIndex(
+        (station) => station.stationId === "factory-deck",
+      ),
+    ).toBeGreaterThan(
+      project.stations.findIndex(
+        (station) => station.stationId === "promo-pilot",
+      ),
+    );
+    expect(
+      project.stations.every((station) => station.status === "queued"),
+    ).toBe(true);
   });
 
   it("deduplicates an unchanged Obsidian note and hash-chains evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
-    const intake = intakeFromMarkdown("# GrantFlow\nFind and match real funding.", "C:/Vault/GrantFlow.md");
+    const intake = intakeFromMarkdown(
+      "# GrantFlow\nFind and match real funding.",
+      "C:/Vault/GrantFlow.md",
+    );
     const first = await store.create(intake);
     const second = await store.create(intake);
-    await store.appendEvidence(first.id, "crucible", "challenge.recorded", { severity: "high" });
+    await store.appendEvidence(first.id, "crucible", "challenge.recorded", {
+      severity: "high",
+    });
 
     expect(second.id).toBe(first.id);
     const lines = (await readFile(join(root, "evidence.jsonl"), "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { hash: string; previousHash: string | null });
+      .map(
+        (line) =>
+          JSON.parse(line) as { hash: string; previousHash: string | null },
+      );
     expect(lines).toHaveLength(2);
     expect(lines[1].previousHash).toBe(lines[0].hash);
   });
@@ -46,28 +72,45 @@ describe("Purpose Foundry", () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
     const project = await store.create(
-      intakeFromMarkdown("# FutureU\nBuild a complete curriculum platform.", "C:/Vault/FutureU.md"),
+      intakeFromMarkdown(
+        "# FutureU\nBuild a complete curriculum platform.",
+        "C:/Vault/FutureU.md",
+      ),
     );
     await Promise.all(
       Array.from({ length: 12 }, (_, index) =>
-        store.appendEvidence(project.id, "crucible", "challenge.recorded", { index }),
+        store.appendEvidence(project.id, "crucible", "challenge.recorded", {
+          index,
+        }),
       ),
     );
     const lines = (await readFile(join(root, "evidence.jsonl"), "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { sequence: number; hash: string; previousHash: string | null });
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            sequence: number;
+            hash: string;
+            previousHash: string | null;
+          },
+      );
     expect(lines).toHaveLength(13);
     lines.forEach((event, index) => {
       expect(event.sequence).toBe(index + 1);
-      expect(event.previousHash).toBe(index === 0 ? null : lines[index - 1].hash);
+      expect(event.previousHash).toBe(
+        index === 0 ? null : lines[index - 1].hash,
+      );
     });
   });
 
   it("deduplicates simultaneous project creation", async () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
-    const intake = intakeFromMarkdown("# GeneMap\nMap evidence to genes.", "C:/Vault/GeneMap.md");
+    const intake = intakeFromMarkdown(
+      "# GeneMap\nMap evidence to genes.",
+      "C:/Vault/GeneMap.md",
+    );
     const projects = await Promise.all(
       Array.from({ length: 8 }, () => store.create(intake)),
     );
@@ -79,7 +122,11 @@ describe("Purpose Foundry", () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const inbox = await mkdtemp(join(tmpdir(), "purpose-foundry-inbox-"));
     const outside = join(root, "outside.md");
-    await writeFile(join(inbox, "GrantFlow.md"), "# GrantFlow\r\nFind funding.\r\n", "utf8");
+    await writeFile(
+      join(inbox, "GrantFlow.md"),
+      "# GrantFlow\r\nFind funding.\r\n",
+      "utf8",
+    );
     await writeFile(outside, "# Private\nDo not import.\n", "utf8");
     await symlink(outside, join(inbox, "outside.md"));
     const store = new FoundryStore(root);
@@ -87,7 +134,9 @@ describe("Purpose Foundry", () => {
     const first = await store.importObsidianInbox(inbox);
     const second = await store.importObsidianInbox(inbox);
     expect(first.imported).toBe(1);
-    expect(first.errors.some((error) => error.startsWith("outside.md:"))).toBe(true);
+    expect(first.errors.some((error) => error.startsWith("outside.md:"))).toBe(
+      true,
+    );
     expect(second.imported).toBe(0);
     expect(second.unchanged).toBe(1);
     expect(await store.list()).toHaveLength(1);
@@ -118,10 +167,13 @@ describe("Purpose Foundry", () => {
     const adapters = new FoundryAdapters(store, {
       fetch: async (_url, init) => {
         posted = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify({ results: [{ name: "useful/repo" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ results: [{ name: "useful/repo" }] }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       },
     });
     const outcome = await adapters.execute(project, "repo-rewards");
@@ -137,7 +189,9 @@ describe("Purpose Foundry", () => {
       store.writeArtifact(project.id, "repo-rewards", "../escape.json", {}),
     ).rejects.toThrow("Invalid artifact filename");
 
-    const outside = await mkdtemp(join(tmpdir(), "purpose-foundry-artifact-outside-"));
+    const outside = await mkdtemp(
+      join(tmpdir(), "purpose-foundry-artifact-outside-"),
+    );
     const stationParent = join(root, "artifacts", project.id);
     await mkdir(stationParent, { recursive: true });
     await symlink(outside, join(stationParent, "watchtower"), "dir");
@@ -152,20 +206,159 @@ describe("Purpose Foundry", () => {
     const project = await store.create(
       intakeFromMarkdown("# IPlay\nShip the mobile app.", "C:/Vault/IPlay.md"),
     );
-    project.stations.find((station) => station.stationId === "factory-deck")!.artifacts = [
-      "C:/build/IPlay.aab",
-    ];
-    const adapters = new FoundryAdapters(store, {
-      fetch: async () =>
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    });
+    project.stations.find(
+      (station) => station.stationId === "factory-deck",
+    )!.artifacts = ["C:/build/IPlay.aab"];
+    const previous = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
+    process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = "x".repeat(32);
+    try {
+      const adapters = new FoundryAdapters(store, {
+        fetch: async (url) => {
+          const path = new URL(String(url)).pathname;
+          const body =
+            path === "/api/stores"
+              ? { stores: [{ id: "google_play", configured: true }] }
+              : path === "/api/presets"
+                ? {
+                    presets: [
+                      {
+                        id: "iplay",
+                        label: "IPlay",
+                        packageName: "com.iplay.app",
+                      },
+                    ],
+                  }
+                : path === "/api/submissions"
+                  ? { submissions: [] }
+                  : { ok: true };
+          return new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
 
-    const outcome = await adapters.execute(project, "app-store-publisher");
-    expect(outcome.status).toBe("needs_attention");
-    expect(outcome.evidence).toMatchObject({ uploaded: false, submitted: false });
-    expect(outcome.summary).toContain("has not uploaded");
+      const outcome = await adapters.execute(project, "app-store-publisher");
+      expect(outcome.status).toBe("needs_attention");
+      expect(outcome.evidence).toMatchObject({
+        uploaded: false,
+        submitted: false,
+      });
+      expect(outcome.summary).toContain("requiring attention");
+    } finally {
+      if (previous === undefined)
+        delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
+      else process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = previous;
+    }
+  });
+
+  it("streams, checksum-verifies, dry-runs, and submits a real build through Publisher", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const target = await mkdtemp(join(tmpdir(), "purpose-foundry-release-"));
+    const release = join(target, "grantflow-release.aab");
+    const bytes = Buffer.from("PK\u0003\u0004purpose-foundry-test-build");
+    await writeFile(release, bytes);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown(
+        `---\nproject: GrantFlow\npurpose: Ship verified funding tools\ntargets: ${target}\n---\n# GrantFlow`,
+        "C:/Vault/GrantFlow.md",
+      ),
+    );
+    project.stations.find(
+      (station) => station.stationId === "factory-deck",
+    )!.artifacts = [release];
+    const calls: string[] = [];
+    const previous = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
+    process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = "p".repeat(32);
+    try {
+      const adapters = new FoundryAdapters(store, {
+        fetch: async (url, init) => {
+          const path = new URL(String(url)).pathname;
+          calls.push(`${init?.method || "GET"} ${path}`);
+          let body: Record<string, unknown>;
+          if (path === "/api/stores") {
+            body = {
+              stores: [
+                { id: "google_play", label: "Google Play", configured: true },
+              ],
+            };
+          } else if (path === "/api/presets") {
+            body = {
+              presets: [
+                {
+                  id: "grantflow",
+                  label: "GrantFlow",
+                  repo: "buckeye7066/GrantFlow",
+                  packageName: "com.grantflow.app",
+                },
+              ],
+            };
+          } else if (path === "/api/submissions") {
+            body = { submissions: [] };
+          } else if (path === "/api/upload") {
+            const chunks: Buffer[] = [];
+            for await (const chunk of init?.body as AsyncIterable<Uint8Array>)
+              chunks.push(Buffer.from(chunk));
+            const multipart = Buffer.concat(chunks);
+            expect(multipart.includes(bytes)).toBe(true);
+            expect(multipart.toString("latin1")).toContain(sha256);
+            expect(init?.headers).toMatchObject({
+              "x-purpose-foundry-token": "p".repeat(32),
+            });
+            body = {
+              uploadId: "upload-1",
+              fileName: "grantflow-release.aab",
+              sha256,
+              inspection: { fields: { packageId: "com.grantflow.app" } },
+            };
+          } else if (path === "/api/submit") {
+            const request = JSON.parse(String(init?.body)) as {
+              dryRun?: boolean;
+            };
+            body = request.dryRun
+              ? {
+                  approvalToken: "approval-1",
+                  artifactEvidence: {
+                    stores: [{ unknowns: [], mismatches: [] }],
+                  },
+                  plannedMutations: [],
+                }
+              : {
+                  results: [
+                    {
+                      store: "google_play",
+                      status: "success",
+                      state: "published",
+                    },
+                  ],
+                };
+          } else {
+            body = { ok: true };
+          }
+          return new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+
+      const outcome = await adapters.execute(project, "app-store-publisher");
+      expect(outcome.status).toBe("completed");
+      expect(outcome.evidence).toMatchObject({
+        uploaded: true,
+        submitted: true,
+        submittedStores: 1,
+      });
+      expect(calls).toContain("POST /api/upload");
+      expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(
+        2,
+      );
+    } finally {
+      if (previous === undefined)
+        delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN;
+      else process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_TOKEN = previous;
+    }
   });
 });
