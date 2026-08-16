@@ -487,6 +487,13 @@ export const RunOptionsSchema = z.object({
   codeProvider: ProviderNameSchema.optional(),
   reviewProvider: ProviderNameSchema.optional(),
   demo: z.boolean().optional(),
+  /**
+   * Publish the finished app to the owner's app store (axiombiolabs.org
+   * registry, which PromoPilot promotes from). Default true. Owner order
+   * 2026-08-15: "some things I work on are just for me" - unchecked, the app
+   * is still built, saved to GitHub, and hosted, but never listed or promoted.
+   */
+  publish: z.boolean().optional(),
   maxRepairLoops: z.number().optional(),
   /** Client-supplied idempotency key (also accepted via Idempotency-Key header). */
   idempotencyKey: z.string().min(1).max(200).optional(),

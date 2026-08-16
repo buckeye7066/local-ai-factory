@@ -1246,7 +1246,12 @@ async function executeRun(
            * PromoPilot picks it up from the same registry. Only a deploy this
            * process live-verified qualifies; store failures never fail the
            * run. FACTORY_STORE_PUBLISH=0 opts out. */
-          if (
+          if (checkpoint.options.publish === false) {
+            log(
+              "info",
+              "App Store: skipped - this run is marked private (publish unchecked), so it is not listed or promoted.",
+            );
+          } else if (
             dep.deployed &&
             dep.verified &&
             dep.url &&

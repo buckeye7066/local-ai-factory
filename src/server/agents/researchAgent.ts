@@ -260,7 +260,10 @@ async function evaluateCompetitiveDossier(
       `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
       `DISCOVERY DOSSIER:\n${JSON.stringify(dossier.candidates.map(compactCandidate))}`,
       `Return a feature-by-feature comparison for every credible candidate and a selected list of concrete elements ` +
-        `worth integrating. Every selected candidateId must exactly match the dossier. Cite file/page URLs in evidenceUrls. ` +
+        `worth integrating. Cover AT LEAST the five strongest competitors in the comparisons (all of them when fewer ` +
+        `than five candidates exist), and for each competitor name the single most valuable idea worth adopting - ` +
+        `the thing it does better than this app - respecting its license policy. Every selected candidateId must ` +
+        `exactly match the dossier. Cite file/page URLs in evidenceUrls. ` +
         `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
     ].join("\n\n"),
     schema: CompetitiveSelectionSchema,
@@ -338,5 +341,16 @@ export async function researchAgent(
   }
 
   const selection = await evaluateCompetitiveDossier(deps, spec, arch, dossier);
-  return mergeCompetitiveResults(base, dossier, selection);
+  const merged = mergeCompetitiveResults(base, dossier, selection);
+  if (dossier.candidates.length < 5) {
+    // No silent caps: the owner's floor is the top FIVE competitors. Fewer
+    // discovered is reported, never papered over.
+    return ResearchFindingsSchema.parse({
+      ...merged,
+      summary: `${merged.summary}
+
+Competitor coverage below the owner's floor: only ${dossier.candidates.length} candidate(s) were discovered and inspected (target: at least 5).`,
+    });
+  }
+  return merged;
 }

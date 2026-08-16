@@ -58,6 +58,11 @@ export function NewRunHero({
   // The owner names a brand-new app/repo up front. Factory Deck never invents
   // one and never buries the build in an anonymous workspace folder.
   const [repoName, setRepoName] = useState("");
+  // Owner order 2026-08-15: "some things I work on are just for me." Checked
+  // (default), a finished app is listed in the owner's app store and picked
+  // up by PromoPilot; unchecked, it is still built, saved to GitHub, and
+  // hosted - just never listed or promoted.
+  const [publish, setPublish] = useState(true);
   const nameCheck = useRepoNameCheck(repoName);
 
   // EVERY submission path (new app, extend direct, extend clarify) flows
@@ -76,6 +81,7 @@ export function NewRunHero({
     if (!trimmed) return;
     startWithRouting(trimmed, {
       demo,
+      publish,
       mode: "new",
       newRepo: { name: repoName.trim(), private: true },
     });
@@ -139,6 +145,28 @@ export function NewRunHero({
           allowDemo={runMode === "new"}
         />
       </motion.div>
+
+      {runMode === "new" && (
+        <motion.div variants={slideUp} className="mx-auto mt-4 max-w-3xl">
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/5 bg-white/[0.03] p-3 text-sm text-slate-300 transition-colors hover:bg-white/[0.05]">
+            <input
+              type="checkbox"
+              checked={publish}
+              onChange={(e) => setPublish(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-aurora-violet"
+            />
+            <span>
+              <span className="font-medium text-white">Publish this app</span>
+              <span className="block text-xs text-slate-400">
+                List the finished app in your Axiom BioLabs app store and let
+                PromoPilot promote it. Uncheck for something that is just for
+                you - it still gets built, saved to GitHub, and hosted, but
+                never listed or promoted.
+              </span>
+            </span>
+          </label>
+        </motion.div>
+      )}
 
       {runMode === "extend" ? (
         <ExtendExistingPanel starting={starting} onStart={startWithRouting} />

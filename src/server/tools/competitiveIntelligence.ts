@@ -444,13 +444,29 @@ function candidateScore(
   return candidate.hits * 10 + termMatches * 3;
 }
 
+/**
+ * Owner directive 2026-08-15: every build/extend run must look for AT LEAST
+ * the top five COMPETITORS to the app — real market products, not just
+ * open-source implementations — and glean their most valuable ideas. The
+ * first three queries hunt competitor products; the rest hunt inspectable
+ * open-source implementations.
+ */
 export function buildDiscoveryQueries(spec: ProductSpec): string[] {
   const features = spec.coreFeatures.slice(0, 5);
+  const primary = features[0] ?? spec.tagline;
   return [
+    `${spec.appName} competitors`,
+    `best ${primary} software for ${spec.targetUser}`,
+    `top alternatives to ${spec.appName}`,
     `${spec.appName} alternatives open source GitHub`,
     `${spec.targetUser} software open source GitHub`,
     ...features.map((feature) => `${feature} open source GitHub implementation`),
-  ].slice(0, 7);
+  ].slice(0, 10);
+}
+
+/** True for queries whose results are competitor PRODUCT pages, not code. */
+export function isCompetitorQuery(query: string): boolean {
+  return /(^|\s)competitors?(\s|$)|^best |^top alternatives/i.test(query);
 }
 
 /**
@@ -486,7 +502,13 @@ export async function buildCompetitiveDossier(
           hits: (existing?.hits ?? 0) + 1,
           evidence: [...new Set([...(existing?.evidence ?? []), `${query}: ${result.url}`])],
         });
-      } else if (/docs|api|library|sdk|framework|tool/i.test(`${result.title} ${result.snippet}`)) {
+      } else if (
+        /docs|api|library|sdk|framework|tool/i.test(`${result.title} ${result.snippet}`) ||
+        // Competitor-intent queries surface product pages that never say
+        // "library" or "sdk" — dropping them was how a grant-platform run
+        // researched ten repos and zero actual competitors.
+        isCompetitorQuery(query)
+      ) {
         const existing = webCandidates.get(result.url);
         webCandidates.set(result.url, {
           title: result.title,
