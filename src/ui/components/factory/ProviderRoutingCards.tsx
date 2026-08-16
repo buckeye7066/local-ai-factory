@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Sparkles, Cpu, FlaskConical, Check, AlertTriangle, Gift } from "lucide-react";
+import { Sparkles, Cpu, Check, AlertTriangle, Gift } from "lucide-react";
 import { cn } from "../../lib/cn.js";
 import { Badge } from "../ui/Badge.js";
 import { staggerContainer, staggerItem } from "../../lib/motion.js";
