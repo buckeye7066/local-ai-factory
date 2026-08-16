@@ -68,15 +68,22 @@ export class AnthropicProvider implements LLMProvider {
         // NOTE: no `temperature` — sampling params are rejected (400) on
         // Claude Opus 4.7+/Sonnet 5/Fable 5, so omitting keeps this provider
         // model-agnostic. input.temperature still applies to other providers.
-        const res = await client.messages.create(
-          {
-            model: this.model,
-            max_tokens: input.maxTokens ?? 4096,
-            system: input.system,
-            messages: [{ role: "user", content: input.prompt }],
-          },
-          { signal: this.signal },
-        );
+        // Streamed then accumulated: the SDK REFUSES large non-streaming
+        // requests ("streaming is strongly recommended for operations that
+        // may take longer than 10 minutes") - the first real epic's 16k-token
+        // planning call died on exactly that. finalMessage() returns the same
+        // Message shape, so nothing downstream changes.
+        const res = await client.messages
+          .stream(
+            {
+              model: this.model,
+              max_tokens: input.maxTokens ?? 4096,
+              system: input.system,
+              messages: [{ role: "user", content: input.prompt }],
+            },
+            { signal: this.signal },
+          )
+          .finalMessage();
         this.onUsage({
           inTokens: res.usage?.input_tokens ?? 0,
           outTokens: res.usage?.output_tokens ?? 0,
@@ -103,15 +110,19 @@ fenced code block outside the JSON object. Your entire response must be parseabl
 JSON.parse() as-is.`;
 
     const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> => {
-      const res = await client.messages.create(
-        {
-          model: this.model,
-          max_tokens: maxTokens,
-          system,
-          messages: [{ role: "user", content: prompt }],
-        },
-        { signal: this.signal },
-      );
+      // Streamed for the same reason as generateText - large max_tokens
+      // non-streaming calls are refused by the SDK outright.
+      const res = await client.messages
+        .stream(
+          {
+            model: this.model,
+            max_tokens: maxTokens,
+            system,
+            messages: [{ role: "user", content: prompt }],
+          },
+          { signal: this.signal },
+        )
+        .finalMessage();
       this.onUsage({
         inTokens: res.usage?.input_tokens ?? 0,
         outTokens: res.usage?.output_tokens ?? 0,
