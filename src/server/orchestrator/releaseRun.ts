@@ -47,6 +47,14 @@ export interface ReleaseInput {
   sleepImpl?: (ms: number) => Promise<void>;
   /** Max time to wait for the host repo's checks. */
   checkTimeoutMs?: number;
+  /**
+   * How long "no checks reported" must persist before it is believed to mean
+   * "this repo has no CI" rather than "GitHub has not registered them yet".
+   * Injectable so tests can exercise the race without waiting minutes.
+   */
+  noChecksGraceMs?: number;
+  /** Consecutive absent readings required alongside the grace window. */
+  noChecksConfirmations?: number;
 }
 
 export interface ReleaseResult {
@@ -109,6 +117,18 @@ export function releaseEligible(input: {
 
 const CHECK_POLL_MS = 90_000;
 
+/**
+ * How long "no checks reported" must persist before it is believed.
+ *
+ * `gh pr checks` says "no checks reported" both for a repo with no CI at all
+ * AND for the first seconds of a brand-new PR whose workflow runs GitHub has
+ * not registered yet. Treating the first reading as truth merged to main ahead
+ * of the host repo's own suite.
+ */
+const NO_CHECKS_GRACE_MS = 120_000;
+/** Consecutive absent readings required alongside the grace window. */
+const NO_CHECKS_CONFIRMATIONS = 3;
+
 export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
   const run = input.ghImpl ?? gh;
   const sleep =
@@ -168,10 +188,23 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
   }
 
   // 2. Wait for the HOST repo's own checks. `gh pr checks` exits 0 when all
-  //    checks pass, 8 while pending, non-zero otherwise. A repo with no checks
-  //    at all reports "no checks" — treated as pass-through (the repo imposed
-  //    no gate).
+  //    checks pass, 8 while pending, non-zero otherwise.
+  //
+  //    A repo with genuinely NO checks reports "no checks" and is pass-through
+  //    (that repo imposed no gate). But absence must be CONFIRMED, never taken
+  //    on the first look: this loop runs immediately after `pr create`, and
+  //    GitHub takes seconds to register a new PR's workflow runs. During that
+  //    window a repo that DOES have CI also reports "no checks reported" — so
+  //    the old single-shot `break` could merge to main before the host repo's
+  //    suite had even started, which is precisely a merge with no evidence
+  //    behind it. Require several consecutive absent observations spanning a
+  //    grace window before believing the repo has no CI at all.
   const deadline = Date.now() + (input.checkTimeoutMs ?? 45 * 60_000);
+  const graceUntil = Date.now() + (input.noChecksGraceMs ?? NO_CHECKS_GRACE_MS);
+  const neededAbsent = input.noChecksConfirmations ?? NO_CHECKS_CONFIRMATIONS;
+  let absentObservations = 0;
+  /** True when the host repo's own checks were seen green (not merely absent). */
+  let hostChecksGreen = false;
   for (;;) {
     const checks = await run(
       ["pr", "checks", prUrl, "--json", "state,name"],
@@ -179,7 +212,31 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
       60_000,
     );
     const raw = checks.stdout + checks.stderr;
-    if (/no checks reported/i.test(raw)) break;
+    if (/no checks reported/i.test(raw)) {
+      absentObservations++;
+      // Believe "this repo has no CI" only after the grace window has elapsed
+      // AND the absence has held across several polls.
+      if (
+        absentObservations >= neededAbsent &&
+        Date.now() >= graceUntil
+      ) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        return {
+          released: false,
+          prUrl,
+          mergedSha: null,
+          reason:
+            "host repo reported no checks for the whole release window — PR left open",
+        };
+      }
+      await sleep(CHECK_POLL_MS);
+      continue;
+    }
+    // Checks appeared, so the repo DOES have CI: absence was just the
+    // registration race. Never fall back to the pass-through path again.
+    absentObservations = 0;
     let states: Array<{ state: string; name: string }> = [];
     try {
       states = JSON.parse(checks.stdout);
@@ -198,7 +255,10 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
       };
     }
     const pending = states.filter((s) => /PENDING|QUEUED|IN_PROGRESS|EXPECTED/i.test(s.state));
-    if (states.length && !pending.length) break;
+    if (states.length && !pending.length) {
+      hostChecksGreen = true;
+      break;
+    }
     if (Date.now() > deadline) {
       return {
         released: false,
@@ -242,6 +302,13 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
     released: true,
     prUrl,
     mergedSha: sha || null,
-    reason: "merged to main after grounded QA, passing tests, and green host-repo checks",
+    // Say WHICH evidence backed the merge. "green host-repo checks" is a
+    // claim only the first branch may make; when the repo has no CI the only
+    // evidence is the run's own executed tests, and the report must not
+    // dress that up as the host repo having approved it.
+    reason: hostChecksGreen
+      ? "merged to main after grounded QA, passing tests, and green host-repo checks"
+      : "merged to main after grounded QA and passing tests — the host repo reports NO CI checks, " +
+        "so its own suite did not gate this merge",
   };
 }
