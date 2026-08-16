@@ -107,12 +107,36 @@ async function isGitWorkingTree(dir: string): Promise<boolean> {
   return existsSync(join(dir, ".git"));
 }
 
+/**
+ * A location that is plainly a remote URL is a GIT source, whatever the form
+ * said. The owner pasted a GitHub URL with the "Local path" tab selected and
+ * the run died deep inside slice 1 with
+ * "Local path does not exist: C:\...\local-ai-factory\https:\github.com\...".
+ * Nothing good comes of resolving a URL as a folder — correct it and say so.
+ */
+export function normalizeRepoSource(source: RepoSource): {
+  source: RepoSource;
+  note: string | null;
+} {
+  const looksRemote = /^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/i.test(source.location.trim());
+  if (source.type === "path" && looksRemote) {
+    return {
+      source: { ...source, type: "git", inPlace: false },
+      note: `Treating ${source.location} as a Git URL (it was entered as a local path).`,
+    };
+  }
+  return { source, note: null };
+}
+
 export async function ingestExistingRepo(
   workspaceRoot: string,
-  source: RepoSource,
+  rawSource: RepoSource,
   runId: string,
 ): Promise<IngestResult> {
   const log: string[] = [];
+  const normalized = normalizeRepoSource(rawSource);
+  const source = normalized.source;
+  if (normalized.note) log.push(normalized.note);
   assertSafeGitArg(source.location);
 
   if (source.type === "git") {

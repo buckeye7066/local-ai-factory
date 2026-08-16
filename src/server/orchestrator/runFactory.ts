@@ -1594,8 +1594,37 @@ export async function resumeRun(
   runId: string,
   config: AppConfig,
   secrets: AppSecrets,
+  /**
+   * Optional provider switch applied to THIS resume (owner order 2026-08-16:
+   * "grantflow needs to be on openai"). A run's providers were fixed at
+   * creation, so the only way to move an in-flight build off the free route
+   * was to abandon its paid checkpoint and start over. The override is
+   * validated against configured live providers and persisted with the run.
+   */
+  providers?: { codeProvider?: ProviderName; reviewProvider?: ProviderName },
 ): Promise<RunRecord> {
   const prepared = await prepareResume(runId, config, secrets);
+  if (providers?.codeProvider || providers?.reviewProvider) {
+    const registry = createProviderRegistry(config, secrets);
+    const live = new Set(registry.availableLive());
+    for (const name of [providers.codeProvider, providers.reviewProvider]) {
+      if (name && !live.has(name)) {
+        throw new MissingProviderCredentialError([
+          `provider "${name}" is not configured — cannot resume onto it`,
+        ]);
+      }
+    }
+    if (providers.codeProvider) prepared.run.codeProvider = providers.codeProvider;
+    if (providers.reviewProvider) prepared.run.reviewProvider = providers.reviewProvider;
+    prepared.run.logs.push(
+      makeLog(
+        "info",
+        `Provider switched on resume: code=${prepared.run.codeProvider}, review=${prepared.run.reviewProvider}.`,
+        prepared.run.currentStage,
+      ),
+    );
+    await saveRun(prepared.run);
+  }
   void executeRun(prepared.run, prepared.args, prepared.checkpoint).catch(
     async (err) => {
       await restoreFailedResume(prepared.run, err).catch(() => {});

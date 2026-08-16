@@ -8,6 +8,7 @@ import {
   RunOptionsSchema,
   isValidRunId,
   repoNameProblem,
+  ProviderNameSchema,
   type RunSummary,
 } from "../shared/schemas.js";
 import {
@@ -536,13 +537,28 @@ app.post(
   }),
 );
 
+const ProviderSwitchSchema = z
+  .object({
+    codeProvider: ProviderNameSchema.optional(),
+    reviewProvider: ProviderNameSchema.optional(),
+  })
+  .strict();
+
 app.post(
   "/api/runs/:runId/resume",
   wrap(async (req, res) => {
     const runId = validRunIdParam(req, res);
     if (runId === null) return;
     try {
-      const run = await resumeRun(runId, config, secrets);
+      // Optional provider switch for this resume (owner order 2026-08-16:
+      // move an in-flight run off the free route without losing its paid
+      // checkpoint). Unknown providers are rejected by resumeRun.
+      const wanted = ProviderSwitchSchema.safeParse(req.body ?? {});
+      if (!wanted.success) {
+        res.status(400).json({ error: wanted.error.issues[0]?.message ?? "Bad providers." });
+        return;
+      }
+      const run = await resumeRun(runId, config, secrets, wanted.data);
       res.status(202).json({ ok: true, runId: run.id });
     } catch (err) {
       if (err instanceof RunNotResumableError) {
