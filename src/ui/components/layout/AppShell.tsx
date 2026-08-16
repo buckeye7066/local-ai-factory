@@ -21,7 +21,6 @@ import type { Theme } from "../../lib/useTheme.js";
 export function AppShell({
   active,
   onNavigate,
-  onDemo,
   health,
   theme,
   onToggleTheme,
@@ -30,7 +29,6 @@ export function AppShell({
 }: {
   active: NavKey | "run";
   onNavigate: (key: NavKey) => void;
-  onDemo: () => void;
   health: Health | null;
   theme: Theme;
   onToggleTheme: () => void;
@@ -59,7 +57,7 @@ export function AppShell({
               : "border-white/[0.06] bg-white/[0.02] backdrop-blur-xl",
           )}
         >
-          <Sidebar active={active} onNavigate={onNavigate} onDemo={onDemo} />
+          <Sidebar active={active} onNavigate={onNavigate} />
         </aside>
 
         {/* Mobile sidebar overlay */}
@@ -88,10 +86,6 @@ export function AppShell({
                 <Sidebar
                   active={active}
                   onNavigate={nav}
-                  onDemo={() => {
-                    onDemo();
-                    setMenuOpen(false);
-                  }}
                   onClose={() => setMenuOpen(false)}
                 />
               </motion.aside>

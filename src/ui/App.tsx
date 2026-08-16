@@ -85,16 +85,21 @@ export function App() {
     };
   }, [refreshRuns]);
 
-  // Start a run (live or demo).
+  // Start a run. Every run is real work — there is no demo/simulate path.
   const startRun = useCallback(
     async (idea: string, options: RunOptions) => {
       setStarting(true);
       try {
         if (options.epic) {
           const { epic: _epic, ...rest } = options;
-          const { slices } = await api.createEpic(idea, rest);
-          toast.success("Evolution started", {
-            description: `Planned into ${slices} slices - each builds, verifies, and merges on its own. Watch the runs list as they land.`,
+          await api.createEpic(idea, rest);
+          // Planning happens in the BACKGROUND after this 202, so the slice
+          // count does not exist yet. Report only what actually happened —
+          // the request was accepted — instead of asserting a plan that may
+          // still fail. (This previously read "Planned into undefined slices".)
+          toast.success("Evolution accepted", {
+            description:
+              "Planning it into slices now — this can take a few minutes. Each slice builds, verifies, and merges on its own; they appear in the runs list as they are planned.",
           });
           refreshRuns();
           return;
@@ -105,7 +110,7 @@ export function App() {
         setView("run");
         lastStatus.current = "queued";
         toast.success("Factory run started", {
-          description: options.demo ? "Demo mode — offline mock provider." : idea,
+          description: idea,
         });
         refreshRuns();
       } catch (e) {
@@ -119,10 +124,6 @@ export function App() {
     },
     [refreshRuns],
   );
-
-  const startDemo = useCallback(() => {
-    startRun("Build a Bible reading habit tracker", { demo: true });
-  }, [startRun]);
 
   // Toast + refresh on terminal transitions; fetch file contents as they grow.
   useEffect(() => {
@@ -243,7 +244,6 @@ export function App() {
     <AppShell
       active={view}
       onNavigate={(k) => setView(k)}
-      onDemo={startDemo}
       health={health}
       theme={theme}
       onToggleTheme={toggle}
@@ -496,8 +496,18 @@ function WorkspacesView({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        copy(r.workspacePath ?? "");
-                        toast.success("Workspace path copied");
+                        // `copy` resolves false when the Clipboard API is
+                        // blocked. Await it and report the real outcome — a
+                        // success toast over a failed copy is a small lie the
+                        // owner only discovers on paste.
+                        void copy(r.workspacePath ?? "").then((ok) => {
+                          if (ok) toast.success("Workspace path copied");
+                          else
+                            toast.error("Could not copy the workspace path", {
+                              description:
+                                "The clipboard is unavailable — select the path and copy it manually.",
+                            });
+                        });
                       }}
                       aria-label="Copy workspace path"
                       className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white"

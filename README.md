@@ -7,8 +7,9 @@ test, and self-repair a small working app, then hand you a report and a
 workspace folder you can open and run.
 
 It ships with a premium control-room UI ("Factory Deck") that visualizes the
-assembly line in real time, and a fully offline **demo mode** so you can see the
-whole thing animate before adding any API keys.
+assembly line in real time. There is **no demo, mock, dry-run, or simulate
+mode**: every run does real work against real providers, so what you watch on
+the deck is what actually happened.
 
 ---
 
@@ -18,7 +19,7 @@ whole thing animate before adding any API keys.
 Idea
   └─▶ Intake → Product Spec → Architecture → Task Plan
         → File Generation → Write to Workspace
-        → Test Generation → (install / typecheck / test*)
+        → Test Generation → (install / typecheck / test)
         → QA Critique → Repair Loop ⟲ (bounded) → Final Report
 ```
 
@@ -41,8 +42,6 @@ Live runs now research beyond named dependencies. Before planning is finalized, 
 6. passes the selected approach and enforced reuse mode into planning and file generation.
 
 Unknown, proprietary, or reciprocal licenses cannot be promoted to direct source reuse by a model response. Those candidates remain reference-only or are implemented as clean-room patterns. The crawl is bounded by query, candidate, file, byte, and timeout budgets so research cannot run indefinitely.
-
-\* Commands only run when you opt out of dry-run mode (see Security below).
 
 ---
 
@@ -72,10 +71,11 @@ DEFAULT_REVIEW_PROVIDER=openai
 MAX_REPAIR_LOOPS=3
 MAX_MODEL_CALLS_PER_RUN=30
 WORKSPACE_ROOT=./workspaces
-DRY_RUN_COMMANDS=true
 ```
 
-> You do **not** need any keys to try it — demo mode runs fully offline.
+> A run needs a real provider. Start the FREE route ("Claude Code - FREE
+> (Ollama)") or set a paid key — there is no offline fallback, because a run
+> with no provider must fail loudly rather than fabricate a result.
 
 ---
 
@@ -86,8 +86,8 @@ pnpm dev
 ```
 
 This starts the local backend (`http://127.0.0.1:5179`) and the Factory Deck UI
-(`http://localhost:5190`). Open the UI, type an idea (or click **Demo Mode** in
-the sidebar), and watch the assembly line run.
+(`http://localhost:5190`). Open the UI, type an idea, and watch the assembly
+line run.
 
 - **New Run** — the hero screen with provider-routing cards and safety preview.
 - **Stop** — a running run can be cancelled from the run header (or
@@ -110,16 +110,6 @@ pnpm factory "build me a family chore tracker with rewards"
 
 Streams stage-by-stage progress and prints the final workspace path + report.
 
-## Demo mode (no keys required)
-
-```bash
-pnpm demo
-```
-
-Uses the **stub provider**: it generates a tiny but real Vite + React + TS app,
-injects one QA issue, runs exactly one repair loop, and finishes with a passing
-report — so you can see the whole flow (and every animation) offline.
-
 ---
 
 ## Security & safety boundaries
@@ -136,14 +126,15 @@ This is designed to be safe to run on your own machine:
   (`src/server/workspace/fileWriter.ts`).
 - **Commands are conservative.** Only an allowlist (npm/pnpm `install` / `build`
   / `test` / `typecheck`) may run, and only *inside* a workspace, with `shell`
-  disabled (no injection surface). With `DRY_RUN_COMMANDS=true` (the default),
-  commands are **previewed, not executed** (`src/server/workspace/commandRunner.ts`).
+  disabled (no injection surface). Commands really execute — there is no
+  preview/dry-run mode (`src/server/workspace/commandRunner.ts`); the allowlist
+  and the workspace jail are the safety boundary.
 
 ## Cost control
 
 - `MAX_MODEL_CALLS_PER_RUN` hard-caps LLM calls per run.
 - `MAX_REPAIR_LOOPS` bounds the repair loop.
-- Demo mode makes **zero** API calls.
+- The FREE route is the default primary; paid providers are a rescue tier.
 
 ## Changing models
 
@@ -162,7 +153,6 @@ the active values.
 | `pnpm server` | Backend only (tsx watch) |
 | `pnpm ui` | Vite UI only |
 | `pnpm factory "<idea>"` | Run the factory from the CLI |
-| `pnpm demo` | Offline stub demo run |
 | `pnpm test` | Vitest suite |
 | `pnpm typecheck` | Type-check server + UI |
 | `pnpm build` | Type-check + production UI build |

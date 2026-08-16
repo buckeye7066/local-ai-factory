@@ -9,20 +9,37 @@ import type { RunOptions } from "../shared/schemas.js";
 /**
  * cli/factory.ts — run the assembly line from the terminal.
  *
- *   pnpm factory "build me a habit tracker"   (live — requires paid keys)
- *   pnpm demo                                 (explicit offline mock; not readiness)
+ *   pnpm factory "build me a habit tracker"   (real work against real providers)
+ *
+ * There is no demo / mock / simulate mode: every invocation does real work
+ * (owner order — no dry-run or report-only modes in owner tooling). `--demo`
+ * was removed and now EXITS NON-ZERO rather than silently proceeding.
  */
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function parseArgs(argv: string[]): { idea: string; demo: boolean } {
+/** Flags that were removed outright; naming one is a hard error, not a warning. */
+const REMOVED_FLAGS = ["--demo", "--dry-run", "--simulate", "--report-only"];
+
+function parseArgs(argv: string[]): { idea: string } {
   const args = argv.slice(2);
-  const demo = args.includes("--demo");
+  const named = REMOVED_FLAGS.filter((f) => args.includes(f));
+  if (named.length) {
+    console.error(
+      `${COLORS.red}✘ ${named.join(", ")} ${named.length > 1 ? "were" : "was"} removed.${COLORS.reset}`,
+    );
+    console.error(
+      `${COLORS.dim}  Factory Deck has no demo, mock, simulate, or dry-run mode —\n` +
+        `  every run does real work against real providers. Start the FREE route\n` +
+        `  ("Claude Code - FREE (Ollama)") or set ANTHROPIC_API_KEY / OPENAI_API_KEY.${COLORS.reset}`,
+    );
+    process.exit(2);
+  }
   const idea = args
     .filter((a) => !a.startsWith("--"))
     .join(" ")
     .trim();
-  return { idea, demo };
+  return { idea };
 }
 
 const COLORS: Record<string, string> = {
@@ -48,7 +65,7 @@ function paint(kind: string, msg: string): string {
 }
 
 async function main() {
-  const { idea: parsedIdea, demo } = parseArgs(process.argv);
+  const { idea: parsedIdea } = parseArgs(process.argv);
   const idea = parsedIdea || "Build a Bible reading habit tracker";
   const config = getConfig();
   const secrets = getSecrets();
@@ -58,7 +75,7 @@ async function main() {
   );
   console.log(`${COLORS.dim}  idea: ${idea}${COLORS.reset}\n`);
 
-  const options: RunOptions = { demo };
+  const options: RunOptions = {};
   let started;
   try {
     started = startRun({ idea, options, config, secrets });
@@ -66,7 +83,8 @@ async function main() {
     if (err instanceof MissingProviderCredentialError) {
       console.error(`${COLORS.red}✘ ${err.message}${COLORS.reset}`);
       console.error(
-        `${COLORS.dim}  Pass --demo for offline mock only (not purpose fulfillment).${COLORS.reset}`,
+        `${COLORS.dim}  Start the FREE route ("Claude Code - FREE (Ollama)") or set a paid\n` +
+          `  ANTHROPIC_API_KEY / OPENAI_API_KEY. There is no offline fallback.${COLORS.reset}`,
       );
       process.exit(1);
     }

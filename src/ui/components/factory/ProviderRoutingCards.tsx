@@ -22,19 +22,12 @@ export type PaidRouting = "auto" | "anthropic" | "openai";
  */
 export function ProviderRoutingCards({
   health,
-  demo,
-  onToggleDemo,
   routing,
   onRoutingChange,
-  allowDemo = true,
 }: {
   health: Health | null;
-  demo: boolean;
-  onToggleDemo: (demo: boolean) => void;
   routing: PaidRouting;
   onRoutingChange: (routing: PaidRouting) => void;
-  /** Hide the mock card where demo mode does not apply (extend mode). */
-  allowDemo?: boolean;
 }) {
   const freeReady = health?.freeConfigured ?? false;
   const anthropicReady = health?.anthropicConfigured ?? false;
@@ -52,13 +45,12 @@ export function ProviderRoutingCards({
           : "Click to return to free-first",
       icon: Gift,
       ready: freeReady,
-      selected: !demo && routing === "auto",
+      selected: routing === "auto",
       accent: "emerald" as const,
       serving: serving === "free",
       calls: counts?.free,
       onClick: () => {
         if (!freeReady) return;
-        onToggleDemo(false);
         onRoutingChange("auto");
       },
     },
@@ -71,13 +63,12 @@ export function ProviderRoutingCards({
           : "Paid rescue — click to pin as primary",
       icon: Sparkles,
       ready: anthropicReady,
-      selected: !demo && routing === "anthropic",
+      selected: routing === "anthropic",
       accent: "violet" as const,
       serving: serving === "anthropic",
       calls: counts?.anthropic,
       onClick: () => {
         if (!anthropicReady) return;
-        onToggleDemo(false);
         onRoutingChange("anthropic");
       },
     },
@@ -90,21 +81,19 @@ export function ProviderRoutingCards({
           : "Paid rescue — click to pin as primary",
       icon: Cpu,
       ready: openaiReady,
-      selected: !demo && routing === "openai",
+      selected: routing === "openai",
       accent: "cyan" as const,
       serving: serving === "openai",
       calls: counts?.openai,
       onClick: () => {
         if (!openaiReady) return;
-        onToggleDemo(false);
         onRoutingChange("openai");
       },
     },
   ];
-  // The "Mock Demo" card is gone (owner doctrine 2026-08-15: no test-run or
-  // simulate modes in owner tooling — see feedback-no-dry-runs-ever). Demo
-  // remains an internal test-suite substrate only, never an owner surface.
-  void allowDemo;
+  // There is no "Mock Demo" card and no demo prop: no test-run or simulate
+  // modes exist in owner tooling. The mock/stub providers remain an internal
+  // unit-test substrate only, never an owner surface.
 
   return (
     <motion.div
@@ -157,9 +146,7 @@ export function ProviderRoutingCards({
             <p className="mt-3 text-sm font-semibold text-white">{c.title}</p>
             <p className="text-xs text-slate-400">{c.role}</p>
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              {c.key === "mock" ? (
-                <Badge tone="emerald">Always available</Badge>
-              ) : c.key === "free" ? (
+              {c.key === "free" ? (
                 c.ready ? (
                   <Badge tone="emerald" icon={<Check className="h-3 w-3" />}>
                     Free route ready

@@ -39,8 +39,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ idea, options }),
     }),
+  /**
+   * Start a large evolution. The server responds 202 with ONLY `epicId` and
+   * plans in the background (planning alone can take minutes on the free
+   * route), so there is no slice count to report yet — claiming one here
+   * rendered "Planned into undefined slices."
+   */
   createEpic: (idea: string, options: RunOptions) =>
-    jsonFetch<{ epicId: string; slices: number }>("/api/epics", {
+    jsonFetch<{ epicId: string }>("/api/epics", {
       method: "POST",
       body: JSON.stringify({ idea, options }),
     }),

@@ -22,3 +22,7 @@ workspaces/
 .DS_Store
 Thumbs.db
 *.tmp
+
+# Agent worktrees + one-off run dumps (local debugging artifacts, never source)
+.claude/
+/run-*.json
