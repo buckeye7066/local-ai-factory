@@ -800,6 +800,28 @@ async function executeRun(
               .join(", ")}.`,
           );
         }
+        // An incomplete build FAILS LOUDLY with every missing category named.
+        // Run f0077040: 12 of 13 categories silently produced nothing and the
+        // "build" was one README that QA then honestly passed. A build that
+        // cannot fulfill the plan is a failed build, not a small success.
+        for (const f of concurrentResult.failures) {
+          log("warning", `Build category FAILED on every provider: ${f.id} — ${f.reason}`);
+        }
+        for (const id of concurrentResult.empties) {
+          log("warning", `Build category returned no files: ${id}`);
+        }
+        const missing =
+          concurrentResult.failures.length + concurrentResult.empties.length;
+        if (missing > 0) {
+          throw new Error(
+            `Build incomplete: ${missing} categor${missing === 1 ? "y" : "ies"} produced no files (` +
+              [
+                ...concurrentResult.failures.map((f) => f.id),
+                ...concurrentResult.empties,
+              ].join(", ") +
+              `). The run fails honestly instead of delivering a fraction of the plan.`,
+          );
+        }
         build = concurrentResult.build;
       } else {
         log("model_call", `File Builder agent (${code.name})…`);

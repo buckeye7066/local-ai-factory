@@ -134,3 +134,60 @@ describe("buildFilesConcurrently", () => {
     expect(result.build.files.length).toBe(2);
   });
 });
+
+describe("no silent category loss (run f0077040 class)", () => {
+  class EmptyForCategory extends FakeBuilderProvider {
+    constructor(name: "free" | "anthropic" | "openai", readonly emptyCategory: string) {
+      super(name);
+    }
+    override async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
+      const match = input.prompt.match(/"category":"(\w+)"/);
+      if (match && match[1] === this.emptyCategory) {
+        return input.schema.parse({ files: [] }) as T;
+      }
+      return super.generateJson(input);
+    }
+  }
+
+  it("an empty category fails schema (.min(1)) and is NAMED in failures - never silent", async () => {
+    const p1 = new EmptyForCategory("free", "backend");
+    const p2 = new EmptyForCategory("anthropic", "backend");
+    const plan = planWithCategories("frontend", "backend");
+    const existing = {
+      fileTreeExcerpt: "a.ts",
+      manifestExcerpt: "{}",
+      readmeExcerpt: "",
+    };
+    const result = await buildFilesConcurrently(p1, [p1, p2], spec, arch, plan, existing);
+    expect(result.failures.map((f) => f.id)).toContain("backend");
+    expect(result.build.files.map((f) => f.path)).toEqual(["frontend.txt"]);
+  });
+
+  class FailForCategory extends FakeBuilderProvider {
+    constructor(name: "free" | "anthropic" | "openai", readonly failCategory: string) {
+      super(name);
+    }
+    override async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
+      const match = input.prompt.match(/"category":"(\w+)"/);
+      if (match && match[1] === this.failCategory) {
+        throw new Error(`${this.name} exploded on ${this.failCategory}`);
+      }
+      return super.generateJson(input);
+    }
+  }
+
+  it("a category that fails on every provider is reported with its reason", async () => {
+    const p1 = new FailForCategory("free", "backend");
+    const p2 = new FailForCategory("anthropic", "backend");
+    const plan = planWithCategories("frontend", "backend");
+    const existing = {
+      fileTreeExcerpt: "a.ts",
+      manifestExcerpt: "{}",
+      readmeExcerpt: "",
+    };
+    const result = await buildFilesConcurrently(p1, [p1, p2], spec, arch, plan, existing);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].id).toBe("backend");
+    expect(result.failures[0].reason).toMatch(/exploded on backend/);
+  });
+});
