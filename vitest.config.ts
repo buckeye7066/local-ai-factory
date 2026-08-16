@@ -1,9 +1,22 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // UI tests are .tsx. vitest.config.ts does not inherit vite.config.ts's
+  // react plugin, so the automatic JSX runtime is enabled here explicitly
+  // (matching "jsx": "react-jsx" in tsconfig.ui.json).
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
-    include: ["src/server/**/*.test.ts"],
+    include: ["src/server/**/*.test.ts", "src/ui/**/*.test.tsx"],
+    // UI tests need a DOM; they opt in per-file with a
+    // `@vitest-environment happy-dom` docblock, so server tests keep the
+    // faster node environment and no deprecated config option is needed.
+    //
+    // happy-dom, NOT jsdom: jsdom@30 pulls undici@8, which calls
+    // `webidl.util.markAsUncloneable` - absent on Node 20, the version CI
+    // runs and the floor this package declares in `engines`. That combination
+    // made the UI test FILE fail to load in CI (66/67 files ran) while
+    // passing on a Node 24 dev machine. happy-dom has no undici dependency.
     // Isolate the run-history store so end-to-end (stub) run tests never write
     // into the user's real .factory/ history. runsStore reads FACTORY_DATA_DIR
     // at import time; vitest applies `env` before test modules load. The global
