@@ -183,23 +183,50 @@ Write-Host ""
 # Invoke node directly: `pnpm server` as a child process exits silently with
 # code 0 on this machine (known trap) - the direct binary is also faster.
 #
-# The supervisor restarts the backend if it dies unexpectedly. A CLEAN exit
-# (code 0) is the user closing the deck and is never restarted; only a crash
-# is. Bounded at 5 attempts so a permanently broken build fails visibly instead
-# of respawning forever.
+# The supervisor restarts the backend if it dies unexpectedly - but ONLY when a
+# restart could actually help. The decision lives in Get-RestartDecision
+# (scripts/lib/RestartPolicy.ps1) so it is unit-testable without launching the
+# app; see src/server/__tests__/launcherRestartPolicy.test.ts.
+#
+# It refuses to respawn in three cases, which together prevent a console window
+# that reappears the instant it dies:
+#   * exit 0            - the user closed the deck
+#   * exit 78 (FATAL)   - permanent, operator-fixable (refused LAN bind, port
+#                         held by a foreign service); a retry cannot fix it
+#   * two instant deaths - a startup crash (missing dep / bad build / stale
+#                         flag), not a transient fault
+# Transient crashes retry with bounded EXPONENTIAL backoff (2s, 4s, 8s ... 30s).
+. (Join-Path $PSScriptRoot "lib\RestartPolicy.ps1")
+
 $maxAttempts = 5
+$fastFailSeconds = 5
+$consecutiveFastFailures = 0
+$code = 0
 for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-    if ($attempt -gt 1) {
-        Write-Host ""
-        Write-Host "RESTART $attempt/$maxAttempts - the backend exited unexpectedly; relaunching ..." -ForegroundColor Yellow
-    }
+    $startedAt = Get-Date
     & node --import tsx src/server/index.ts
     $code = $LASTEXITCODE
-    if ($code -eq 0) { break }
-    Write-Host "Factory Deck backend exited with code $code." -ForegroundColor Yellow
-    if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
+    $ranFor = ((Get-Date) - $startedAt).TotalSeconds
+
+    if ($ranFor -lt $fastFailSeconds) { $consecutiveFastFailures++ }
+    else { $consecutiveFastFailures = 0 }
+
+    $decision = Get-RestartDecision -ExitCode $code -Attempt $attempt `
+        -MaxAttempts $maxAttempts -RanForSeconds $ranFor `
+        -ConsecutiveFastFailures $consecutiveFastFailures `
+        -FastFailSeconds $fastFailSeconds
+
+    if (-not $decision.Restart) {
+        if ($code -ne 0) {
+            $colour = if ($decision.Fatal) { "Red" } else { "Yellow" }
+            Write-Host ""
+            Write-Host $decision.Reason -ForegroundColor $colour
+        }
+        break
+    }
+
+    Write-Host ""
+    Write-Host $decision.Reason -ForegroundColor Yellow
+    Start-Sleep -Milliseconds $decision.DelayMs
 }
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Gave up after $maxAttempts attempts - see the output above." -ForegroundColor Red
-}
-exit $LASTEXITCODE
+exit $code

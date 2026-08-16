@@ -61,6 +61,7 @@ import {
 } from "./storage/clarificationStore.js";
 import { createFoundryRouter } from "./foundry/router.js";
 import { findRemovedRunOption } from "./removedOptions.js";
+import { FATAL_EXIT_CODE } from "./exitCodes.js";
 
 /**
  * server/index.ts — the LOCAL backend API.
@@ -839,7 +840,7 @@ void pruneOldRuns().then((n) => {
 const bind = resolveBindHost({ bindLan: config.bindLan, token: secrets.authToken });
 if (bind.error) {
   console.error(`[factory] ${bind.error}`);
-  process.exit(1);
+  process.exit(FATAL_EXIT_CODE);
 }
 
 /**
@@ -916,7 +917,8 @@ server.on("error", (err: NodeJS.ErrnoException) => {
         `[factory] port ${config.port} is in use by another (non-Factory Deck) process. ` +
           `Free the port or set PORT to a different value. Exiting.`,
       );
-      process.exit(1);
+      // Permanent until the operator frees the port — restarting cannot fix it.
+      process.exit(FATAL_EXIT_CODE);
     })();
     return;
   }
