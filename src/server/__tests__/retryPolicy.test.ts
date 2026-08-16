@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
 import { withRetry, isNonRetryable } from "../providers/types.js";
 
 function httpError(status: number): Error & { status: number } {
@@ -41,5 +42,31 @@ describe("withRetry", () => {
     });
     expect(result).toBe("ok");
     expect(calls).toBe(2);
+  });
+});
+
+describe("schema failures are not transport faults (2026-08-16)", () => {
+  // Live GrantFlow slice: a ZodError escaping the repair loop was re-run by
+  // withRetry as if it were a network blip — six ~60k-token paid calls
+  // (~$10) for the same missing field. The repair loop already spent its
+  // attempts WITH the error fed back; re-running it from scratch is pure
+  // re-billing.
+  it("classifies a ZodError as non-retryable", () => {
+    const r = z.object({ element: z.string() }).safeParse({});
+    expect(r.success).toBe(false);
+    if (!r.success) expect(isNonRetryable(r.error)).toBe(true);
+  });
+
+  it("withRetry gives a ZodError exactly one attempt", async () => {
+    let calls = 0;
+    await expect(
+      withRetry("test", async () => {
+        calls++;
+        const r = z.object({ element: z.string() }).safeParse({});
+        if (!r.success) throw r.error;
+        return "unreachable";
+      }),
+    ).rejects.toThrow(/failed after 1 attempt/);
+    expect(calls).toBe(1);
   });
 });

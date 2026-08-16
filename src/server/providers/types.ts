@@ -12,6 +12,7 @@ export type {
 export type { ProviderName } from "../../shared/schemas.js";
 
 import type { GenerateJsonInput } from "../../shared/types.js";
+import { ZodError } from "zod";
 
 /** Small helper: sleep used by retry/backoff (kept here so all providers share it). */
 export function sleep(ms: number): Promise<void> {
@@ -24,6 +25,14 @@ export function sleep(ms: number): Promise<void> {
  * failures should surface immediately instead of burning backoff time.
  */
 export function isNonRetryable(err: unknown): boolean {
+  // A schema-validation failure is NOT a transport fault. It escapes
+  // generateJsonWithRepair only after that loop's own repair attempts (which
+  // feed the model the exact Zod issues) are exhausted — re-running the whole
+  // loop from scratch re-bills the full input for the same guess. Measured
+  // 2026-08-16, live GrantFlow slice: one 60k-token competitive-selection
+  // prompt x (2 repair attempts) x (3 withRetry attempts) = six paid calls,
+  // ~$10, and the run still died on the identical missing field.
+  if (err instanceof ZodError) return true;
   const status = (err as { status?: unknown })?.status;
   if (typeof status !== "number") return false; // network errors etc. → retry
   return status >= 400 && status < 500 && status !== 408 && status !== 429;
@@ -268,6 +277,74 @@ function widenBudget(current: number): number {
  * The final attempt fails LOUDLY, naming the schema so the run log says which
  * stage gave up.
  */
+/**
+ * Render a Zod schema as the literal JSON shape the model must produce.
+ *
+ * THE MODEL WAS NEVER SHOWN THE FIELD NAMES (found 2026-08-16, live GrantFlow
+ * slice). Every provider's system prompt said only 'match the "<schemaName>"
+ * shape' — the name, not the shape. The model had to GUESS key names, and for
+ * CompetitiveSelection it guessed everything except `selected[].element`,
+ * failed validation identically on all six billed attempts (~$10), and killed
+ * the run. Zod defaults had been masking the gap: most fields are `.default()`
+ * so a wrong guess usually cost nothing — the required-without-default fields
+ * are exactly where guessing dies.
+ *
+ * Deliberately a compact TS-ish rendering, not full JSON Schema: it goes in a
+ * prompt, so field NAMES and requiredness matter, prose does not. `?` marks
+ * optional-or-defaulted fields. Depth/length capped — a pathological schema
+ * degrades to a truncated hint, never a prompt bomb.
+ */
+export function describeZodShape(schema: unknown, depth = 0): string {
+  if (depth > 6) return "…";
+  const def = (schema as { _def?: Record<string, unknown> })?._def;
+  if (!def) return "any";
+  const t = def.typeName as string | undefined;
+  switch (t) {
+    case "ZodObject": {
+      const shapeRaw = def.shape;
+      const shape: Record<string, unknown> =
+        typeof shapeRaw === "function"
+          ? (shapeRaw as () => Record<string, unknown>)()
+          : ((shapeRaw as Record<string, unknown>) ?? {});
+      const fields = Object.entries(shape).map(([key, sub]) => {
+        const subDef = (sub as { _def?: { typeName?: string } })?._def;
+        const optional =
+          subDef?.typeName === "ZodOptional" || subDef?.typeName === "ZodDefault";
+        return `"${key}"${optional ? "?" : ""}: ${describeZodShape(sub, depth + 1)}`;
+      });
+      return `{ ${fields.join(", ")} }`;
+    }
+    case "ZodArray":
+      return `[${describeZodShape(def.type, depth + 1)}, …]`;
+    case "ZodEnum":
+      return (def.values as string[]).map((v) => JSON.stringify(v)).join(" | ");
+    case "ZodLiteral":
+      return JSON.stringify(def.value);
+    case "ZodUnion":
+      return (def.options as unknown[])
+        .map((o) => describeZodShape(o, depth + 1))
+        .join(" | ");
+    case "ZodOptional":
+    case "ZodDefault":
+      return describeZodShape(def.innerType, depth + 1);
+    case "ZodNullable":
+      return `${describeZodShape(def.innerType, depth + 1)} | null`;
+    case "ZodRecord":
+      return `{ [key: string]: ${describeZodShape(def.valueType, depth + 1)} }`;
+    case "ZodString":
+      return "string";
+    case "ZodNumber":
+      return "number";
+    case "ZodBoolean":
+      return "boolean";
+    default:
+      return "any";
+  }
+}
+
+/** Cap for the rendered shape inside a prompt. */
+const MAX_SHAPE_CHARS = 4000;
+
 export async function generateJsonWithRepair<T>(args: {
   input: GenerateJsonInput<T>;
   /** Perform one call and return the extracted value (may throw). */
@@ -278,7 +355,23 @@ export async function generateJsonWithRepair<T>(args: {
   baseMaxTokens: number;
 }): Promise<T> {
   const { input, call, attempts, baseMaxTokens } = args;
-  let prompt = input.prompt;
+  // The shape rides on EVERY attempt (first and repairs alike): field names
+  // are facts the model cannot be expected to guess. See describeZodShape.
+  let shape = "";
+  try {
+    shape = describeZodShape(input.schema);
+  } catch {
+    shape = ""; // a shape we cannot render must never break the call itself
+  }
+  if (shape.length > MAX_SHAPE_CHARS) shape = shape.slice(0, MAX_SHAPE_CHARS) + "…";
+  const basePrompt = shape
+    ? `${input.prompt}
+
+The "${input.schemaName}" JSON value must match EXACTLY this shape — the field
+names are literal and required unless marked with "?":
+${shape}`
+    : input.prompt;
+  let prompt = basePrompt;
   let maxTokens = baseMaxTokens;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -294,7 +387,7 @@ export async function generateJsonWithRepair<T>(args: {
           `${input.schemaName}: the model returned no usable JSON after ${attempts} attempt(s). Last parse error: ${err.message}`,
         );
       }
-      prompt = `${input.prompt}
+      prompt = `${basePrompt}
 
 Your previous response contained NO JSON and could not be parsed (${err.message}).
 Do NOT explain what you are about to do. Do NOT write a preamble, a plan, or any
@@ -310,7 +403,7 @@ short so the whole value fits comfortably in the response limit.`;
     // Out of attempts: parse again so the caller gets the real ZodError.
     if (last) return input.schema.parse(raw);
 
-    prompt = `${input.prompt}
+    prompt = `${basePrompt}
 
 Your previous JSON failed schema validation for "${input.schemaName}".
 Issues (truncated): ${JSON.stringify(parsed.error.issues.slice(0, 12))}
