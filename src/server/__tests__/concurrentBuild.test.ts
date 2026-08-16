@@ -159,7 +159,7 @@ describe("no silent category loss (run f0077040 class)", () => {
       readmeExcerpt: "",
     };
     const result = await buildFilesConcurrently(p1, [p1, p2], spec, arch, plan, existing);
-    expect(result.failures.map((f) => f.id)).toContain("backend");
+    expect(result.failures.some((f) => f.id.includes("backend"))).toBe(true);
     expect(result.build.files.map((f) => f.path)).toEqual(["frontend.txt"]);
   });
 
@@ -187,7 +187,7 @@ describe("no silent category loss (run f0077040 class)", () => {
     };
     const result = await buildFilesConcurrently(p1, [p1, p2], spec, arch, plan, existing);
     expect(result.failures).toHaveLength(1);
-    expect(result.failures[0].id).toBe("backend");
+    expect(result.failures[0].id).toContain("backend");
     expect(result.failures[0].reason).toMatch(/exploded on backend/);
   });
 });

@@ -43,15 +43,7 @@ export interface ConcurrentBuildResult {
   empties: string[];
 }
 
-function groupTasksByCategory(plan: TaskPlan): Map<string, TaskPlan["tasks"]> {
-  const groups = new Map<string, TaskPlan["tasks"]>();
-  for (const task of plan.tasks) {
-    const list = groups.get(task.category) ?? [];
-    list.push(task);
-    groups.set(task.category, list);
-  }
-  return groups;
-}
+
 
 export async function buildFilesConcurrently(
   /** The resilient default provider (e.g. the free->paid failover chain), used
@@ -68,10 +60,9 @@ export async function buildFilesConcurrently(
   research?: ResearchFindings,
   additionalSources?: AdditionalSourceContext[],
 ): Promise<ConcurrentBuildResult> {
-  const groups = groupTasksByCategory(plan);
   const configured = pool.filter((p) => p.isConfigured());
 
-  if (configured.length < 2 || groups.size < 2) {
+  if (configured.length < 2 || plan.tasks.length < 2) {
     const build = await fileBuilderAgent(
       { provider: primary },
       spec,
@@ -84,21 +75,25 @@ export async function buildFilesConcurrently(
     return { build, tasksByProvider: {}, usedConcurrency: false, failures: [], empties: [] };
   }
 
-  const tasks: DispatchTask<FileBuild>[] = [...groups.entries()].map(
-    ([category, categoryTasks]) => ({
-      id: category,
-      run: (provider) =>
-        fileBuilderAgent(
-          { provider },
-          spec,
-          arch,
-          { tasks: categoryTasks },
-          existing,
-          research,
-          additionalSources,
-        ),
-    }),
-  );
+  // PER-TASK dispatch (owner order 2026-08-16: fix known weaknesses before
+  // they fail). Per-CATEGORY dispatch demanded every file of a category in a
+  // single bounded response - lesson-sized content truncated mid-JSON and
+  // failed schema on EVERY backend, which is how 12 of 13 categories died in
+  // run f0077040. One task per call keeps each response small enough to
+  // survive every provider's output ceiling.
+  const tasks: DispatchTask<FileBuild>[] = plan.tasks.map((task, i) => ({
+    id: `${task.category}#${i + 1} ${task.title}`.slice(0, 100),
+    run: (provider) =>
+      fileBuilderAgent(
+        { provider },
+        spec,
+        arch,
+        { tasks: [task] },
+        existing,
+        research,
+        additionalSources,
+      ),
+  }));
 
   const summary = await dispatchConcurrent(configured, tasks);
   const failed = summary.outcomes.filter((o) => o.error);

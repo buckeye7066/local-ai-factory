@@ -317,6 +317,30 @@ async function executeRun(
     config.maxModelCallsPerRun,
     attribution(rawReview),
   );
+  // CRITICAL-STAGE provider (owner order 2026-08-16: fix known-weak backends
+  // before they fail, don't wait). Spec, architecture, research, planning and
+  // the final report are ONE call each whose quality shapes or judges the
+  // whole run - the free small model demonstrably planned junk and gave up on
+  // competitor research ("no conclusion within 5 steps"). These few calls
+  // prefer the first configured PAID provider (budget-gated like the pool);
+  // free remains the keyless fallback and the builder's bulk free-primary
+  // economics are unchanged.
+  const rawCritical = run.demo
+    ? registry.get("mock")
+    : registry.resolveLive(
+        registry.availablePaid()[0] ?? run.codeProvider,
+        config.defaultCodeProvider,
+      );
+  const criticalCounted = new CountingProvider(
+    rawCritical,
+    run,
+    config.maxModelCallsPerRun,
+    attribution(rawCritical),
+  );
+  const critical: LLMProvider =
+    rawCritical.name === "anthropic" || rawCritical.name === "openai"
+      ? new BudgetGatedProvider(criticalCounted, rawCritical.name)
+      : criticalCounted;
   // Every distinct LIVE backend actually configured (free / anthropic / openai,
   // never the failover chain itself), each still budget-metered — the pool the
   // concurrent builder dispatches independent work across. Demo runs get just
@@ -623,7 +647,7 @@ async function executeRun(
     if (!spec) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "product_spec");
-      log("model_call", `Product Spec agent (${code.name})…`);
+      log("model_call", `Product Spec agent (${critical.name})…`);
       // Give the model the RAW idea (checkpoint.idea), not the redacted
       // persisted copy. Extend mode composes a richer idea string (existing app
       // name + stack + goals) so productSpecAgent stays completely unchanged.
@@ -635,7 +659,7 @@ async function executeRun(
               additionalSourceContexts,
             )
           : checkpoint.idea;
-      spec = await productSpecAgent({ provider: code }, ideaForSpec);
+      spec = await productSpecAgent({ provider: critical }, ideaForSpec);
       if (extendMode && repoAnalysis) {
         // Authoritative override: the existing app's real name is known from
         // disk, not from what the model decided to call it — never trust the
@@ -663,8 +687,8 @@ async function executeRun(
     if (!arch) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "architect");
-      log("model_call", `Architect agent (${code.name})…`);
-      arch = await architectAgent({ provider: code }, spec);
+      log("model_call", `Architect agent (${critical.name})…`);
+      arch = await architectAgent({ provider: critical }, spec);
       await checkpointNow({ architecture: arch });
     }
     // Real research — "if there's a tool out there that can help build this,
@@ -684,9 +708,9 @@ async function executeRun(
       if (!run.demo && config.enableResearch) {
         log(
           "model_call",
-          `Research agent (${code.name}) — searching for tools/APIs that could help…`,
+          `Research agent (${critical.name}) — searching for tools/APIs that could help…`,
         );
-        research = await researchAgent({ provider: code }, spec, arch, {
+        research = await researchAgent({ provider: critical }, spec, arch, {
           competitive: true,
         });
         await checkpointNow({ research });
@@ -708,7 +732,7 @@ async function executeRun(
     if (!plan) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "task_planner");
-      log("model_call", `Task Planner agent (${code.name})…`);
+      log("model_call", `Task Planner agent (${critical.name})…`);
       // Research findings are folded into the architecture text fed to the
       // planner — taskPlannerAgent itself stays completely unchanged, same
       // trick as composeExtendIdea uses for the spec agent.
@@ -721,7 +745,7 @@ async function executeRun(
                 .join("; ")}`,
             }
           : arch;
-      plan = await taskPlannerAgent({ provider: code }, spec, archForPlanning);
+      plan = await taskPlannerAgent({ provider: critical }, spec, archForPlanning);
       await checkpointNow({ plan });
     }
     if (!stageDone("task_planner")) {
@@ -1092,8 +1116,8 @@ async function executeRun(
     if (!report) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "final_review");
-      log("model_call", `Final Reviewer agent (${review.name})…`);
-      report = await finalReviewerAgent({ provider: review }, spec, qa, {
+      log("model_call", `Final Reviewer agent (${critical.name})…`);
+      report = await finalReviewerAgent({ provider: critical }, spec, qa, {
         repairLoops: run.repairLoops,
         workspacePath,
         providerUsage: run.providerUsage,
