@@ -68,6 +68,8 @@ import {
 } from "./cancellation.js";
 import { runRepairLoop } from "./repairLoop.js";
 import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
+import { groundFinalReport } from "./reportGrounding.js";
+import { foldTestExit, freshTestVerdict, testStatusFor } from "./testVerdict.js";
 import { classifyEnvironmentFailure } from "./envFailure.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
 import { architectAgent } from "../agents/architectAgent.js";
@@ -95,6 +97,23 @@ export interface StartRunArgs {
   options: RunOptions;
   config: AppConfig;
   secrets: AppSecrets;
+}
+
+/**
+ * What one writeBuild call actually did.
+ *
+ * The invariant the owner's no-silent-no-op rule demands:
+ *   candidates === written + refusals.length
+ * A stage that produced files but wrote none must be LOUD, never a success
+ * line quoting the model's output count.
+ */
+export interface WriteTally {
+  /** Files the stage handed to writeBuild. */
+  candidates: number;
+  /** Files that genuinely reached disk. */
+  written: number;
+  /** Files a guard refused, each with the reason. */
+  refusals: Array<{ path: string; reason: string }>;
 }
 
 /** Raised when the overall run wall-clock timeout fires. */
@@ -416,11 +435,59 @@ async function executeRun(
     checkpoint.files.map((file) => [file.path, file]),
   );
 
+  /**
+   * Every generated file a guard refused this run, across all stages. Carried
+   * into the final report so a refusal is surfaced to the owner rather than
+   * living only in a log line they may never scroll back to.
+   */
+  const writeRefusals: Array<{ path: string; reason: string }> = [];
+
+  /**
+   * Report a write tally honestly: never announce work that was refused, and
+   * make a zero-write stage LOUD rather than a quiet success line.
+   */
+  const reportWrites = (tally: WriteTally, stage: StageId, noun: string) => {
+    const { candidates, written, refusals } = tally;
+    if (candidates === 0) return;
+    if (written === 0) {
+      log(
+        "warning",
+        `NO ${noun.toUpperCase()} REACHED DISK: all ${candidates} generated file(s) were refused — ` +
+          refusals.map((r) => `${r.path} (${r.reason})`).join("; "),
+        stage,
+      );
+      return;
+    }
+    if (refusals.length) {
+      log(
+        "warning",
+        `Wrote ${written} of ${candidates} ${noun} file(s); ${refusals.length} refused — ` +
+          refusals.map((r) => `${r.path} (${r.reason})`).join("; "),
+        stage,
+      );
+      return;
+    }
+    log("success", `Wrote ${written} ${noun} file(s).`, stage);
+  };
+
+  /**
+   * Write a stage's generated files and report EXACTLY what reached disk.
+   *
+   * Three guards below can refuse a file (blind rewrite, protected host file,
+   * undeclared dependency). Callers used to log the count of files the MODEL
+   * PRODUCED, so a stage that refused every write still announced "Generated
+   * N files" — the silent-overclaim defect. The tally returned here is the
+   * only honest count, and it always satisfies:
+   *
+   *     incoming.length === written + refused
+   */
   const writeBuild = async (
     workspacePath: string,
     incoming: { path: string; purpose: string; contents: string; edits?: FileEdit[] }[],
     stage: StageId,
-  ) => {
+  ): Promise<WriteTally> => {
+    const refusals: Array<{ path: string; reason: string }> = [];
+    let written = 0;
     // A cancel during a stage must stop further file writes, not only at stage
     // boundaries — check before touching the workspace.
     throwIfCancelled(run.id);
@@ -436,11 +503,9 @@ async function executeRun(
         edits: f.edits ?? [],
       });
       if (resolved.contents === null) {
-        log(
-          "warning",
-          `BLIND REWRITE REFUSED: ${f.path} — ${resolved.reason}`,
-          stage,
-        );
+        const reason = resolved.reason ?? "refused";
+        log("warning", `WRITE REFUSED: ${f.path} — ${reason}`, stage);
+        refusals.push({ path: f.path, reason });
         continue;
       }
       let finalContents = resolved.contents;
@@ -454,11 +519,13 @@ async function executeRun(
       // additive manifest edits still pass. Inert for new-app workspaces.
       const verdict = assessProtectedHostWrite(workspacePath, f.path, finalContents);
       if (verdict.refused) {
+        const reason = `protected host file — ${verdict.reason}`;
         log(
           "warning",
           `PROTECTED HOST FILE: refused generated write of ${f.path} — ${verdict.reason}`,
           stage,
         );
+        refusals.push({ path: f.path, reason });
         continue;
       }
       // PHANTOM DEPENDENCIES: a generated file may only import packages the
@@ -480,24 +547,32 @@ async function executeRun(
       }
       if (phantom.corrected) finalContents = phantom.corrected;
       if (phantom.refused) {
+        const reason = `undeclared dependency — ${phantom.reason}`;
         log(
           "warning",
           `UNDECLARED DEPENDENCY in ${f.path} — ${phantom.reason}`,
           stage,
         );
+        refusals.push({ path: f.path, reason });
         continue;
       }
       const res = await writeWorkspaceFile(workspacePath, f.path, finalContents);
       // And again after the awaited write, before we record/log/persist it.
       throwIfCancelled(run.id);
       const status: FileContent["status"] = res.existed ? "modified" : "generated";
+      written++;
       files.set(res.path, {
         path: res.path,
         purpose: f.purpose,
         language: res.language,
         size: res.size,
         status,
-        contents: f.contents,
+        // `finalContents`, NOT the model's `f.contents`. The two diverge
+        // whenever anchored edits were applied to the real file or a phantom
+        // import was corrected in place. Storing the model's copy left QA
+        // reviewing text that is not on disk, and served the same stale text
+        // to the UI and the persisted run record.
+        contents: finalContents,
       });
       log(
         "file_write",
@@ -508,6 +583,8 @@ async function executeRun(
     run.files = summarize([...files.values()]);
     saveRunFiles(run.id, [...files.values()]);
     await checkpointNow({ files: [...files.values()] });
+    writeRefusals.push(...refusals);
+    return { candidates: incoming.length, written, refusals };
   };
 
   const persistAttribution = async (
@@ -985,12 +1062,16 @@ async function executeRun(
           `Builder stage was marked done but ${missingFromWorkspace.length} of ${build.files.length} generated file(s) were never written — writing them now.`,
         );
       }
-      await writeBuild(
+      const builderTally = await writeBuild(
         workspacePath,
         stageDone("builder") ? missingFromWorkspace : build.files,
         "builder",
       );
-      log("success", `Generated ${build.files.length} files.`);
+      // HONEST COUNT. This used to read `Generated ${build.files.length}
+      // files.` — the number the MODEL produced, which counted every file the
+      // guards above refused. A build whose writes were all refused reported
+      // full success.
+      reportWrites(builderTally, "builder", "builder");
       finishStage(run, "builder", "completed");
       await flush();
     }
@@ -1014,6 +1095,9 @@ async function executeRun(
       verification = { executed: [] };
       testsExecuted = false;
       testExit = null;
+      // Distinct from `testExit === null`: a timeout-killed suite legitimately
+      // reports a null exit, so null cannot double as "nothing recorded yet".
+      let verdict = freshTestVerdict();
       const verificationCommands = verificationCommandsForWorkspace(workspacePath);
       if (!verificationCommands.length) {
         log(
@@ -1057,9 +1141,20 @@ async function executeRun(
           });
           if (cmd.isTest) {
             testsExecuted = true;
-            if (res.exitCode !== 0 || testExit === null) {
-              testExit = res.exitCode;
-            }
+            // A RED TEST SIGNAL IS STICKY. The old condition was
+            //   `res.exitCode !== 0 || testExit === null`
+            // which used `testExit === null` to mean "no result yet" — but a
+            // test suite KILLED by the 45-minute timeout also closes with
+            // exitCode `null` (SIGKILL, executed: true). So a timed-out suite
+            // set testExit = null, and the very next passing test command
+            // matched `testExit === null` and overwrote it with 0 — turning a
+            // killed suite into testStatus "passing".
+            //
+            // Track "have we recorded any test result yet" separately from the
+            // exit value, and never let a clean 0 replace a non-zero-or-null
+            // result that was already observed.
+            verdict = foldTestExit(verdict, res.exitCode);
+            testExit = verdict.testExit;
           }
         }
       }
@@ -1080,7 +1175,8 @@ async function executeRun(
         await checkpointNow({ testPlan });
       }
       if (testPlan.files.length) {
-        await writeBuild(workspacePath, testPlan.files, "test_writer");
+        const testTally = await writeBuild(workspacePath, testPlan.files, "test_writer");
+        reportWrites(testTally, "test_writer", "test");
       }
 
       // Verify the files written by the test writer. The same helper is used
@@ -1131,7 +1227,8 @@ async function executeRun(
       if (checkpoint.pendingRepair) {
         const pending = checkpoint.pendingRepair;
         if (pending.files.length) {
-          await writeBuild(workspacePath, pending.files, "repair");
+          const repairTally = await writeBuild(workspacePath, pending.files, "repair");
+          reportWrites(repairTally, "repair", "repair");
         }
         log("info", pending.notes || "Applied checkpointed repair.", "repair");
         log("info", "Re-running executable verification after repair.", "repair");
@@ -1199,10 +1296,23 @@ async function executeRun(
               // Persist before writing so a crash cannot replay the provider call.
               await checkpointNow({ pendingRepair: fix });
             }
+            let repairWrote = 0;
             if (fix.files.length) {
-              await writeBuild(workspacePath, fix.files, "repair");
+              const fixTally = await writeBuild(workspacePath, fix.files, "repair");
+              reportWrites(fixTally, "repair", "repair");
+              repairWrote = fixTally.written;
             }
-            log("info", fix.notes || "Applied repairs.", "repair");
+            // "Applied repairs" is only true if something actually changed on
+            // disk. A repair loop whose every write was refused otherwise
+            // re-ran QA against untouched code and reported progress it had
+            // not made.
+            log(
+              "info",
+              repairWrote > 0
+                ? fix.notes || "Applied repairs."
+                : `NO REPAIR APPLIED — nothing reached disk${fix.notes ? ` (model notes: ${fix.notes})` : ""}.`,
+              "repair",
+            );
           },
           verify: verifyWorkspace,
           reverify: async () => {
@@ -1236,11 +1346,7 @@ async function executeRun(
     // exited 0. The old fallback promoted a bare model verdict to "passing"
     // with zero tests run — the fabricated-pass defect (run c72fdb26 claimed
     // 278/278 with no repo clone). No execution = "unknown", always.
-    const testStatus = testsExecuted
-      ? testExit === 0
-        ? "passing"
-        : "failing"
-      : "unknown";
+    const testStatus = testStatusFor(testsExecuted, testExit);
     let report = checkpoint.finalReport;
     if (!report) {
       throwIfTimedOut(deadline, timeoutMs);
@@ -1251,6 +1357,22 @@ async function executeRun(
         workspacePath,
         providerUsage: run.providerUsage,
         testStatus,
+        // The reviewer used to see only the spec and the QA report, so its
+        // prose could assert "all tests pass" beside a stamped
+        // testStatus:"failing". Give it the executed evidence and the real
+        // file list it is supposed to be summarizing.
+        verification,
+        writtenFiles: [...files.keys()],
+      });
+      // ...and then ENFORCE it. An instruction in a prompt is not a guarantee:
+      // the same grounding rule QA verdicts follow is applied to the report's
+      // prose deterministically.
+      report = groundFinalReport({
+        report,
+        evidence: verification,
+        testStatus,
+        writtenFiles: [...files.keys()],
+        refusals: writeRefusals,
       });
       // SCAFFOLDING HONESTY (extend runs). Three consecutive GrantFlow
       // deliveries generated pages/modules that NOTHING pre-existing imports —

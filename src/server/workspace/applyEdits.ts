@@ -94,6 +94,18 @@ export function resolveGeneratedWrite(
         reason: "edits were supplied for a file that does not exist yet — send full contents",
       };
     }
+    // An EMPTY new file is refused for the same reason an empty replacement
+    // is: it is never what the model meant. Creating a 0-byte source file is
+    // strictly worse than refusing — the refusal is logged and counted, while
+    // the empty file silently ships, imports as `{}`, and turns into a
+    // confusing runtime failure far from the build that caused it.
+    if (!file.contents.trim()) {
+      return {
+        contents: null,
+        edited: false,
+        reason: "empty contents for a new file — nothing to write",
+      };
+    }
     return { contents: file.contents, edited: false };
   }
 
