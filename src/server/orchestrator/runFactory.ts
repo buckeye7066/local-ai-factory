@@ -82,6 +82,7 @@ import { researchAgent } from "../agents/researchAgent.js";
 import { deliverRun, planDestination } from "./deliverRun.js";
 import { releaseRun } from "./releaseRun.js";
 import { deployRun } from "./deployRun.js";
+import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
 
 export interface StartRunArgs {
@@ -246,21 +247,20 @@ async function executeRun(
 ): Promise<void> {
   const { config, secrets } = args;
   const { flush, log } = controller(run);
-  let checkpoint: FactoryCheckpoint =
-    restored ?? {
-      schemaVersion: 1,
-      runId: run.id,
-      idea: args.idea,
-      options: args.options,
-      files: [],
-      testWriterComplete: false,
-      commandOutput: "",
-      testsExecuted: false,
-      testExit: null,
-      repairLoops: 0,
-      repairComplete: false,
-      updatedAt: Date.now(),
-    };
+  let checkpoint: FactoryCheckpoint = restored ?? {
+    schemaVersion: 1,
+    runId: run.id,
+    idea: args.idea,
+    options: args.options,
+    files: [],
+    testWriterComplete: false,
+    commandOutput: "",
+    testsExecuted: false,
+    testExit: null,
+    repairLoops: 0,
+    repairComplete: false,
+    updatedAt: Date.now(),
+  };
   const checkpointNow = async (patch: Partial<FactoryCheckpoint> = {}) => {
     checkpoint = { ...checkpoint, ...patch, updatedAt: Date.now() };
     await saveRunCheckpoint(checkpoint);
@@ -686,7 +686,9 @@ async function executeRun(
           "model_call",
           `Research agent (${code.name}) — searching for tools/APIs that could help…`,
         );
-        research = await researchAgent({ provider: code }, spec, arch, { competitive: true });
+        research = await researchAgent({ provider: code }, spec, arch, {
+          competitive: true,
+        });
         await checkpointNow({ research });
         log(
           research.recommendations.length ? "success" : "info",
@@ -838,8 +840,7 @@ async function executeRun(
       verification = { executed: [] };
       testsExecuted = false;
       testExit = null;
-      const verificationCommands =
-        verificationCommandsForWorkspace(workspacePath);
+      const verificationCommands = verificationCommandsForWorkspace(workspacePath);
       if (!verificationCommands.length) {
         log(
           "warning",
@@ -977,9 +978,7 @@ async function executeRun(
       // a final review blaming the Node version for a skipped-install-scripts
       // binding). Classification is deterministic signature matching over the
       // EXECUTED commands' real output — never model judgment.
-      const envFailure = qa.passed
-        ? null
-        : classifyEnvironmentFailure(verification);
+      const envFailure = qa.passed ? null : classifyEnvironmentFailure(verification);
       if (qa.passed) {
         log("success", "No high-severity issues — repair loop skipped.");
         finishStage(run, "repair", "skipped");
@@ -1035,11 +1034,7 @@ async function executeRun(
             throwIfTimedOut(deadline, timeoutMs);
             log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
             const next = groundQaReport(
-              await qaCriticAgent(
-                { provider: review },
-                fullBuild(),
-                commandOutput,
-              ),
+              await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
               verification,
             );
             await checkpointNow({ qa: next, pendingRepair: undefined });
@@ -1158,7 +1153,10 @@ async function executeRun(
         checkpoint.options.demo !== true &&
         process.env.FACTORY_RELEASE_TO_MAIN !== "0"
       ) {
-        log("info", "Release: opening the PR against main and waiting on the repo's checks…");
+        log(
+          "info",
+          "Release: opening the PR against main and waiting on the repo's checks…",
+        );
         const release = await releaseRun({
           repoUrl: delivered.target,
           branch: delivered.branch,
@@ -1234,6 +1232,44 @@ async function executeRun(
             runId: run.id,
             detail: dep.url ?? dep.reason,
           });
+
+          /* Store publish — owner order 2026-08-15: a production-ready app is
+           * posted to the owner's app store on www.axiombiolabs.org too, and
+           * PromoPilot picks it up from the same registry. Only a deploy this
+           * process live-verified qualifies; store failures never fail the
+           * run. FACTORY_STORE_PUBLISH=0 opts out. */
+          if (
+            dep.deployed &&
+            dep.verified &&
+            dep.url &&
+            process.env.FACTORY_STORE_PUBLISH !== "0"
+          ) {
+            log("info", "App Store: posting to the axiombiolabs.org store registry…");
+            const store = await storePublish({
+              appName: run.appName,
+              runId: run.id,
+              url: dep.url,
+              tagline: spec.tagline || null,
+            });
+            log(
+              store.published && store.verified ? "success" : "warning",
+              `App Store: ${store.reason}`,
+            );
+            run.destination = {
+              ...run.destination,
+              detail: redactSecrets(
+                `${run.destination.detail ?? ""} Store: ${store.reason}.`.trim(),
+              ),
+            };
+            await appendAuditEvent({
+              type:
+                store.published && store.verified
+                  ? "run.store.listed"
+                  : "run.store.held",
+              runId: run.id,
+              detail: store.appId ?? store.reason,
+            });
+          }
         }
       }
     }
@@ -1352,11 +1388,7 @@ async function assertResumeWorkspace(
   const root = resolve(workspaceRoot);
   const candidate = resolve(workspacePath);
   const lexical = relative(root, candidate);
-  if (
-    lexical === "" ||
-    lexical.startsWith("..") ||
-    isAbsolute(lexical)
-  ) {
+  if (lexical === "" || lexical.startsWith("..") || isAbsolute(lexical)) {
     throw new RunNotResumableError(
       "Saved workspace must be a strict child of the current WORKSPACE_ROOT. Restore the prior root or start a new run.",
     );
@@ -1378,11 +1410,7 @@ async function assertResumeWorkspace(
     );
   }
   const physical = relative(rootReal, candidateReal);
-  if (
-    physical === "" ||
-    physical.startsWith("..") ||
-    isAbsolute(physical)
-  ) {
+  if (physical === "" || physical.startsWith("..") || isAbsolute(physical)) {
     throw new RunNotResumableError(
       "Saved workspace resolves outside the current WORKSPACE_ROOT.",
     );
@@ -1427,9 +1455,7 @@ async function prepareResume(
       registry.get("mock");
     } else {
       if (registry.availableLive().length === 0) {
-        throw new MissingProviderCredentialError(
-          registry.missingCredentialNames(),
-        );
+        throw new MissingProviderCredentialError(registry.missingCredentialNames());
       }
       registry.resolveLive(run.codeProvider, config.defaultCodeProvider);
       registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);

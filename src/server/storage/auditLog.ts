@@ -40,7 +40,11 @@ export type AuditEventType =
   | "run.release.merged"
   | "run.release.held"
   | "run.deploy.live"
-  | "run.deploy.held";
+  | "run.deploy.held"
+  // Store: the app was posted to the owner's axiombiolabs.org App Store
+  // registry (and PromoPilot picks it up from the same registry).
+  | "run.store.listed"
+  | "run.store.held";
 
 export interface AuditEventInput {
   type: AuditEventType;
