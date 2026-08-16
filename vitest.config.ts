@@ -14,5 +14,14 @@ export default defineConfig({
     // tests stub `fetch` instead of relying on this flag.
     env: { FACTORY_DATA_DIR: ".vitest-factory-data", FACTORY_RESEARCH_ENABLED: "0" },
     globalSetup: ["./vitest.globalSetup.ts"],
+    // Load-proof timeouts. The end-to-end suites drive real git and real file
+    // I/O; on a machine that is also running a live factory build they blew
+    // the 5s default and "failed" in different files every run while passing
+    // in isolation (2026-08-16). Timing headroom is the honest fix - a longer
+    // ceiling never hides a real failure, it only stops load from inventing
+    // one. (Forks-per-file was tried first and made it worse: more processes,
+    // more contention.)
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
   },
 });
