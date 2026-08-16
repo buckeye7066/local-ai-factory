@@ -309,13 +309,34 @@ export const TaskPlanSchema = z.preprocess(
 );
 export type TaskPlan = z.infer<typeof TaskPlanSchema>;
 
+/**
+ * ANCHORED EDIT — how an EXISTING file is changed.
+ *
+ * The builder never saw the files it was "modifying": it received a list of
+ * PATHS and reconstructed whole files from the filename alone. That is how
+ * services/api/.../auth.js came back as CommonJS with every export gone, how
+ * App.jsx lost its auth route gating, and how react-router-dom appeared in a
+ * repo that uses react-router v8. An edit quotes the exact text it replaces,
+ * so anything the model did not think about survives untouched.
+ */
+export const FileEditSchema = z.object({
+  /** Exact existing text to replace. Must appear EXACTLY ONCE in the file. */
+  find: z.string().min(1),
+  /** Replacement text. Empty string deletes the matched block. */
+  replace: z.string(),
+});
+export type FileEdit = z.infer<typeof FileEditSchema>;
+
 export const FileBuildSchema = z.object({
   files: z
     .array(
       z.object({
         path: z.string(),
         purpose: z.string().default(""),
-        contents: z.string(),
+        /** Full contents — ONLY for files that do not exist yet. */
+        contents: z.string().default(""),
+        /** Anchored edits — REQUIRED for a file that already exists. */
+        edits: z.array(FileEditSchema).default([]),
       }),
     )
     .min(1),

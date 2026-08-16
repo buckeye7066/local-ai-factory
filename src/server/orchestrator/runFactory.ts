@@ -16,6 +16,7 @@ import type {
   TaskPlan,
 } from "../../shared/schemas.js";
 import { freshStages } from "../../shared/schemas.js";
+import type { FileEdit } from "../../shared/schemas.js";
 import type { LLMProvider } from "../../shared/types.js";
 import {
   createProviderRegistry,
@@ -32,6 +33,8 @@ import { verificationCommandsForWorkspace } from "../workspace/verificationComma
 import { findUnwiredNewFiles, unwiredCaveat } from "../workspace/unwiredFiles.js";
 import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { assessPhantomImports } from "../workspace/phantomImports.js";
+import { resolveGeneratedWrite } from "../workspace/applyEdits.js";
+import { readTargetFiles } from "../workspace/targetFiles.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -391,7 +394,7 @@ async function executeRun(
 
   const writeBuild = async (
     workspacePath: string,
-    incoming: { path: string; purpose: string; contents: string }[],
+    incoming: { path: string; purpose: string; contents: string; edits?: FileEdit[] }[],
     stage: StageId,
   ) => {
     // A cancel during a stage must stop further file writes, not only at stage
@@ -401,6 +404,22 @@ async function executeRun(
     for (const f of incoming) {
       // Re-check per file so a cancel mid-loop stops the REMAINING writes.
       throwIfCancelled(run.id);
+      // ROOT FIX: an existing file is EDITED, never regenerated from its name.
+      // resolveGeneratedWrite reads the real file and applies anchored edits;
+      // a blind whole-file replacement of existing source is refused outright.
+      const resolved = resolveGeneratedWrite(workspacePath, f.path, {
+        contents: f.contents,
+        edits: f.edits ?? [],
+      });
+      if (resolved.contents === null) {
+        log(
+          "warning",
+          `BLIND REWRITE REFUSED: ${f.path} — ${resolved.reason}`,
+          stage,
+        );
+        continue;
+      }
+      const finalContents = resolved.contents;
       throwIfTimedOut(deadline, timeoutMs);
       // PROTECTED HOST FILES (run a8a9c84a): the test-writer replaced the
       // ingested repo's 10,998-byte package.json with a 192-byte stub and the
@@ -409,7 +428,7 @@ async function executeRun(
       // read green. Destructive writes to tracked manifests/lockfiles/root
       // tool configs (and hijack-by-new-variant configs) are refused LOUDLY;
       // additive manifest edits still pass. Inert for new-app workspaces.
-      const verdict = assessProtectedHostWrite(workspacePath, f.path, f.contents);
+      const verdict = assessProtectedHostWrite(workspacePath, f.path, finalContents);
       if (verdict.refused) {
         log(
           "warning",
@@ -424,7 +443,7 @@ async function executeRun(
       // the failure only surfaced as "Failed to resolve import" deep in the
       // test run, after paid repair loops. Checked against the manifests as
       // they are ON DISK, so a build that adds the dependency first passes.
-      const phantom = assessPhantomImports(workspacePath, f.path, f.contents);
+      const phantom = assessPhantomImports(workspacePath, f.path, finalContents);
       if (phantom.refused) {
         log(
           "warning",
@@ -433,7 +452,7 @@ async function executeRun(
         );
         continue;
       }
-      const res = await writeWorkspaceFile(workspacePath, f.path, f.contents);
+      const res = await writeWorkspaceFile(workspacePath, f.path, finalContents);
       // And again after the awaited write, before we record/log/persist it.
       throwIfCancelled(run.id);
       const status: FileContent["status"] = res.existed ? "modified" : "generated";
@@ -828,8 +847,29 @@ async function executeRun(
     if (!build) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "builder");
-      const existingContext =
+      // READ BEFORE WRITE: hand the builder the REAL contents of the files this
+      // plan names, so an existing file is edited from its actual text instead
+      // of reconstructed from its filename.
+      const baseContext =
         extendMode && repoAnalysis ? buildExistingContext(repoAnalysis) : undefined;
+      const existingContext =
+        baseContext && workspacePath
+          ? {
+              ...baseContext,
+              targetFiles: readTargetFiles(
+                workspacePath,
+                plan,
+                checkpoint.idea ?? "",
+                repoAnalysis?.fileTree ?? [],
+              ),
+            }
+          : baseContext;
+      if (existingContext?.targetFiles?.length) {
+        log(
+          "info",
+          `Read ${existingContext.targetFiles.length} existing file(s) the plan targets — edits will quote real code.`,
+        );
+      }
       if (extendMode) {
         // Only extend-mode goes through the concurrent dispatcher: the task
         // planner's categories are genuinely independent build units here, and
@@ -1023,6 +1063,7 @@ async function executeRun(
         path: file.path,
         purpose: file.purpose,
         contents: file.contents,
+        edits: [],
       })),
     });
 

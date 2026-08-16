@@ -71,7 +71,7 @@ describe("usability mandate", () => {
     });
     await qaCriticAgent(
       { provider },
-      { files: [{ path: "a.ts", purpose: "p", contents: "x" }] },
+      { files: [{ path: "a.ts", purpose: "p", contents: "x", edits: [] }] },
       "",
     );
     expect(captured.system).toMatch(/usability blockers/i);
