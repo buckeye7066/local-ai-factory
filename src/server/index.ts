@@ -19,7 +19,8 @@ import {
 } from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
 import {
-  createEpic,
+  createEpicShell,
+  planEpic,
   getEpic,
   listEpics,
   runEpic,
@@ -439,10 +440,13 @@ app.post(
       return;
     }
     const deps = epicDeps();
-    const epic = await createEpic(idea, parsed.data, deps);
-    // Slices execute in the background; the epic record streams progress.
-    void runEpic(epic, deps).catch(() => {});
-    res.status(202).json({ epicId: epic.id, slices: epic.slices.length });
+    // Respond immediately: planning alone can take minutes on the free route.
+    const shell = await createEpicShell(idea, parsed.data);
+    void (async () => {
+      const epic = await planEpic(shell, deps);
+      if (epic.status === "running") await runEpic(epic, deps);
+    })().catch(() => {});
+    res.status(202).json({ epicId: shell.id });
   }),
 );
 

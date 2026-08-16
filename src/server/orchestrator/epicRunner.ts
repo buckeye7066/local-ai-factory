@@ -108,10 +108,10 @@ export interface EpicDeps {
   secrets: AppSecrets;
 }
 
-export async function createEpic(
+/** Persist the shell immediately so the API can answer before planning. */
+export async function createEpicShell(
   idea: string,
   options: RunOptions,
-  deps: EpicDeps,
 ): Promise<EpicRecord> {
   const epic: EpicRecord = {
     id: randomUUID(),
@@ -127,19 +127,44 @@ export async function createEpic(
   };
   await saveEpic(epic);
   await appendAuditEvent({ type: "epic.created", runId: epic.id, detail: idea.slice(0, 200) });
+  return epic;
+}
 
-  const plan = EpicPlanSchema.parse(await deps.plan(idea));
-  epic.summary = plan.summary;
-  epic.slices = plan.slices.map((s) => ({
-    ...s,
-    status: "pending" as const,
-    runId: null,
-    prUrl: null,
-    mergedSha: null,
-    detail: null,
-  }));
-  epic.status = "running";
+/**
+ * Plan the shell's slices. Planning can take minutes on the free route, so
+ * callers run this in the background; a failed plan lands on the record with
+ * its reason instead of throwing into the void.
+ */
+export async function planEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRecord> {
+  try {
+    const plan = EpicPlanSchema.parse(await deps.plan(epic.idea));
+    epic.summary = plan.summary;
+    epic.slices = plan.slices.map((s) => ({
+      ...s,
+      status: "pending" as const,
+      runId: null,
+      prUrl: null,
+      mergedSha: null,
+      detail: null,
+    }));
+    epic.status = "running";
+  } catch (err) {
+    epic.status = "failed";
+    epic.statusReason = `planning failed: ${String((err as Error)?.message ?? err)}`;
+  }
   await saveEpic(epic);
+  return epic;
+}
+
+export async function createEpic(
+  idea: string,
+  options: RunOptions,
+  deps: EpicDeps,
+): Promise<EpicRecord> {
+  const epic = await planEpic(await createEpicShell(idea, options), deps);
+  if (epic.status === "failed") {
+    throw new Error(epic.statusReason ?? "epic planning failed");
+  }
   return epic;
 }
 
