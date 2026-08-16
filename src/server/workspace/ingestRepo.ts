@@ -47,6 +47,13 @@ export interface IngestResult {
   /** True when `path` IS the original source location (no copy was made). */
   inPlace: boolean;
   /**
+   * inPlace only: the branch the OWNER had checked out before this run cut its
+   * own. The run restores it when it ends — a run that parks the owner's real
+   * repo on a factory branch (the FlexFactor 2026-08-11 parking defect) leaves
+   * their working tree wrong for every tool that opens it next.
+   */
+  previousBranch: string | null;
+  /**
    * The repo this workspace can push back to (the attached git URL, or the
    * local checkout a clone came from). null when there is nowhere to deliver —
    * a plain folder copy with no git at all.
@@ -138,6 +145,7 @@ export async function ingestExistingRepo(
       isGitRepo: true,
       branch,
       inPlace: false,
+    previousBranch: null,
       originUrl: source.location,
       log,
     };
@@ -171,8 +179,13 @@ export async function ingestExistingRepo(
       );
     }
     const branch = `factory-deck/${runId.slice(0, 8)}`;
+    // Remember where the owner WAS, so the run can put them back.
+    const previousBranch = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], src, 15_000)
+      .then((r) => (r.code === 0 && r.stdout.trim() && r.stdout.trim() !== "HEAD" ? r.stdout.trim() : null))
+      .catch(() => null);
     log.push(
-      `Operating IN PLACE on ${src} (explicit opt-in) — checking out ${branch}.`,
+      `Operating IN PLACE on ${src} (explicit opt-in) — checking out ${branch}` +
+        (previousBranch ? ` (will restore ${previousBranch} when the run ends).` : "."),
     );
     const res = await runGit(["checkout", "-b", branch], src, 15_000);
     if (res.code !== 0) {
@@ -191,6 +204,7 @@ export async function ingestExistingRepo(
       isGitRepo: true,
       branch,
       inPlace: true,
+      previousBranch,
       originUrl: inPlaceOrigin,
       log,
     };
@@ -220,6 +234,7 @@ export async function ingestExistingRepo(
       isGitRepo: true,
       branch,
       inPlace: false,
+    previousBranch: null,
       originUrl: src,
       log,
     };
@@ -253,6 +268,7 @@ export async function ingestExistingRepo(
     isGitRepo: false,
     branch: null,
     inPlace: false,
+    previousBranch: null,
     // A plain folder copy has no git anywhere, so there is nothing to push
     // back to — the run's output stays in its workspace and says so.
     originUrl: null,
