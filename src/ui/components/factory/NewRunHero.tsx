@@ -4,7 +4,6 @@ import {
   Rocket,
   Wand2,
   TriangleAlert,
-  FlaskConical,
   ArrowRight,
   MessageCircleQuestion,
   Sparkles,
@@ -181,7 +180,6 @@ export function NewRunHero({
           repoName={repoName}
           setRepoName={setRepoName}
           nameCheck={nameCheck}
-          demo={demo}
           hasAnyKey={hasAnyKey}
           health={health}
           starting={starting}
@@ -269,7 +267,6 @@ function NewAppPanel({
   repoName,
   setRepoName,
   nameCheck,
-  demo,
   hasAnyKey,
   health,
   starting,
@@ -280,7 +277,6 @@ function NewAppPanel({
   repoName: string;
   setRepoName: (v: string) => void;
   nameCheck: NameCheck;
-  demo: boolean;
   hasAnyKey: boolean;
   health: Health | null;
   starting: boolean;
