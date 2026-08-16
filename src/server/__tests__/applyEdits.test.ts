@@ -69,18 +69,22 @@ describe("applyEdits", () => {
 });
 
 describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
-  it("REFUSES a whole-file replacement of an existing source file (the exact destruction)", () => {
+  it("accepts an informed whole-file rewrite (the export guard is what stops destruction)", () => {
     const root = workspace({ "services/api/src/middleware/auth.js": AUTH_JS });
-    const cjsRewrite = [
-      "const jwt = require('jsonwebtoken');",
-      "module.exports = { authenticate };",
-    ].join(BR);
+    const rewrite = AUTH_JS.replace("sameSite: 'lax'", "sameSite: 'none'");
     const res = resolveGeneratedWrite(root, "services/api/src/middleware/auth.js", {
-      contents: cjsRewrite,
+      contents: rewrite,
       edits: [],
     });
+    expect(res.contents).toContain("sameSite: 'none'");
+    expect(res.edited).toBe(true);
+  });
+
+  it("refuses an EMPTY replacement — that deletes a file by accident", () => {
+    const root = workspace({ "src/a.js": AUTH_JS });
+    const res = resolveGeneratedWrite(root, "src/a.js", { contents: "   ", edits: [] });
     expect(res.contents).toBeNull();
-    expect(res.reason).toMatch(/anchored edits/i);
+    expect(res.reason).toMatch(/empty replacement/i);
   });
 
   it("accepts edits against the file's REAL contents", () => {
