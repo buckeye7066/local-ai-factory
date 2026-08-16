@@ -36,7 +36,9 @@ export type AuditEventType =
   | "run.delivery.delivered"
   | "run.delivery.failed"
   | "run.delivery.skipped"
-  | "run.delivery.planned";
+  | "run.delivery.planned"
+  | "run.release.merged"
+  | "run.release.held";
 
 export interface AuditEventInput {
   type: AuditEventType;

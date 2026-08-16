@@ -80,6 +80,7 @@ import { ingestAdditionalSource } from "./ingestAdditionalSource.js";
 import { buildFilesConcurrently } from "./concurrentBuild.js";
 import { researchAgent } from "../agents/researchAgent.js";
 import { deliverRun, planDestination } from "./deliverRun.js";
+import { releaseRun } from "./releaseRun.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
 
 export interface StartRunArgs {
@@ -1142,6 +1143,52 @@ async function executeRun(
         runId: run.id,
         detail: delivered.target,
       });
+
+      /* Release — finish the job (owner order 2026-08-15): an extend run that
+       * EARNED it goes to main, and main is what production deploys. The gate
+       * is earned evidence only — grounded QA green, tests executed and
+       * passing, and the HOST repo's own CI checks green on the PR (see
+       * releaseRun.ts). Anything less leaves the branch + an open PR with the
+       * reason recorded. FACTORY_RELEASE_TO_MAIN=0 opts out. */
+      if (
+        delivered.status === "delivered" &&
+        delivered.kind === "existing-repo" &&
+        delivered.branch &&
+        checkpoint.options.demo !== true &&
+        process.env.FACTORY_RELEASE_TO_MAIN !== "0"
+      ) {
+        log("info", "Release: opening the PR against main and waiting on the repo's checks…");
+        const release = await releaseRun({
+          repoUrl: delivered.target,
+          branch: delivered.branch,
+          runId: run.id,
+          appName: run.appName,
+          qaPassed: qa.passed,
+          testStatus,
+          caveats: report.caveats ?? [],
+        });
+        log(
+          release.released ? "success" : "warning",
+          release.released
+            ? `Released: merged to main (${release.mergedSha?.slice(0, 10) ?? "sha unknown"}). Production deploys from main pick this up.`
+            : `Not released to main: ${release.reason}${release.prUrl ? ` — PR left open: ${release.prUrl}` : ""}`,
+        );
+        run.destination = {
+          ...run.destination,
+          detail: redactSecrets(
+            `${run.destination.detail ?? ""} ${
+              release.released
+                ? `Released: merged to main (${release.mergedSha ?? "sha unknown"}).`
+                : `Not auto-released: ${release.reason}.`
+            }${release.prUrl ? ` PR: ${release.prUrl}` : ""}`.trim(),
+          ),
+        };
+        await appendAuditEvent({
+          type: release.released ? "run.release.merged" : "run.release.held",
+          runId: run.id,
+          detail: release.prUrl ?? delivered.target,
+        });
+      }
     }
 
     run.status = "completed";
