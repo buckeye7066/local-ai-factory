@@ -76,7 +76,12 @@ export async function fileBuilderAgent(
         `and already runs. Do NOT regenerate the whole app and do NOT recreate config/entry files (package.json, ` +
         `index.html, build config, etc.) unless a goal explicitly requires changing them. Only output files ` +
         `that are genuinely NEW or that must be MODIFIED to implement the goals. Match the existing file ` +
-        `layout, naming, and stack shown below.`,
+        `layout, naming, and stack shown below. The goals demand WORKING BEHAVIOR wired into the real product ` +
+        `code: a delivery consisting only of documentation, standalone tests, or schema files is a FAILED build ` +
+        `and will be refused release. Three moves are forbidden outright: (1) introducing a new ORM or schema ` +
+        `layer (e.g. a prisma/ directory) into a repo that does not already use it; (2) writing tests that ` +
+        `reimplement product logic inside the test file instead of importing and exercising the repo's real ` +
+        `modules; (3) writing docs or "audit" files that assert verification you did not perform.`,
     );
     promptParts.push(
       `Implement the goals in this spec against the EXISTING (TARGET) repo below.\n\nSPEC (the change to make):\n${JSON.stringify(

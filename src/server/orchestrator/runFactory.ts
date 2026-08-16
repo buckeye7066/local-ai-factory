@@ -80,7 +80,7 @@ import { ingestAdditionalSource } from "./ingestAdditionalSource.js";
 import { buildFilesConcurrently } from "./concurrentBuild.js";
 import { researchAgent } from "../agents/researchAgent.js";
 import { deliverRun, planDestination } from "./deliverRun.js";
-import { releaseRun } from "./releaseRun.js";
+import { releaseRun, isPaperOnlyDelivery } from "./releaseRun.js";
 import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
@@ -1157,7 +1157,15 @@ async function executeRun(
           "info",
           "Release: opening the PR against main and waiting on the repo's checks…",
         );
+        const paperOnly = isPaperOnlyDelivery([...files.keys()]);
+        if (paperOnly) {
+          log(
+            "warning",
+            "Delivery is paper-only (docs/tests/schema, no wired product change) — it will not auto-merge.",
+          );
+        }
         const release = await releaseRun({
+          paperOnly,
           repoUrl: delivered.target,
           branch: delivered.branch,
           runId: run.id,

@@ -39,6 +39,8 @@ export interface ReleaseInput {
   testStatus: "passing" | "failing" | "unknown";
   /** Final-report caveats (unwired scaffolding etc.) surfaced in the PR body. */
   caveats: string[];
+  /** True when the delivery contains no wired product change (see isPaperOnlyDelivery). */
+  paperOnly?: boolean;
   /** Injectable gh runner for tests. */
   ghImpl?: typeof gh;
   /** Injectable sleep for tests. */
@@ -60,11 +62,33 @@ export function repoSlug(repoUrl: string): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
+/**
+ * A delivery consisting ONLY of docs, standalone tests, and schema files is
+ * paper — it changes no product behavior. Run a1d8866f delivered exactly this
+ * (5 docs + 4 self-referential contract tests + a prisma schema for an ORM the
+ * host repo does not use) with every command legitimately exiting 0: grounded
+ * QA cannot catch a build that verifies its own paper. Paper never auto-merges.
+ */
+const PAPER_PATH_RE = /^(docs?\/|tests?\/|__tests__\/|test\/|prisma\/)|\.mdx?$/i;
+
+export function isPaperOnlyDelivery(filePaths: string[]): boolean {
+  if (filePaths.length === 0) return true;
+  return filePaths.every((p) => PAPER_PATH_RE.test(p.replace(/\\/g, "/")));
+}
+
 /** The evidence gate — pure, so tests pin it directly. */
 export function releaseEligible(input: {
   qaPassed: boolean;
   testStatus: ReleaseInput["testStatus"];
+  paperOnly?: boolean;
 }): { eligible: boolean; reason: string } {
+  if (input.paperOnly) {
+    return {
+      eligible: false,
+      reason:
+        "delivery contains only docs/tests/schema paper — no wired product change, so there is nothing to release",
+    };
+  }
   if (!input.qaPassed) {
     return {
       eligible: false,
