@@ -418,7 +418,12 @@ function epicDeps(): EpicDeps {
     executeSliceRun: (idea, options) =>
       runFactoryFull({ idea, options, config, secrets }),
     plan: async (idea) => {
-      const provider = clarificationProvider();
+      // ONE call whose quality decides every slice downstream: prefer a
+      // configured PAID provider; the free small model produced a 15-minute
+      // crawl on the first real epic. Free remains the keyless fallback.
+      const registry = createProviderRegistry(config, secrets);
+      const paid = registry.availablePaid();
+      const provider = registry.resolveLive(paid[0], config.defaultCodeProvider);
       return epicPlannerAgent({ provider }, { idea });
     },
     config,
