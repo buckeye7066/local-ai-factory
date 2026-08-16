@@ -31,6 +31,7 @@ import { runCommand } from "../workspace/commandRunner.js";
 import { verificationCommandsForWorkspace } from "../workspace/verificationCommands.js";
 import { findUnwiredNewFiles, unwiredCaveat } from "../workspace/unwiredFiles.js";
 import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
+import { assessPhantomImports } from "../workspace/phantomImports.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -413,6 +414,21 @@ async function executeRun(
         log(
           "warning",
           `PROTECTED HOST FILE: refused generated write of ${f.path} — ${verdict.reason}`,
+          stage,
+        );
+        continue;
+      }
+      // PHANTOM DEPENDENCIES: a generated file may only import packages the
+      // repo declares. Two SermonSmith slices in a row wrote
+      // `react-router-dom` into a repo that depends on react-router v8, and
+      // the failure only surfaced as "Failed to resolve import" deep in the
+      // test run, after paid repair loops. Checked against the manifests as
+      // they are ON DISK, so a build that adds the dependency first passes.
+      const phantom = assessPhantomImports(workspacePath, f.path, f.contents);
+      if (phantom.refused) {
+        log(
+          "warning",
+          `PHANTOM IMPORT: refused generated write of ${f.path} — ${phantom.reason}`,
           stage,
         );
         continue;
