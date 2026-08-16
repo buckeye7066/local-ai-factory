@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assessPhantomImports,
+  correctPhantomImports,
   declaredDependencies,
   importedPackages,
   nearestDeclared,
@@ -68,15 +69,33 @@ describe("nearestDeclared", () => {
 });
 
 describe("assessPhantomImports (the SermonSmith failure, twice over)", () => {
-  it("refuses react-router-dom in a repo that depends on react-router, and names the real package", () => {
+  it("FIXES react-router-dom to the declared react-router instead of refusing", () => {
     const root = repo({ "": { dependencies: { react: "19", "react-router": "8" } } });
     const verdict = assessPhantomImports(
       root,
       "apps/web/src/App.jsx",
       "import { Link } from 'react-router-dom';",
     );
+    expect(verdict.refused).toBe(false);
+    expect(verdict.corrected).toContain("'react-router'");
+    expect(verdict.corrected).not.toContain("react-router-dom");
+    expect(verdict.corrections).toContain("react-router-dom -> react-router");
+  });
+
+  it("preserves a deep path while correcting the package", () => {
+    const declared = new Set(["react-router"]);
+    const out = correctPhantomImports(
+      "import { x } from 'react-router-dom/server';",
+      declared,
+    );
+    expect(out.contents).toContain("'react-router/server'");
+  });
+
+  it("still refuses an import with NO declared counterpart (the build must declare it)", () => {
+    const root = repo({ "": { dependencies: { react: "19" } } });
+    const verdict = assessPhantomImports(root, "src/a.js", "import x from 'left-pad';");
     expect(verdict.refused).toBe(true);
-    expect(verdict.reason).toMatch(/react-router-dom \(this repo has react-router\)/);
+    expect(verdict.reason).toMatch(/no declared counterpart/i);
   });
 
   it("allows imports the repo declares, plus builtins and relatives", () => {

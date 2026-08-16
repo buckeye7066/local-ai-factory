@@ -419,7 +419,7 @@ async function executeRun(
         );
         continue;
       }
-      const finalContents = resolved.contents;
+      let finalContents = resolved.contents;
       throwIfTimedOut(deadline, timeoutMs);
       // PROTECTED HOST FILES (run a8a9c84a): the test-writer replaced the
       // ingested repo's 10,998-byte package.json with a 192-byte stub and the
@@ -443,11 +443,22 @@ async function executeRun(
       // the failure only surfaced as "Failed to resolve import" deep in the
       // test run, after paid repair loops. Checked against the manifests as
       // they are ON DISK, so a build that adds the dependency first passes.
+      // FIX, DON'T BLOCK (owner rule 2026-08-16). A specifier with a known
+      // right answer is corrected in place; only an import with no declared
+      // counterpart is still refused, because the build must declare it.
       const phantom = assessPhantomImports(workspacePath, f.path, finalContents);
+      if (phantom.corrections?.length) {
+        log(
+          "info",
+          `Import corrected in ${f.path}: ${phantom.corrections.join(", ")} (matched the repo's declared packages).`,
+          stage,
+        );
+      }
+      if (phantom.corrected) finalContents = phantom.corrected;
       if (phantom.refused) {
         log(
           "warning",
-          `PHANTOM IMPORT: refused generated write of ${f.path} — ${phantom.reason}`,
+          `UNDECLARED DEPENDENCY in ${f.path} — ${phantom.reason}`,
           stage,
         );
         continue;
