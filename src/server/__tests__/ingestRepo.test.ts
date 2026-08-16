@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { ingestExistingRepo, IngestError } from "../workspace/ingestRepo.js";
+import { normalizeRepoSource, ingestExistingRepo, IngestError } from "../workspace/ingestRepo.js";
 
 const cleanupPaths: string[] = [];
 afterAll(async () => {
@@ -185,5 +185,33 @@ describe("ingestExistingRepo", () => {
         "77777777-7777-7777-7777-777777777777",
       ),
     ).rejects.toThrow(IngestError);
+  });
+});
+
+describe("normalizeRepoSource", () => {
+  it("treats a URL entered in the local-path field as a git source (real epic failure)", () => {
+    const { source, note } = normalizeRepoSource({
+      type: "path",
+      location: "https://github.com/buckeye7066/genemap-discovery",
+    });
+    expect(source.type).toBe("git");
+    expect(source.inPlace).toBe(false);
+    expect(note).toMatch(/Git URL/i);
+  });
+  it("accepts ssh and git@ forms too", () => {
+    expect(
+      normalizeRepoSource({ type: "path", location: "git@github.com:a/b.git" }).source.type,
+    ).toBe("git");
+    expect(
+      normalizeRepoSource({ type: "path", location: "ssh://git@host/a/b" }).source.type,
+    ).toBe("git");
+  });
+  it("leaves a real local path alone", () => {
+    const { source, note } = normalizeRepoSource({
+      type: "path",
+      location: "C:/Users/firer/genemap-discovery",
+    });
+    expect(source.type).toBe("path");
+    expect(note).toBeNull();
   });
 });
