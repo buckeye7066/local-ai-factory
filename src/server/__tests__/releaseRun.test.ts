@@ -116,6 +116,114 @@ describe("releaseRun", () => {
     expect(calls.some((c) => c[1] === "merge")).toBe(false);
   });
 
+  /* ---------------------------------------------------------------- *
+   * "no checks reported" — absence must be CONFIRMED, never assumed.
+   *
+   * `gh pr checks` says "no checks reported" both for a repo with no CI
+   * AND for the first seconds of a new PR whose workflow runs GitHub has
+   * not registered yet. The old code broke out of the wait loop on the
+   * FIRST such reading and merged — so a repo WITH CI could be merged to
+   * main before its own suite had started.
+   * ---------------------------------------------------------------- */
+
+  it("does NOT merge on the first 'no checks reported' — it waits out the registration race", async () => {
+    // Checks appear on the 3rd poll and are still running, then pass.
+    const { impl, calls } = fakeGh([
+      () => ok("https://github.com/buckeye7066/GrantFlow/pull/110"),
+      () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
+      () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
+      (a) =>
+        a[1] === "checks"
+          ? ok(JSON.stringify([{ state: "IN_PROGRESS", name: "ci" }]))
+          : ok(""),
+      (a) =>
+        a[1] === "checks"
+          ? ok(JSON.stringify([{ state: "SUCCESS", name: "ci" }]))
+          : ok(""),
+      (a) => (a[1] === "merge" ? ok("merged") : ok("")),
+      (a) => (a[1] === "view" ? ok("MERGED cafe1234") : ok("")),
+    ]);
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      checkTimeoutMs: 60_000,
+      noChecksGraceMs: 60_000, // never satisfied before the checks appear
+      ghImpl: impl,
+    });
+    expect(res.released).toBe(true);
+    // The decisive assertion: it did NOT merge while checks were absent or
+    // still in progress. The merge came after SUCCESS was observed.
+    expect(res.reason).toMatch(/green host-repo checks/i);
+    const checkCalls = calls.filter((c) => c[1] === "checks").length;
+    expect(checkCalls).toBeGreaterThanOrEqual(4);
+  });
+
+  it("holds the merge when checks appear FAILING after an initial 'no checks' window", async () => {
+    // The exact race that used to auto-merge: absence first, failure later.
+    const { impl, calls } = fakeGh([
+      () => ok("https://github.com/buckeye7066/GrantFlow/pull/111"),
+      () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
+      (a) =>
+        a[1] === "checks"
+          ? ok(JSON.stringify([{ state: "FAILURE", name: "unit" }]))
+          : ok(""),
+    ]);
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      checkTimeoutMs: 60_000,
+      noChecksGraceMs: 60_000,
+      ghImpl: impl,
+    });
+    expect(res.released).toBe(false);
+    expect(res.reason).toMatch(/unit/);
+    expect(calls.some((c) => c[1] === "merge")).toBe(false);
+  });
+
+  it("a repo with genuinely no CI merges, but says so instead of claiming green checks", async () => {
+    const { impl } = fakeGh([
+      () => ok("https://github.com/buckeye7066/GrantFlow/pull/112"),
+      () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
+      () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
+      () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
+      (a) => (a[1] === "merge" ? ok("merged") : ok("")),
+      (a) => (a[1] === "view" ? ok("MERGED beef5678") : ok("")),
+    ]);
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      checkTimeoutMs: 60_000,
+      noChecksGraceMs: 0, // grace already elapsed; confirmations still required
+      noChecksConfirmations: 3,
+      ghImpl: impl,
+    });
+    expect(res.released).toBe(true);
+    // Must NOT claim the host repo's checks approved this.
+    expect(res.reason).not.toMatch(/green host-repo checks/i);
+    expect(res.reason).toMatch(/NO CI checks/i);
+  });
+
+  it("leaves the PR open when the repo reports no checks for the entire window", async () => {
+    const { impl, calls } = fakeGh([
+      () => ok("https://github.com/buckeye7066/GrantFlow/pull/113"),
+      () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
+    ]);
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      checkTimeoutMs: 5, // deadline passes before the grace window can
+      noChecksGraceMs: 10 * 60_000,
+      ghImpl: impl,
+    });
+    expect(res.released).toBe(false);
+    expect(res.reason).toMatch(/no checks/i);
+    expect(calls.some((c) => c[1] === "merge")).toBe(false);
+  });
+
   it("holds the merge when the host repo's checks fail, naming the checks", async () => {
     const { impl, calls } = fakeGh([
       () => ok("https://github.com/buckeye7066/GrantFlow/pull/101"),
