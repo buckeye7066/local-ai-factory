@@ -66,11 +66,19 @@ function num(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+/**
+ * NO INVENTED SPEND CAPS (owner correction 2026-08-16: "I don't know where
+ * the $2 a day cap came from. i never asked for it"). The 6/hour, 24/day and
+ * $2/day defaults were self-imposed guardrails that silently blocked ordered
+ * work - the banned class. Defaults are now UNLIMITED: the ledger still
+ * records every paid call so spend can be reported honestly, but nothing is
+ * refused unless the OWNER sets an explicit limit env var.
+ */
 export function loadLimits(env: NodeJS.ProcessEnv = process.env): PaidBudgetLimits {
   return {
-    perHour: num(env.FACTORY_PAID_RESCUES_PER_HOUR, 6),
-    perDay: num(env.FACTORY_PAID_RESCUES_PER_DAY, 24),
-    usdPerDay: num(env.FACTORY_PAID_MAX_USD_PER_DAY, 2),
+    perHour: num(env.FACTORY_PAID_RESCUES_PER_HOUR, Infinity),
+    perDay: num(env.FACTORY_PAID_RESCUES_PER_DAY, Infinity),
+    usdPerDay: num(env.FACTORY_PAID_MAX_USD_PER_DAY, Infinity),
     usdPerMtokIn: num(env.FACTORY_PAID_USD_PER_MTOK_IN, 20),
     usdPerMtokOut: num(env.FACTORY_PAID_USD_PER_MTOK_OUT, 100),
   };
