@@ -80,6 +80,87 @@
   animation: blink-caret 1s step-end infinite;
 }
 
+/* ------------------------------------------------------------------ */
+/* Purpose Foundry — Lorain Assembly materials.                        */
+/* Surfaces only (no motion): stamped steel, tread plate, hazard       */
+/* chevrons, painted aisle lines. Scoped to foundry mode by usage.     */
+/* ------------------------------------------------------------------ */
+
+/* Stamped steel panel: vertical brush marks, a rolled top highlight and
+   a shadowed bottom edge so panels read as sheet metal, not glass. */
+.plant-steel {
+  background-color: #15181d;
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0) 12%),
+    linear-gradient(0deg, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0) 18%),
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.014) 0 1px,
+      rgba(0, 0, 0, 0) 1px 4px
+    );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+}
+
+/* Tread plate — the receiving dock deck. */
+.plant-plate {
+  background-color: #12151a;
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.03) 0 2px,
+      rgba(0, 0, 0, 0) 2px 9px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.03) 0 2px,
+      rgba(0, 0, 0, 0) 2px 9px
+    );
+}
+
+/* Safety chevrons — painted on column bases and dock edges. Used in
+   exactly two places so it stays signage, not wallpaper. */
+.plant-hazard {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    #f2c300 0 10px,
+    #0a0c0f 10px 20px
+  );
+}
+
+/* Painted aisle lines on grey concrete. */
+.plant-aisle {
+  background-image:
+    linear-gradient(to right, rgba(242, 195, 0, 0.1) 2px, transparent 2px),
+    linear-gradient(to bottom, rgba(242, 195, 0, 0.06) 2px, transparent 2px);
+  background-size: 132px 132px;
+}
+
+/* Coarse concrete grain under the light pools. */
+.plant-concrete {
+  background-image:
+    repeating-linear-gradient(
+      27deg,
+      rgba(255, 255, 255, 0.012) 0 1px,
+      rgba(0, 0, 0, 0) 1px 3px
+    ),
+    repeating-linear-gradient(
+      -63deg,
+      rgba(255, 255, 255, 0.01) 0 1px,
+      rgba(0, 0, 0, 0) 1px 5px
+    );
+}
+
+/* Stenciled plant lettering. Inter, widened until it reads as a spray
+   stencil on steel — the personality without a remote font. */
+.plant-stencil {
+  text-transform: uppercase;
+  letter-spacing: 0.3em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Honor the OS reduce-motion setting globally. */
 @media (prefers-reduced-motion: reduce) {
   .aurora-blob,
