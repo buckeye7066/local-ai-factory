@@ -869,8 +869,26 @@ async function executeRun(
       }
       await checkpointNow({ build });
     }
-    if (!stageDone("builder")) {
-      await writeBuild(workspacePath, build.files, "builder");
+    // PAID WORK MUST REACH DISK (run b74e5955, 2026-08-16). A cancel landed
+    // between the builder's answers being checkpointed and being WRITTEN. On
+    // resume the builder stage already read "done", so writeBuild was skipped
+    // entirely: ~$18 of generated UI files vanished, and the run sailed on to
+    // deliver a PR containing only the test-writer's files. Stage bookkeeping
+    // is not evidence that files exist — the run's file map is. Any build file
+    // missing from it gets written, whatever the stage says.
+    const missingFromWorkspace = build.files.filter((f) => !files.has(f.path));
+    if (!stageDone("builder") || missingFromWorkspace.length > 0) {
+      if (stageDone("builder") && missingFromWorkspace.length > 0) {
+        log(
+          "warning",
+          `Builder stage was marked done but ${missingFromWorkspace.length} of ${build.files.length} generated file(s) were never written — writing them now.`,
+        );
+      }
+      await writeBuild(
+        workspacePath,
+        stageDone("builder") ? missingFromWorkspace : build.files,
+        "builder",
+      );
       log("success", `Generated ${build.files.length} files.`);
       finishStage(run, "builder", "completed");
       await flush();
@@ -1352,7 +1370,24 @@ async function executeRun(
     run.resumable = false;
     const doneEv = await appendAuditEvent({ type: "run.completed", runId: run.id });
     await persistAttribution(testStatus, doneEv.seq);
-    log("success", `Run complete — ${spec.appName} is ready at ${workspacePath}.`);
+    // "Complete" describes the PIPELINE, never the outcome. A run whose tests
+    // failed or whose work was held back read "Run complete — X is ready",
+    // which the owner reasonably took as success (2026-08-16, run b74e5955).
+    // The final line now states what actually happened.
+    const outcomeOk = qa.passed && testStatus === "passing";
+    const releaseNote = run.release
+      ? run.release.released
+        ? ` Merged to main (${run.release.mergedSha?.slice(0, 8) ?? "sha unknown"}).`
+        : ` NOT merged: ${run.release.reason}`
+      : "";
+    log(
+      outcomeOk ? "success" : "warning",
+      outcomeOk
+        ? `Run finished — ${spec.appName} passed its checks.${releaseNote} Workspace: ${workspacePath}.`
+        : `Run finished WITHOUT passing its checks (${
+            testStatus === "passing" ? "QA flagged blockers" : `tests ${testStatus}`
+          }) — ${spec.appName} is NOT ready.${releaseNote} Workspace: ${workspacePath}.`,
+    );
     await flush();
     await deleteRunCheckpoint(run.id).catch(() => {
       log("warning", "Completed run checkpoint cleanup will be retried by retention.");
