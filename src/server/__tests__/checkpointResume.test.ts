@@ -113,6 +113,86 @@ describe("durable checkpoint continuation", () => {
     expect(await store.getRunCheckpoint(id)).toBeNull();
   });
 
+  it("resumes a CANCELLED run from its kept checkpoint (a cancel is a pause, not a shredder)", async () => {
+    // Owner order 2026-08-15: "there needs to be a way to pick up where the
+    // run left off". The concrete case: run a8a9c84a was cancelled mid-repair
+    // to fix a Factory Deck defect, and the old delete-checkpoint-on-cancel
+    // behavior destroyed ~$4 of already-paid stage work.
+    vi.resetModules();
+    const store = await import("../storage/runsStore.js");
+    const { resumeFactory } = await import("../orchestrator/runFactory.js");
+    const { loadConfig, loadSecrets } = await import("../config.js");
+
+    const id = crypto.randomUUID();
+    const stages = freshStages();
+    stages.find((stage) => stage.id === "intake")!.status = "completed";
+    stages.find((stage) => stage.id === "product_spec")!.status = "completed";
+    const run: RunRecord = {
+      id,
+      idea: "Build a cancel-resume proof app",
+      status: "cancelled",
+      resumable: true,
+      demo: true,
+      codeProvider: "mock",
+      reviewProvider: "mock",
+      currentStage: null,
+      stages,
+      logs: [],
+      files: [],
+      repairLoops: 0,
+      providerUsage: {
+        free: { calls: 0 },
+        anthropic: { calls: 0 },
+        openai: { calls: 0 },
+        stub: { calls: 0 },
+        mock: { calls: 1 },
+        totalCalls: 1,
+      },
+      finalReport: null,
+      appName: "CancelResumeProof",
+      workspacePath: null,
+      error: null,
+      attribution: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await store.saveRun(run);
+    await store.saveRunCheckpoint({
+      schemaVersion: 1,
+      runId: id,
+      idea: "Build a cancel-resume proof app",
+      options: { demo: true },
+      spec: {
+        appName: "CancelResumeProof",
+        tagline: "Pause, fix, continue",
+        targetUser: "operators",
+        coreFeatures: ["resume after deliberate cancel"],
+        dataModel: [],
+        userFlows: ["cancel a run, fix the environment, resume it"],
+        acceptanceCriteria: ["completed calls are not replayed"],
+      },
+      files: [],
+      testWriterComplete: false,
+      commandOutput: "",
+      testsExecuted: false,
+      testExit: null,
+      repairLoops: 0,
+      repairComplete: false,
+      updatedAt: Date.now(),
+    });
+
+    const config = {
+      ...loadConfig({}),
+      workspaceRoot,
+      allowUntrustedScripts: false,
+    };
+    const resumed = await resumeFactory(id, config, loadSecrets({}));
+    expect(resumed.status).toBe("completed");
+    expect(
+      resumed.logs.filter((line) => line.message.includes("Product Spec agent")),
+    ).toHaveLength(0);
+  });
+
   it("keeps a checkpoint resumable when its workspace is outside the current root", async () => {
     vi.resetModules();
     const store = await import("../storage/runsStore.js");
