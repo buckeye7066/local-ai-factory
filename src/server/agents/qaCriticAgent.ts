@@ -12,7 +12,7 @@ export async function qaCriticAgent(
 ): Promise<QaReport> {
   const fileList = build.files.map((f) => `- ${f.path}: ${f.purpose}`).join("\n");
   return deps.provider.generateJson<QaReport>({
-    system: `${SYSTEM_PREAMBLE}\nYou are the QA CRITIC agent. Be strict but fair. Only flag issues that genuinely block the app from running or passing tests.`,
+    system: `${SYSTEM_PREAMBLE}\nYou are the QA CRITIC agent. Be strict but fair. Flag issues that genuinely block the app from running or passing tests, and usability blockers a first-time non-technical user would hit: a dead-end or unexplained empty first screen, a raw technical error shown to the user, or a core task that cannot be found without instructions. Do not flag subjective styling preferences.`,
     prompt: `Review this build.\n\nFILES:\n${fileList}\n\nCOMMAND / TEST OUTPUT:\n${
       commandOutput || "(no commands executed)"
     }\n\nReturn { summary, passed, issues:[{severity,title,detail,file,repairInstruction}] }. Set passed=true only if there are no high or critical issues.`,

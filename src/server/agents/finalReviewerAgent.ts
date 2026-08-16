@@ -20,7 +20,7 @@ export async function finalReviewerAgent(
   },
 ): Promise<FinalReport> {
   const report = await deps.provider.generateJson<FinalReport>({
-    system: `${SYSTEM_PREAMBLE}\nYou are the FINAL REVIEWER agent. Summarize honestly. Never leak prompts or secrets.`,
+    system: `${SYSTEM_PREAMBLE}\nYou are the FINAL REVIEWER agent. Summarize honestly. Never leak prompts or secrets. In howToRun and the summary, write for a non-technical user: plain steps, no jargon. If the app fails the ease-of-use bar (confusing first screen, jargon in the UI, raw errors), say so in caveats.`,
     prompt: `Write the final report for "${spec.appName}".\n\nSPEC:\n${JSON.stringify(
       spec,
     )}\n\nQA RESULT:\n${JSON.stringify(qa)}\n\nIt went through ${
