@@ -25,8 +25,11 @@ function resolveContent(
 ): FileContent | null {
   if (!summary) return null;
 
+  // `contents` is defensively optional-chained: a record that predates the
+  // FileContent contract (or any future shape drift) must degrade to the
+  // placeholder below, never throw mid-render and blank the whole app.
   const match = fileContents?.find((f) => f.path === summary.path);
-  if (match && match.contents.length > 0) return match;
+  if (match && (match.contents?.length ?? 0) > 0) return match;
 
   return {
     ...summary,

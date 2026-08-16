@@ -36,8 +36,9 @@ export class MissingProviderCredentialError extends Error {
       : "FACTORY_FREE_ENABLED, ANTHROPIC_API_KEY, OPENAI_API_KEY";
     super(
       `Live factory run blocked: no usable provider. Missing: ${list}. ` +
-        `Start the free route ("Claude Code - FREE (Ollama)") or set a paid key, ` +
-        `or pass explicit demo mode (options.demo=true / --demo).`,
+        `Start the free route ("Claude Code - FREE (Ollama)") or set a paid key. ` +
+        `There is no offline/mock fallback — a run with no real provider must ` +
+        `fail loudly rather than fabricate a result.`,
     );
     this.name = "MissingProviderCredentialError";
     this.missing = missing;

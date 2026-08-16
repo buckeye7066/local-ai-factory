@@ -46,11 +46,10 @@ export function NewRunHero({
   const hasAnyKey =
     (health?.anthropicConfigured ?? false) || (health?.openaiConfigured ?? false);
   const [idea, setIdea] = useState("");
-  // Demo/simulate mode is not an owner surface (doctrine 2026-08-15) — a run
-  // without keys fails loudly with the real missing-credential error instead
-  // of silently producing a mock app.
-  const demo = false;
-  const setDemo = (_: boolean) => {};
+  // Demo/simulate mode is not an owner surface — a run without a provider
+  // fails loudly with the real missing-credential error instead of silently
+  // producing a mock app. The option no longer exists at all: the server
+  // rejects options.demo outright.
   const [runMode, setRunMode] = useState<"new" | "extend">("new");
   // Which provider is PRIMARY for runs started from this screen. "auto" is
   // the free-first default; pinning Claude/OpenAI sends an explicit
@@ -74,7 +73,7 @@ export function NewRunHero({
   const startWithRouting = (ideaText: string, options: RunOptions) =>
     onStart(
       ideaText,
-      routing !== "auto" && !options.demo
+      routing !== "auto"
         ? { ...options, codeProvider: routing, reviewProvider: routing }
         : options,
     );
@@ -83,7 +82,6 @@ export function NewRunHero({
     const trimmed = idea.trim();
     if (!trimmed) return;
     startWithRouting(trimmed, {
-      demo,
       publish,
       mode: "new",
       newRepo: { name: repoName.trim(), private: true },
@@ -141,11 +139,8 @@ export function NewRunHero({
         <p className="mb-2 text-xs font-medium text-slate-400">Provider routing</p>
         <ProviderRoutingCards
           health={health}
-          demo={demo}
-          onToggleDemo={setDemo}
           routing={routing}
           onRoutingChange={setRouting}
-          allowDemo={runMode === "new"}
         />
       </motion.div>
 

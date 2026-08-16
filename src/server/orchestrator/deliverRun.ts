@@ -129,6 +129,25 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
   const dest = { ...input.destination };
   const now = Date.now();
 
+  // A simulated run NEVER writes into a real repository. The mock/stub
+  // providers emit canned, unrelated source (a Bible-streak React demo); a
+  // measured run proved that landing in an attached repo it overwrote the
+  // owner's own package.json and README on a `factory-deck/<id>` branch, and
+  // reported status "delivered". Release-to-main and deploy were already
+  // demo-gated; delivery was not. Fail LOUD and skip — never silently, and
+  // never as a success.
+  if (input.options.demo === true) {
+    return {
+      ...dest,
+      status: "skipped",
+      detail:
+        "REFUSED: this run used the offline mock provider, so its output is " +
+        "simulated and was NOT written to the target repo. Re-run against a " +
+        "real provider (free route or a paid key) to deliver real work.",
+      deliveredAt: now,
+    };
+  }
+
   try {
     if (dest.kind === "workspace-only") {
       return {

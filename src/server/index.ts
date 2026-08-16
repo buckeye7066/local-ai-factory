@@ -60,6 +60,8 @@ import {
   questionCap,
 } from "./storage/clarificationStore.js";
 import { createFoundryRouter } from "./foundry/router.js";
+import { findRemovedRunOption } from "./removedOptions.js";
+import { FATAL_EXIT_CODE } from "./exitCodes.js";
 
 /**
  * server/index.ts — the LOCAL backend API.
@@ -274,6 +276,20 @@ function validRunIdParam(req: Request, res: Response): string | null {
   return runId;
 }
 
+/**
+ * Reject any request that names a REMOVED run option (demo / dryRun /
+ * simulate / reportOnly). The decision itself lives in removedOptions.ts so it
+ * is unit-testable without booting the server.
+ *
+ * @returns true when the request was rejected (the caller must stop).
+ */
+function rejectRemovedDemoOption(req: Request, res: Response): boolean {
+  const rejection = findRemovedRunOption(req.body?.options);
+  if (!rejection) return false;
+  res.status(rejection.status).json(rejection.body);
+  return true;
+}
+
 /** Route async rejections into the JSON error handler instead of crashing. */
 function wrap(
   fn: (req: Request, res: Response) => Promise<void> | void,
@@ -307,6 +323,7 @@ app.post(
       });
       return;
     }
+    if (rejectRemovedDemoOption(req, res)) return;
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
       const first = parsed.error.issues[0];
@@ -389,7 +406,7 @@ app.post(
             "Start the FREE route (run the 'Claude Code - FREE (Ollama)' shortcut, " +
             "or set FACTORY_FREE_ENABLED=1 with fcc-server running). " +
             "A paid ANTHROPIC_API_KEY / OPENAI_API_KEY is optional and used only " +
-            "as a rescue tier. Or pass options.demo=true for offline mock only.",
+            "as a rescue tier. There is no offline/mock fallback.",
         });
         return;
       }
@@ -443,6 +460,7 @@ app.post(
       res.status(400).json({ error: "Field 'idea' is required." });
       return;
     }
+    if (rejectRemovedDemoOption(req, res)) return;
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
@@ -760,8 +778,19 @@ app.get(
       return;
     }
     // Full contents are served only from this explicit endpoint (still local).
+    //
+    // getRunFiles() returns [] on ANY read/parse failure, and the fallback
+    // below is run.files — which are FileSummary records with NO `contents`
+    // field. Serving those raw broke the declared FileContent[] contract and
+    // crashed the Files tab (`match.contents.length` on undefined), taking the
+    // whole SPA to a blank page. Normalise to a real FileContent so a missing
+    // body is an empty string the UI can render, never a type violation.
     const files = await getRunFiles(runId);
-    res.json({ files: files.length ? files : run.files });
+    res.json({
+      files: files.length
+        ? files
+        : run.files.map((f) => ({ ...f, contents: "" })),
+    });
   }),
 );
 
@@ -811,7 +840,7 @@ void pruneOldRuns().then((n) => {
 const bind = resolveBindHost({ bindLan: config.bindLan, token: secrets.authToken });
 if (bind.error) {
   console.error(`[factory] ${bind.error}`);
-  process.exit(1);
+  process.exit(FATAL_EXIT_CODE);
 }
 
 /**
@@ -888,7 +917,8 @@ server.on("error", (err: NodeJS.ErrnoException) => {
         `[factory] port ${config.port} is in use by another (non-Factory Deck) process. ` +
           `Free the port or set PORT to a different value. Exiting.`,
       );
-      process.exit(1);
+      // Permanent until the operator frees the port — restarting cannot fix it.
+      process.exit(FATAL_EXIT_CODE);
     })();
     return;
   }

@@ -5,7 +5,6 @@ import {
   History,
   FolderGit2,
   Settings as SettingsIcon,
-  FlaskConical,
   Network,
   X,
 } from "lucide-react";
@@ -27,18 +26,16 @@ const NAV: {
 ];
 
 /**
- * Sidebar — brand + primary navigation + a Demo Mode shortcut. On mobile it
- * slides in as an overlay (controlled by the parent via `open`/`onClose`).
+ * Sidebar — brand + primary navigation. On mobile it slides in as an overlay
+ * (controlled by the parent via `open`/`onClose`).
  */
 export function Sidebar({
   active,
   onNavigate,
-  onDemo,
   onClose,
 }: {
   active: NavKey | "run";
   onNavigate: (key: NavKey) => void;
-  onDemo: () => void;
   onClose?: () => void;
 }) {
   return (
@@ -104,18 +101,8 @@ export function Sidebar({
       </nav>
 
       <div className="mt-auto">
-        {/* Demo Mode CTA */}
-        <button
-          onClick={onDemo}
-          className="group flex w-full items-center gap-3 rounded-xl border border-aurora-violet/25 bg-aurora-violet/[0.08] px-3 py-2.5 text-sm font-medium text-violet-200 transition-colors hover:bg-aurora-violet/15"
-        >
-          <FlaskConical className="h-4.5 w-4.5" />
-          Demo Mode
-          <span className="ml-auto text-[10px] text-violet-300/70 group-hover:text-violet-200">
-            no keys
-          </span>
-        </button>
-        <p className="mt-3 px-1 text-[10px] leading-relaxed text-slate-600">
+        {/* No demo/simulate CTA: every run does real work against real providers. */}
+        <p className="px-1 text-[10px] leading-relaxed text-slate-600">
           Runs locally. Keys stay in <code className="text-slate-500">.env</code>, never
           in the browser.
         </p>

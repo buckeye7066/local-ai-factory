@@ -20,8 +20,6 @@
     "ui": "vite",
     "build": "tsc -p tsconfig.json && vite build",
     "factory": "tsx src/cli/factory.ts",
-    "demo": "tsx src/cli/factory.ts --demo \"Build a Bible reading habit tracker\"",
-    "proof:mock-e2e": "tsx src/cli/factory.ts --demo \"Build a Bible reading habit tracker\"",
     "proof:real-provider": "tsx src/cli/proof-real-provider.ts",
     "proof:free-route": "tsx src/cli/proof-free-route.ts",
     "proof:extend-futureu": "tsx src/cli/proof-extend-futureu.ts",
