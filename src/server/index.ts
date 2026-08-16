@@ -790,6 +790,32 @@ if (bind.error) {
   process.exit(1);
 }
 
+/**
+ * CRASH VISIBILITY (owner order 2026-08-16): the server died overnight with
+ * exit 1 and ZERO output - undiagnosable. Every uncaught error now lands in
+ * .factory/crash.log with a stack before anything else happens. Rejections
+ * and exceptions are logged-and-survived: durable checkpoints make a live
+ * server strictly better than a dead one, and the log names what happened.
+ */
+import("node:fs").then(({ appendFileSync, mkdirSync }) => {
+  const dir = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".factory");
+  const logCrash = (kind: string, err: unknown) => {
+    const line = `[${new Date().toISOString()}] ${kind}: ${
+      err instanceof Error ? (err.stack ?? err.message) : String(err)
+    }
+`;
+    try {
+      mkdirSync(dir, { recursive: true });
+      appendFileSync(resolve(dir, "crash.log"), line);
+    } catch {
+      /* the console line below still fires */
+    }
+    console.error(`[factory] ${kind}:`, err);
+  };
+  process.on("uncaughtException", (err) => logCrash("uncaughtException", err));
+  process.on("unhandledRejection", (err) => logCrash("unhandledRejection", err));
+});
+
 void recoverOrphanedEpics().then((n) => {
   if (n > 0) console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
 });
