@@ -305,17 +305,24 @@ async function executeRun(
   // otherwise a paid call would be booked as free and the spend would hide.
   const attribution = (p: LLMProvider): "declared" | "served" =>
     p instanceof FailoverProvider ? "served" : "declared";
-  const code: LLMProvider = new CountingProvider(
+  // BUDGET BYPASS FIX (2026-08-16): only the concurrent pool was budget-gated.
+  // When a run's own codeProvider/reviewProvider resolved to a RAW paid
+  // provider (pinned routing, or a paid default), every stage call skipped
+  // canPayNow() entirely — spend was RECORDED but never CHECKED. Measured
+  // result: 68 paid calls / $26.64 in 24h against configured caps of 24/day
+  // and $2/day. The failover chain gates itself; raw paid providers must be
+  // wrapped here, exactly like the pool.
+  const gateIfPaid = (p: LLMProvider, counted: LLMProvider): LLMProvider =>
+    p.name === "anthropic" || p.name === "openai"
+      ? new BudgetGatedProvider(counted, p.name)
+      : counted;
+  const code: LLMProvider = gateIfPaid(
     rawCode,
-    run,
-    config.maxModelCallsPerRun,
-    attribution(rawCode),
+    new CountingProvider(rawCode, run, config.maxModelCallsPerRun, attribution(rawCode)),
   );
-  const review: LLMProvider = new CountingProvider(
+  const review: LLMProvider = gateIfPaid(
     rawReview,
-    run,
-    config.maxModelCallsPerRun,
-    attribution(rawReview),
+    new CountingProvider(rawReview, run, config.maxModelCallsPerRun, attribution(rawReview)),
   );
   // CRITICAL-STAGE provider (owner order 2026-08-16: fix known-weak backends
   // before they fail, don't wait). Spec, architecture, research, planning and
@@ -337,10 +344,7 @@ async function executeRun(
     config.maxModelCallsPerRun,
     attribution(rawCritical),
   );
-  const critical: LLMProvider =
-    rawCritical.name === "anthropic" || rawCritical.name === "openai"
-      ? new BudgetGatedProvider(criticalCounted, rawCritical.name)
-      : criticalCounted;
+  const critical: LLMProvider = gateIfPaid(rawCritical, criticalCounted);
   // Every distinct LIVE backend actually configured (free / anthropic / openai,
   // never the failover chain itself), each still budget-metered — the pool the
   // concurrent builder dispatches independent work across. Demo runs get just

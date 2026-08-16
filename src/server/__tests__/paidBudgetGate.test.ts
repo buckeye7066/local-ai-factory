@@ -15,6 +15,12 @@ import type { LLMProvider } from "../../shared/types.js";
 // file's own paid-rescue ledger writes (e.g. freeRouteFailover.test.ts).
 const DATA_DIR = ".vitest-factory-data-paid-budget-gate";
 process.env.FACTORY_DATA_DIR = DATA_DIR;
+// Caps are OWNER-SET only (defaults are unlimited since 2026-08-16 — the
+// invented $2/day guardrail was removed). These tests exercise the gate, so
+// they set the limits explicitly, exactly as an owner would.
+process.env.FACTORY_PAID_RESCUES_PER_HOUR = "6";
+process.env.FACTORY_PAID_RESCUES_PER_DAY = "24";
+process.env.FACTORY_PAID_MAX_USD_PER_DAY = "2";
 
 /**
  * `resetPaidBudget()` only drops the IN-MEMORY cache so the next read hits
