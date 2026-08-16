@@ -195,7 +195,7 @@ describe("epic resilience across server restarts", () => {
     const d1 = deps([{ status: "failed", release: null, error: "process died" }]);
     const startedIds: string[] = [];
     const origExec = d1.executeSliceRun;
-    d1.executeSliceRun = async (idea, options, onStarted) => {
+    d1.executeSliceRun = async (_idea, _options, onStarted) => {
       const run = fakeRun({ status: "failed", release: null, error: "process died" });
       startedIds.push(run.id);
       await onStarted?.(run);
