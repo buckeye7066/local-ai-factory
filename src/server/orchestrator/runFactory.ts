@@ -332,10 +332,20 @@ async function executeRun(
   // prefer the first configured PAID provider (budget-gated like the pool);
   // free remains the keyless fallback and the builder's bulk free-primary
   // economics are unchanged.
+  // The run's OWN pinned paid provider wins (2026-08-16): picking
+  // availablePaid()[0] made every run - including ones explicitly pinned to
+  // OpenAI - route its spec/architecture/research/planning through Anthropic,
+  // so an Anthropic credit outage failed five epics that had a funded OpenAI
+  // key sitting right there. Order: the run's own paid choice, then any
+  // configured paid provider, then free.
+  const runPinnedPaid =
+    run.codeProvider === "anthropic" || run.codeProvider === "openai"
+      ? run.codeProvider
+      : undefined;
   const rawCritical = run.demo
     ? registry.get("mock")
     : registry.resolveLive(
-        registry.availablePaid()[0] ?? run.codeProvider,
+        runPinnedPaid ?? registry.availablePaid()[0] ?? run.codeProvider,
         config.defaultCodeProvider,
       );
   const criticalCounted = new CountingProvider(
