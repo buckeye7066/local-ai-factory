@@ -151,7 +151,7 @@ describe("workspace removal stays jailed under WORKSPACE_ROOT", () => {
     expect(await readFile(join(outside, "keep.txt"), "utf8")).toBe(
       "owner's actual code",
     );
-    await rm(outside, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   });
 
   it("refuses the workspace ROOT itself", async () => {

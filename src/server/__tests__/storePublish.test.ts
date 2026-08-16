@@ -7,7 +7,7 @@ import type { ExecResult } from "../workspace/gitOps.js";
 
 const ROOT = resolve(process.cwd(), ".test-store-publish");
 afterAll(async () => {
-  await rm(ROOT, { recursive: true, force: true });
+  await rm(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 const ok = (stdout: string): ExecResult => ({

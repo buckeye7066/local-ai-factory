@@ -57,7 +57,7 @@ import { loadConfig, loadSecrets } from "../config.js";
 const tmpRoot = resolve(process.cwd(), ".test-workspaces-served");
 
 afterAll(async () => {
-  await rm(tmpRoot, { recursive: true, force: true });
+  await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 describe("Round-10 #4 + #5 served idea + finalReport are redacted; model gets raw idea", () => {

@@ -24,7 +24,7 @@ process.env.FACTORY_DATA_DIR = DATA_DIR;
  * on disk too.
  */
 async function resetLedgerCompletely(): Promise<void> {
-  await rm(resolve(process.cwd(), DATA_DIR), { recursive: true, force: true });
+  await rm(resolve(process.cwd(), DATA_DIR), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   resetPaidBudget();
 }
 
