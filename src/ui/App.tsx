@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Toaster, toast } from "sonner";
+import { ErrorBoundary } from "./components/ui/ErrorBoundary.js";
 import {
   Workflow,
   ScrollText,
@@ -32,6 +33,26 @@ import { useTheme } from "./lib/useTheme.js";
 import type { RunOptions, RunSummary, FileContent } from "../shared/schemas.js";
 
 type View = NavKey | "run";
+
+/** Human-readable name for the current view, used in the crash fallback. */
+function viewLabel(view: string): string {
+  switch (view) {
+    case "new":
+      return "the New Run screen";
+    case "history":
+      return "the Runs list";
+    case "workspaces":
+      return "the Workspaces list";
+    case "settings":
+      return "Settings";
+    case "run":
+      return "the run view";
+    case "foundry":
+      return "the Foundry floor";
+    default:
+      return "this panel";
+  }
+}
 
 export function App() {
   const { theme, toggle } = useTheme();
@@ -257,6 +278,11 @@ export function App() {
           animate="show"
           exit="exit"
         >
+          {/* One panel's render-time throw must not unmount the whole deck.
+              The boundary sits INSIDE the shell so the sidebar, top bar and
+              every other tab stay usable, and it is keyed by view so simply
+              navigating away clears a crashed panel. */}
+          <ErrorBoundary label={viewLabel(view)} resetKey={view}>
           {view === "foundry" && <FoundryFloor />}
 
           {view === "new" && (
@@ -292,6 +318,7 @@ export function App() {
           {view === "run" && !run && (
             <div className="py-20 text-center text-sm text-slate-400">Loading run…</div>
           )}
+          </ErrorBoundary>
         </motion.div>
       </AnimatePresence>
 
