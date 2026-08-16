@@ -100,23 +100,11 @@ export function ProviderRoutingCards({
         onRoutingChange("openai");
       },
     },
-    ...(allowDemo
-      ? [
-          {
-            key: "mock",
-            title: "Mock Demo",
-            role: "Offline, deterministic",
-            icon: FlaskConical,
-            ready: true,
-            selected: demo,
-            accent: "emerald" as const,
-            serving: false,
-            calls: undefined,
-            onClick: () => onToggleDemo(true),
-          },
-        ]
-      : []),
   ];
+  // The "Mock Demo" card is gone (owner doctrine 2026-08-15: no test-run or
+  // simulate modes in owner tooling — see feedback-no-dry-runs-ever). Demo
+  // remains an internal test-suite substrate only, never an owner surface.
+  void allowDemo;
 
   return (
     <motion.div
