@@ -60,7 +60,7 @@ export type ExecFn = (
   timeoutMs: number,
 ) => Promise<ExecResult>;
 
-const defaultExec: ExecFn = (bin, args, cwd, timeoutMs) =>
+export const defaultExec: ExecFn = (bin, args, cwd, timeoutMs) =>
   new Promise((resolveP) => {
     const child = spawn(bin, args, { cwd, shell: false });
     let stdout = "";
@@ -112,7 +112,10 @@ export function chooseTarget(workspacePath: string): {
         scripts?: Record<string, string>;
       };
       if (pkg.scripts?.start) {
-        return { target: "railway", reason: "package.json has a start script (server app)" };
+        return {
+          target: "railway",
+          reason: "package.json has a start script (server app)",
+        };
       }
     } catch {
       /* unreadable package.json falls through to the static checks */
@@ -172,7 +175,13 @@ export async function deployRun(input: DeployInput): Promise<DeployResult> {
 
   const chosen = chooseTarget(cwd);
   if (!chosen.target) {
-    return { deployed: false, url: null, target: null, verified: false, reason: chosen.reason };
+    return {
+      deployed: false,
+      url: null,
+      target: null,
+      verified: false,
+      reason: chosen.reason,
+    };
   }
 
   const resolveCli = input.cliPathImpl ?? resolveNpmCli;
@@ -201,14 +210,20 @@ export async function deployRun(input: DeployInput): Promise<DeployResult> {
     // An already-linked workspace dir reports an existing project — not fatal.
     if (init.code !== 0 && !/already|exists/i.test(init.stderr + init.stdout)) {
       return {
-        deployed: false, url: null, target: "railway", verified: false,
+        deployed: false,
+        url: null,
+        target: "railway",
+        verified: false,
         reason: `railway init failed: ${failText(init)}`,
       };
     }
     const up = await cli(["up", "--detach"], 300_000);
     if (up.code !== 0) {
       return {
-        deployed: false, url: null, target: "railway", verified: false,
+        deployed: false,
+        url: null,
+        target: "railway",
+        verified: false,
         reason: `railway up failed: ${failText(up)}`,
       };
     }
@@ -216,7 +231,10 @@ export async function deployRun(input: DeployInput): Promise<DeployResult> {
     url = URL_RE.exec(domain.stdout + " " + domain.stderr)?.[0] ?? null;
     if (!url) {
       return {
-        deployed: true, url: null, target: "railway", verified: false,
+        deployed: true,
+        url: null,
+        target: "railway",
+        verified: false,
         reason: `deployed to Railway but no domain was obtained: ${failText(domain)}`,
       };
     }
@@ -224,21 +242,30 @@ export async function deployRun(input: DeployInput): Promise<DeployResult> {
     const link = await cli(["link", "--yes", "--project", name], 120_000);
     if (link.code !== 0) {
       return {
-        deployed: false, url: null, target: "vercel", verified: false,
+        deployed: false,
+        url: null,
+        target: "vercel",
+        verified: false,
         reason: `vercel link failed: ${failText(link)}`,
       };
     }
     const deploy = await cli(["deploy", "--prod", "--yes"], 600_000);
     if (deploy.code !== 0) {
       return {
-        deployed: false, url: null, target: "vercel", verified: false,
+        deployed: false,
+        url: null,
+        target: "vercel",
+        verified: false,
         reason: `vercel deploy failed: ${failText(deploy)}`,
       };
     }
     url = URL_RE.exec(deploy.stdout + " " + deploy.stderr)?.[0] ?? null;
     if (!url) {
       return {
-        deployed: true, url: null, target: "vercel", verified: false,
+        deployed: true,
+        url: null,
+        target: "vercel",
+        verified: false,
         reason: "vercel deploy succeeded but printed no production URL",
       };
     }
