@@ -1,6 +1,7 @@
 import type { Architecture, ProductSpec } from "../../shared/schemas.js";
 import { webFetchTool } from "./webFetch.js";
 import { webSearchTool } from "./webSearch.js";
+import { repoRewardsSearch } from "./repoRewards.js";
 
 export type LicenseReusePolicy =
   | "direct-use"
@@ -43,6 +44,12 @@ export interface CompetitiveDossier {
   discoveredCount: number;
   inspectedCount: number;
   generatedAt: string;
+  /**
+   * Which discovery sources actually answered, and why any did not. The
+   * owner's own Repo Rewards service runs alongside web search (owner order
+   * 2026-08-16); an unreachable source is REPORTED, never silently dropped.
+   */
+  sources: { name: string; ok: boolean; detail: string }[];
 }
 
 interface GitHubRepoRef {
@@ -489,8 +496,25 @@ export async function buildCompetitiveDossier(
     { title: string; snippet: string; hits: number; evidence: string[] }
   >();
 
+  // Discovery runs BOTH sources per query: the owner's Repo Rewards service
+  // (ranked real repositories for a need) and keyless web search (market
+  // products with no GitHub presence). Repo Rewards results are
+  // metadata-screened candidates only — they get the same inspection, license
+  // gate, and reuse-mode enforcement as anything found on the web.
+  const sources: CompetitiveDossier["sources"] = [];
+  let rrEndpoint: string | null = null;
+  let rrFailure: string | null = null;
+  let rrHits = 0;
+
   for (const query of queries) {
-    const results = await webSearchTool(query);
+    const rr = await repoRewardsSearch(query, { limit: 10 });
+    if (rr.endpoint) {
+      rrEndpoint = rr.endpoint;
+      rrHits += rr.results.length;
+    } else if (!rrFailure) {
+      rrFailure = rr.unreachableReason;
+    }
+    const results = [...rr.results, ...(await webSearchTool(query))];
     for (const result of results) {
       const repo = parseGitHubRepoUrl(result.url);
       if (repo) {
@@ -580,8 +604,20 @@ export async function buildCompetitiveDossier(
     });
   }
 
+  sources.push(
+    rrEndpoint
+      ? { name: "repo-rewards", ok: true, detail: `${rrEndpoint} — ${rrHits} ranked repo hit(s)` }
+      : { name: "repo-rewards", ok: false, detail: rrFailure ?? "no endpoint answered" },
+  );
+  sources.push({
+    name: "web-search",
+    ok: true,
+    detail: `${queries.length} quer${queries.length === 1 ? "y" : "ies"} (competitor products + implementations)`,
+  });
+
   return {
     queries,
+    sources,
     candidates: inspected,
     discoveredCount: repositories.size + webCandidates.size,
     inspectedCount: inspected.length,
