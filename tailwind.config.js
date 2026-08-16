@@ -41,6 +41,24 @@ export default {
           magenta: "#d946ef",
           emerald: "#34d399",
         },
+        // Purpose Foundry identity — Ford Lorain Assembly, third shift. Cold
+        // concrete lit amber by sodium-vapor high bays. Scoped to foundry mode
+        // ONLY; Factory Deck keeps the aurora palette above.
+        plant: {
+          night: "#0a0c0f", // the floor beyond the light
+          floor: "#0f1216", // slab under a lamp
+          slab: "#15181d", // panel face
+          steel: "#232830", // stamped steel
+          edge: "#333a45", // sheared edge / weld seam
+          paint: "#8a939b", // worn machine paint
+          ford: "#003478", // corporate blue, plant signage only
+          arc: "#1d5bb8", // lit blue
+          sodium: "#ffb43c", // high-bay vapor light
+          safety: "#f2c300", // aisle lines, hazard chevrons, bay numbers
+          oxide: "#a6432a", // rust patina
+          go: "#2fbf5b", // andon: running
+          stop: "#d93a2b", // andon: line down
+        },
       },
       boxShadow: {
         glow: "0 0 0 1px rgba(59,130,246,0.18), 0 8px 40px -8px rgba(59,130,246,0.35)",
@@ -73,11 +91,29 @@ export default {
         shimmer: {
           "100%": { transform: "translateX(100%)" },
         },
+        // Purpose Foundry: an overhead power-and-free carrier crossing the bays.
+        carrier: {
+          "0%": { transform: "translateX(-4%)" },
+          "100%": { transform: "translateX(104%)" },
+        },
+        // Sodium-vapor high bays never sit perfectly still.
+        "high-bay": {
+          "0%, 100%": { opacity: "0.72" },
+          "50%": { opacity: "1" },
+        },
+        // The lit andon lamp, breathing.
+        andon: {
+          "0%, 100%": { opacity: "0.72", filter: "brightness(1)" },
+          "50%": { opacity: "1", filter: "brightness(1.5)" },
+        },
       },
       animation: {
         "aurora-drift": "aurora-drift 18s ease-in-out infinite",
         "pulse-glow": "pulse-glow 2.4s ease-in-out infinite",
         shimmer: "shimmer 1.6s infinite",
+        carrier: "carrier 16s linear infinite",
+        "high-bay": "high-bay 9s ease-in-out infinite",
+        andon: "andon 1.8s ease-in-out infinite",
       },
     },
   },

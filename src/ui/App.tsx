@@ -247,6 +247,7 @@ export function App() {
       health={health}
       theme={theme}
       onToggleTheme={toggle}
+      variant={view === "foundry" ? "foundry" : "deck"}
     >
       <AnimatePresence mode="wait">
         <motion.div

@@ -2,8 +2,10 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AuroraBackground } from "./AuroraBackground.js";
+import { PlantBackground } from "../foundry/PlantBackground.js";
 import { Sidebar, type NavKey } from "./Sidebar.js";
 import { TopBar } from "./TopBar.js";
+import { cn } from "../../lib/cn.js";
 import type { Health } from "../../../shared/schemas.js";
 import type { Theme } from "../../lib/useTheme.js";
 
@@ -11,6 +13,10 @@ import type { Theme } from "../../lib/useTheme.js";
  * AppShell — full-screen responsive layout: fixed glass sidebar (overlay on
  * mobile), sticky top bar, and a main content area. Children are keyed by the
  * parent so page changes animate via AnimatePresence.
+ *
+ * `variant` swaps the ambient identity. Factory Deck keeps the aurora backdrop
+ * and glass chrome; Purpose Foundry gets the Lorain Assembly plant floor —
+ * sodium high bays over concrete, with the chrome dropped to bare steel.
  */
 export function AppShell({
   active,
@@ -19,6 +25,7 @@ export function AppShell({
   health,
   theme,
   onToggleTheme,
+  variant = "deck",
   children,
 }: {
   active: NavKey | "run";
@@ -27,9 +34,11 @@ export function AppShell({
   health: Health | null;
   theme: Theme;
   onToggleTheme: () => void;
+  variant?: "deck" | "foundry";
   children: ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const foundry = variant === "foundry";
 
   const nav = (key: NavKey) => {
     onNavigate(key);
@@ -38,11 +47,18 @@ export function AppShell({
 
   return (
     <div className="relative min-h-screen text-slate-100">
-      <AuroraBackground />
+      {foundry ? <PlantBackground /> : <AuroraBackground />}
 
       <div className="flex min-h-screen">
         {/* Desktop sidebar */}
-        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 border-r border-white/[0.06] bg-white/[0.02] backdrop-blur-xl lg:block">
+        <aside
+          className={cn(
+            "sticky top-0 hidden h-screen w-64 shrink-0 border-r lg:block",
+            foundry
+              ? "border-plant-edge/70 bg-plant-slab/80 backdrop-blur-sm"
+              : "border-white/[0.06] bg-white/[0.02] backdrop-blur-xl",
+          )}
+        >
           <Sidebar active={active} onNavigate={onNavigate} onDemo={onDemo} />
         </aside>
 
@@ -58,7 +74,12 @@ export function AppShell({
                 onClick={() => setMenuOpen(false)}
               />
               <motion.aside
-                className="fixed inset-y-0 left-0 z-50 w-72 border-r border-white/10 bg-deck-surface/95 backdrop-blur-2xl lg:hidden"
+                className={cn(
+                  "fixed inset-y-0 left-0 z-50 w-72 border-r lg:hidden",
+                  foundry
+                    ? "border-plant-edge bg-plant-slab/95 backdrop-blur-sm"
+                    : "border-white/10 bg-deck-surface/95 backdrop-blur-2xl",
+                )}
                 initial={{ x: "-100%" }}
                 animate={{ x: 0 }}
                 exit={{ x: "-100%" }}
