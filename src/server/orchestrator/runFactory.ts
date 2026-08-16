@@ -81,6 +81,7 @@ import { buildFilesConcurrently } from "./concurrentBuild.js";
 import { researchAgent } from "../agents/researchAgent.js";
 import { deliverRun, planDestination } from "./deliverRun.js";
 import { releaseRun } from "./releaseRun.js";
+import { deployRun } from "./deployRun.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
 
 export interface StartRunArgs {
@@ -1188,6 +1189,52 @@ async function executeRun(
           runId: run.id,
           detail: release.prUrl ?? delivered.target,
         });
+      }
+
+      /* Deploy — the from-scratch twin of Release (owner order 2026-08-15):
+       * a NEW program finishes on a real host (Railway for servers, Vercel
+       * for static/frontend), and "live" is claimed only after this process
+       * observes the URL answering. Same evidence gate; deploy failures
+       * never fail the run. FACTORY_DEPLOY_NEW_APPS=0 opts out. */
+      if (
+        delivered.status === "delivered" &&
+        delivered.kind === "new-repo" &&
+        checkpoint.options.demo !== true &&
+        process.env.FACTORY_DEPLOY_NEW_APPS !== "0"
+      ) {
+        const gate = qa.passed && testStatus === "passing";
+        if (!gate) {
+          log(
+            "warning",
+            `Not deploying to a host: ${
+              qa.passed ? "tests did not execute green" : "grounded QA did not pass"
+            } — an unverified build never goes live.`,
+          );
+        } else {
+          log("info", "Deploy: putting the new app on a host (Railway/Vercel)…");
+          const dep = await deployRun({
+            workspacePath,
+            appName: run.appName,
+            runId: run.id,
+          });
+          log(
+            dep.deployed && dep.verified ? "success" : "warning",
+            dep.deployed && dep.verified
+              ? `Deployed and live: ${dep.url} (${dep.target})`
+              : `Deploy (${dep.target ?? "no target"}): ${dep.reason}`,
+          );
+          run.destination = {
+            ...run.destination,
+            detail: redactSecrets(
+              `${run.destination.detail ?? ""} Hosting: ${dep.reason}.`.trim(),
+            ),
+          };
+          await appendAuditEvent({
+            type: dep.deployed && dep.verified ? "run.deploy.live" : "run.deploy.held",
+            runId: run.id,
+            detail: dep.url ?? dep.reason,
+          });
+        }
       }
     }
 
