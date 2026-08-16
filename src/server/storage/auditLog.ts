@@ -38,7 +38,9 @@ export type AuditEventType =
   | "run.delivery.skipped"
   | "run.delivery.planned"
   | "run.release.merged"
-  | "run.release.held";
+  | "run.release.held"
+  | "run.deploy.live"
+  | "run.deploy.held";
 
 export interface AuditEventInput {
   type: AuditEventType;
