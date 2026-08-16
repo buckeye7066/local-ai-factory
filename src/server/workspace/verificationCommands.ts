@@ -43,6 +43,13 @@ function javascriptCommands(workspacePath: string): VerificationCommand[] {
   // (it executes even for packages the allowlist has not approved — verified
   // live in that workspace: the warning prints, the binding builds, the auth
   // suite goes green) and is an idempotent no-op when nothing needs building.
+  // PRISMA CLIENT — the same skipped-scripts class, one layer up. A repo with
+  // a prisma schema generates its client in a postinstall hook; with install
+  // scripts skipped the client never materializes and every test that imports
+  // it dies with "@prisma/client did not initialize yet". SermonSmith slice
+  // 40c4c51d burned three repair loops on exactly that (2026-08-16).
+  // `prisma generate` is idempotent and a no-op when the client is current.
+  const prismaStep = hasPrismaSchema(workspacePath);
   if (
     exists(workspacePath, "package-lock.json") ||
     exists(workspacePath, "npm-shrinkwrap.json")
@@ -50,14 +57,28 @@ function javascriptCommands(workspacePath: string): VerificationCommand[] {
     return [
       { bin: "npm", args: ["ci"], isTest: false },
       { bin: "npm", args: ["rebuild"], isTest: false },
+      ...(prismaStep ? [{ bin: "npx", args: ["prisma", "generate"], isTest: false }] : []),
       { bin: "npm", args: ["test"], isTest: true },
     ];
   }
   return [
     { bin: "pnpm", args: ["install"], isTest: false },
     { bin: "pnpm", args: ["rebuild"], isTest: false },
+    ...(prismaStep ? [{ bin: "npx", args: ["prisma", "generate"], isTest: false }] : []),
     { bin: "pnpm", args: ["test"], isTest: true },
   ];
+}
+
+/** True when the repo (or a common workspace layout) ships a prisma schema. */
+function hasPrismaSchema(workspacePath: string): boolean {
+  return [
+    "prisma/schema.prisma",
+    "services/api/prisma/schema.prisma",
+    "apps/api/prisma/schema.prisma",
+    "packages/db/prisma/schema.prisma",
+    "backend/prisma/schema.prisma",
+    "server/prisma/schema.prisma",
+  ].some((rel) => exists(workspacePath, rel));
 }
 
 const DIRECT_TEST_PATH =

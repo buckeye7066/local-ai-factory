@@ -99,3 +99,55 @@ describe("assessProtectedHostWrite", () => {
     expect(assessProtectedHostWrite(path, "package.json", "{}").refused).toBe(false);
   });
 });
+
+const BR = String.fromCharCode(10);
+
+describe("tracked source files keep their exports (slice 40c4c51d class)", () => {
+  it("refuses an ESM->CJS rewrite that drops every export", () => {
+    const repo = gitWorkspace({
+      "auth.js": [
+        "export const AUTH_COOKIE = 'ss_token';",
+        "export function cookieOptions() { return {}; }",
+        "export function signToken(u) { return u; }",
+      ].join(BR),
+    });
+    const verdict = assessProtectedHostWrite(
+      repo,
+      "auth.js",
+      ["const jwt = require('jsonwebtoken');", "module.exports = { authenticate };"].join(BR),
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/drops 3 export/i);
+    expect(verdict.reason).toMatch(/cookieOptions/);
+  });
+
+  it("allows an additive edit that keeps every export", () => {
+    const repo = gitWorkspace({
+      "auth.js": "export function cookieOptions() { return {}; }",
+    });
+    const verdict = assessProtectedHostWrite(
+      repo,
+      "auth.js",
+      [
+        "export function cookieOptions() { return { secure: true }; }",
+        "export function newHelper() {}",
+      ].join(BR),
+    );
+    expect(verdict.refused).toBe(false);
+  });
+
+  it("compares CJS exports on equal footing (no false refusal)", () => {
+    const repo = gitWorkspace({ "util.js": "module.exports = { alpha, beta };" });
+    const verdict = assessProtectedHostWrite(
+      repo,
+      "util.js",
+      ["exports.alpha = alpha;", "exports.beta = beta;", "exports.gamma = gamma;"].join(BR),
+    );
+    expect(verdict.refused).toBe(false);
+  });
+
+  it("leaves brand-new source files alone", () => {
+    const repo = gitWorkspace({ "auth.js": "export const A = 1;" });
+    expect(assessProtectedHostWrite(repo, "brandNew.js", "// anything").refused).toBe(false);
+  });
+});

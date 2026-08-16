@@ -66,6 +66,8 @@ const ALLOWLIST: ReadonlyArray<readonly [string, string]> = [
   ["yarn", "install"],
   ["yarn", "test"],
   ["npx", "tsc"],
+  // Prisma client generation — the postinstall step modern installers skip.
+  ["npx", "prisma"],
 ];
 
 /** Python entrypoints Factory Deck itself may schedule for verification. */

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { statSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -84,6 +84,41 @@ export function _resetProtectedFilesCache(): void {
   baselineCache.clear();
 }
 
+const SOURCE_RX = /\.(m?[jt]sx?|cjs)$/i;
+
+/**
+ * Exported symbol names of a JS/TS module — ESM `export` forms plus the
+ * CommonJS `module.exports.x` / `exports.x` shapes, so an ESM→CJS rewrite is
+ * compared on equal footing.
+ */
+export function exportedSymbols(source: string): Set<string> {
+  const names = new Set<string>();
+  const add = (n?: string) => {
+    if (n && n !== "default") names.add(n);
+  };
+  for (const m of source.matchAll(
+    /export\s+(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g,
+  )) add(m[1]);
+  for (const m of source.matchAll(/export\s*\{([^}]*)\}/g)) {
+    for (const part of (m[1] ?? "").split(",")) {
+      const piece = part.trim();
+      if (!piece) continue;
+      const asMatch = /as\s+([A-Za-z_$][\w$]*)/.exec(piece);
+      add(asMatch ? asMatch[1] : piece.split(/\s+/)[0]);
+    }
+  }
+  for (const m of source.matchAll(
+    /(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/g,
+  )) add(m[1]);
+  for (const m of source.matchAll(/module\.exports\s*=\s*\{([^}]*)\}/g)) {
+    for (const part of (m[1] ?? "").split(",")) {
+      const key = part.split(":")[0]?.trim();
+      if (key && /^[A-Za-z_$][\w$]*$/.test(key)) add(key);
+    }
+  }
+  return names;
+}
+
 export function assessProtectedHostWrite(
   workspacePath: string,
   relPath: string,
@@ -123,6 +158,36 @@ export function assessProtectedHostWrite(
       };
     }
     return { refused: false };
+  }
+
+  // 2b. TRACKED SOURCE FILES: a rewrite must not delete the module's public
+  //     surface. SermonSmith slice 40c4c51d rewrote services/api/.../auth.js
+  //     from ESM to CommonJS (dropping every `export`, breaking 12 tests) and
+  //     replaced apps/web/src/App.jsx with a version missing its auth route
+  //     gating (breaking 50 more) — a frontend navigation slice destroying
+  //     unrelated working code. Additive edits and refactors that KEEP the
+  //     exported symbols still pass; only removal is refused.
+  if (isTracked && SOURCE_RX.test(base)) {
+    let current = "";
+    try {
+      current = readFileSync(join(workspacePath, norm), "utf8");
+    } catch {
+      /* unreadable on disk — nothing to protect */
+    }
+    if (current) {
+      const before = exportedSymbols(current);
+      const after = exportedSymbols(newContents);
+      const dropped = [...before].filter((name) => !after.has(name));
+      if (dropped.length > 0) {
+        return {
+          refused: true,
+          reason:
+            `replacement drops ${dropped.length} export(s) the host file provides ` +
+            `(${dropped.slice(0, 6).join(", ")}) — other files and tests import them; ` +
+            `edit additively instead of rewriting the module`,
+        };
+      }
+    }
   }
 
   // Root-level tool configs only from here on.
