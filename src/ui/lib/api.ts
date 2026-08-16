@@ -39,6 +39,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ idea, options }),
     }),
+  createEpic: (idea: string, options: RunOptions) =>
+    jsonFetch<{ epicId: string; slices: number }>("/api/epics", {
+      method: "POST",
+      body: JSON.stringify({ idea, options }),
+    }),
   cancelRun: (id: string) =>
     jsonFetch<{ ok: true }>(`/api/runs/${id}/cancel`, { method: "POST" }),
   resumeRun: (id: string) =>

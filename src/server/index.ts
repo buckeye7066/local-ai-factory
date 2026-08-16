@@ -13,10 +13,19 @@ import {
 import {
   startRun,
   resumeRun,
+  runFactory as runFactoryFull,
   MissingProviderCredentialError,
   RunNotResumableError,
 } from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
+import {
+  createEpic,
+  getEpic,
+  listEpics,
+  runEpic,
+  type EpicDeps,
+} from "./orchestrator/epicRunner.js";
+import { epicPlannerAgent } from "./agents/epicPlannerAgent.js";
 import {
   getRun,
   listRuns,
@@ -393,6 +402,92 @@ app.get(
   "/api/runs",
   wrap(async (_req, res) => {
     res.json({ runs: await listRuns() });
+  }),
+);
+
+/**
+ * Epics — large evolutions run as ordered slices (owner order 2026-08-16:
+ * reach the factory's purpose "even with larger systems and evolutions").
+ * Each slice is a full normal run; the epic advances only on a slice that
+ * actually RELEASED to main, pauses with the named reason otherwise, and a
+ * paused epic is resumable. No approval gates.
+ */
+function epicDeps(): EpicDeps {
+  return {
+    executeSliceRun: (idea, options) =>
+      runFactoryFull({ idea, options, config, secrets }),
+    plan: async (idea) => {
+      const provider = clarificationProvider();
+      return epicPlannerAgent({ provider }, { idea });
+    },
+    config,
+    secrets,
+  };
+}
+
+app.post(
+  "/api/epics",
+  wrap(async (req, res) => {
+    const idea = typeof req.body?.idea === "string" ? req.body.idea.trim() : "";
+    if (!idea) {
+      res.status(400).json({ error: "Field 'idea' is required." });
+      return;
+    }
+    const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
+      return;
+    }
+    const deps = epicDeps();
+    const epic = await createEpic(idea, parsed.data, deps);
+    // Slices execute in the background; the epic record streams progress.
+    void runEpic(epic, deps).catch(() => {});
+    res.status(202).json({ epicId: epic.id, slices: epic.slices.length });
+  }),
+);
+
+app.get(
+  "/api/epics",
+  wrap(async (_req, res) => {
+    res.json({ epics: await listEpics() });
+  }),
+);
+
+app.get(
+  "/api/epics/:epicId",
+  wrap(async (req, res) => {
+    const epic = await getEpic(String(req.params.epicId));
+    if (!epic) {
+      res.status(404).json({ error: "Epic not found." });
+      return;
+    }
+    res.json(epic);
+  }),
+);
+
+app.post(
+  "/api/epics/:epicId/resume",
+  wrap(async (req, res) => {
+    const epic = await getEpic(String(req.params.epicId));
+    if (!epic) {
+      res.status(404).json({ error: "Epic not found." });
+      return;
+    }
+    if (epic.status !== "paused") {
+      res.status(409).json({ error: `Epic is ${epic.status}, not paused.` });
+      return;
+    }
+    // Retry the slice that paused it: reset to pending and continue.
+    const slice = epic.slices[epic.currentSlice];
+    if (slice) {
+      slice.status = "pending";
+      slice.detail = null;
+    }
+    epic.status = "running";
+    epic.statusReason = null;
+    const deps = epicDeps();
+    void runEpic(epic, deps).catch(() => {});
+    res.status(202).json({ ok: true });
   }),
 );
 

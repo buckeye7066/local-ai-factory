@@ -494,6 +494,11 @@ export const RunOptionsSchema = z.object({
    * is still built, saved to GitHub, and hosted, but never listed or promoted.
    */
   publish: z.boolean().optional(),
+  /**
+   * Large evolution: plan the request into ordered slices and run them one at
+   * a time, each fully released before the next (client routes to /api/epics).
+   */
+  epic: z.boolean().optional(),
   maxRepairLoops: z.number().optional(),
   /** Client-supplied idempotency key (also accepted via Idempotency-Key header). */
   idempotencyKey: z.string().min(1).max(200).optional(),
@@ -605,6 +610,16 @@ export const RunRecordSchema = z.object({
    * history.
    */
   destination: RunDestinationSchema.nullable().optional(),
+  /** Release outcome for extend runs (auto-merge to main). Null until delivery. */
+  release: z
+    .object({
+      released: z.boolean(),
+      prUrl: z.string().nullable(),
+      mergedSha: z.string().nullable(),
+      reason: z.string(),
+    })
+    .nullable()
+    .optional(),
   error: z.string().nullable().default(null),
   /** Populated as the run progresses; full attribution written at completion. */
   attribution: RunAttributionSchema.nullable().default(null),

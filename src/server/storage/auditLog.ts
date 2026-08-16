@@ -44,7 +44,12 @@ export type AuditEventType =
   // Store: the app was posted to the owner's axiombiolabs.org App Store
   // registry (and PromoPilot picks it up from the same registry).
   | "run.store.listed"
-  | "run.store.held";
+  | "run.store.held"
+  // Epics: large evolutions run as ordered slices, one released at a time.
+  | "epic.created"
+  | "epic.paused"
+  | "epic.slice.released"
+  | "epic.completed";
 
 export interface AuditEventInput {
   type: AuditEventType;
