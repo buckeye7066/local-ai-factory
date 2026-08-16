@@ -58,6 +58,7 @@ import {
 } from "./stages.js";
 import { redactSecrets, redactDeep } from "../security/redact.js";
 import { BudgetGatedProvider } from "../providers/paidBudget.js";
+import { QuotaFailoverProvider } from "../providers/quotaFailover.js";
 import {
   RunCancelledError,
   clearCancel,
@@ -320,13 +321,36 @@ async function executeRun(
     p.name === "anthropic" || p.name === "openai"
       ? new BudgetGatedProvider(counted, p.name)
       : counted;
-  const code: LLMProvider = gateIfPaid(
-    rawCode,
-    new CountingProvider(rawCode, run, config.maxModelCallsPerRun, attribution(rawCode)),
+  // QUOTA FAILOVER (owner rule: fix, don't block). A pinned provider answering
+  // "no credits remaining" used to end the slice while a funded second key sat
+  // unused. Only quota refusals fail over; a real 400 still fails loudly.
+  const alternates = (): LLMProvider[] =>
+    run.demo
+      ? []
+      : registry
+          .availableLive()
+          .filter((n) => n !== "free")
+          .map((n) => registry.get(n));
+  const withFailover = (p: LLMProvider): LLMProvider =>
+    run.demo
+      ? p
+      : new QuotaFailoverProvider(p, alternates(), (from, to, reason) =>
+          log(
+            "warning",
+            `${from} refused on quota — continuing on ${to}. (${reason.slice(0, 120)})`,
+          ),
+        );
+  const code: LLMProvider = withFailover(
+    gateIfPaid(
+      rawCode,
+      new CountingProvider(rawCode, run, config.maxModelCallsPerRun, attribution(rawCode)),
+    ),
   );
-  const review: LLMProvider = gateIfPaid(
-    rawReview,
-    new CountingProvider(rawReview, run, config.maxModelCallsPerRun, attribution(rawReview)),
+  const review: LLMProvider = withFailover(
+    gateIfPaid(
+      rawReview,
+      new CountingProvider(rawReview, run, config.maxModelCallsPerRun, attribution(rawReview)),
+    ),
   );
   // CRITICAL-STAGE provider (owner order 2026-08-16: fix known-weak backends
   // before they fail, don't wait). Spec, architecture, research, planning and
@@ -358,7 +382,7 @@ async function executeRun(
     config.maxModelCallsPerRun,
     attribution(rawCritical),
   );
-  const critical: LLMProvider = gateIfPaid(rawCritical, criticalCounted);
+  const critical: LLMProvider = withFailover(gateIfPaid(rawCritical, criticalCounted));
   // Every distinct LIVE backend actually configured (free / anthropic / openai,
   // never the failover chain itself), each still budget-metered — the pool the
   // concurrent builder dispatches independent work across. Demo runs get just
