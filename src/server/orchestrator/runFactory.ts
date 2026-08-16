@@ -450,6 +450,8 @@ async function executeRun(
     });
   };
 
+  /** inPlace runs restore the owner's branch on EVERY exit path (see finally). */
+  let inPlaceRestore: { path: string; branch: string } | null = null;
   try {
     const isResume = Boolean(restored);
     run.status = "running";
@@ -537,6 +539,9 @@ async function executeRun(
         );
         for (const line of ingested.log) log("info", line);
         ingestedWorkspacePath = ingested.path;
+        if (ingested.inPlace && ingested.previousBranch) {
+          inPlaceRestore = { path: ingested.path, branch: ingested.previousBranch };
+        }
         // Record the workspace NOW (not at builder time) so a crash between
         // intake and builder still resumes into the SAME ingested copy.
         run.workspacePath = ingested.path;
@@ -1434,6 +1439,23 @@ async function executeRun(
     // DELETE, and retention pruning still bounds checkpoint lifetime.
     await flush();
   } finally {
+    // PARKING FIX (2026-08-16): an inPlace run cut a branch in the owner's REAL
+    // repo and never put them back — success, failure, or crash left their
+    // working tree parked on factory-deck/<id>, which is how the FlexFactor
+    // audit stranded five repos on 2026-08-11. Restore runs on every exit path
+    // and never masks the run's own outcome.
+    if (inPlaceRestore) {
+      const res = await git(["checkout", inPlaceRestore.branch], inPlaceRestore.path, 30_000).catch(
+        (err: unknown) => ({ code: 1, stdout: "", stderr: String(err), spawnError: null }),
+      );
+      log(
+        res.code === 0 ? "info" : "warning",
+        res.code === 0
+          ? `Restored your working tree to ${inPlaceRestore.branch} (the run's work stays on its own branch).`
+          : `Could not restore ${inPlaceRestore.branch} in ${inPlaceRestore.path}: ${res.stderr.slice(0, 300)} — your repo is still on the run's branch.`,
+      );
+      await flush().catch(() => {});
+    }
     clearCancel(run.id);
   }
 }

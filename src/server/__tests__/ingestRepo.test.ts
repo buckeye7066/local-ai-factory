@@ -131,6 +131,23 @@ describe("ingestExistingRepo", () => {
       .trim();
     expect(branch).toBe(result.branch);
     expect(branch).toMatch(/^factory-deck\//);
+    // PARKING FIX: the owner's original branch is captured so the run can put
+    // their working tree back (FlexFactor stranded five repos this way).
+    expect(result.previousBranch).toBeTruthy();
+    expect(result.previousBranch).not.toMatch(/^factory-deck\//);
+  });
+
+  it("a cloned (non-inPlace) ingest has no branch to restore", async () => {
+    const src = await makeTmpGitRepo();
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-ws-"));
+    cleanupPaths.push(workspaceRoot);
+    const result = await ingestExistingRepo(
+      workspaceRoot,
+      { type: "path", location: src },
+      "55555555-5555-5555-5555-555555555555",
+    );
+    expect(result.inPlace).toBe(false);
+    expect(result.previousBranch).toBeNull();
   });
 
   it("inPlace refuses a non-git directory", async () => {

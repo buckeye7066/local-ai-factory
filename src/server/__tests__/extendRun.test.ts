@@ -99,7 +99,17 @@ describe("extend mode (end-to-end, offline mock)", () => {
     })
       .toString()
       .trim();
-    expect(branch).toMatch(/^factory-deck\//);
+    // PARKING FIX (2026-08-16): the run's work lives on its own
+    // factory-deck/<id> branch, but the owner's working tree is put BACK on
+    // the branch they started on. Leaving a real repo parked on the run's
+    // branch is the FlexFactor defect that stranded five repos.
+    expect(branch).not.toMatch(/^factory-deck\//);
+    const runBranches = execFileSync("git", ["branch", "--list", "factory-deck/*"], {
+      cwd: src,
+    })
+      .toString()
+      .trim();
+    expect(runBranches).toMatch(/factory-deck\//);
   }, 20_000);
 
   it("greenfield 'new' mode is unaffected — same behavior as before extend mode existed", async () => {
