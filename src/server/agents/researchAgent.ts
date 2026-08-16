@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
+import { ProviderAbortError } from "../providers/types.js";
 import { webSearchTool } from "../tools/webSearch.js";
 import { webFetchTool } from "../tools/webFetch.js";
 import {
@@ -346,7 +347,28 @@ export async function researchAgent(
     });
   }
 
-  const selection = await evaluateCompetitiveDossier(deps, spec, arch, dossier);
+  // RESEARCH IS ADVISORY — IT MUST NEVER KILL THE RUN (2026-08-16, live
+  // GrantFlow slice: the competitive-selection call failed schema validation
+  // after ~$10 of billed retries and the whole slice died before the builder
+  // ever ran). A failed selection is a NAMED SKIP: the run continues on the
+  // base findings, the discovered candidates stay in the audit, and the
+  // summary says out loud what was skipped and why. A deliberate cancel
+  // (abort) still propagates — swallowing that would be worse.
+  let selection: CompetitiveSelection;
+  try {
+    selection = await evaluateCompetitiveDossier(deps, spec, arch, dossier);
+  } catch (err) {
+    if (err instanceof ProviderAbortError) throw err;
+    const msg = err instanceof Error ? err.message : String(err);
+    return ResearchFindingsSchema.parse({
+      ...base,
+      summary:
+        `${base.summary}\n\nCompetitive selection FAILED and was SKIPPED — ` +
+        `continuing without competitor recommendations (${msg.slice(0, 300)}). ` +
+        `${dossier.candidates.length} discovered candidate(s) are recorded in the audit.`,
+      competitiveAudit: auditFrom(dossier),
+    });
+  }
   let merged = mergeCompetitiveResults(base, dossier, selection);
   const deadSources = (dossier.sources ?? []).filter((s) => !s.ok);
   if (deadSources.length) {

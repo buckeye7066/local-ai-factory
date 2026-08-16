@@ -4,6 +4,7 @@ import {
   extractJson,
   salvageTruncatedJson,
   generateJsonWithRepair,
+  describeZodShape,
   JsonExtractionError,
 } from "../providers/types.js";
 
@@ -219,5 +220,87 @@ describe("generateJsonWithRepair", () => {
     });
     expect(out.risks).toEqual(["a", "b"]);
     expect(calls).toHaveLength(1);
+  });
+});
+
+/**
+ * 2026-08-16, live GrantFlow slice: the competitive-selection call failed
+ * validation on `selected[].element` six times (~$10 billed) because the model
+ * was only ever told the schema's NAME — it had to guess the field names, and
+ * required-without-default fields are exactly where guessing dies. The shape
+ * now rides in the prompt on every attempt.
+ */
+describe("the model is shown the actual field names", () => {
+  const Selection = z.object({
+    summary: z.string().default(""),
+    selected: z
+      .array(
+        z.object({
+          candidateId: z.string(),
+          element: z.string(),
+          why: z.string().default(""),
+          reuseMode: z.enum(["dependency", "reference-only"]),
+        }),
+      )
+      .default([]),
+  });
+
+  const selInput = {
+    system: "s",
+    prompt: "TASK",
+    schema: Selection,
+    schemaName: "CompetitiveSelection",
+  };
+
+  it("describeZodShape renders literal field names, optionality, and enums", () => {
+    const shape = describeZodShape(Selection);
+    expect(shape).toContain('"element": string');
+    expect(shape).toContain('"candidateId": string');
+    expect(shape).toContain('"summary"?');       // defaulted => optional
+    expect(shape).toContain('"selected"?');
+    expect(shape).toContain('"dependency" | "reference-only"');
+  });
+
+  it("the FIRST attempt's prompt already carries every required field name", async () => {
+    const { call, calls } = scripted([JSON.stringify({ selected: [] })]);
+    await generateJsonWithRepair({
+      input: selInput,
+      call,
+      attempts: 2,
+      baseMaxTokens: 512,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].prompt).toContain("TASK");
+    expect(calls[0].prompt).toContain('"element"');
+    expect(calls[0].prompt).toContain('"candidateId"');
+  });
+
+  it("repair prompts keep the shape alongside the Zod issues", async () => {
+    const bad = JSON.stringify({
+      selected: [{ candidateId: "c1", why: "no element field" }],
+    });
+    const good = JSON.stringify({
+      selected: [
+        { candidateId: "c1", element: "profile form", reuseMode: "reference-only" },
+      ],
+    });
+    const { call, calls } = scripted([bad, good]);
+    const out = await generateJsonWithRepair<z.infer<typeof Selection>>({
+      input: selInput,
+      call,
+      attempts: 2,
+      baseMaxTokens: 512,
+    });
+    expect(out.selected[0].element).toBe("profile form");
+    expect(calls).toHaveLength(2);
+    expect(calls[1].prompt).toContain('"element"');            // the shape
+    expect(calls[1].prompt).toContain("failed schema validation"); // the issues
+  });
+
+  it("a schema too deep or exotic to render degrades to no shape, never a crash", () => {
+    // A self-referential schema via z.lazy has no _def.typeName we handle.
+    type Node = { next?: Node };
+    const Lazy: z.ZodType<Node> = z.lazy(() => z.object({ next: Lazy.optional() }));
+    expect(() => describeZodShape(Lazy)).not.toThrow();
   });
 });

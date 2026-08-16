@@ -217,3 +217,101 @@ describe("researchAgent", () => {
     expect(findings.summary).toContain("did not reach a conclusion");
   });
 });
+
+/**
+ * 2026-08-16, live GrantFlow slice: the competitive-selection call failed
+ * schema validation and the exception escaped researchAgent, killing the
+ * whole run before the builder ran. Research is ADVISORY: a failed selection
+ * is a named skip that keeps the base findings and the audit trail.
+ */
+describe("researchAgent competitive selection failure is a named skip", () => {
+  const DOSSIER = {
+    queries: ["grant management"],
+    sources: [{ name: "github", ok: true, detail: "" }],
+    discoveredCount: 1,
+    inspectedCount: 1,
+    generatedAt: "2026-08-16T00:00:00Z",
+    candidates: [
+      {
+        id: "c1",
+        kind: "repo",
+        name: "Rival",
+        url: "https://example.com/rival",
+        description: "",
+        stars: 10,
+        archived: false,
+        updatedAt: "",
+        discoveryEvidence: "",
+        license: { spdxId: "MIT", policy: "direct-use", evidenceUrl: "" },
+        inspectionError: "",
+        fileTree: [],
+        sourceEvidence: [],
+      },
+    ],
+  };
+
+  it("keeps the base findings and audit when selection fails validation", async () => {
+    const ci = await import("../tools/competitiveIntelligence.js");
+    const spy = vi
+      .spyOn(ci, "buildCompetitiveDossier")
+      .mockResolvedValue(DOSSIER as never);
+    try {
+      const provider = new ScriptedProvider([
+        // base loop concludes cleanly...
+        {
+          thought: "nothing external needed",
+          action: "conclude",
+          findings: { summary: "base summary", recommendations: [] },
+        },
+        // ...then the selection payload is missing `element` -> real ZodError.
+        {
+          summary: "s",
+          comparisons: [],
+          selected: [{ candidateId: "c1", why: "missing element" }],
+        },
+      ]);
+      const findings = await researchAgent({ provider }, spec, arch, {
+        competitive: true,
+      });
+      expect(findings.summary).toContain("base summary");
+      expect(findings.summary).toContain("FAILED and was SKIPPED");
+      expect(findings.recommendations).toEqual([]);
+      expect(findings.competitiveAudit?.candidates).toHaveLength(1);
+      expect(findings.competitiveAudit?.candidates[0].name).toBe("Rival");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a deliberate abort still propagates — a cancelled run is never continued", async () => {
+    const ci = await import("../tools/competitiveIntelligence.js");
+    const spy = vi
+      .spyOn(ci, "buildCompetitiveDossier")
+      .mockResolvedValue(DOSSIER as never);
+    try {
+      const { ProviderAbortError } = await import("../providers/types.js");
+      let calls = 0;
+      const provider = {
+        name: "mock" as const,
+        isConfigured: () => true,
+        generateText: async () => ({ text: "", provider: "mock" }),
+        generateJson: async <T,>(input: GenerateJsonInput<T>): Promise<T> => {
+          calls++;
+          if (calls === 1) {
+            return input.schema.parse({
+              thought: "",
+              action: "conclude",
+              findings: { summary: "base", recommendations: [] },
+            }) as T;
+          }
+          throw new ProviderAbortError();
+        },
+      } as unknown as LLMProvider;
+      await expect(
+        researchAgent({ provider }, spec, arch, { competitive: true }),
+      ).rejects.toThrow(/aborted/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

@@ -876,16 +876,33 @@ async function executeRun(
           "model_call",
           `Research agent (${critical.name}) — searching for tools/APIs that could help…`,
         );
-        research = await researchAgent({ provider: critical }, spec, arch, {
-          competitive: true,
-        });
-        await checkpointNow({ research });
-        log(
-          research.recommendations.length ? "success" : "info",
-          research.recommendations.length
-            ? `Research: ${research.recommendations.length} candidate(s) — ${research.recommendations.map((r) => r.name).join(", ")}.`
-            : `Research: nothing external recommended — ${research.summary}`,
-        );
+        // RESEARCH IS ADVISORY. It informs the planner; it builds nothing.
+        // Live GrantFlow slice 2026-08-16: a schema-validation failure inside
+        // competitive selection escaped here and killed the whole run before
+        // the builder ever started (after ~$10 of billed retries). An
+        // advisory stage failing is a LOUD, NAMED skip — never a dead slice.
+        // A deliberate cancel still propagates (continuing a run the owner
+        // cancelled would be worse than any research gap).
+        try {
+          research = await researchAgent({ provider: critical }, spec, arch, {
+            competitive: true,
+          });
+          await checkpointNow({ research });
+          log(
+            research.recommendations.length ? "success" : "info",
+            research.recommendations.length
+              ? `Research: ${research.recommendations.length} candidate(s) — ${research.recommendations.map((r) => r.name).join(", ")}.`
+              : `Research: nothing external recommended — ${research.summary}`,
+          );
+        } catch (err) {
+          if (err instanceof ProviderAbortError) throw err;
+          research = undefined;
+          const msg = err instanceof Error ? err.message : String(err);
+          log(
+            "warning",
+            `Research FAILED and was SKIPPED (advisory stage): ${msg.slice(0, 300)} — continuing the build without external recommendations.`,
+          );
+        }
       } else {
         log("info", "Research skipped (demo mode or FACTORY_RESEARCH_ENABLED=0).");
       }
@@ -1352,18 +1369,49 @@ async function executeRun(
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "final_review");
       log("model_call", `Final Reviewer agent (${critical.name})…`);
-      report = await finalReviewerAgent({ provider: critical }, spec, qa, {
-        repairLoops: run.repairLoops,
-        workspacePath,
-        providerUsage: run.providerUsage,
-        testStatus,
-        // The reviewer used to see only the spec and the QA report, so its
-        // prose could assert "all tests pass" beside a stamped
-        // testStatus:"failing". Give it the executed evidence and the real
-        // file list it is supposed to be summarizing.
-        verification,
-        writtenFiles: [...files.keys()],
-      });
+      // THE REPORT WRITER MUST NEVER KILL A VERIFIED BUILD (same advisory-kill
+      // class as research, 2026-08-16). By this point the code is built,
+      // QA'd, and its tests have run — if the model call that merely PROSES
+      // that up fails, the run falls back to a deterministic report assembled
+      // from the executed evidence, which is the same authority the model
+      // prose is grounded against anyway. Aborts still propagate.
+      try {
+        report = await finalReviewerAgent({ provider: critical }, spec, qa, {
+          repairLoops: run.repairLoops,
+          workspacePath,
+          providerUsage: run.providerUsage,
+          testStatus,
+          // The reviewer used to see only the spec and the QA report, so its
+          // prose could assert "all tests pass" beside a stamped
+          // testStatus:"failing". Give it the executed evidence and the real
+          // file list it is supposed to be summarizing.
+          verification,
+          writtenFiles: [...files.keys()],
+        });
+      } catch (err) {
+        if (err instanceof ProviderAbortError) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        log(
+          "warning",
+          `Final Reviewer FAILED (${msg.slice(0, 200)}) — falling back to a deterministic evidence-based report. The build itself is unaffected.`,
+        );
+        report = {
+          appName: spec.appName,
+          summary:
+            "Automated summary unavailable (the reviewer model call failed). " +
+            "This report is assembled deterministically from the run's executed evidence.",
+          whatWasBuilt: [...files.keys()],
+          howToRun: "See the repository README / package.json scripts.",
+          testStatus,
+          repairLoops: run.repairLoops,
+          caveats: [
+            "The narrative reviewer failed; only mechanically-derived facts are listed.",
+          ],
+          nextImprovements: [],
+          workspacePath,
+          providerUsage: run.providerUsage,
+        };
+      }
       // ...and then ENFORCE it. An instruction in a prompt is not a guarantee:
       // the same grounding rule QA verdicts follow is applied to the report's
       // prose deterministically.
