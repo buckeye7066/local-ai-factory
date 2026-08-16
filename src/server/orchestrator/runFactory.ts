@@ -30,6 +30,7 @@ import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import { verificationCommandsForWorkspace } from "../workspace/verificationCommands.js";
 import { findUnwiredNewFiles, unwiredCaveat } from "../workspace/unwiredFiles.js";
+import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -360,6 +361,22 @@ async function executeRun(
       // Re-check per file so a cancel mid-loop stops the REMAINING writes.
       throwIfCancelled(run.id);
       throwIfTimedOut(deadline, timeoutMs);
+      // PROTECTED HOST FILES (run a8a9c84a): the test-writer replaced the
+      // ingested repo's 10,998-byte package.json with a 192-byte stub and the
+      // repair loop then regenerated the lockfile to match — collapsing the
+      // host's ~1,900-test suite into the run's own two tests while npm test
+      // read green. Destructive writes to tracked manifests/lockfiles/root
+      // tool configs (and hijack-by-new-variant configs) are refused LOUDLY;
+      // additive manifest edits still pass. Inert for new-app workspaces.
+      const verdict = assessProtectedHostWrite(workspacePath, f.path, f.contents);
+      if (verdict.refused) {
+        log(
+          "warning",
+          `PROTECTED HOST FILE: refused generated write of ${f.path} — ${verdict.reason}`,
+          stage,
+        );
+        continue;
+      }
       const res = await writeWorkspaceFile(workspacePath, f.path, f.contents);
       // And again after the awaited write, before we record/log/persist it.
       throwIfCancelled(run.id);
