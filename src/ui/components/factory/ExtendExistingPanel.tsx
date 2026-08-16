@@ -146,10 +146,11 @@ function DirectPromptMode({
   repoSource: { type: "path" | "git"; location: string } | undefined;
   onStart: (idea: string, options: RunOptions) => void;
 }) {
+  const [epic, setEpic] = useState(false);
   const start = () => {
     const trimmed = prompt.trim();
     if (!trimmed) return;
-    onStart(trimmed, { mode: "extend", repoSource });
+    onStart(trimmed, { mode: "extend", repoSource, epic });
   };
   return (
     <>
@@ -168,6 +169,23 @@ function DirectPromptMode({
         placeholder="e.g. here's a repo: https://github.com/you/futureu — add a parent-visible progress dashboard"
         aria-label="Describe what to change in the existing program"
       />
+      <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/5 bg-white/[0.03] p-3 text-sm text-slate-300 transition-colors hover:bg-white/[0.05]">
+        <input
+          type="checkbox"
+          checked={epic}
+          onChange={(e) => setEpic(e.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-aurora-violet"
+        />
+        <span>
+          <span className="font-medium text-white">This is a big change</span>
+          <span className="block text-xs text-slate-400">
+            Break it into small steps automatically. Each step is built, tested,
+            and merged on its own before the next one starts - so a large
+            evolution lands as a series of real, working improvements instead of
+            one giant attempt.
+          </span>
+        </span>
+      </label>
       <div className="mt-4 flex justify-end">
         <Button
           size="lg"

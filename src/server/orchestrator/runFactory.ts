@@ -1190,6 +1190,12 @@ async function executeRun(
             }${release.prUrl ? ` PR: ${release.prUrl}` : ""}`.trim(),
           ),
         };
+        run.release = {
+          released: release.released,
+          prUrl: release.prUrl,
+          mergedSha: release.mergedSha,
+          reason: redactSecrets(release.reason),
+        };
         await appendAuditEvent({
           type: release.released ? "run.release.merged" : "run.release.held",
           runId: run.id,

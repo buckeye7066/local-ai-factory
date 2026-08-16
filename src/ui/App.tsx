@@ -90,6 +90,15 @@ export function App() {
     async (idea: string, options: RunOptions) => {
       setStarting(true);
       try {
+        if (options.epic) {
+          const { epic: _epic, ...rest } = options;
+          const { slices } = await api.createEpic(idea, rest);
+          toast.success("Evolution started", {
+            description: `Planned into ${slices} slices - each builds, verifies, and merges on its own. Watch the runs list as they land.`,
+          });
+          refreshRuns();
+          return;
+        }
         const { runId } = await api.createRun(idea, options);
         setActiveRunId(runId);
         setFiles([]);
