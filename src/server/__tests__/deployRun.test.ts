@@ -17,6 +17,8 @@ afterAll(async () => {
 const ok = (stdout: string): ExecResult => ({ code: 0, stdout, stderr: "", spawnError: null });
 const fail = (stderr: string): ExecResult => ({ code: 1, stdout: "", stderr, spawnError: null });
 
+const fakeCli = (rel: string) => `/fake/${rel}`;
+
 function fakeExec(script: Array<(args: string[]) => ExecResult>) {
   const calls: string[][] = [];
   let i = 0;
@@ -79,7 +81,7 @@ describe("deployRun — Railway lane", () => {
     ]);
     const res = await deployRun({
       workspacePath: ws, appName: "Srv Live!", runId: "r1",
-      execImpl: impl, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
+      execImpl: impl, cliPathImpl: fakeCli, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
     });
     expect(res).toMatchObject({
       deployed: true, verified: true, target: "railway",
@@ -100,7 +102,7 @@ describe("deployRun — Railway lane", () => {
     ]);
     const res = await deployRun({
       workspacePath: ws, appName: "srv-down", runId: "r2",
-      execImpl: impl, fetchImpl: fetchDown, sleepImpl: async () => {}, probeTimeoutMs: 1,
+      execImpl: impl, cliPathImpl: fakeCli, fetchImpl: fetchDown, sleepImpl: async () => {}, probeTimeoutMs: 1,
     });
     expect(res.deployed).toBe(true);
     expect(res.verified).toBe(false);
@@ -115,7 +117,7 @@ describe("deployRun — Railway lane", () => {
     ]);
     const res = await deployRun({
       workspacePath: ws, appName: "srv-fail", runId: "r3",
-      execImpl: impl, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
+      execImpl: impl, cliPathImpl: fakeCli, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
     });
     expect(res.deployed).toBe(false);
     expect(res.reason).toMatch(/railway up failed.*Nixpacks/i);
@@ -130,7 +132,7 @@ describe("deployRun — Railway lane", () => {
     ]);
     const res = await deployRun({
       workspacePath: ws, appName: "srv-again", runId: "r4",
-      execImpl: impl, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
+      execImpl: impl, cliPathImpl: fakeCli, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
     });
     expect(res.deployed).toBe(true);
     expect(res.verified).toBe(true);
@@ -146,7 +148,7 @@ describe("deployRun — Vercel lane", () => {
     ]);
     const res = await deployRun({
       workspacePath: ws, appName: "web-live", runId: "r5",
-      execImpl: impl, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
+      execImpl: impl, cliPathImpl: fakeCli, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
     });
     expect(res).toMatchObject({
       deployed: true, verified: true, target: "vercel",
@@ -164,7 +166,7 @@ describe("deployRun — Vercel lane", () => {
     ]);
     const res = await deployRun({
       workspacePath: ws, appName: "web-nourl", runId: "r6",
-      execImpl: impl, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
+      execImpl: impl, cliPathImpl: fakeCli, fetchImpl: fetchOk, sleepImpl: async () => {}, probeTimeoutMs: 1,
     });
     expect(res.url).toBeNull();
     expect(res.verified).toBe(false);

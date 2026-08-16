@@ -35,6 +35,8 @@ export interface DeployInput {
   appName: string | null;
   runId: string;
   execImpl?: ExecFn;
+  /** Injectable CLI resolution for tests (default: resolveNpmCli). */
+  cliPathImpl?: (relEntry: string) => string | null;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
   /** Max time to wait for the deployed URL to answer. */
@@ -173,7 +175,8 @@ export async function deployRun(input: DeployInput): Promise<DeployResult> {
     return { deployed: false, url: null, target: null, verified: false, reason: chosen.reason };
   }
 
-  const entry = resolveNpmCli(chosen.target === "railway" ? RAILWAY_ENTRY : VERCEL_ENTRY);
+  const resolveCli = input.cliPathImpl ?? resolveNpmCli;
+  const entry = resolveCli(chosen.target === "railway" ? RAILWAY_ENTRY : VERCEL_ENTRY);
   if (!entry) {
     return {
       deployed: false,
