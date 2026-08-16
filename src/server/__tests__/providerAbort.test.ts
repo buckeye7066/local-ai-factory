@@ -23,13 +23,17 @@ const openaiCreateCalls: { params: unknown; options: { signal?: AbortSignal } }[
 vi.mock("@anthropic-ai/sdk", () => {
   class FakeAnthropic {
     messages = {
-      create: vi.fn((params: unknown, options: { signal?: AbortSignal } = {}) => {
-        anthropicCreateCalls.push({ params, options });
-        // Simulates a wedged request: never resolves, never rejects on its own.
-        return new Promise(() => {});
+      create: vi.fn(() => {
+        throw new Error(
+          "messages.create() should not be reached - the provider streams (large non-streaming calls are refused by the SDK)",
+        );
       }),
-      stream: vi.fn(() => {
-        throw new Error("messages.stream() should not be reached in this suite");
+      // The provider now STREAMS every call (the SDK refuses large
+      // non-streaming requests). A wedged stream = finalMessage() that never
+      // settles; the abort contract is identical.
+      stream: vi.fn((params: unknown, options: { signal?: AbortSignal } = {}) => {
+        anthropicCreateCalls.push({ params, options });
+        return { finalMessage: () => new Promise(() => {}) };
       }),
     };
     constructor(public opts: unknown) {}
@@ -120,7 +124,7 @@ describe("cancellation.getCancelSignal reaches an in-flight call", () => {
 });
 
 describe("AnthropicProvider bounds a wedged SDK call", () => {
-  it("generateText: passes the signal to messages.create() AND aborts within budget", async () => {
+  it("generateText: passes the signal to messages.stream() AND aborts within budget", async () => {
     anthropicCreateCalls.length = 0;
     const signal = AbortSignal.timeout(80);
     const provider = new AnthropicProvider("sk-test", "claude-test", undefined, signal);
