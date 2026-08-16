@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessLicense,
   buildDiscoveryQueries,
+  isCompetitorQuery,
   detectLicenseFromText,
   parseGitHubRepoUrl,
   rankRelevantPaths,
@@ -110,8 +111,21 @@ describe("competitive discovery", () => {
       acceptanceCriteria: ["works"],
     };
     const queries = buildDiscoveryQueries(spec);
-    expect(queries.length).toBeGreaterThanOrEqual(4);
+    expect(queries.length).toBeGreaterThanOrEqual(5);
     expect(queries.join(" ")).toContain("email aliases");
-    expect(queries.every((query) => query.includes("open source"))).toBe(true);
+    // Owner directive 2026-08-15: hunt real COMPETITOR PRODUCTS first, then
+    // open-source implementations - never only the latter.
+    expect(queries[0]).toMatch(/competitors/);
+    expect(queries.some((query) => query.includes("open source"))).toBe(true);
+    expect(queries.some((query) => !query.includes("open source"))).toBe(true);
+  });
+});
+
+describe("isCompetitorQuery", () => {
+  it("recognizes competitor-product queries and not implementation queries", () => {
+    expect(isCompetitorQuery("GrantFlow competitors")).toBe(true);
+    expect(isCompetitorQuery("best grant discovery software for nonprofits")).toBe(true);
+    expect(isCompetitorQuery("top alternatives to GrantFlow")).toBe(true);
+    expect(isCompetitorQuery("grant matching open source GitHub implementation")).toBe(false);
   });
 });
