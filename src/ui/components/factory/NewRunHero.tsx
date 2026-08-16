@@ -47,7 +47,11 @@ export function NewRunHero({
   const hasAnyKey =
     (health?.anthropicConfigured ?? false) || (health?.openaiConfigured ?? false);
   const [idea, setIdea] = useState("");
-  const [demo, setDemo] = useState(!hasAnyKey);
+  // Demo/simulate mode is not an owner surface (doctrine 2026-08-15) — a run
+  // without keys fails loudly with the real missing-credential error instead
+  // of silently producing a mock app.
+  const demo = false;
+  const setDemo = (_: boolean) => {};
   const [runMode, setRunMode] = useState<"new" | "extend">("new");
   // Which provider is PRIMARY for runs started from this screen. "auto" is
   // the free-first default; pinning Claude/OpenAI sends an explicit
@@ -364,15 +368,8 @@ function NewAppPanel({
         <div className="mt-5 space-y-2">
           {!hasAnyKey && (
             <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
-              No API keys detected. You can still explore the full assembly line in{" "}
-              <strong>demo mode</strong> — add keys in <code>.env</code> for real
-              builds.
-            </Helper>
-          )}
-          {hasAnyKey && demo && (
-            <Helper tone="violet" icon={<FlaskConical className="h-3.5 w-3.5" />}>
-              Demo mode selected — this run uses the offline mock provider (no API
-              calls).
+              No API keys detected — add keys in <code>.env</code> to build. Every
+              run does real work; there is no demo or test mode.
             </Helper>
           )}
         </div>
