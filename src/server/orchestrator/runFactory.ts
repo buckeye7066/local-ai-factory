@@ -1565,3 +1565,20 @@ export async function runFactory(args: StartRunArgs): Promise<RunRecord> {
   await executeRun(run, args);
   return run;
 }
+
+/**
+ * Await the full run, reporting the created record BEFORE execution — so an
+ * orchestrator (the epic runner) can persist the runId while the run is
+ * still alive instead of only after it finishes.
+ */
+export async function runFactoryTracked(
+  args: StartRunArgs,
+  onCreated: (run: RunRecord) => void | Promise<void>,
+): Promise<RunRecord> {
+  const run = createRecord(args);
+  await appendAuditEvent({ type: "run.queued", runId: run.id });
+  await saveRun(run);
+  await onCreated(run);
+  await executeRun(run, args);
+  return run;
+}

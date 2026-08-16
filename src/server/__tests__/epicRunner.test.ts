@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import {
   createEpic,
   getEpic,
+  recoverOrphanedEpics,
   runEpic,
   sliceIdea,
   type EpicDeps,
@@ -170,5 +171,55 @@ describe("epic slices", () => {
     const d2 = deps([released, released]);
     const done = await runEpic(paused, d2);
     expect(done.status).toBe("completed");
+  });
+});
+
+describe("epic resilience across server restarts", () => {
+  it("boot recovery pauses orphaned running epics with the reason named", async () => {
+    const d = deps([]);
+    const epic = await createEpic("big evolution", { mode: "extend" }, d);
+    expect(epic.status).toBe("running");
+    const n = await recoverOrphanedEpics();
+    expect(n).toBeGreaterThanOrEqual(1);
+    const reloaded = await getEpic(epic.id);
+    expect(reloaded?.status).toBe("paused");
+    expect(reloaded?.statusReason).toMatch(/server restart/i);
+  });
+
+  it("persists the slice runId at run START, and resumes an interrupted slice from its checkpoint", async () => {
+    const released = {
+      status: "completed" as const,
+      release: { released: true, prUrl: "pr", mergedSha: "abc", reason: "merged" },
+    };
+    // First pass: the slice run "starts" (runId persisted) then the run fails.
+    const d1 = deps([{ status: "failed", release: null, error: "process died" }]);
+    const startedIds: string[] = [];
+    const origExec = d1.executeSliceRun;
+    d1.executeSliceRun = async (idea, options, onStarted) => {
+      const run = fakeRun({ status: "failed", release: null, error: "process died" });
+      startedIds.push(run.id);
+      await onStarted?.(run);
+      return run;
+    };
+    void origExec;
+    const epic = await createEpic("big evolution", { mode: "extend" }, d1);
+    const paused = await runEpic(epic, d1);
+    expect(paused.status).toBe("paused");
+    // runId was persisted at start, before the failure landed.
+    expect(paused.slices[0]!.runId).toBe(startedIds[0]);
+
+    // Resume: the runner tries resumeSliceRun with the saved runId FIRST.
+    paused.slices[paused.currentSlice]!.status = "pending";
+    paused.status = "running";
+    paused.statusReason = null;
+    const resumedWith: string[] = [];
+    const d2 = deps([released, released]);
+    d2.resumeSliceRun = async (runId) => {
+      resumedWith.push(runId);
+      return fakeRun(released);
+    };
+    const done = await runEpic(paused, d2);
+    expect(resumedWith[0]).toBe(startedIds[0]);
+    expect(done.slices[0]!.status).toBe("released");
   });
 });

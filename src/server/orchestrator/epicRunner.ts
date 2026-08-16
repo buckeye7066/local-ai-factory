@@ -101,8 +101,19 @@ export function sliceIdea(epic: EpicRecord, index: number): string {
 }
 
 export interface EpicDeps {
-  /** Executes one slice run to completion and returns the final RunRecord. */
-  executeSliceRun: (idea: string, options: RunOptions) => Promise<RunRecord>;
+  /**
+   * Executes one slice run to completion and returns the final RunRecord.
+   * onStarted fires as soon as the run record exists, so the epic can persist
+   * the runId while the slice is still alive (a crashed server used to leave
+   * running slices with runId=null — unfindable).
+   */
+  executeSliceRun: (
+    idea: string,
+    options: RunOptions,
+    onStarted?: (run: RunRecord) => void | Promise<void>,
+  ) => Promise<RunRecord>;
+  /** Resume a failed-but-resumable slice run from its checkpoint (paid work salvage). */
+  resumeSliceRun?: (runId: string) => Promise<RunRecord>;
   plan: (idea: string) => Promise<EpicPlan>;
   config: AppConfig;
   secrets: AppSecrets;
@@ -172,6 +183,27 @@ export async function createEpic(
  * Run the epic from its current slice until completion or pause. Never
  * throws — every outcome lands on the record with its reason.
  */
+/**
+ * Boot-time recovery: an epic whose driving loop died with the process is
+ * stuck "running"/"planning" forever with nothing advancing it. Mark such
+ * orphans paused with the reason named — resumable, never silent.
+ */
+export async function recoverOrphanedEpics(): Promise<number> {
+  let recovered = 0;
+  for (const epic of await listEpics()) {
+    if (epic.status !== "running" && epic.status !== "planning") continue;
+    epic.status = "paused";
+    epic.statusReason =
+      "interrupted by a server restart — resume to continue from the current slice (an interrupted slice run resumes from its checkpoint)";
+    const slice = epic.slices[epic.currentSlice];
+    if (slice && slice.status === "running") slice.status = "pending";
+    await saveEpic(epic);
+    await appendAuditEvent({ type: "epic.paused", runId: epic.id, detail: epic.statusReason });
+    recovered++;
+  }
+  return recovered;
+}
+
 export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRecord> {
   while (epic.currentSlice < epic.slices.length) {
     const i = epic.currentSlice;
@@ -181,9 +213,26 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
 
     let run: RunRecord;
     try {
-      run = await deps.executeSliceRun(sliceIdea(epic, i), {
-        ...(epic.options as RunOptions),
-      });
+      // A slice that already has a runId was interrupted (server restart) —
+      // resume its checkpoint instead of paying for the completed stages again.
+      let resumed: RunRecord | null = null;
+      if (slice.runId && deps.resumeSliceRun) {
+        try {
+          resumed = await deps.resumeSliceRun(slice.runId);
+        } catch {
+          resumed = null; // not resumable (no checkpoint) — fall through to a fresh run
+        }
+      }
+      run =
+        resumed ??
+        (await deps.executeSliceRun(
+          sliceIdea(epic, i),
+          { ...(epic.options as RunOptions) },
+          async (started) => {
+            slice.runId = started.id;
+            await saveEpic(epic);
+          },
+        ));
     } catch (err) {
       slice.status = "failed";
       slice.detail = String((err as Error)?.message ?? err);
