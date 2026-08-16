@@ -104,15 +104,18 @@ export function resolveGeneratedWrite(
       : { contents: null, edited: true, reason: outcome.reason };
   }
 
-  if (/\.(m?[jt]sx?|cjs|vue|svelte|py|rb|go|rs|java|cs|php)$/i.test(relPath)) {
+  // FIX, DON'T BLOCK (owner rule 2026-08-16). The builder is now GIVEN the
+  // file's real contents, so a whole-file answer is an informed rewrite rather
+  // than a reconstruction from the filename. Accept it and let the export guard
+  // catch any actual destruction — refusing outright would stall real work over
+  // a formatting preference. An EMPTY body is still refused: that deletes a file
+  // by accident, never on purpose.
+  if (!file.contents.trim()) {
     return {
       contents: null,
       edited: true,
-      reason:
-        "whole-file replacement of an existing source file is refused — send anchored " +
-        "edits quoting the current text, so nothing outside your change is lost",
+      reason: "empty replacement for an existing file — nothing to write",
     };
   }
-
   return { contents: file.contents, edited: true };
 }
