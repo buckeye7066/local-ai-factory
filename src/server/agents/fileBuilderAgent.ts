@@ -17,6 +17,15 @@ export interface ExistingRepoContext {
   fileTreeExcerpt: string;
   manifestExcerpt: string;
   readmeExcerpt: string;
+  /**
+   * ACTUAL CONTENTS of the files this build is expected to touch. Without
+   * these the builder was reconstructing existing files from their FILENAME —
+   * the single defect behind every destructive delivery this week (an auth
+   * module rewritten ESM→CJS with its exports gone, an app shell that lost its
+   * route gating, imports of packages the repo never had). You cannot edit
+   * code you have not read.
+   */
+  targetFiles?: { path: string; contents: string }[];
 }
 
 /**
@@ -76,6 +85,11 @@ export async function fileBuilderAgent(
         `and already runs. Do NOT regenerate the whole app and do NOT recreate config/entry files (package.json, ` +
         `index.html, build config, etc.) unless a goal explicitly requires changing them. Only output files ` +
         `that are genuinely NEW or that must be MODIFIED to implement the goals. Match the existing file ` +
+        `HOW TO CHANGE AN EXISTING FILE: return \`edits\` — an array of { find, replace } where \`find\` ` +
+        `quotes the CURRENT text exactly (whitespace included) and appears exactly ONCE in that file. Do ` +
+        `NOT return \`contents\` for a file that already exists: a whole-file replacement is refused, ` +
+        `because rewriting from memory silently deletes exports, imports, and behavior you were not asked ` +
+        `to change. Return \`contents\` ONLY for files you are creating for the first time. ` +
         `layout, naming, and stack shown below. The goals demand WORKING BEHAVIOR wired into the real product ` +
         `code: a delivery consisting only of documentation, standalone tests, or schema files is a FAILED build ` +
         `and will be refused release. Three moves are forbidden outright: (1) introducing a new ORM or schema ` +
@@ -91,6 +105,19 @@ export async function fileBuilderAgent(
         existing.manifestExcerpt || "(none found)"
       }\n\nTARGET REPO README:\n${existing.readmeExcerpt || "(none found)"}`,
     );
+    if (existing.targetFiles?.length) {
+      // THE REAL CODE. Everything above is metadata; this is what the model
+      // must quote from to change anything. Its absence is what made every
+      // "modification" a rewrite-from-imagination.
+      promptParts.push(
+        "CURRENT CONTENTS of the files you are most likely to change. These are the REAL files " +
+          "on disk. To change any of them, quote from what you see here inside an `edits` entry — " +
+          "never retype a file from memory:\n\n" +
+          existing.targetFiles
+            .map((f) => `----- ${f.path} -----\n${f.contents}`)
+            .join("\n\n"),
+      );
+    }
   } else {
     systemParts.push(
       `You are the FILE BUILDER agent. Output a complete, runnable app.`,
