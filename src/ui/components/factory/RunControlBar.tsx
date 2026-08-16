@@ -82,7 +82,9 @@ export function RunControlBar({
               {run.repairLoops} repair
             </Badge>
           )}
-          {run.status === "failed" && run.resumable && onResume && (
+          {(run.status === "failed" || run.status === "cancelled") &&
+            run.resumable &&
+            onResume && (
             <Button
               size="sm"
               variant="ghost"

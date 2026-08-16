@@ -1167,10 +1167,24 @@ async function executeRun(
         : rawErr;
     if (err instanceof RunCancelledError) {
       run.status = "cancelled";
-      run.resumable = false;
+      // A cancel is a PAUSE the owner may want to return from, not a shredder
+      // (owner order 2026-08-15: "there needs to be a way to pick up where the
+      // run left off"). The concrete case: run a8a9c84a was cancelled mid-
+      // repair specifically so a Factory Deck defect could be fixed — and its
+      // checkpoint held ~$4 of already-paid spec/architecture/research/plan
+      // work that deleting made unrecoverable. Cancelled runs now keep their
+      // checkpoint and are resumable exactly like failed ones; the one-click
+      // run DELETE remains the disposal path for a cancel the owner means as
+      // final, and retention pruning still bounds how long checkpoints linger.
+      run.resumable = Boolean(await getRunCheckpoint(run.id));
       run.error = null;
       if (run.currentStage) finishStage(run, run.currentStage, "skipped");
-      log("warning", "Run cancelled by user — stopping cleanly.");
+      log(
+        "warning",
+        run.resumable
+          ? "Run cancelled by user — stopping cleanly. The durable checkpoint is kept; resume to pick up where it left off."
+          : "Run cancelled by user — stopping cleanly.",
+      );
       const ev = await appendAuditEvent({ type: "run.cancelled", runId: run.id });
       await persistAttribution("not_run", ev.seq).catch(() => {});
     } else if (err instanceof RunTimeoutError) {
@@ -1215,23 +1229,11 @@ async function executeRun(
     if (run.status === "failed") {
       run.resumable = Boolean(await getRunCheckpoint(run.id));
     }
-    // A user cancellation is terminal, not resumable. Persist that terminal
-    // truth first, then remove the private raw checkpoint so cancelled input
-    // does not linger until retention pruning.
+    // Cancelled runs KEEP their checkpoint (owner order 2026-08-15: a cancel
+    // is a pause to fix something, then "pick up where the run left off").
+    // Disposal of a cancel the owner means as final is the one-click run
+    // DELETE, and retention pruning still bounds checkpoint lifetime.
     await flush();
-    if (run.status === "cancelled") {
-      try {
-        await deleteRunCheckpoint(run.id);
-      } catch (cleanupErr) {
-        log(
-          "warning",
-          `Cancelled-run checkpoint cleanup failed: ${redactSecrets(
-            cleanupErr instanceof Error ? cleanupErr.message : "unknown error",
-          )}`,
-        );
-        await flush();
-      }
-    }
   } finally {
     clearCancel(run.id);
   }
@@ -1309,7 +1311,12 @@ async function prepareResume(
   try {
     const run = await getRunForExecution(runId);
     const checkpoint = await getRunCheckpoint(runId);
-    if (!run || !checkpoint || run.status !== "failed" || !run.resumable) {
+    // Failed AND cancelled runs resume — a cancel is a pause the owner may
+    // return from once whatever prompted it is fixed (owner order 2026-08-15).
+    const stoppedResumable =
+      (run?.status === "failed" || run?.status === "cancelled") &&
+      run?.resumable === true;
+    if (!run || !checkpoint || !stoppedResumable) {
       throw new RunNotResumableError(
         "Run has no interrupted durable checkpoint to resume.",
       );
