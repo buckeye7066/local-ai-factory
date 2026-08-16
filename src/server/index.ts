@@ -486,8 +486,12 @@ app.post(
       res.status(404).json({ error: "Epic not found." });
       return;
     }
-    if (epic.status !== "paused") {
-      res.status(409).json({ error: `Epic is ${epic.status}, not paused.` });
+    // A FAILED epic is resumable too (2026-08-16): an epic whose PLANNING died
+    // - e.g. the provider was out of credits - had zero slices and could never
+    // be retried, a permanent dead end for work the owner still wanted. Only
+    // completed and already-running epics are refused.
+    if (epic.status === "completed" || epic.status === "running") {
+      res.status(409).json({ error: `Epic is ${epic.status}; nothing to resume.` });
       return;
     }
     // Retry the slice that paused it: reset to pending and continue.
@@ -499,7 +503,11 @@ app.post(
     epic.status = "running";
     epic.statusReason = null;
     const deps = epicDeps();
-    void runEpic(epic, deps).catch(() => {});
+    // Never planned (or planning failed): plan first, then run.
+    void (async () => {
+      const ready = epic.slices.length === 0 ? await planEpic(epic, deps) : epic;
+      if (ready.status !== "failed") await runEpic(ready, deps);
+    })().catch(() => {});
     res.status(202).json({ ok: true });
   }),
 );
