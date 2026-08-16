@@ -13,7 +13,8 @@ import {
 import {
   startRun,
   resumeRun,
-  runFactory as runFactoryFull,
+  runFactoryTracked,
+  resumeFactory as resumeFactoryFull,
   MissingProviderCredentialError,
   RunNotResumableError,
 } from "./orchestrator/runFactory.js";
@@ -21,6 +22,7 @@ import { requestCancel } from "./orchestrator/cancellation.js";
 import {
   createEpicShell,
   planEpic,
+  recoverOrphanedEpics,
   getEpic,
   listEpics,
   runEpic,
@@ -415,8 +417,9 @@ app.get(
  */
 function epicDeps(): EpicDeps {
   return {
-    executeSliceRun: (idea, options) =>
-      runFactoryFull({ idea, options, config, secrets }),
+    executeSliceRun: (idea, options, onStarted) =>
+      runFactoryTracked({ idea, options, config, secrets }, onStarted ?? (() => {})),
+    resumeSliceRun: (runId) => resumeFactoryFull(runId, config, secrets),
     plan: async (idea) => {
       // ONE call whose quality decides every slice downstream: prefer a
       // configured PAID provider; the free small model produced a 15-minute
@@ -787,6 +790,9 @@ if (bind.error) {
   process.exit(1);
 }
 
+void recoverOrphanedEpics().then((n) => {
+  if (n > 0) console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
+});
 const server = app.listen(config.port, bind.host, () => {
   console.log(`[factory] backend listening on http://${bind.host}:${config.port}`);
   console.log(
