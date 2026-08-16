@@ -51,6 +51,11 @@ const CandidateComparisonSchema = z.object({
 
 const CompetitiveAuditSchema = z.object({
   queries: z.array(z.string()).default([]),
+  /** Which discovery sources answered (Repo Rewards, web search) — an
+   *  unreachable source is reported by name, never silently dropped. */
+  sources: z
+    .array(z.object({ name: z.string(), ok: z.boolean(), detail: z.string() }))
+    .default([]),
   discoveredCount: z.number().int().nonnegative().default(0),
   inspectedCount: z.number().int().nonnegative().default(0),
   generatedAt: z.string().default(""),
@@ -214,6 +219,7 @@ function compactCandidate(candidate: CompetitiveCandidate) {
 function auditFrom(dossier: CompetitiveDossier) {
   return {
     queries: dossier.queries,
+    sources: dossier.sources ?? [],
     discoveredCount: dossier.discoveredCount,
     inspectedCount: dossier.inspectedCount,
     generatedAt: dossier.generatedAt,
@@ -341,7 +347,18 @@ export async function researchAgent(
   }
 
   const selection = await evaluateCompetitiveDossier(deps, spec, arch, dossier);
-  const merged = mergeCompetitiveResults(base, dossier, selection);
+  let merged = mergeCompetitiveResults(base, dossier, selection);
+  const deadSources = (dossier.sources ?? []).filter((s) => !s.ok);
+  if (deadSources.length) {
+    merged = ResearchFindingsSchema.parse({
+      ...merged,
+      summary: `${merged.summary}
+
+Discovery source unavailable: ${deadSources
+        .map((s) => `${s.name} (${s.detail})`)
+        .join("; ")}.`,
+    });
+  }
   if (dossier.candidates.length < 5) {
     // No silent caps: the owner's floor is the top FIVE competitors. Fewer
     // discovered is reported, never papered over.
