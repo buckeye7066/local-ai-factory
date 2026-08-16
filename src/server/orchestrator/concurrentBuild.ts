@@ -37,6 +37,10 @@ export interface ConcurrentBuildResult {
   /** How many category-groups each provider actually built — proof of real concurrency. */
   tasksByProvider: Record<string, number>;
   usedConcurrency: boolean;
+  /** Category-level accounting: every planned category is built, failed (with
+   * reason), or empty (schema-valid but produced no files) — never silent. */
+  failures: { id: string; reason: string }[];
+  empties: string[];
 }
 
 function groupTasksByCategory(plan: TaskPlan): Map<string, TaskPlan["tasks"]> {
@@ -77,7 +81,7 @@ export async function buildFilesConcurrently(
       research,
       additionalSources,
     );
-    return { build, tasksByProvider: {}, usedConcurrency: false };
+    return { build, tasksByProvider: {}, usedConcurrency: false, failures: [], empties: [] };
   }
 
   const tasks: DispatchTask<FileBuild>[] = [...groups.entries()].map(
@@ -105,6 +109,17 @@ export async function buildFilesConcurrently(
       : new Error(String(failed[0].error));
   }
 
+  // NO SILENT SKIPS (owner doctrine): run f0077040 dispatched 30 tasks in 13
+  // categories, 12 produced nothing, and the run marched to QA with a single
+  // README as "the build". Every category is now accounted for by name.
+  const failures = failed.map((o) => ({
+    id: o.id,
+    reason: String((o.error as Error)?.message ?? o.error).slice(0, 300),
+  }));
+  const empties = summary.outcomes
+    .filter((o) => !o.error && (!o.result || o.result.files.length === 0))
+    .map((o) => o.id);
+
   const files: FileBuild["files"] = [];
   const seenPaths = new Set<string>();
   for (const outcome of summary.outcomes) {
@@ -125,5 +140,7 @@ export async function buildFilesConcurrently(
     build: { files },
     tasksByProvider: summary.tasksByProvider,
     usedConcurrency: true,
+    failures,
+    empties,
   };
 }

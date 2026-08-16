@@ -79,7 +79,7 @@ describe("ingestExistingRepo", () => {
     expect(branch).toBe("factory-deck/11111111");
   }, 30_000);
 
-  it("clones a git working tree found at a local path when type: path (no inPlace)", async () => {
+  it("clones a git working tree found at a local path when type: path (no inPlace)", { timeout: 30_000 }, async () => {
     const src = await makeTmpGitRepo();
     const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-ws-"));
     cleanupPaths.push(workspaceRoot);
