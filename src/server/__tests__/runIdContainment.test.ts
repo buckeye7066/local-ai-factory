@@ -20,7 +20,7 @@ const escapeTarget = resolve(process.cwd(), "outside-idguard.json");
 
 afterAll(async () => {
   delete process.env.FACTORY_DATA_DIR;
-  await rm(dataPath, { recursive: true, force: true });
+  await rm(dataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   await rm(escapeTarget, { force: true });
 });
 

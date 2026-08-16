@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isPaperOnlyDelivery,
   releaseEligible,
   releaseRun,
   repoSlug,
@@ -51,6 +52,40 @@ describe("releaseEligible — the evidence gate", () => {
   });
   it("passes only with QA green AND tests executed green", () => {
     expect(releaseEligible({ qaPassed: true, testStatus: "passing" }).eligible).toBe(true);
+  });
+
+  it("refuses a paper-only delivery even with QA and tests green (run a1d8866f class)", () => {
+    const gate = releaseEligible({ qaPassed: true, testStatus: "passing", paperOnly: true });
+    expect(gate.eligible).toBe(false);
+    expect(gate.reason).toMatch(/no wired product change/i);
+  });
+});
+
+describe("isPaperOnlyDelivery", () => {
+  it("classifies run a1d8866f's actual delivery as paper", () => {
+    expect(
+      isPaperOnlyDelivery([
+        "docs/connector-operations.md",
+        "docs/current-state-audit.md",
+        "docs/database-schema-audit.md",
+        "docs/release-verification.md",
+        "docs/security-and-ai-safety.md",
+        "prisma/schema.prisma",
+        "tests/current-state-contract.spec.ts",
+        "tests/domain/eligibility-contract.spec.ts",
+        "tests/schema-contract.spec.ts",
+        "tests/security-release-contract.spec.ts",
+      ]),
+    ).toBe(true);
+  });
+  it("one wired product file makes the delivery real", () => {
+    expect(
+      isPaperOnlyDelivery(["docs/notes.md", "backend/services/matchEngine.js"]),
+    ).toBe(false);
+    expect(isPaperOnlyDelivery(["src/App.tsx"])).toBe(false);
+  });
+  it("an empty delivery is paper", () => {
+    expect(isPaperOnlyDelivery([])).toBe(true);
   });
 });
 

@@ -14,7 +14,7 @@ import { loadConfig, loadSecrets } from "../config.js";
 const tmpRoot = resolve(process.cwd(), ".test-workspaces-cancel");
 
 afterAll(async () => {
-  await rm(tmpRoot, { recursive: true, force: true });
+  await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 describe("cancellation primitives", () => {

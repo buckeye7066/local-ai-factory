@@ -23,7 +23,7 @@ import { loadConfig, loadSecrets } from "../config.js";
 const tmpRoot = resolve(process.cwd(), ".test-workspaces-errredact");
 
 afterAll(async () => {
-  await rm(tmpRoot, { recursive: true, force: true });
+  await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 describe("Round-9 #7 run.error is redacted before persistence/serving", () => {

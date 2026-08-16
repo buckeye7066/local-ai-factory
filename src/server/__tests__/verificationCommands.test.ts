@@ -15,7 +15,7 @@ function workspace(): string {
 
 afterEach(() => {
   for (const path of workspaces.splice(0)) {
-    rmSync(path, { recursive: true, force: true });
+    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });
 

@@ -29,7 +29,7 @@ function tmp(): string {
   return d;
 }
 afterAll(() => {
-  for (const d of scratch) rmSync(d, { recursive: true, force: true });
+  for (const d of scratch) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 /* #1 — credential-bearing URLs/DSNs must not reach the child env. */

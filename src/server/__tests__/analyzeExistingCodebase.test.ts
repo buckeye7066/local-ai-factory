@@ -6,7 +6,7 @@ import { analyzeExistingCodebase } from "../workspace/analyzeExistingCodebase.js
 
 const cleanupPaths: string[] = [];
 afterAll(async () => {
-  await Promise.all(cleanupPaths.map((p) => rm(p, { recursive: true, force: true })));
+  await Promise.all(cleanupPaths.map((p) => rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })));
 });
 
 describe("analyzeExistingCodebase", () => {

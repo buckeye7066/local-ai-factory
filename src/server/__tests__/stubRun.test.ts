@@ -7,7 +7,7 @@ import { loadConfig, loadSecrets } from "../config.js";
 const tmpRoot = resolve(process.cwd(), ".test-workspaces");
 
 afterAll(async () => {
-  await rm(tmpRoot, { recursive: true, force: true });
+  await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 describe("stub demo run (end-to-end, offline)", () => {

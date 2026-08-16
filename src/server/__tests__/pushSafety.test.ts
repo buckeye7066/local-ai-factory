@@ -60,7 +60,7 @@ describe("pushBranch — what may reach the owner's repo", () => {
       // The guard is only real if the remote did not move.
       expect(git(["rev-parse", "main"], remote)).toBe(before);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
   }, 30_000);
 
@@ -86,7 +86,7 @@ describe("pushBranch — what may reach the owner's repo", () => {
       // ...and main was not touched.
       expect(git(["rev-parse", "main"], remote)).toBe(mainBefore);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
   }, 30_000);
 
@@ -101,7 +101,7 @@ describe("pushBranch — what may reach the owner's repo", () => {
       expect(res.pushed).toBe(false);
       expect(res.detail).toMatch(/No 'origin' remote/);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
   }, 30_000);
 });
@@ -125,7 +125,7 @@ describe("commitRunFiles — only the run's own output is committed", () => {
       // Still untracked — never swept into the run's commit.
       expect(git(["status", "--porcelain"], clone)).toContain("OWNERS_WIP.txt");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
   }, 30_000);
 
@@ -136,7 +136,7 @@ describe("commitRunFiles — only the run's own output is committed", () => {
       expect(res.committed).toBe(false);
       expect(res.detail).toMatch(/Nothing to commit/);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
   }, 30_000);
 });

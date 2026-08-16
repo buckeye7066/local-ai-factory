@@ -12,9 +12,9 @@ const outsideRoot = resolve(process.cwd(), ".test-checkpoint-outside");
 
 afterAll(async () => {
   delete process.env.FACTORY_DATA_DIR;
-  await rm(dataPath, { recursive: true, force: true });
-  await rm(workspaceRoot, { recursive: true, force: true });
-  await rm(outsideRoot, { recursive: true, force: true });
+  await rm(dataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await rm(workspaceRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await rm(outsideRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 describe("durable checkpoint continuation", () => {

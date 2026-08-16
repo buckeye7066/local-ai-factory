@@ -19,8 +19,8 @@ const outsidePath = resolve(process.cwd(), ".test-factory-guardrecover-OUTSIDE")
 
 afterAll(async () => {
   delete process.env.FACTORY_DATA_DIR;
-  await rm(dataPath, { recursive: true, force: true });
-  await rm(outsidePath, { recursive: true, force: true });
+  await rm(dataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await rm(outsidePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 function makeRun(id: string): RunRecord {
@@ -61,8 +61,8 @@ async function freshStore() {
 
 describe("Round-11 #7 guard failure is not permanently latched", () => {
   it("refuses while a junction is present, then RECOVERS once it is removed", async () => {
-    await rm(dataPath, { recursive: true, force: true });
-    await rm(outsidePath, { recursive: true, force: true });
+    await rm(dataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await rm(outsidePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     await mkdir(join(dataPath, "runs"), { recursive: true });
     await mkdir(join(dataPath, "files"), { recursive: true });
     await mkdir(outsidePath, { recursive: true });
@@ -73,7 +73,7 @@ describe("Round-11 #7 guard failure is not permanently latched", () => {
     await store.saveRun(makeRun(crypto.randomUUID()));
 
     // 2) Swap runs -> junction/symlink (transient unsafe condition).
-    await rm(join(dataPath, "runs"), { recursive: true, force: true });
+    await rm(join(dataPath, "runs"), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     let swapped = false;
     try {
       await symlink(
@@ -97,7 +97,7 @@ describe("Round-11 #7 guard failure is not permanently latched", () => {
 
     // 4) Remove the junction, restore a real dir — the guard must REVALIDATE and
     //    let the NEXT write succeed (no permanent wedge).
-    await rm(join(dataPath, "runs"), { recursive: true, force: true });
+    await rm(join(dataPath, "runs"), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     await mkdir(join(dataPath, "runs"), { recursive: true });
     const after = makeRun(crypto.randomUUID());
     await store.saveRun(after); // must NOT throw

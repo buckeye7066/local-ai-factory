@@ -8,7 +8,7 @@ const tmpData = resolve(process.cwd(), ".test-factory-data-mock");
 // MUST be set before importing storage modules (they capture DATA_ROOT at load).
 process.env.FACTORY_DATA_DIR = tmpData;
 await mkdir(tmpData, { recursive: true });
-await rm(resolve(tmpData, "audit"), { recursive: true, force: true });
+await rm(resolve(tmpData, "audit"), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 
 const { runFactory } = await import("../orchestrator/runFactory.js");
 const { loadConfig, loadSecrets, toHealth } = await import("../config.js");
@@ -24,8 +24,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(tmpRoot, { recursive: true, force: true });
-  await rm(tmpData, { recursive: true, force: true });
+  await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await rm(tmpData, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   delete process.env.FACTORY_DATA_DIR;
 });
 
@@ -71,7 +71,7 @@ describe("control-plane health vs providers (#237)", () => {
 describe("mock end-to-end job (#242)", () => {
   it("completes a full assembly line with zero paid credits + attribution", async () => {
     _resetAuditCursorForTests();
-    await rm(resolve(tmpData, "audit"), { recursive: true, force: true });
+    await rm(resolve(tmpData, "audit"), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     const config = {
       ...loadConfig({}),
       workspaceRoot: tmpRoot,
