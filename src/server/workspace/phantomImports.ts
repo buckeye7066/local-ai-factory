@@ -95,6 +95,38 @@ export function nearestDeclared(pkg: string, declared: Set<string>): string | nu
 export interface PhantomVerdict {
   refused: boolean;
   reason?: string;
+  /** Contents with fixable specifiers corrected (owner rule: fix, don't block). */
+  corrected?: string;
+  /** Human-readable list of corrections actually applied. */
+  corrections?: string[];
+}
+
+/**
+ * Rewrite import specifiers the repo does not have to the ones it does.
+ * `react-router-dom` in a react-router v8 repo is a KNOWN wrong answer with a
+ * known right answer — correcting it is strictly better than refusing the file
+ * and making the model guess again (owner rule 2026-08-16: errors are to be
+ * FIXED, not blocked).
+ */
+export function correctPhantomImports(
+  contents: string,
+  declared: Set<string>,
+): { contents: string; corrections: string[] } {
+  const corrections: string[] = [];
+  let out = contents;
+  for (const pkg of importedPackages(contents)) {
+    if (BUILTINS.has(pkg) || declared.has(pkg)) continue;
+    const near = nearestDeclared(pkg, declared);
+    if (!near) continue;
+    // Replace the specifier inside its quotes, preserving any deep path
+    // ("react-router-dom/server" -> "react-router/server").
+    for (const quote of ['"', "'"]) {
+      out = out.split(`${quote}${pkg}${quote}`).join(`${quote}${near}${quote}`);
+      out = out.split(`${quote}${pkg}/`).join(`${quote}${near}/`);
+    }
+    corrections.push(`${pkg} -> ${near}`);
+  }
+  return { contents: out, corrections };
 }
 
 /**
@@ -111,18 +143,27 @@ export function assessPhantomImports(
   const declared = declaredDependencies(workspacePath);
   if (declared.size === 0) return { refused: false };
 
-  const missing: string[] = [];
-  for (const pkg of importedPackages(contents)) {
+  // FIX FIRST: correct every specifier that has a known right answer.
+  const fixed = correctPhantomImports(contents, declared);
+  const remaining: string[] = [];
+  for (const pkg of importedPackages(fixed.contents)) {
     if (BUILTINS.has(pkg) || declared.has(pkg)) continue;
-    const near = nearestDeclared(pkg, declared);
-    missing.push(near ? `${pkg} (this repo has ${near})` : pkg);
+    remaining.push(pkg);
   }
-  if (missing.length === 0) return { refused: false };
+  if (remaining.length === 0) {
+    return fixed.corrections.length
+      ? { refused: false, corrected: fixed.contents, corrections: fixed.corrections }
+      : { refused: false };
+  }
+  // Only a package with NO declared counterpart is still a hard problem: the
+  // build must declare it before importing it.
   return {
     refused: true,
+    corrected: fixed.corrections.length ? fixed.contents : undefined,
+    corrections: fixed.corrections,
     reason:
-      `imports ${missing.length} package(s) the repo does not depend on: ` +
-      `${missing.slice(0, 4).join(", ")} — import what the manifests declare, ` +
-      `or add the dependency to package.json in this same build`,
+      `imports ${remaining.length} package(s) the repo does not depend on and that have no ` +
+      `declared counterpart: ${remaining.slice(0, 4).join(", ")} — add them to package.json ` +
+      `in this same build, or import what the manifests already declare`,
   };
 }
