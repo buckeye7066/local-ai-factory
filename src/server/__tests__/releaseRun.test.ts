@@ -10,11 +10,17 @@ import type { ExecResult } from "../workspace/gitOps.js";
 const ok = (stdout: string): ExecResult => ({ code: 0, stdout, stderr: "", spawnError: null });
 const fail = (stderr: string): ExecResult => ({ code: 1, stdout: "", stderr, spawnError: null });
 
-function fakeGh(script: Array<(args: string[]) => ExecResult>) {
+const VERIFIED_SHA = "abc123verified";
+
+function fakeGh(
+  script: Array<(args: string[]) => ExecResult>,
+  headSha = VERIFIED_SHA,
+) {
   const calls: string[][] = [];
   let i = 0;
   const impl = async (args: string[]): Promise<ExecResult> => {
     calls.push(args);
+    if (args.includes("headRefOid")) return ok(headSha);
     const step = script[Math.min(i, script.length - 1)]!;
     i++;
     return step(args);
@@ -27,6 +33,7 @@ const BASE = {
   branch: "factory-deck/testrun1",
   runId: "testrun1-0000-0000",
   appName: "GrantFlow",
+  verifiedCommitSha: VERIFIED_SHA,
   caveats: [],
   sleepImpl: async () => {},
   checkTimeoutMs: 1000,
@@ -84,6 +91,11 @@ describe("isPaperOnlyDelivery", () => {
     ).toBe(false);
     expect(isPaperOnlyDelivery(["src/App.tsx"])).toBe(false);
   });
+  it("recognizes suffix-style tests as paper, including tests beside source", () => {
+    expect(
+      isPaperOnlyDelivery(["src/App.test.tsx", "packages/api/auth.spec.mts"]),
+    ).toBe(true);
+  });
   it("an empty delivery is paper", () => {
     expect(isPaperOnlyDelivery([])).toBe(true);
   });
@@ -105,15 +117,15 @@ describe("releaseRun", () => {
     expect(calls.flat().join(" ")).not.toMatch(/--force|--admin/);
   });
 
-  it("opens the PR but NEVER merges when tests did not run", async () => {
+  it("creates no PR or other GitHub state when tests did not run", async () => {
     const { impl, calls } = fakeGh([
-      () => ok("https://github.com/buckeye7066/GrantFlow/pull/100"),
+      () => ok("this must never be called"),
     ]);
     const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "unknown", ghImpl: impl });
     expect(res.released).toBe(false);
-    expect(res.prUrl).toMatch(/pull\/100/);
+    expect(res.prUrl).toBeNull();
     expect(res.reason).toMatch(/no test command executed/i);
-    expect(calls.some((c) => c[1] === "merge")).toBe(false);
+    expect(calls).toHaveLength(0);
   });
 
   /* ---------------------------------------------------------------- *
@@ -182,28 +194,25 @@ describe("releaseRun", () => {
     expect(calls.some((c) => c[1] === "merge")).toBe(false);
   });
 
-  it("a repo with genuinely no CI merges, but says so instead of claiming green checks", async () => {
-    const { impl } = fakeGh([
+  it("holds a repo with no CI because absence is not passing evidence", async () => {
+    const { impl, calls } = fakeGh([
       () => ok("https://github.com/buckeye7066/GrantFlow/pull/112"),
       () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
       () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
       () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
-      (a) => (a[1] === "merge" ? ok("merged") : ok("")),
-      (a) => (a[1] === "view" ? ok("MERGED beef5678") : ok("")),
     ]);
     const res = await releaseRun({
       ...BASE,
       qaPassed: true,
       testStatus: "passing",
       checkTimeoutMs: 60_000,
-      noChecksGraceMs: 0, // grace already elapsed; confirmations still required
+      noChecksGraceMs: 0,
       noChecksConfirmations: 3,
       ghImpl: impl,
     });
-    expect(res.released).toBe(true);
-    // Must NOT claim the host repo's checks approved this.
-    expect(res.reason).not.toMatch(/green host-repo checks/i);
-    expect(res.reason).toMatch(/NO CI checks/i);
+    expect(res.released).toBe(false);
+    expect(res.reason).toMatch(/no reported CI checks|absence/i);
+    expect(calls.some((call) => call[1] === "merge")).toBe(false);
   });
 
   it("leaves the PR open when the repo reports no checks for the entire window", async () => {
@@ -290,6 +299,25 @@ describe("releaseRun", () => {
     ]);
     const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "passing", ghImpl: impl });
     expect(res.prUrl).toMatch(/pull\/7/);
+  });
+
+  it("holds when the PR head differs from the verified delivered commit", async () => {
+    const { impl, calls } = fakeGh(
+      [
+        () => ok("https://github.com/buckeye7066/GrantFlow/pull/120"),
+        () => ok(JSON.stringify([{ state: "SUCCESS", name: "test" }])),
+      ],
+      "different-sha",
+    );
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      ghImpl: impl,
+    });
+    expect(res.released).toBe(false);
+    expect(res.reason).toMatch(/PR head|verified delivered commit/i);
+    expect(calls.some((call) => call[1] === "merge")).toBe(false);
   });
 
   it("declines cleanly for non-GitHub destinations", async () => {

@@ -59,7 +59,7 @@ describe("durable checkpoint continuation", () => {
     };
     await store.saveRun(run);
     await store.saveRunCheckpoint({
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId: id,
       idea: "Build a checkpoint proof app",
       options: { demo: true },
@@ -73,6 +73,8 @@ describe("durable checkpoint continuation", () => {
         acceptanceCriteria: ["completed calls are not replayed"],
       },
       files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
       writeRefusals: [],
       blockingWriteRefusals: [],
       testWriterComplete: false,
@@ -160,7 +162,7 @@ describe("durable checkpoint continuation", () => {
     };
     await store.saveRun(run);
     await store.saveRunCheckpoint({
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId: id,
       idea: "Build a cancel-resume proof app",
       options: { demo: true },
@@ -174,6 +176,8 @@ describe("durable checkpoint continuation", () => {
         acceptanceCriteria: ["completed calls are not replayed"],
       },
       files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
       writeRefusals: [],
       blockingWriteRefusals: [],
       testWriterComplete: false,
@@ -235,11 +239,13 @@ describe("durable checkpoint continuation", () => {
     };
     await store.saveRun(run);
     await store.saveRunCheckpoint({
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId: id,
       idea: run.idea,
       options: { demo: true },
       files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
       writeRefusals: [],
       blockingWriteRefusals: [],
       testWriterComplete: false,

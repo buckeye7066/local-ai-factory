@@ -79,39 +79,31 @@ export function testStatusFor(
 const TEST_FILE_RE =
   /(\.(test|spec)\.[cm]?[jt]sx?$)|(^|[\\/])__tests__[\\/]|(^|[\\/])test_[^\\/]+\.py$|_test\.py$/i;
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function canonical(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
-function outputMentionsRelativePath(output: string, path: string): boolean {
-  const normalizedOutput = output
-    .replace(/\\/g, "/")
-    .replace(/(^|[\s"\'(])\.\//gm, "$1");
-  const relativePath = path.replace(/\\/g, "/").replace(/^\.\//, "");
-  if (!relativePath) return false;
-  const token = new RegExp(
-    `(?:^|[\\s"\'(])${escapeRegex(relativePath)}(?=$|[\\s"\'():,])`,
-    "m",
-  );
-  return token.test(normalizedOutput);
-}
 export function writtenTestFiles(writtenFiles: string[]): string[] {
-  return writtenFiles.filter((p) => TEST_FILE_RE.test(p));
+  return writtenFiles.map(canonical).filter((path) => TEST_FILE_RE.test(path));
 }
 
 export interface RelevantTestVerdict {
   status: "passing" | "failing" | "unknown";
-  /** Written-by-this-run test files the executed output never mentioned. */
+  /** Written-by-this-run test files without an exact direct runner result. */
   uncoveredTestFiles: string[];
-  /** True when a green exit was degraded because none of them ran. */
+  /** True when a green exit was degraded because direct evidence was missing. */
   degraded: boolean;
 }
 
+/**
+ * Filename text in arbitrary stdout is diagnostic only. Coverage authority is
+ * the exact path attached to an engine-selected direct runner command.
+ */
 export function relevantTestStatus(
   testsExecuted: boolean,
   testExit: number | null,
   writtenFiles: string[],
-  executedOutput: string,
+  directlyExecutedTestPaths: string[],
 ): RelevantTestVerdict {
   const base = testStatusFor(testsExecuted, testExit);
   const ownTests = writtenTestFiles(writtenFiles);
@@ -122,10 +114,10 @@ export function relevantTestStatus(
       degraded: base === "passing",
     };
   }
-  const covered = ownTests.filter((path) =>
-    outputMentionsRelativePath(executedOutput, path),
+  const directlyExecuted = new Set(
+    directlyExecutedTestPaths.map(canonical),
   );
-  const uncovered = ownTests.filter((p) => !covered.includes(p));
+  const uncovered = ownTests.filter((path) => !directlyExecuted.has(path));
   if (base !== "passing") {
     return { status: base, uncoveredTestFiles: uncovered, degraded: false };
   }

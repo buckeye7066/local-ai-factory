@@ -43,7 +43,14 @@ CURRENT CODE:
 ${codeContext.text}
 
 Return a testPlan string and test files (path, purpose, contents). Use relative paths only.
-The test plan must name which acceptance criterion each test proves.`,
+The test plan must name which acceptance criterion each test proves.
+Every test must be active (never skip/todo), named, and contain a real assertion.
+When CURRENT CODE changes interactive JSX/TSX/UI behavior and the acceptance criteria describe
+click/fill/save/edit/reload/persistence, include a Playwright journey ONLY if @playwright/test
+and a Playwright config are already declared by the host. That journey must page.goto the real
+app, perform the interaction, assert the result, and use page.reload for persistence criteria.
+Never invent a browser dependency or config; without an existing harness, say so in testPlan
+and the deterministic delivery gate will hold the run for missing browser evidence.`,
     schema: TestPlanSchema,
     schemaName: "TestPlan",
     temperature: 0.1,

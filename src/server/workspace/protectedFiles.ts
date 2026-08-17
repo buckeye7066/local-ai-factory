@@ -1,6 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { statSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import * as ts from "typescript";
+import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
+import { safeResolveExistingPath } from "./fileWriter.js";
 
 /**
  * protectedFiles.ts — the ingested repo's manifests and tooling configs are
@@ -48,6 +52,57 @@ const ROOT_CONFIG_RX =
   /^(vitest|jest|playwright|vite)(?:\.[A-Za-z0-9_-]+)?\.config\.(?:js|cjs|mjs|ts|cts|mts)$/i;
 const OTHER_ROOT_CONFIGS_RX = /^(?:tsconfig(?:\.[A-Za-z0-9_-]+)?\.json|\.eslintrc(?:\.[A-Za-z0-9.]+)?|eslint\.config\.(?:js|cjs|mjs|ts))$/i;
 
+const DEPENDENCY_MAP_KEYS = new Set([
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+]);
+const PYTHON_TEST_CONFIGS = new Set([
+  "pytest.ini",
+  "tox.ini",
+  "setup.cfg",
+  ".coveragerc",
+  "pyproject.toml",
+]);
+
+function additiveManifestChange(beforeText: string, afterText: string): boolean {
+  try {
+    const before = JSON.parse(beforeText) as Record<string, unknown>;
+    const after = JSON.parse(afterText) as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (DEPENDENCY_MAP_KEYS.has(key)) {
+        const oldMap =
+          before[key] && typeof before[key] === "object"
+            ? (before[key] as Record<string, unknown>)
+            : {};
+        const newMap =
+          after[key] && typeof after[key] === "object"
+            ? (after[key] as Record<string, unknown>)
+            : {};
+        for (const [name, value] of Object.entries(oldMap)) {
+          if (!(name in newMap) || !isDeepStrictEqual(newMap[name], value)) {
+            return false;
+          }
+        }
+        continue;
+      }
+      if (!isDeepStrictEqual(after[key], before[key])) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isProtectedConfig(base: string): boolean {
+  return (
+    ROOT_CONFIG_RX.test(base) ||
+    OTHER_ROOT_CONFIGS_RX.test(base) ||
+    PYTHON_TEST_CONFIGS.has(base.toLowerCase())
+  );
+}
+
 export interface ProtectedVerdict {
   refused: boolean;
   reason?: string;
@@ -56,18 +111,32 @@ export interface ProtectedVerdict {
 /** Workspace-relative paths tracked at git HEAD, or null when not a git repo. */
 function trackedFiles(workspacePath: string): Set<string> | null {
   try {
-    const out = execFileSync("git", ["-C", workspacePath, "ls-files"], {
+    execFileSync(
+      "git",
+      ["-C", workspacePath, "rev-parse", "--is-inside-work-tree"],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+  } catch {
+    return null; // genuinely not a git repo (new-app workspace)
+  }
+  try {
+    const out = execFileSync("git", ["-C", workspacePath, "ls-files", "-z"], {
       encoding: "utf8",
       timeout: 30_000,
+      maxBuffer: 64 * 1024 * 1024,
     });
     return new Set(
       out
-        .split(/\r?\n/)
-        .map((l) => l.trim().replace(/\\/g, "/"))
+        .split("\0")
+        .map((line) => line.replace(/\\/g, "/"))
         .filter(Boolean),
     );
-  } catch {
-    return null; // not a git repo (new-app workspace) — guard inert
+  } catch (error) {
+    throw new Error(
+      `Cannot enumerate the host git baseline safely: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
 }
 
@@ -84,40 +153,111 @@ export function _resetProtectedFilesCache(): void {
   baselineCache.clear();
 }
 
-const SOURCE_RX = /\.[cm]?[jt]sx?$/i;
+const SOURCE_RX = JS_TS_SOURCE_EXTENSION_RX;
+
+function hasModifier(
+  node: ts.Node,
+  kind: ts.SyntaxKind,
+): boolean {
+  return Boolean(
+    ts.canHaveModifiers(node) &&
+      ts.getModifiers(node)?.some((modifier) => modifier.kind === kind),
+  );
+}
+
+function collectBindingNames(name: ts.BindingName, out: Set<string>): void {
+  if (ts.isIdentifier(name)) {
+    out.add(name.text);
+    return;
+  }
+  for (const element of name.elements) {
+    if (!ts.isOmittedExpression(element)) collectBindingNames(element.name, out);
+  }
+}
 
 /**
- * Exported symbol names of a JS/TS module — ESM `export` forms plus the
- * CommonJS `module.exports.x` / `exports.x` shapes, so an ESM→CJS rewrite is
- * compared on equal footing.
+ * Parse the module surface with TypeScript's real JS/TS parser. Regex matching
+ * was spoofable by strings/templates/regex literals containing "export", and
+ * missed type-only declarations. A preservation guard must inspect syntax.
  */
 export function exportedSymbols(source: string): Set<string> {
   const names = new Set<string>();
-  const code = source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-  const add = (n?: string) => {
-    if (n) names.add(n);
-  };
-  if (/\bexport\s+default\b/.test(code)) names.add("default");
-  for (const m of code.matchAll(
-    /export\s+(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g,
-  )) add(m[1]);
-  for (const m of code.matchAll(/export\s*\{([^}]*)\}/g)) {
-    for (const part of (m[1] ?? "").split(",")) {
-      const piece = part.trim();
-      if (!piece) continue;
-      const asMatch = /\bas\s+([A-Za-z_$][\w$]*)/.exec(piece);
-      add(asMatch ? asMatch[1] : piece.split(/\s+/)[0]);
+  const sourceFile = ts.createSourceFile(
+    "factory-module.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isExportAssignment(statement)) {
+      names.add("default");
+      continue;
     }
-  }
-  for (const m of code.matchAll(
-    /(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/g,
-  )) add(m[1]);
-  for (const m of code.matchAll(/module\.exports\s*=\s*\{([^}]*)\}/g)) {
-    for (const part of (m[1] ?? "").split(",")) {
-      const key = part.split(":")[0]?.trim();
-      if (key && /^[A-Za-z_$][\w$]*$/.test(key)) add(key);
+    if (ts.isExportDeclaration(statement)) {
+      if (!statement.exportClause) {
+        names.add("*");
+      } else if (ts.isNamedExports(statement.exportClause)) {
+        for (const element of statement.exportClause.elements) {
+          names.add(element.name.text);
+        }
+      } else if (ts.isNamespaceExport(statement.exportClause)) {
+        names.add(statement.exportClause.name.text);
+      }
+      continue;
+    }
+
+    const exported = hasModifier(statement, ts.SyntaxKind.ExportKeyword);
+    if (exported) {
+      if (hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) {
+        names.add("default");
+      }
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          collectBindingNames(declaration.name, names);
+        }
+      } else if (
+        (ts.isFunctionDeclaration(statement) ||
+          ts.isClassDeclaration(statement) ||
+          ts.isInterfaceDeclaration(statement) ||
+          ts.isTypeAliasDeclaration(statement) ||
+          ts.isEnumDeclaration(statement) ||
+          ts.isModuleDeclaration(statement)) &&
+        statement.name
+      ) {
+        names.add(statement.name.getText(sourceFile));
+      }
+    }
+
+    if (!ts.isExpressionStatement(statement)) continue;
+    const expression = statement.expression;
+    if (
+      !ts.isBinaryExpression(expression) ||
+      expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+    ) {
+      continue;
+    }
+    const left = expression.left.getText(sourceFile);
+    const direct = /^(?:module\.)?exports\.([A-Za-z_$][\w$]*)$/.exec(left);
+    if (direct) {
+      names.add(direct[1]!);
+      continue;
+    }
+    if (left !== "module.exports") continue;
+    names.add("default");
+    if (ts.isObjectLiteralExpression(expression.right)) {
+      for (const property of expression.right.properties) {
+        if (
+          (ts.isPropertyAssignment(property) ||
+            ts.isShorthandPropertyAssignment(property) ||
+            ts.isMethodDeclaration(property)) &&
+          property.name
+        ) {
+          const text = property.name.getText(sourceFile).replace(/^["']|["']$/g, "");
+          if (/^[A-Za-z_$][\w$]*$/.test(text)) names.add(text);
+        }
+      }
     }
   }
   return names;
@@ -145,20 +285,25 @@ export function assessProtectedHostWrite(
     };
   }
 
-  // 2. package.json: refuse DESTRUCTIVE replacement (a from-scratch stub).
+  // 2. package.json: only additive dependency-map entries may change.
+  // Test/build scripts, workspaces, package-manager configuration, and every
+  // existing dependency value are verification infrastructure and immutable.
   if (isTracked && base === "package.json") {
-    let currentSize = 0;
+    let current = "";
     try {
-      currentSize = statSync(join(workspacePath, norm)).size;
+      current = readFileSync(safeResolveExistingPath(workspacePath, norm), "utf8");
     } catch {
-      /* deleted on disk — treat as replaceable */
+      return {
+        refused: true,
+        reason: "the tracked host manifest could not be read safely",
+      };
     }
-    if (currentSize > 0 && newContents.length < currentSize * 0.8) {
+    if (!additiveManifestChange(current, newContents)) {
       return {
         refused: true,
         reason:
-          `replacement (${newContents.length} B) would collapse the host manifest ` +
-          `(${currentSize} B) — additive edits are fine, from-scratch stubs are not`,
+          "tracked package.json may only add dependency-map entries; existing scripts, " +
+          "workspaces, configuration, and dependency versions must remain unchanged",
       };
     }
     return { refused: false };
@@ -174,7 +319,7 @@ export function assessProtectedHostWrite(
   if (isTracked && SOURCE_RX.test(base)) {
     let current = "";
     try {
-      current = readFileSync(join(workspacePath, norm), "utf8");
+      current = readFileSync(safeResolveExistingPath(workspacePath, norm), "utf8");
     } catch {
       /* unreadable on disk — nothing to protect */
     }
@@ -219,16 +364,16 @@ export function assessProtectedHostWrite(
     }
   }
 
-  // Root-level tool configs only from here on.
-  if (norm.includes("/")) return { refused: false };
-
-  // 3. Tracked root build/test config: replacement refused.
-  if (isTracked && (ROOT_CONFIG_RX.test(base) || OTHER_ROOT_CONFIGS_RX.test(base))) {
+  // 3. Tracked test/build configuration is immutable at every package depth.
+  if (isTracked && isProtectedConfig(base)) {
     return {
       refused: true,
-      reason: "the host repo's root tooling config governs its own suites/builds",
+      reason: "the host repo's test/build configuration governs its own verification",
     };
   }
+
+  // Root-level new tool-config variants from here on.
+  if (norm.includes("/")) return { refused: false };
 
   // 4. NEW variant of a tool whose config the host already tracks — the
   //    .ts-outranks-.js discovery hijack.

@@ -64,15 +64,12 @@ const ALLOWLIST: ReadonlyArray<readonly [string, string]> = [
   ["pnpm", "typecheck"],
   ["pnpm", "rebuild"],
   ["yarn", "install"],
+  ["yarn", "run"],
   ["yarn", "test"],
-  ["npx", "tsc"],
-  // Prisma client generation — the postinstall step modern installers skip.
-  ["npx", "prisma"],
 ];
 
 /** Python entrypoints Factory Deck itself may schedule for verification. */
 const PYTHON_BINS = new Set(["python", "python3"]);
-const PYTHON_CHECK_MODULES = new Set(["compileall", "pytest", "unittest"]);
 
 const DIRECT_PYTHON_TEST =
   /^(?:[A-Za-z0-9_.-]+\/)*test_[A-Za-z0-9_.-]+\.py$/;
@@ -90,7 +87,29 @@ function isAllowedPython(args: string[]): boolean {
   if (args.length === 1 && isSafeDirectPythonTest(args[0]!)) return true;
   if (args[0] !== "-m") return false;
   const module = args[1] ?? "";
-  if (PYTHON_CHECK_MODULES.has(module)) return true;
+  if (
+    module === "compileall" &&
+    args.length === 4 &&
+    args[2] === "-q" &&
+    args[3] === "."
+  ) {
+    return true;
+  }
+  if (
+    module === "pytest" &&
+    (args.length === 3 || args.length === 4) &&
+    args[2] === "-q" &&
+    (args.length === 3 || isSafeDirectPythonTest(args[3]!))
+  ) {
+    return true;
+  }
+  if (
+    module === "unittest" &&
+    args.length === 3 &&
+    args[2] === "discover"
+  ) {
+    return true;
+  }
   // Dependency installation is deliberately narrow: only a requirements file
   // in the workspace, with pip's version check disabled. The script-execution
   // approval gate still applies because Python packages may execute build hooks.
@@ -102,6 +121,53 @@ function isAllowedPython(args: string[]): boolean {
     args[4] === "-r" &&
     args[5] === "requirements.txt"
   );
+}
+
+const DIRECT_JS_TEST =
+  /^(?:[A-Za-z0-9_.@-]+\/)*(?:[A-Za-z0-9_.-]+\.)?(?:test|spec)\.[cm]?[jt]sx?$/;
+
+function isSafeDirectJsTest(arg: string): boolean {
+  const normalized = arg.replace(/\\/g, "/");
+  return (
+    !normalized.startsWith("/") &&
+    !normalized.split("/").includes("..") &&
+    DIRECT_JS_TEST.test(normalized)
+  );
+}
+
+/** Engine-authored local-runner forms only; npx may never download a package. */
+export function isAllowedNpxVerification(args: string[]): boolean {
+  if (args[0] !== "--no-install") return false;
+  const tool = args[1] ?? "";
+  if (tool === "prisma") {
+    return args.length === 3 && args[2] === "generate";
+  }
+  if (tool === "tsc") {
+    return args.length === 3 && args[2] === "--noEmit";
+  }
+  if (tool === "vitest") {
+    return (
+      args.length === 4 &&
+      args[2] === "run" &&
+      isSafeDirectJsTest(args[3]!)
+    );
+  }
+  if (tool === "jest") {
+    return (
+      args.length === 4 &&
+      args[2] === "--runInBand" &&
+      isSafeDirectJsTest(args[3]!)
+    );
+  }
+  if (tool === "playwright") {
+    return (
+      args.length === 5 &&
+      args[2] === "test" &&
+      isSafeDirectJsTest(args[3]!) &&
+      args[4] === "--reporter=json"
+    );
+  }
+  return false;
 }
 
 export interface CommandRequest {
@@ -123,6 +189,7 @@ export interface CommandResult {
 
 export function isAllowed(bin: string, args: string[]): boolean {
   if (PYTHON_BINS.has(bin)) return isAllowedPython(args);
+  if (bin === "npx") return isAllowedNpxVerification(args);
   const first = args[0] ?? "";
   return ALLOWLIST.some(([b, a]) => b === bin && a === first);
 }

@@ -1,4 +1,5 @@
 import type { RunDestination, RunOptions } from "../../shared/schemas.js";
+import { verifyFileDigests } from "../workspace/verificationReceipt.js";
 import {
   commitRunFiles,
   compareUrlFor,
@@ -48,10 +49,12 @@ export interface DeliveryInput {
   appName: string | null;
   options: RunOptions;
   /** Required evidence for every real delivery; absence fails closed. */
-  verification?: {
+  verification: {
     qaPassed: boolean;
     testStatus: "passing" | "failing" | "skipped" | "unknown";
     writeRefusals: number;
+    incompleteCommands: number;
+    fileDigests?: Record<string, string>;
   };
 }
 
@@ -159,7 +162,8 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
     !verification ||
     !verification.qaPassed ||
     verification.testStatus !== "passing" ||
-    verification.writeRefusals > 0
+    verification.writeRefusals > 0 ||
+    verification.incompleteCommands > 0
   ) {
     return {
       ...dest,
@@ -170,6 +174,40 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
       deliveredAt: now,
     };
   }
+
+  const receipt = await verifyFileDigests(
+    input.workspacePath,
+    input.filePaths,
+    verification.fileDigests,
+  );
+  if (!receipt.ok) {
+    return {
+      ...dest,
+      status: "skipped",
+      detail:
+        `REFUSED: verified file receipt is invalid (${receipt.reason ?? "unknown reason"}); ` +
+        "no commit, push, PR, or release was attempted.",
+      deliveredAt: now,
+    };
+  }
+
+  const receiptStillValid = async (): Promise<RunDestination | null> => {
+    const check = await verifyFileDigests(
+      input.workspacePath,
+      input.filePaths,
+      verification.fileDigests,
+    );
+    return check.ok
+      ? null
+      : {
+          ...dest,
+          status: "failed",
+          detail:
+            `REFUSED: deliverable bytes changed during commit preparation (${check.reason ?? "unknown reason"}); ` +
+            "nothing was pushed.",
+          deliveredAt: Date.now(),
+        };
+  };
 
   try {
     if (dest.kind === "workspace-only") {
@@ -201,11 +239,22 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
       if (!commit.committed) {
         return { ...dest, status: "failed", detail: commit.detail, deliveredAt: now };
       }
+      if (!commit.sha) {
+        return {
+          ...dest,
+          status: "failed",
+          detail: "Commit succeeded but its SHA could not be verified; nothing was pushed.",
+          deliveredAt: now,
+        };
+      }
+      const changedDuringNewCommit = await receiptStillValid();
+      if (changedDuringNewCommit) return changedDuringNewCommit;
       if (input.options.newRepo?.createRemote === false) {
         return {
           ...dest,
           status: "delivered",
           detail: `${commit.detail} Local git repo only (no GitHub repo requested): ${input.workspacePath}`,
+          commitSha: commit.sha,
           deliveredAt: now,
         };
       }
@@ -225,6 +274,7 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
             res.code === 0
               ? `${commit.detail} Pushed ${branch} to ${existingRemote}.`
               : `${commit.detail} git push failed — ${failureText(res)}`,
+          commitSha: commit.sha,
           deliveredAt: now,
         };
       }
@@ -238,6 +288,7 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
         status: created.created ? "delivered" : "failed",
         detail: `${commit.detail} ${created.detail}`,
         url: created.url ?? dest.url,
+        commitSha: commit.sha,
         deliveredAt: now,
       };
     }
@@ -275,6 +326,17 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
         deliveredAt: now,
       };
     }
+    if (!commit.sha) {
+      return {
+        ...dest,
+        branch,
+        status: "failed",
+        detail: "Commit succeeded but its SHA could not be verified; nothing was pushed.",
+        deliveredAt: now,
+      };
+    }
+    const changedDuringCommit = await receiptStillValid();
+    if (changedDuringCommit) return { ...changedDuringCommit, branch };
     const pushed = await pushBranch(input.workspacePath, branch);
     const remote = (await originUrl(input.workspacePath)) ?? dest.target;
     return {
@@ -283,6 +345,7 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
       status: pushed.pushed ? "delivered" : "failed",
       detail: `${commit.detail} ${pushed.detail}`,
       url: pushed.pushed ? compareUrlFor(remote, branch) : null,
+      commitSha: commit.sha,
       deliveredAt: now,
     };
   } catch (err) {

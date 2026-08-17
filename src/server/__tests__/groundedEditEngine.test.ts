@@ -20,12 +20,21 @@ import { repairAgent } from "../agents/repairAgent.js";
 import { testWriterAgent } from "../agents/testWriterAgent.js";
 import { qaCriticAgent } from "../agents/qaCriticAgent.js";
 import {
+  clearResolvedBlockingWriteRefusals,
+  generatedFilesNeedingWrite,
+  generatedPathsForWiring,
+  normalizeGeneratedPath,
   partitionRepairFiles,
   repairOutcomeMessage,
+  withinHostChangeBudget,
 } from "../orchestrator/runFactory.js";
 import { deliverRun } from "../orchestrator/deliverRun.js";
 import { analyzeExistingCodebase } from "../workspace/analyzeExistingCodebase.js";
 import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
+import {
+  captureFileDigests,
+  findUnexpectedWorkspaceChanges,
+} from "../workspace/verificationReceipt.js";
 
 class CaptureProvider implements LLMProvider {
   readonly name = "stub" as const;
@@ -269,6 +278,54 @@ describe("repair accounting and scope are mechanical", () => {
     ]);
   });
 
+  it("canonicalizes accepted repair aliases to the real allowed path", () => {
+    const partition = partitionRepairFiles(
+      [{ path: "./src/../src/App.jsx" }],
+      ["src/App.jsx"],
+    );
+    expect(partition.refusals).toEqual([]);
+    expect(partition.accepted[0]!.path).toBe("src/App.jsx");
+    expect(normalizeGeneratedPath("src/../vitest.config.ts")).toBe(
+      "vitest.config.ts",
+    );
+  });
+
+  it("skips exact checkpointed test bytes and clears only resolved blockers", () => {
+    const pending = generatedFilesNeedingWrite(
+      [
+        { path: "./src/a.test.ts", contents: "same" },
+        { path: "src/b.test.ts", contents: "new" },
+      ],
+      [{ path: "src/a.test.ts", contents: "same" }],
+    );
+    expect(pending.map((file) => file.path)).toEqual(["src/b.test.ts"]);
+
+    const blockers = [
+      { path: "./src/a.test.ts", reason: "old refusal" },
+      { path: "src/b.test.ts", reason: "still blocked" },
+    ];
+    clearResolvedBlockingWriteRefusals(blockers, ["src/a.test.ts"]);
+    expect(blockers).toEqual([
+      { path: "src/b.test.ts", reason: "still blocked" },
+    ]);
+  });
+
+  it("preserves generated-vs-modified origin and cumulative host locality", () => {
+    expect(
+      generatedPathsForWiring([
+        { path: "src/App.jsx", status: "modified" },
+        { path: "src/New.jsx", status: "generated" },
+      ]),
+    ).toEqual(["src/New.jsx"]);
+    const baseline = "a".repeat(500) + "b".repeat(500);
+    expect(
+      withinHostChangeBudget(baseline, "x".repeat(600) + "b".repeat(400)),
+    ).toBe(false);
+    expect(
+      withinHostChangeBudget(baseline, "a".repeat(500) + "c".repeat(100) + "b".repeat(400)),
+    ).toBe(true);
+  });
+
   it("never turns one accepted write into a claim that four fixes landed", () => {
     const message = repairOutcomeMessage({
       candidates: 4,
@@ -285,10 +342,10 @@ describe("repair accounting and scope are mechanical", () => {
   });
 });
 
-describe("refusal ledger survives restart parsing", () => {
-  it("retains refused writes and defaults legacy checkpoints safely", () => {
+describe("checkpoint safety contract", () => {
+  it("retains refusal ledgers and rejects pre-fix version-1 checkpoints", () => {
     const base = {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       runId: crypto.randomUUID(),
       idea: "test",
       options: {},
@@ -296,15 +353,18 @@ describe("refusal ledger survives restart parsing", () => {
       updatedAt: Date.now(),
     };
     const refusal = { path: "vitest.config.js", reason: "protected host file" };
-    expect(
-      FactoryCheckpointSchema.parse({
-        ...base,
-        writeRefusals: [refusal],
-      }).writeRefusals,
-    ).toEqual([refusal]);
-    const legacy = FactoryCheckpointSchema.parse(base);
-    expect(legacy.writeRefusals).toEqual([]);
-    expect(legacy.blockingWriteRefusals).toEqual([]);
+    const parsed = FactoryCheckpointSchema.parse({
+      ...base,
+      writeRefusals: [refusal],
+      blockingWriteRefusals: [refusal],
+    });
+    expect(parsed.writeRefusals).toEqual([refusal]);
+    expect(parsed.blockingWriteRefusals).toEqual([refusal]);
+    expect(parsed.builderExistingPaths).toEqual([]);
+    expect(parsed.hostFileBaselines).toEqual({});
+    expect(() =>
+      FactoryCheckpointSchema.parse({ ...base, schemaVersion: 1 }),
+    ).toThrow();
   });
 });
 
@@ -362,6 +422,33 @@ describe("existing-repo indexing includes safe untracked work", () => {
   });
 });
 
+describe("verification tree binding", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("detects tracked and untracked command mutations outside the deliverable set", () => {
+    const repo = mkdtempSync(join(tmpdir(), "factory-tree-"));
+    roots.push(repo);
+    writeFileSync(join(repo, "host.js"), "export const host = 1;\n");
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+    execFileSync("git", ["add", "-A"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "baseline"], { cwd: repo });
+    writeFileSync(join(repo, "host.js"), "export const host = 2;\n");
+    writeFileSync(join(repo, "generated.log"), "side effect\n");
+    expect(findUnexpectedWorkspaceChanges(repo, ["app.js"])).toEqual([
+      "generated.log",
+      "host.js",
+    ]);
+    expect(findUnexpectedWorkspaceChanges(repo, ["generated.log", "host.js"])).toEqual([]);
+  });
+});
+
 describe("delivery fails closed without complete verification", () => {
   const roots: string[] = [];
 
@@ -409,6 +496,7 @@ describe("delivery fails closed without complete verification", () => {
         qaPassed: true,
         testStatus: "passing",
         writeRefusals: 1,
+        incompleteCommands: 0,
       },
     });
 
@@ -420,4 +508,72 @@ describe("delivery fails closed without complete verification", () => {
     }).trim();
     expect(after).toBe(before);
   });
+
+  it("delivers only the exact bytes covered by a verification receipt", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "factory-receipt-"));
+    roots.push(repo);
+    writeFileSync(join(repo, "app.js"), "export const value = 1;\n");
+    execFileSync("git", ["init", "-q", "-b", "factory-deck/receipt"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+    const receipt = await captureFileDigests(repo, ["app.js"]);
+    const result = await deliverRun({
+      destination: {
+        kind: "new-repo",
+        target: "local",
+        branch: "main",
+        status: "planned",
+        detail: null,
+        url: null,
+        deliveredAt: null,
+      },
+      workspacePath: repo,
+      filePaths: ["app.js"],
+      runId: crypto.randomUUID(),
+      appName: "Receipt",
+      options: { newRepo: { name: "local", createRemote: false } },
+      verification: {
+        qaPassed: true,
+        testStatus: "passing",
+        writeRefusals: 0,
+        incompleteCommands: 0,
+        fileDigests: receipt,
+      },
+    });
+    expect(result.status).toBe("delivered");
+  });
+
+  it("refuses delivery when one verified byte changes", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "factory-receipt-mutate-"));
+    roots.push(repo);
+    writeFileSync(join(repo, "app.js"), "export const value = 1;\n");
+    const receipt = await captureFileDigests(repo, ["app.js"]);
+    writeFileSync(join(repo, "app.js"), "export const value = 2;\n");
+    const result = await deliverRun({
+      destination: {
+        kind: "new-repo",
+        target: "local",
+        branch: "main",
+        status: "planned",
+        detail: null,
+        url: null,
+        deliveredAt: null,
+      },
+      workspacePath: repo,
+      filePaths: ["app.js"],
+      runId: crypto.randomUUID(),
+      appName: "Receipt",
+      options: { newRepo: { name: "local", createRemote: false } },
+      verification: {
+        qaPassed: true,
+        testStatus: "passing",
+        writeRefusals: 0,
+        incompleteCommands: 0,
+        fileDigests: receipt,
+      },
+    });
+    expect(result.status).toBe("skipped");
+    expect(result.detail).toMatch(/receipt|changed/i);
+  });
+
 });

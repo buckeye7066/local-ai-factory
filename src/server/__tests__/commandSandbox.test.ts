@@ -6,6 +6,8 @@ import {
   sanitizeChildEnv,
   looksLikeCredentialUrl,
   isScriptExecuting,
+  isAllowed,
+  isAllowedNpxVerification,
   resolvePmBinary,
   isInsideWorkspace,
   runCommand,
@@ -97,6 +99,38 @@ describe("#2/#3 model-authored scripts require explicit approval", () => {
     expect(res.executed).toBe(false);
     expect(res.allowed).toBe(false);
     expect(res.reason).toMatch(/explicit approval|ALLOW_UNTRUSTED_SCRIPTS/i);
+  });
+});
+
+describe("engine-owned npx verification grammar", () => {
+  it("allows exact local runners and rejects downloads, arbitrary tools, and traversal", () => {
+    expect(
+      isAllowedNpxVerification([
+        "--no-install",
+        "vitest",
+        "run",
+        "src/App.test.tsx",
+      ]),
+    ).toBe(true);
+    expect(
+      isAllowedNpxVerification([
+        "--no-install",
+        "playwright",
+        "test",
+        "tests/profile.spec.ts",
+        "--reporter=json",
+      ]),
+    ).toBe(true);
+    expect(isAllowed("npx", ["--package", "attacker", "evil"])).toBe(false);
+    expect(isAllowed("npx", ["--no-install", "evil", "run"])).toBe(false);
+    expect(
+      isAllowed("npx", [
+        "--no-install",
+        "vitest",
+        "run",
+        "../escape.test.ts",
+      ]),
+    ).toBe(false);
   });
 });
 

@@ -114,6 +114,17 @@ describe("assessPhantomImports (the SermonSmith failure, twice over)", () => {
     expect(assessPhantomImports(root, "src/a.js", "import z from 'zod';").refused).toBe(false);
   });
 
+  it.each(["cts", "mts"])("checks undeclared imports in .%s files", (ext) => {
+    const root = repo({ "": { dependencies: { react: "19" } } });
+    const verdict = assessPhantomImports(
+      root,
+      `src/worker.${ext}`,
+      "import x from 'left-pad';",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toContain("left-pad");
+  });
+
   it("is inert for non-source files and for a workspace with no manifests", () => {
     const root = repo({ "": { dependencies: { react: "19" } } });
     expect(assessPhantomImports(root, "README.md", "import x from 'nope';").refused).toBe(false);

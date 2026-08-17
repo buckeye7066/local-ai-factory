@@ -77,11 +77,13 @@ describe("deleteRun — the run record, its files and its checkpoint all go", ()
       },
     ]);
     await saveRunCheckpoint({
-      schemaVersion: 1,
+      schemaVersion: 2,
       runId: run.id,
       idea: "i",
       options: {},
       files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
       writeRefusals: [],
       blockingWriteRefusals: [],
       testWriterComplete: false,

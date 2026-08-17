@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import type { TaskPlan } from "../../shared/schemas.js";
-import { safeResolve } from "./fileWriter.js";
+import { safeResolve, safeResolveExistingPath } from "./fileWriter.js";
+import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
 
 /**
  * targetFiles.ts — find the real files a build is about to change, and read
@@ -15,7 +16,7 @@ import { safeResolve } from "./fileWriter.js";
 
 const MAX_BYTES_PER_FILE = 24_000;
 const MAX_TOTAL_BYTES = 120_000;
-const JS_TS_EXT_RX = /\.[cm]?[jt]sx?$/i;
+const JS_TS_EXT_RX = JS_TS_SOURCE_EXTENSION_RX;
 
 function jsTsStem(path: string): string | null {
   return JS_TS_EXT_RX.test(path) ? path.replace(JS_TS_EXT_RX, "") : null;
@@ -35,6 +36,13 @@ export function mentionedPaths(plan: TaskPlan, ideaText = ""): string[] {
   const found = new Set<string>();
   for (const m of text.matchAll(
     /\b((?:(?:[\w.@-]+\/)+)?[\w.-]+\.[A-Za-z0-9]{1,6})\b/g,
+  )) {
+    const raw = m[1]!.replace(/^\.\//, "");
+    if (raw.includes("node_modules")) continue;
+    found.add(raw);
+  }
+  for (const m of text.matchAll(
+    /(?:^|[\s`"'(])((?:(?:[\w.@-]+\/)+)?(?:Dockerfile|Makefile|Procfile|Jenkinsfile|Gemfile|\.gitignore|\.dockerignore|\.npmrc|\.nvmrc|\.env(?:\.[\w.-]+)?))(?=$|[\s`"',):])/gim,
   )) {
     const raw = m[1]!.replace(/^\.\//, "");
     if (raw.includes("node_modules")) continue;
@@ -95,7 +103,7 @@ export function inspectTargetFiles(
 
   for (const rel of resolved) {
     try {
-      const abs = safeResolve(workspacePath, rel);
+      const abs = safeResolveExistingPath(workspacePath, rel);
       const size = statSync(abs).size;
       if (size > MAX_BYTES_PER_FILE) {
         omitted.push({ path: rel, reason: "file exceeds the per-file context limit" });

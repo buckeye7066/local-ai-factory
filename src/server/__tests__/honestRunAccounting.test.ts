@@ -262,38 +262,38 @@ describe("test verdict — a failure or a kill is sticky", () => {
 
 import { relevantTestStatus, writtenTestFiles } from "../orchestrator/testVerdict.js";
 
-describe("relevantTestStatus — a green suite that never ran this run's tests proves nothing", () => {
-  // The live shape: the run wrote an app + its tests into a monorepo, `npm
-  // test` executed the repo's PRE-EXISTING backend suite, exited 0, and the
-  // report said "Tests passing" beside a caveat that the output belonged to a
-  // different project.
+describe("relevantTestStatus — only exact direct-runner evidence counts", () => {
   const written = [
     "src/App.tsx",
     "src/lib/storage.ts",
     "src/lib/storage.test.ts",
     "src/App.test.tsx",
   ];
-  const backendOutput =
-    "$ npm test\n✓ server/auth/otp.test.ts (12 tests)\n✓ server/db/schema.test.ts (9 tests)\nSqliteError: no such column: state";
 
-  it("degrades exit-0 to 'unknown' when NONE of the run's test files appear in the output", () => {
-    const v = relevantTestStatus(true, 0, written, backendOutput);
+  it("ignores filenames merely printed by install or generic host-suite output", () => {
+    const v = relevantTestStatus(true, 0, written, []);
     expect(v.status).toBe("unknown");
     expect(v.degraded).toBe(true);
-    expect(v.uncoveredTestFiles).toEqual(["src/lib/storage.test.ts", "src/App.test.tsx"]);
+    expect(v.uncoveredTestFiles).toEqual([
+      "src/lib/storage.test.ts",
+      "src/App.test.tsx",
+    ]);
   });
 
-  it("requires every generated test to run; partial coverage is not passing", () => {
-    const output = backendOutput + "\n✓ src/lib/storage.test.ts (5 tests)";
-    const v = relevantTestStatus(true, 0, written, output);
+  it("requires a direct result for every generated test", () => {
+    const v = relevantTestStatus(true, 0, written, [
+      "src/lib/storage.test.ts",
+    ]);
     expect(v.status).toBe("unknown");
-    expect(v.degraded).toBe(true);
     expect(v.uncoveredTestFiles).toEqual(["src/App.test.tsx"]);
   });
 
-  it("normalizes Windows separators while requiring the generated relative path", () => {
-    const v = relevantTestStatus(true, 0, ["src\\App.test.tsx"], "✓ src/App.test.tsx (3 tests)");
-    expect(v.status).toBe("passing");
+  it("normalizes Windows separators while requiring the full relative path", () => {
+    expect(
+      relevantTestStatus(true, 0, ["src\\App.test.tsx"], [
+        "src/App.test.tsx",
+      ]).status,
+    ).toBe("passing");
   });
 
   it("does not let a same-basename test in another package prove coverage", () => {
@@ -301,35 +301,29 @@ describe("relevantTestStatus — a green suite that never ran this run's tests p
       true,
       0,
       ["apps/new/src/App.test.tsx"],
-      "✓ packages/legacy/src/App.test.tsx (3 tests)",
+      ["packages/legacy/src/App.test.tsx"],
     );
     expect(v.status).toBe("unknown");
     expect(v.uncoveredTestFiles).toEqual(["apps/new/src/App.test.tsx"]);
   });
 
-  it("recognizes Python tests and requires their full relative path token", () => {
+  it("recognizes Python tests and exact direct paths", () => {
     expect(
       relevantTestStatus(
         true,
         0,
         ["tests/test_profile.py"],
-        "tests/test_profile.py::test_reload PASSED",
+        ["tests/test_profile.py"],
       ).status,
     ).toBe("passing");
-    expect(
-      relevantTestStatus(
-        true,
-        0,
-        ["src/App.test.tsx"],
-        "packages/legacy/src/App.test.tsx (3 tests)",
-      ).status,
-    ).toBe("unknown");
   });
 
-  it("never upgrades a failure, and leaves runs that wrote no tests alone", () => {
-    expect(relevantTestStatus(true, 1, written, backendOutput).status).toBe("failing");
-    expect(relevantTestStatus(false, null, written, "").status).toBe("unknown");
-    const noTests = relevantTestStatus(true, 0, ["src/App.tsx"], backendOutput);
+  it("never upgrades failure or no-execution states", () => {
+    expect(relevantTestStatus(true, 1, written, written).status).toBe("failing");
+    expect(relevantTestStatus(false, null, written, written).status).toBe(
+      "unknown",
+    );
+    const noTests = relevantTestStatus(true, 0, ["src/App.tsx"], []);
     expect(noTests.status).toBe("unknown");
     expect(noTests.degraded).toBe(true);
   });

@@ -1,8 +1,16 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { applyEdits, resolveGeneratedWrite } from "../workspace/applyEdits.js";
+import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 import {
   inspectTargetFiles,
   mentionedPaths,
@@ -157,6 +165,31 @@ describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
     expect(res.edited).toBe(false);
   });
 
+  it("allows explicit initialization of an existing zero-byte file", () => {
+    const root = workspace({ "src/empty.ts": "" });
+    const res = resolveGeneratedWrite(root, "src/empty.ts", {
+      contents: "export const initialized = true;\n",
+      edits: [],
+    });
+    expect(res.contents).toContain("initialized");
+    expect(res.edited).toBe(true);
+  });
+
+  it("treats only ENOENT as new and refuses an unreadable existing file", () => {
+    const root = workspace({ "src/secret.ts": "export const secret = 1;\n" });
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+    const res = resolveGeneratedWrite(
+      root,
+      "src/secret.ts",
+      { contents: "export const overwritten = true;", edits: [] },
+      () => {
+        throw denied;
+      },
+    );
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/could not be read safely|only ENOENT/i);
+  });
+
   it("requires anchored edits for existing docs and data too", () => {
     const root = workspace({ "docs/notes.md": "old" });
     const res = resolveGeneratedWrite(root, "docs/notes.md", {
@@ -176,6 +209,38 @@ describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
     expect(res.contents).toBeNull();
     expect(res.reason).toMatch(/not found/i);
   });
+});
+
+describe("file writer physical containment", () => {
+  it.skipIf(process.platform === "win32")(
+    "does not follow a symlinked parent outside the workspace",
+    async () => {
+      const root = workspace({});
+      const outside = mkdtempSync(join(tmpdir(), "factory-edits-outside-"));
+      dirs.push(outside);
+      symlinkSync(outside, join(root, "linked"), "dir");
+
+      await expect(
+        writeWorkspaceFile(root, "linked/escaped.ts", "owned"),
+      ).rejects.toThrow(/symlink|workspace|contain/i);
+      expect(() => readFileSync(join(outside, "escaped.ts"), "utf8")).toThrow();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not overwrite a symlinked final target",
+    async () => {
+      const root = workspace({});
+      const outside = join(root, "..", `factory-outside-${Date.now()}.ts`);
+      dirs.push(outside);
+      writeFileSync(outside, "sentinel");
+      symlinkSync(outside, join(root, "alias.ts"), "file");
+      await expect(
+        writeWorkspaceFile(root, "alias.ts", "overwritten"),
+      ).rejects.toThrow(/symlink|workspace|contain/i);
+      expect(readFileSync(outside, "utf8")).toBe("sentinel");
+    },
+  );
 });
 
 describe("targetFiles — the builder is given real code to quote", () => {
@@ -273,6 +338,23 @@ describe("targetFiles — the builder is given real code to quote", () => {
       ],
     };
     expect(readTargetFiles(root, plan, "", [])).toEqual([]);
+  });
+
+  it("grounds exact extensionless integration points", () => {
+    const root = workspace({ Dockerfile: "FROM node:20\n" });
+    const plan = {
+      tasks: [
+        {
+          order: 1,
+          category: "backend" as const,
+          title: "Update Dockerfile",
+          detail: "Add the production build step to Dockerfile",
+        },
+      ],
+    };
+    expect(readTargetFiles(root, plan, "", ["Dockerfile"])).toEqual([
+      { path: "Dockerfile", contents: "FROM node:20\n" },
+    ]);
   });
 
   it("extracts path-shaped tokens and ignores prose", () => {

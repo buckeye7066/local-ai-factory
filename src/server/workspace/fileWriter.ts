@@ -1,4 +1,5 @@
-import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
+import { mkdir, open, stat } from "node:fs/promises";
+import { constants, lstatSync, realpathSync } from "node:fs";
 import { dirname, resolve, relative, isAbsolute, sep, extname } from "node:path";
 
 /**
@@ -45,6 +46,80 @@ export function safeResolve(workspaceRoot: string, relativePath: string): string
   return target;
 }
 
+/**
+ * Resolve a path and reject every symlink component. Existing targets are
+ * additionally realpath-checked beneath the physical workspace root.
+ */
+export function safeResolveExistingPath(
+  workspaceRoot: string,
+  relativePath: string,
+): string {
+  const target = safeResolve(workspaceRoot, relativePath);
+  const lexicalRoot = resolve(workspaceRoot);
+  const rootStat = lstatSync(lexicalRoot);
+  if (rootStat.isSymbolicLink()) {
+    throw new WorkspacePathError("Workspace root may not be a symlink.");
+  }
+  const rel = relative(lexicalRoot, target);
+  let cursor = lexicalRoot;
+  for (const part of rel.split(sep).filter(Boolean)) {
+    cursor = resolve(cursor, part);
+    const info = lstatSync(cursor);
+    if (info.isSymbolicLink()) {
+      throw new WorkspacePathError(
+        `Symlink traversal is not allowed: ${relativePath}`,
+      );
+    }
+  }
+  const rootReal = realpathSync(lexicalRoot);
+  const targetReal = realpathSync(target);
+  const physical = relative(rootReal, targetReal);
+  if (
+    physical === "" ||
+    physical.startsWith("..") ||
+    isAbsolute(physical)
+  ) {
+    throw new WorkspacePathError(
+      `Path resolves outside the workspace boundary: ${relativePath}`,
+    );
+  }
+  return target;
+}
+
+/** Resolve a writable path, rejecting symlinks among all components that exist. */
+function safeResolveWritablePath(
+  workspaceRoot: string,
+  relativePath: string,
+): string {
+  const target = safeResolve(workspaceRoot, relativePath);
+  const lexicalRoot = resolve(workspaceRoot);
+  const rootStat = lstatSync(lexicalRoot);
+  if (rootStat.isSymbolicLink()) {
+    throw new WorkspacePathError("Workspace root may not be a symlink.");
+  }
+  const rel = relative(lexicalRoot, target);
+  let cursor = lexicalRoot;
+  for (const part of rel.split(sep).filter(Boolean)) {
+    cursor = resolve(cursor, part);
+    try {
+      const info = lstatSync(cursor);
+      if (info.isSymbolicLink()) {
+        throw new WorkspacePathError(
+          `Symlink traversal is not allowed: ${relativePath}`,
+        );
+      }
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code ?? "")
+          : "";
+      if (code === "ENOENT") break;
+      throw error;
+    }
+  }
+  return target;
+}
+
 export interface WriteResult {
   path: string;
   size: number;
@@ -58,20 +133,44 @@ export async function writeWorkspaceFile(
   relativePath: string,
   contents: string,
 ): Promise<WriteResult> {
-  const abs = safeResolve(workspaceRoot, relativePath);
+  let abs = safeResolveWritablePath(workspaceRoot, relativePath);
   let existed = false;
   try {
-    await stat(abs);
+    const info = await stat(abs);
+    if (!info.isFile()) {
+      throw new WorkspacePathError(
+        `Write target is not a regular file: ${relativePath}`,
+      );
+    }
     existed = true;
-  } catch {
-    existed = false;
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : "";
+    if (code !== "ENOENT") throw error;
   }
   await mkdir(dirname(abs), { recursive: true });
-  await writeFile(abs, contents, "utf8");
+  // Re-check after mkdir to close the ordinary create-parent symlink window.
+  abs = safeResolveWritablePath(workspaceRoot, relativePath);
+  const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  const handle = await open(
+    abs,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | noFollow,
+    0o666,
+  );
+  try {
+    await handle.writeFile(contents, "utf8");
+  } finally {
+    await handle.close();
+  }
+  const canonicalPath = relative(resolve(workspaceRoot), abs)
+    .split(sep)
+    .join("/");
   return {
-    path: relativePath.split(sep).join("/"),
+    path: canonicalPath,
     size: Buffer.byteLength(contents, "utf8"),
-    language: detectLanguage(relativePath),
+    language: detectLanguage(canonicalPath),
     existed,
   };
 }
@@ -80,8 +179,14 @@ export async function readWorkspaceFile(
   workspaceRoot: string,
   relativePath: string,
 ): Promise<string> {
-  const abs = safeResolve(workspaceRoot, relativePath);
-  return readFile(abs, "utf8");
+  const abs = safeResolveExistingPath(workspaceRoot, relativePath);
+  const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  const handle = await open(abs, constants.O_RDONLY | noFollow);
+  try {
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Map a file extension to a syntax-highlight-friendly language name. */

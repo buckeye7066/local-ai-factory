@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
 
 /**
  * unwiredFiles.ts — mechanical honesty about SCAFFOLDING in extend runs.
@@ -21,8 +22,10 @@ import { join, relative } from "node:path";
  * path counts as wired, while a name coincidence on a different path does not.
  */
 
-const SOURCE_EXT = /\.(?:js|jsx|ts|tsx|mjs|cjs)$/i;
+const SOURCE_EXT = JS_TS_SOURCE_EXTENSION_RX;
 const TEST_LIKE = /(?:^|[\\/])(?:__tests__|tests?)[\\/]|\.(?:test|spec)\.[a-z]+$/i;
+const CONFIG_LIKE =
+  /(?:^|\/)(?:vitest|jest|playwright|vite)(?:\.[\w-]+)?\.config\.[cm]?[jt]s$/i;
 const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
@@ -43,8 +46,12 @@ function walkSourceFiles(root: string): string[] {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
+    } catch (error) {
+      throw new Error(
+        `Wiring scan could not read ${dir}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -53,6 +60,11 @@ function walkSourceFiles(root: string): string[] {
         out.push(join(dir, entry.name));
       }
     }
+  }
+  if (stack.length > 0) {
+    throw new Error(
+      `Wiring scan exceeded the ${MAX_SCAN_FILES}-file safety limit.`,
+    );
   }
   return out;
 }
@@ -77,43 +89,73 @@ export function findUnwiredNewFiles(
   generatedPaths: string[],
 ): string[] {
   const generated = new Set(
-    generatedPaths.map((p) => p.replace(/\\/g, "/")),
+    generatedPaths.map((path) => path.replace(/\\/g, "/")),
   );
-  const candidates = generatedPaths.filter((p) => {
-    const n = p.replace(/\\/g, "/");
-    return (
-      SOURCE_EXT.test(n) &&
-      !TEST_LIKE.test(n) &&
-      (n.startsWith("src/") || n.startsWith("backend/"))
-    );
-  });
+  const candidates = [...generated].filter(
+    (path) =>
+      SOURCE_EXT.test(path) &&
+      !TEST_LIKE.test(path) &&
+      !CONFIG_LIKE.test(path),
+  );
   if (!candidates.length) return [];
 
-  const preExisting = walkSourceFiles(workspacePath).filter((abs) => {
-    const rel = relative(workspacePath, abs).replace(/\\/g, "/");
+  const preExisting = walkSourceFiles(workspacePath).filter((absolute) => {
+    const rel = relative(workspacePath, absolute).replace(/\\/g, "/");
     return !generated.has(rel) && !TEST_LIKE.test(rel);
   });
+  // With no prior source there is no existing product wiring claim (new app).
   if (!preExisting.length) return [];
 
-  const texts: string[] = [];
-  for (const abs of preExisting) {
+  const readBounded = (absolute: string): string => {
+    const size = statSync(absolute).size;
+    if (size > MAX_FILE_BYTES) {
+      throw new Error(
+        `Wiring scan cannot inspect oversized source file: ${absolute}`,
+      );
+    }
+    return readFileSync(absolute, "utf8");
+  };
+  const preExistingTexts = preExisting.map(readBounded);
+  const generatedTexts = new Map<string, string>();
+  for (const candidate of candidates) {
     try {
-      if (statSync(abs).size > MAX_FILE_BYTES) continue;
-      texts.push(readFileSync(abs, "utf8"));
+      generatedTexts.set(
+        candidate,
+        readBounded(join(workspacePath, candidate)),
+      );
     } catch {
-      /* unreadable pre-existing file is simply not evidence */
+      // A missing/unreadable generated module cannot be proven reachable.
     }
   }
 
-  const unwired: string[] = [];
+  const references = (text: string, candidate: string): boolean =>
+    importFragments(candidate).some((fragment) => text.includes(fragment));
+
+  // Seed reachability from real pre-existing code (including host files this
+  // run modified), then traverse imports among generated product modules.
+  // Generated tests are never roots, so test-only self-wiring cannot pass.
+  const wired = new Set<string>();
   for (const candidate of candidates) {
-    const fragments = importFragments(candidate.replace(/\\/g, "/"));
-    const wired = texts.some((text) =>
-      fragments.some((f) => text.includes(f)),
-    );
-    if (!wired) unwired.push(candidate.replace(/\\/g, "/"));
+    if (preExistingTexts.some((text) => references(text, candidate))) {
+      wired.add(candidate);
+    }
   }
-  return unwired.sort();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const source of [...wired]) {
+      const text = generatedTexts.get(source);
+      if (!text) continue;
+      for (const candidate of candidates) {
+        if (!wired.has(candidate) && references(text, candidate)) {
+          wired.add(candidate);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return candidates.filter((candidate) => !wired.has(candidate)).sort();
 }
 
 /** One-line caveat for the final report; null when everything is wired. */

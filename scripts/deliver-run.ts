@@ -18,7 +18,7 @@
  *   pnpm tsx scripts/deliver-run.ts <runId>
  */
 import { getRunForExecution, getRunCheckpoint, saveRun } from "../src/server/storage/runsStore.js";
-import { deliverRun, planDestination } from "../src/server/orchestrator/deliverRun.js";
+import { planDestination } from "../src/server/orchestrator/deliverRun.js";
 import { originUrl, currentBranch, git, isGitWorkingTree } from "../src/server/workspace/gitOps.js";
 
 const runId = process.argv[2];
@@ -99,20 +99,8 @@ console.log(`Workspace : ${run.workspacePath}`);
 console.log(`Target    : ${destination.target} (${destination.kind}) branch=${branch}`);
 console.log(`Files     : ${run.files.length}`);
 
-const result = await deliverRun({
-  destination,
-  workspacePath: run.workspacePath,
-  filePaths: run.files.map((f) => f.path),
-  runId: run.id,
-  appName: run.appName,
-  options,
-});
-
-run.destination = result;
-run.updatedAt = Date.now();
-await saveRun(run);
-
-console.log(`\nRESULT: ${result.status}`);
-console.log(`  ${result.detail ?? ""}`);
-if (result.url) console.log(`  ${result.url}`);
-process.exit(result.status === "delivered" ? 0 : 1);
+console.error(
+  "Refusing legacy recovery delivery: this completed run has no immutable verification receipt. " +
+    "Re-run Factory Deck so the exact delivered bytes are checked and receipt-bound before any push.",
+);
+process.exit(1);

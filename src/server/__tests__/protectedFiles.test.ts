@@ -61,6 +61,52 @@ describe("assessProtectedHostWrite", () => {
     expect(assessProtectedHostWrite(ws, "package.json", grown).refused).toBe(false);
   });
 
+  it.each([
+    [
+      "changes the test script",
+      (manifest: Record<string, any>) => {
+        manifest.scripts.test = "echo src/generated.test.ts";
+      },
+    ],
+    [
+      "adds a pretest hook",
+      (manifest: Record<string, any>) => {
+        manifest.scripts.pretest = "node rewrite-test-config.js";
+      },
+    ],
+    [
+      "removes workspaces",
+      (manifest: Record<string, any>) => {
+        delete manifest.workspaces;
+      },
+    ],
+    [
+      "adds inline test discovery config",
+      (manifest: Record<string, any>) => {
+        manifest.vitest = { include: ["src/generated.test.ts"] };
+      },
+    ],
+  ])("refuses package.json verification laundering: %s", (_name, mutate) => {
+    const host = {
+      name: "host",
+      workspaces: ["apps/*"],
+      scripts: {
+        test: "npm run lint && npm run typecheck && npm run unit",
+        unit: "vitest run",
+        lint: "eslint .",
+        typecheck: "tsc --noEmit",
+      },
+      dependencies: { react: "19" },
+    };
+    const before = JSON.stringify(host);
+    const changed = structuredClone(host) as Record<string, any>;
+    mutate(changed);
+    const after = JSON.stringify(changed);
+    expect(after.length).toBeGreaterThan(before.length * 0.8);
+    const ws = gitWorkspace({ "package.json": before });
+    expect(assessProtectedHostWrite(ws, "package.json", after).refused).toBe(true);
+  });
+
   it("refuses every generated write to tracked lockfiles", () => {
     const ws = gitWorkspace({
       "package.json": HOST_MANIFEST,
@@ -93,6 +139,20 @@ describe("assessProtectedHostWrite", () => {
     const ws = gitWorkspace({ "package.json": HOST_MANIFEST });
     expect(assessProtectedHostWrite(ws, "playwright.config.ts", "export default {}").refused).toBe(false);
     expect(assessProtectedHostWrite(ws, "packages/sub/vitest.config.ts", "export default {}").refused).toBe(false);
+  });
+
+  it("refuses edits to tracked package-level test configuration", () => {
+    const ws = gitWorkspace({
+      "packages/web/vitest.config.ts":
+        "export default { test: { include: ['src/**/*.test.ts'] } };",
+    });
+    expect(
+      assessProtectedHostWrite(
+        ws,
+        "packages/web/vitest.config.ts",
+        "export default { test: { include: ['src/generated.test.ts'] } };",
+      ).refused,
+    ).toBe(true);
   });
 
   it("is inert for non-git (new-app) workspaces", () => {
@@ -183,6 +243,47 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     ).toBe(true);
     expect(
       assessProtectedHostWrite(repo, "src/App.cts", "export default function App(){}")
+        .refused,
+    ).toBe(true);
+  });
+
+  it("does not accept export decoys inside strings, templates, or regex literals", () => {
+    for (const decoy of [
+      'const note = "export const auth";',
+      "const note = `export const auth`;",
+      "const note = /export const auth/;",
+    ]) {
+      expect(exportedSymbols(decoy)).not.toContain("auth");
+    }
+    expect(exportedSymbols("export type Auth = { id: string };")).toContain(
+      "Auth",
+    );
+  });
+
+  it("keeps protection active when the tracked-path index exceeds one MiB", () => {
+    const ws = gitWorkspace({ "vitest.config.js": "export default {};\n" });
+    const blob = execFileSync(
+      "git",
+      ["-C", ws, "hash-object", "-w", "--stdin"],
+      { input: "x", encoding: "utf8" },
+    ).trim();
+    const entries = Array.from({ length: 10_000 }, (_, index) => {
+      const path =
+        `bulk/${String(index).padStart(5, "0")}-${"x".repeat(110)}.ts`;
+      return `100644 blob ${blob}\t${path}\0`;
+    }).join("");
+    execFileSync(
+      "git",
+      ["-C", ws, "update-index", "-z", "--index-info"],
+      { input: entries, maxBuffer: 4 * 1024 * 1024 },
+    );
+    const listing = execFileSync("git", ["-C", ws, "ls-files", "-z"], {
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    expect(listing.byteLength).toBeGreaterThan(1024 * 1024);
+    _resetProtectedFilesCache();
+    expect(
+      assessProtectedHostWrite(ws, "vitest.config.ts", "export default {};")
         .refused,
     ).toBe(true);
   });

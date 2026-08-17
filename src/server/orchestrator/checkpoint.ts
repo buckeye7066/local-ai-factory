@@ -20,7 +20,7 @@ import {
  * outputs required to continue without replaying completed provider calls.
  */
 export const FactoryCheckpointSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   runId: RunIdSchema,
   idea: z.string(),
   options: RunOptionsSchema,
@@ -30,6 +30,10 @@ export const FactoryCheckpointSchema = z.object({
   research: ResearchFindingsSchema.optional(),
   plan: TaskPlanSchema.optional(),
   build: FileBuildSchema.optional(),
+  /** Existing host paths shown in full to the builder; all other host edits are refused. */
+  builderExistingPaths: z.array(z.string()).default([]),
+  /** Immutable pre-run host contents used to bound cumulative change across repair passes. */
+  hostFileBaselines: z.record(z.string()).default({}),
   testPlan: TestPlanSchema.optional(),
   files: z.array(FileContentSchema).default([]),
   /** Durable safety ledger: a restart/resume must never forget refused writes. */
@@ -65,10 +69,23 @@ export const FactoryCheckpointSchema = z.object({
           z.object({
             command: z.string(),
             exitCode: z.number().int().nullable(),
+            isTest: z.boolean().default(false),
+            directTestPath: z.string().optional(),
+            isBrowser: z.boolean().default(false),
             outputTail: z.string().default(""),
           }),
         )
         .default([]),
+      incomplete: z
+        .array(
+          z.object({
+            command: z.string(),
+            reason: z.string(),
+          }),
+        )
+        .default([]),
+      /** SHA-256 receipt for every deliverable path after the last verification pass. */
+      fileDigests: z.record(z.string()).default({}),
     })
     .optional(),
   testsExecuted: z.boolean().default(false),

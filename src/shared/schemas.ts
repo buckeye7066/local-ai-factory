@@ -503,6 +503,8 @@ export const RunDestinationSchema = z.object({
   detail: z.string().nullable().default(null),
   /** Browsable URL once known (repo page, or a compare/PR link). */
   url: z.string().nullable().default(null),
+  /** Exact commit whose bytes were covered by the verification receipt. */
+  commitSha: z.string().nullable().optional(),
   deliveredAt: z.number().nullable().default(null),
 });
 export type RunDestination = z.infer<typeof RunDestinationSchema>;

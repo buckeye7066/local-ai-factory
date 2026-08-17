@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { FileEdit } from "../../shared/schemas.js";
+import { safeResolveExistingPath } from "./fileWriter.js";
 
 /**
  * applyEdits.ts — turn anchored edits into new file contents, or refuse.
@@ -116,9 +116,22 @@ export function resolveGeneratedWrite(
 ): ResolvedWrite {
   let current: string | null = null;
   try {
-    current = readFile(join(workspacePath, relPath));
-  } catch {
-    current = null;
+    current = readFile(safeResolveExistingPath(workspacePath, relPath));
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : "";
+    if (code === "ENOENT") {
+      current = null;
+    } else {
+      return {
+        contents: null,
+        edited: false,
+        reason:
+          "existing-path state could not be read safely; only ENOENT is treated as a new file",
+      };
+    }
   }
 
   if (current === null) {
@@ -151,7 +164,14 @@ export function resolveGeneratedWrite(
       : { contents: null, edited: true, reason: outcome.reason };
   }
 
-  // Every existing text file is edit-only, regardless of language or extension.
+  // A zero-byte existing file has no behavior or text to preserve, and the
+  // edit schema cannot express an anchor into it. Treat nonempty contents as
+  // explicit initialization rather than a replacement.
+  if (current.length === 0 && file.contents.trim()) {
+    return { contents: file.contents, edited: true };
+  }
+
+  // Every nonempty existing text file is edit-only, regardless of language or extension.
   // An allowlist inevitably leaves a destructive path for the next stack
   // (.cpp, .swift, .kt, templates, configs, and so on).
   return {
