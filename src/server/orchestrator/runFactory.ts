@@ -28,7 +28,11 @@ import {
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import { readWorkspaceFile, safeResolve, writeWorkspaceFile } from "../workspace/fileWriter.js";
-import { captureFileDigests, verifyFileDigests } from "../workspace/verificationReceipt.js";
+import {
+  captureFileDigests,
+  findUnexpectedWorkspaceChanges,
+  verifyFileDigests,
+} from "../workspace/verificationReceipt.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import { verificationPlanForWorkspace } from "../workspace/verificationCommands.js";
 import {

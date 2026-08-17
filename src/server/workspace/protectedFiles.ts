@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import * as ts from "typescript";
 import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";

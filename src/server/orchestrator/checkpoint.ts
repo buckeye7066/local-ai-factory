@@ -69,9 +69,9 @@ export const FactoryCheckpointSchema = z.object({
           z.object({
             command: z.string(),
             exitCode: z.number().int().nullable(),
-            isTest: z.boolean().default(false),
+            isTest: z.boolean().optional(),
             directTestPath: z.string().optional(),
-            isBrowser: z.boolean().default(false),
+            isBrowser: z.boolean().optional(),
             outputTail: z.string().default(""),
           }),
         )
@@ -83,9 +83,9 @@ export const FactoryCheckpointSchema = z.object({
             reason: z.string(),
           }),
         )
-        .default([]),
+        .optional(),
       /** SHA-256 receipt for every deliverable path after the last verification pass. */
-      fileDigests: z.record(z.string()).default({}),
+      fileDigests: z.record(z.string()).optional(),
     })
     .optional(),
   testsExecuted: z.boolean().default(false),
