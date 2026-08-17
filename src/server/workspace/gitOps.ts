@@ -117,34 +117,56 @@ export async function commitRunFiles(
   dir: string,
   relativePaths: string[],
   message: string,
-): Promise<{ committed: boolean; detail: string; sha: string | null }> {
+): Promise<{
+  committed: boolean;
+  unchanged: boolean;
+  detail: string;
+  sha: string | null;
+}> {
   const paths = [...new Set(relativePaths.filter((p) => p && !p.startsWith("..")))];
   if (!paths.length) {
-    return { committed: false, detail: "No generated files to commit.", sha: null };
+    return {
+      committed: false,
+      unchanged: false,
+      detail: "No generated files to commit.",
+      sha: null,
+    };
   }
   // Stage in batches so a very large build cannot overflow the command line.
   for (let i = 0; i < paths.length; i += 100) {
     const batch = paths.slice(i, i + 100);
     const add = await git(["add", "--", ...batch], dir, 60_000);
     if (add.code !== 0) {
-      return { committed: false, detail: `git add failed — ${failureText(add)}`, sha: null };
+      return {
+        committed: false,
+        unchanged: false,
+        detail: `git add failed — ${failureText(add)}`,
+        sha: null,
+      };
     }
   }
   const staged = await git(["diff", "--cached", "--name-only"], dir, 30_000);
   if (staged.code === 0 && !staged.stdout.trim()) {
     return {
       committed: false,
+      unchanged: true,
       detail: "Nothing to commit — the generated files match what is already in the repo.",
       sha: null,
     };
   }
   const commit = await git(["commit", "-m", message], dir, 60_000);
   if (commit.code !== 0) {
-    return { committed: false, detail: `git commit failed — ${failureText(commit)}`, sha: null };
+    return {
+      committed: false,
+      unchanged: false,
+      detail: `git commit failed — ${failureText(commit)}`,
+      sha: null,
+    };
   }
   const head = await git(["rev-parse", "HEAD"], dir, 15_000);
   return {
     committed: true,
+    unchanged: false,
     detail: `Committed ${paths.length} file(s).`,
     sha: head.code === 0 ? head.stdout.trim() : null,
   };

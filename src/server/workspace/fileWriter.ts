@@ -156,10 +156,17 @@ export async function writeWorkspaceFile(
   const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
   const handle = await open(
     abs,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | noFollow,
+    constants.O_WRONLY | constants.O_CREAT | noFollow,
     0o666,
   );
   try {
+    const opened = await handle.stat();
+    if (opened.nlink > 1) {
+      throw new WorkspacePathError(
+        `Hard-linked write targets are not allowed: ${relativePath}`,
+      );
+    }
+    await handle.truncate(0);
     await handle.writeFile(contents, "utf8");
   } finally {
     await handle.close();

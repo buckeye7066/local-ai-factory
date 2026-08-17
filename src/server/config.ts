@@ -87,10 +87,10 @@ export interface AppConfig {
    */
   enableResearch: boolean;
   /**
-   * Execute model-authored scripts (test/build/run/etc.). Defaults to TRUE:
-   * every run does real work (owner order 2026-08-13 — dry-run removed
-   * entirely; the command allowlist and workspace jail remain the safety
-   * boundary). ALLOW_UNTRUSTED_SCRIPTS=0 is only used by hermetic tests.
+   * Execute repository/model-authored scripts without an OS filesystem
+   * sandbox. Defaults FALSE: cwd validation is not a write jail, and a test can
+   * otherwise modify sibling workspaces or host files. Explicit opt-in remains
+   * available for owners who run Factory Deck inside their own container/VM.
    */
   allowUntrustedScripts: boolean;
   /**
@@ -151,7 +151,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // Always resolved under the project root; the workspace writer enforces this too.
     workspaceRoot: resolve(process.cwd(), env.WORKSPACE_ROOT || "./workspaces"),
     enableResearch: bool(env.FACTORY_RESEARCH_ENABLED, true),
-    allowUntrustedScripts: bool(env.ALLOW_UNTRUSTED_SCRIPTS, true),
+    allowUntrustedScripts: bool(env.ALLOW_UNTRUSTED_SCRIPTS, false),
     bindLan: bool(env.FACTORY_BIND_LAN, false),
     port: num(env.PORT, 5179),
   };

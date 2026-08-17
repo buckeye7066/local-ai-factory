@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
+import * as ts from "typescript";
 import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
 
 /**
@@ -69,13 +70,71 @@ function walkSourceFiles(root: string): string[] {
   return out;
 }
 
-/** `src/pages/Foo.jsx` → `src/pages/Foo` (and the `pages/Foo` suffix). */
-function importFragments(relPath: string): string[] {
-  const noExt = relPath.replace(/\\/g, "/").replace(SOURCE_EXT, "");
-  const segments = noExt.split("/");
-  const fragments = [noExt];
-  if (segments.length >= 2) fragments.push(segments.slice(-2).join("/"));
-  return fragments;
+function withoutSourceExtension(path: string): string {
+  return path.replace(/\\/g, "/").replace(SOURCE_EXT, "");
+}
+
+function moduleSpecifiers(source: string): string[] {
+  const file = ts.createSourceFile(
+    "factory-wiring.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const found = new Set<string>();
+  const addLiteral = (node: ts.Expression | undefined) => {
+    if (node && ts.isStringLiteralLike(node)) found.add(node.text);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      addLiteral(node.moduleSpecifier);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      addLiteral(node.moduleReference.expression);
+    } else if (ts.isCallExpression(node)) {
+      const dynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const requireCall =
+        ts.isIdentifier(node.expression) && node.expression.text === "require";
+      if (dynamicImport || requireCall) addLiteral(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return [...found];
+}
+
+function referencesModule(
+  sourcePath: string,
+  source: string,
+  candidate: string,
+): boolean {
+  const candidateNoExt = withoutSourceExtension(candidate);
+  const candidateFragments = [
+    candidateNoExt,
+    candidateNoExt.split("/").slice(-2).join("/"),
+  ];
+  for (const rawSpecifier of moduleSpecifiers(source)) {
+    const specifier = withoutSourceExtension(rawSpecifier);
+    if (specifier.startsWith(".")) {
+      const resolved = posix.normalize(
+        posix.join(posix.dirname(sourcePath.replace(/\\/g, "/")), specifier),
+      );
+      if (resolved === candidateNoExt) return true;
+      continue;
+    }
+    const clean = specifier.replace(/^\/+/, "");
+    if (
+      candidateFragments.some(
+        (fragment) => clean === fragment || clean.endsWith(`/${fragment}`),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -115,7 +174,10 @@ export function findUnwiredNewFiles(
     }
     return readFileSync(absolute, "utf8");
   };
-  const preExistingTexts = preExisting.map(readBounded);
+  const preExistingSources = preExisting.map((absolute) => ({
+    path: relative(workspacePath, absolute).replace(/\\/g, "/"),
+    contents: readBounded(absolute),
+  }));
   const generatedTexts = new Map<string, string>();
   for (const candidate of candidates) {
     try {
@@ -128,26 +190,31 @@ export function findUnwiredNewFiles(
     }
   }
 
-  const references = (text: string, candidate: string): boolean =>
-    importFragments(candidate).some((fragment) => text.includes(fragment));
-
   // Seed reachability from real pre-existing code (including host files this
   // run modified), then traverse imports among generated product modules.
-  // Generated tests are never roots, so test-only self-wiring cannot pass.
+  // Only actual module specifiers count: comments, strings, and longer path
+  // prefixes cannot certify reachability.
   const wired = new Set<string>();
   for (const candidate of candidates) {
-    if (preExistingTexts.some((text) => references(text, candidate))) {
+    if (
+      preExistingSources.some((source) =>
+        referencesModule(source.path, source.contents, candidate),
+      )
+    ) {
       wired.add(candidate);
     }
   }
   let changed = true;
   while (changed) {
     changed = false;
-    for (const source of [...wired]) {
-      const text = generatedTexts.get(source);
-      if (!text) continue;
+    for (const sourcePath of [...wired]) {
+      const source = generatedTexts.get(sourcePath);
+      if (!source) continue;
       for (const candidate of candidates) {
-        if (!wired.has(candidate) && references(text, candidate)) {
+        if (
+          !wired.has(candidate) &&
+          referencesModule(sourcePath, source, candidate)
+        ) {
           wired.add(candidate);
           changed = true;
         }
@@ -170,7 +237,7 @@ export function unwiredCaveat(unwired: string[]): string | null {
   );
 }
 
-export const _internal = { importFragments };
+export const _internal = { moduleSpecifiers, referencesModule };
 
 /**
  * UNWIRED SCAFFOLDING FAILS QA — it does not merely caption the report

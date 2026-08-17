@@ -80,7 +80,7 @@ export function repoSlug(repoUrl: string): string | null {
  * QA cannot catch a build that verifies its own paper. Paper never auto-merges.
  */
 const PAPER_PATH_RE =
-  /^(?:docs?\/|tests?\/|__tests__\/|test\/|prisma\/)|(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$|\.mdx?$/i;
+  /(?:^|\/)(?:docs?|tests?|__tests__|test|prisma)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$|(?:^|\/)(?:test_[^/]+|[^/]+_test)\.py$|\.mdx?$/i;
 
 export function isPaperOnlyDelivery(filePaths: string[]): boolean {
   if (filePaths.length === 0) return true;
@@ -268,8 +268,33 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
         reason: `host repo checks failed: ${failed.map((f) => f.name).slice(0, 4).join(", ")}`,
       };
     }
-    const pending = states.filter((s) => /PENDING|QUEUED|IN_PROGRESS|EXPECTED/i.test(s.state));
-    if (states.length && !pending.length) {
+    const pending = states.filter((s) =>
+      /PENDING|QUEUED|IN_PROGRESS|EXPECTED/i.test(s.state),
+    );
+    const successful = states.filter((s) => /^SUCCESS$/i.test(s.state));
+    const nonGreenTerminal = states.filter(
+      (s) =>
+        !/^SUCCESS$/i.test(s.state) &&
+        !/PENDING|QUEUED|IN_PROGRESS|EXPECTED/i.test(s.state),
+    );
+    if (nonGreenTerminal.length) {
+      return {
+        released: false,
+        prUrl,
+        mergedSha: null,
+        reason:
+          "host repo checks did not produce an all-success result: " +
+          nonGreenTerminal
+            .map((check) => `${check.name} (${check.state})`)
+            .slice(0, 4)
+            .join(", "),
+      };
+    }
+    if (
+      states.length > 0 &&
+      !pending.length &&
+      successful.length === states.length
+    ) {
       break;
     }
     if (Date.now() > deadline) {
@@ -312,7 +337,16 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
 
   // 3. Merge (squash, never force) and confirm with the repo's own record.
   const merge = await run(
-    ["pr", "merge", prUrl, "-R", slug, "--squash"],
+    [
+      "pr",
+      "merge",
+      prUrl,
+      "-R",
+      slug,
+      "--squash",
+      "--match-head-commit",
+      input.verifiedCommitSha,
+    ],
     process.cwd(),
     120_000,
   );

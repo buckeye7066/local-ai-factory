@@ -34,6 +34,8 @@ import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
 import {
   captureFileDigests,
   findUnexpectedWorkspaceChanges,
+  verifyCommitFileDigests,
+  withVerificationReceipt,
 } from "../workspace/verificationReceipt.js";
 
 class CaptureProvider implements LLMProvider {
@@ -430,6 +432,38 @@ describe("verification tree binding", () => {
     }
   });
 
+  it("holds when a verification command mutates a deliverable", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "factory-command-mutate-"));
+    roots.push(repo);
+    writeFileSync(join(repo, "app.js"), "export const value = 'tested';\n");
+    const intended = await captureFileDigests(repo, ["app.js"]);
+    const result = await withVerificationReceipt(
+      repo,
+      ["app.js"],
+      intended,
+      async () => {
+        writeFileSync(
+          join(repo, "app.js"),
+          "export const value = 'untested';\n",
+        );
+        return 0;
+      },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.phase).toBe("after");
+    expect(result.reason).toMatch(/app\.js/);
+  });
+
+  it("reports unlisted source created in a new-app workspace", () => {
+    const repo = mkdtempSync(join(tmpdir(), "factory-new-tree-"));
+    roots.push(repo);
+    writeFileSync(join(repo, "app.js"), "export const app = 1;\n");
+    writeFileSync(join(repo, "generated-helper.js"), "export const hidden = 1;\n");
+    expect(findUnexpectedWorkspaceChanges(repo, ["app.js"])).toEqual([
+      "generated-helper.js",
+    ]);
+  });
+
   it("detects tracked and untracked command mutations outside the deliverable set", () => {
     const repo = mkdtempSync(join(tmpdir(), "factory-tree-"));
     roots.push(repo);
@@ -574,6 +608,113 @@ describe("delivery fails closed without complete verification", () => {
     });
     expect(result.status).toBe("skipped");
     expect(result.detail).toMatch(/receipt|changed/i);
+  });
+
+
+  it("rejects a commit blob that differs even when the working tree is restored", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "factory-commit-blob-"));
+    roots.push(repo);
+    writeFileSync(join(repo, "app.js"), "export const value = 1;\n");
+    const receipt = await captureFileDigests(repo, ["app.js"]);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+    writeFileSync(join(repo, "app.js"), "export const value = 2;\n");
+    execFileSync("git", ["add", "app.js"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "mutated index"], { cwd: repo });
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
+    writeFileSync(join(repo, "app.js"), "export const value = 1;\n");
+    const verdict = verifyCommitFileDigests(
+      repo,
+      sha,
+      ["app.js"],
+      receipt,
+    );
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/committed blob|verified bytes/i);
+  });
+
+  it("refuses delivery when a pre-staged extra path enters the commit", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "factory-extra-index-"));
+    roots.push(repo);
+    writeFileSync(join(repo, "app.js"), "export const app = 1;\n");
+    writeFileSync(join(repo, "owner.txt"), "owner staged change\n");
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+    execFileSync("git", ["add", "owner.txt"], { cwd: repo });
+    const receipt = await captureFileDigests(repo, ["app.js"]);
+    const result = await deliverRun({
+      destination: {
+        kind: "new-repo",
+        target: "local",
+        branch: "main",
+        status: "planned",
+        detail: null,
+        url: null,
+        deliveredAt: null,
+      },
+      workspacePath: repo,
+      filePaths: ["app.js"],
+      runId: "extra-index-run",
+      appName: "Receipt",
+      options: {
+        newRepo: { name: "local", createRemote: false },
+      },
+      verification: {
+        qaPassed: true,
+        testStatus: "passing",
+        writeRefusals: 0,
+        incompleteCommands: 0,
+        fileDigests: receipt,
+      },
+    });
+    expect(result.status).toBe("failed");
+    expect(result.detail).toMatch(/outside the verification receipt|owner\.txt/i);
+  });
+
+  it("reuses only its own receipt-bound commit after an interrupted delivery", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "factory-retry-commit-"));
+    roots.push(repo);
+    writeFileSync(join(repo, "app.js"), "export const app = 1;\n");
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+    const receipt = await captureFileDigests(repo, ["app.js"]);
+    const input = {
+      destination: {
+        kind: "new-repo" as const,
+        target: "local",
+        branch: "main",
+        status: "planned" as const,
+        detail: null,
+        url: null,
+        deliveredAt: null,
+      },
+      workspacePath: repo,
+      filePaths: ["app.js"],
+      runId: "same-run-after-crash",
+      appName: "Receipt",
+      options: {
+        newRepo: { name: "local", createRemote: false },
+      },
+      verification: {
+        qaPassed: true,
+        testStatus: "passing" as const,
+        writeRefusals: 0,
+        incompleteCommands: 0,
+        fileDigests: receipt,
+      },
+    };
+    const first = await deliverRun(input);
+    const resumed = await deliverRun(input);
+    expect(first.status).toBe("delivered");
+    expect(resumed.status).toBe("delivered");
+    expect(resumed.commitSha).toBe(first.commitSha);
+    expect(resumed.detail).toMatch(/reusing receipt-bound commit/i);
   });
 
 });

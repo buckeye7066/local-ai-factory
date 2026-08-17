@@ -49,7 +49,7 @@ const LOCKFILE_NAMES = new Set([
 /** Root tool-config shapes; capture group 1 is the tool identity. */
 const ROOT_CONFIG_RX =
   /^(vitest|jest|playwright|vite)(?:\.[A-Za-z0-9_-]+)?\.config\.(?:js|cjs|mjs|ts|cts|mts)$/i;
-const OTHER_ROOT_CONFIGS_RX = /^(?:tsconfig(?:\.[A-Za-z0-9_-]+)?\.json|\.eslintrc(?:\.[A-Za-z0-9.]+)?|eslint\.config\.(?:js|cjs|mjs|ts))$/i;
+const OTHER_ROOT_CONFIGS_RX = /^(?:tsconfig(?:\.[A-Za-z0-9_-]+)?\.json|\.eslintrc(?:\.[A-Za-z0-9.]+)?|eslint\.config\.[cm]?[jt]s)$/i;
 
 const DEPENDENCY_MAP_KEYS = new Set([
   "dependencies",
@@ -107,16 +107,27 @@ export interface ProtectedVerdict {
   reason?: string;
 }
 
+interface TrackedBaseline {
+  head: string;
+  files: Set<string>;
+}
+
 /** Workspace-relative paths tracked at git HEAD, or null when not a git repo. */
-function trackedFiles(workspacePath: string): Set<string> | null {
+function trackedFiles(
+  workspacePath: string,
+  knownHead?: string,
+): TrackedBaseline | null {
+  let head = knownHead;
   try {
-    execFileSync(
-      "git",
-      ["-C", workspacePath, "rev-parse", "--is-inside-work-tree"],
-      { encoding: "utf8", timeout: 30_000 },
-    );
+    head =
+      head ??
+      execFileSync(
+        "git",
+        ["-C", workspacePath, "rev-parse", "--verify", "HEAD"],
+        { encoding: "utf8", timeout: 30_000 },
+      ).trim();
   } catch {
-    return null; // genuinely not a git repo (new-app workspace)
+    return null; // genuinely not a git repo/new-app workspace
   }
   try {
     const out = execFileSync("git", ["-C", workspacePath, "ls-files", "-z"], {
@@ -124,12 +135,15 @@ function trackedFiles(workspacePath: string): Set<string> | null {
       timeout: 30_000,
       maxBuffer: 64 * 1024 * 1024,
     });
-    return new Set(
-      out
-        .split("\0")
-        .map((line) => line.replace(/\\/g, "/"))
-        .filter(Boolean),
-    );
+    return {
+      head: head!,
+      files: new Set(
+        out
+          .split("\0")
+          .map((line) => line.replace(/\\/g, "/"))
+          .filter(Boolean),
+      ),
+    };
   } catch (error) {
     throw new Error(
       `Cannot enumerate the host git baseline safely: ${
@@ -139,12 +153,24 @@ function trackedFiles(workspacePath: string): Set<string> | null {
   }
 }
 
-const baselineCache = new Map<string, Set<string> | null>();
+const baselineCache = new Map<string, TrackedBaseline | null>();
 function baseline(workspacePath: string): Set<string> | null {
-  if (!baselineCache.has(workspacePath)) {
-    baselineCache.set(workspacePath, trackedFiles(workspacePath));
+  let head: string;
+  try {
+    head = execFileSync(
+      "git",
+      ["-C", workspacePath, "rev-parse", "--verify", "HEAD"],
+      { encoding: "utf8", timeout: 30_000 },
+    ).trim();
+  } catch {
+    baselineCache.set(workspacePath, null);
+    return null;
   }
-  return baselineCache.get(workspacePath) ?? null;
+  const cached = baselineCache.get(workspacePath);
+  if (cached?.head === head) return cached.files;
+  const refreshed = trackedFiles(workspacePath, head);
+  baselineCache.set(workspacePath, refreshed);
+  return refreshed?.files ?? null;
 }
 
 /** For tests: reset the per-workspace tracked-file cache. */
@@ -196,7 +222,11 @@ export function exportedSymbols(source: string): Set<string> {
     }
     if (ts.isExportDeclaration(statement)) {
       if (!statement.exportClause) {
-        names.add("*");
+        const moduleName =
+          statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
+            ? statement.moduleSpecifier.text
+            : "(unknown)";
+        names.add(`*:${moduleName}`);
       } else if (ts.isNamedExports(statement.exportClause)) {
         for (const element of statement.exportClause.elements) {
           names.add(element.name.text);
@@ -244,7 +274,6 @@ export function exportedSymbols(source: string): Set<string> {
       continue;
     }
     if (left !== "module.exports") continue;
-    names.add("default");
     if (ts.isObjectLiteralExpression(expression.right)) {
       for (const property of expression.right.properties) {
         if (
@@ -257,6 +286,8 @@ export function exportedSymbols(source: string): Set<string> {
           if (/^[A-Za-z_$][\w$]*$/.test(text)) names.add(text);
         }
       }
+    } else {
+      names.add("default");
     }
   }
   return names;
@@ -274,8 +305,10 @@ export function assessProtectedHostWrite(
   const base = norm.split("/").pop() ?? norm;
   const isTracked = tracked.has(norm);
 
-  // 1. Lockfiles: derived artifacts, never hand-written.
-  if (isTracked && LOCKFILE_NAMES.has(base)) {
+  // 1. Lockfiles: derived artifacts, never hand-written. In an extend repo,
+  // a new yarn.lock beside a tracked package-lock would switch the planner's
+  // package manager and bypass the host's locked dependency graph.
+  if (LOCKFILE_NAMES.has(base)) {
     return {
       refused: true,
       reason:
@@ -373,6 +406,23 @@ export function assessProtectedHostWrite(
 
   // Root-level new tool-config variants from here on.
   if (norm.includes("/")) return { refused: false };
+
+  // Python's test config files form one precedence family. A new pytest.ini
+  // can override a tracked pyproject.toml/setup.cfg without editing it.
+  if (!isTracked && PYTHON_TEST_CONFIGS.has(base.toLowerCase())) {
+    const hostHasPythonConfig = [...tracked].some(
+      (path) =>
+        !path.includes("/") &&
+        PYTHON_TEST_CONFIGS.has(path.toLowerCase()),
+    );
+    if (hostHasPythonConfig) {
+      return {
+        refused: true,
+        reason:
+          "the host already tracks Python test configuration — a new root variant could redirect pytest discovery",
+      };
+    }
+  }
 
   // 4. NEW variant of a tool whose config the host already tracks — the
   //    .ts-outranks-.js discovery hijack.

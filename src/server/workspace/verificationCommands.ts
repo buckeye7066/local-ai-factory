@@ -197,11 +197,11 @@ function pythonCommands(workspacePath: string): VerificationCommand[] {
     isTest: false,
   });
   const ciTests = workflowPythonTests(workspacePath);
-  commands.push(
-    ...(ciTests.length
-      ? ciTests
-      : [{ bin, args: ["-m", "pytest", "-q"], isTest: true }]),
-  );
+  // Workflow-specific smoke commands may add coverage, but they can never
+  // replace the full host pytest suite. Generated workflows are part of the
+  // candidate patch and therefore cannot define their own verification gate.
+  commands.push(...ciTests);
+  commands.push({ bin, args: ["-m", "pytest", "-q"], isTest: true });
   return commands;
 }
 

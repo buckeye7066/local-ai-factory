@@ -29,9 +29,10 @@ export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import { readWorkspaceFile, safeResolve, writeWorkspaceFile } from "../workspace/fileWriter.js";
 import {
-  captureFileDigests,
   findUnexpectedWorkspaceChanges,
+  sha256Text,
   verifyFileDigests,
+  withVerificationReceipt,
 } from "../workspace/verificationReceipt.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import { verificationPlanForWorkspace } from "../workspace/verificationCommands.js";
@@ -1406,6 +1407,9 @@ async function executeRun(
       verification = { executed: [], incomplete: [], fileDigests: {} };
       testsExecuted = false;
       testExit = null;
+      const intendedDigests = Object.fromEntries(
+        [...files].map(([path, file]) => [path, sha256Text(file.contents)]),
+      );
       // Distinct from `testExit === null`: a timeout-killed suite legitimately
       // reports a null exit, so null cannot double as "nothing recorded yet".
       let verdict = freshTestVerdict();
@@ -1438,8 +1442,13 @@ async function executeRun(
           "No supported project manifest detected; verification is incomplete.",
         );
       }
-      for (const cmd of verificationPlan.commands) {
-        throwIfCancelled(run.id);
+      const commandReceipt = await withVerificationReceipt(
+        workspacePath,
+        files.keys(),
+        intendedDigests,
+        async () => {
+          for (const cmd of verificationPlan.commands) {
+            throwIfCancelled(run.id);
         throwIfTimedOut(deadline, timeoutMs);
         const res = await runCommand(
           { bin: cmd.bin, args: cmd.args, cwd: workspacePath },
@@ -1492,19 +1501,22 @@ async function executeRun(
             verdict = foldTestExit(verdict, res.exitCode);
             testExit = verdict.testExit;
           }
-        } else {
-          verification.incomplete!.push({
-            command: res.command,
-            reason: res.reason ?? "required verification command did not execute",
-          });
-        }
-      }
-      for (const [path, file] of files) {
-        const contents = await readWorkspaceFile(workspacePath, path);
-        files.set(path, {
-          ...file,
-          contents,
-          size: Buffer.byteLength(contents, "utf8"),
+            } else {
+              verification.incomplete!.push({
+                command: res.command,
+                reason:
+                  res.reason ?? "required verification command did not execute",
+              });
+            }
+          }
+        },
+      );
+      if (!commandReceipt.ok) {
+        verification.incomplete!.push({
+          command: "verification tree",
+          reason:
+            `deliverable bytes changed ${commandReceipt.phase} verification commands: ` +
+            (commandReceipt.reason ?? "unknown mutation"),
         });
       }
       run.files = summarize([...files.values()]);
@@ -1521,10 +1533,8 @@ async function executeRun(
             unexpectedChanges.slice(0, 20).join(", "),
         });
       }
-      verification.fileDigests = await captureFileDigests(
-        workspacePath,
-        files.keys(),
-      );
+      // Never adopt command-mutated bytes as a fresh receipt.
+      verification.fileDigests = intendedDigests;
       await checkpointNow({
         files: [...files.values()],
         commandOutput,
@@ -1649,15 +1659,16 @@ async function executeRun(
         };
       }
     };
+    const groundCurrentQa = (report: QaReport): QaReport =>
+      run.demo ? report : groundQaReport(report, verification);
     let qa: QaReport | undefined = checkpoint.qa;
     if (!qa) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "qa_critic");
       log("model_call", `QA Critic agent (${review.name})…`);
       qa = withWiringGate(
-        groundQaReport(
+        groundCurrentQa(
           await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
-          verification,
         ),
       );
       await checkpointNow({ qa });
@@ -1689,9 +1700,8 @@ async function executeRun(
         await verifyWorkspace();
         log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
         qa = withWiringGate(
-          groundQaReport(
+          groundCurrentQa(
             await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
-            verification,
           ),
         );
         await checkpointNow({ qa, pendingRepair: undefined });
@@ -1767,9 +1777,8 @@ async function executeRun(
             throwIfTimedOut(deadline, timeoutMs);
             log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
             const next = withWiringGate(
-              groundQaReport(
+              groundCurrentQa(
                 await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
-                verification,
               ),
             );
             await checkpointNow({ qa: next, pendingRepair: undefined });

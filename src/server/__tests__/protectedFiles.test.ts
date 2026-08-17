@@ -49,7 +49,7 @@ describe("assessProtectedHostWrite", () => {
       '{"name":"grant-flow","private":true,"type":"module","scripts":{"test":"vitest run"}}';
     const verdict = assessProtectedHostWrite(ws, "package.json", stub);
     expect(verdict.refused).toBe(true);
-    expect(verdict.reason).toMatch(/collapse the host manifest/);
+    expect(verdict.reason).toMatch(/dependency-map entries/);
   });
 
   it("ALLOWS additive package.json edits (adding a dependency must keep working)", () => {
@@ -292,4 +292,89 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     const repo = gitWorkspace({ "auth.js": "export const A = 1;" });
     expect(assessProtectedHostWrite(repo, "brandNew.js", "// anything").refused).toBe(false);
   });
+  it("preserves each export-star source independently", () => {
+    const ws = gitWorkspace({
+      "src/index.ts": "export * from './a';\nexport * from './b';\n",
+    });
+    const verdict = assessProtectedHostWrite(
+      ws,
+      "src/index.ts",
+      "export * from './a';\n",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/export/);
+  });
+
+  it.each(["cts", "mts"])("protects tracked eslint.config.%s", (ext) => {
+    const path = `eslint.config.${ext}`;
+    const ws = gitWorkspace({ [path]: "export default [{ rules: {} }];\n" });
+    expect(
+      assessProtectedHostWrite(ws, path, "export default [];\n").refused,
+    ).toBe(true);
+  });
+
+  it("refuses a Python test-config precedence shadow", () => {
+    const ws = gitWorkspace({
+      "pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-q'\n",
+    });
+    const verdict = assessProtectedHostWrite(
+      ws,
+      "pytest.ini",
+      "[pytest]\ntestpaths = generated_only\n",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/Python test configuration|pytest discovery/i);
+  });
+
+  it("refuses a new lockfile that would switch package managers", () => {
+    const ws = gitWorkspace({
+      "package-lock.json": "{\"lockfileVersion\":3}\n",
+      "package.json": "{\"name\":\"host\"}\n",
+    });
+    const verdict = assessProtectedHostWrite(ws, "yarn.lock", "# shadow\n");
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/lockfile|derived artifact/i);
+  });
+
+
+  it("refreshes its tracked-file baseline when an in-place repo HEAD advances", () => {
+    const ws = gitWorkspace({ "src/old.ts": "export const old = 1;\n" });
+    expect(
+      assessProtectedHostWrite(
+        ws,
+        "src/old.ts",
+        "export const old = 1;\nexport const more = 2;\n",
+      ).refused,
+    ).toBe(false);
+
+    writeFileSync(
+      join(ws, "src", "new.ts"),
+      "export const keep = 1;\n",
+    );
+    execFileSync("git", ["-C", ws, "add", "src/new.ts"]);
+    execFileSync(
+      "git",
+      [
+        "-C",
+        ws,
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "-m",
+        "advance",
+      ],
+    );
+
+    const verdict = assessProtectedHostWrite(
+      ws,
+      "src/new.ts",
+      "const removed = 1;\n",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/drops.*export/i);
+  });
+
 });

@@ -115,6 +115,23 @@ describe("findUnwiredNewFiles", () => {
     ]);
   });
 
+  it("does not count comments, strings, or longer module prefixes as wiring", () => {
+    const ws = workspace();
+    write(
+      ws,
+      "src/App.tsx",
+      [
+        "// import './pages/Fresh';",
+        "const note = 'pages/Fresh';",
+        "import './pages/Freshness';",
+      ].join("\n"),
+    );
+    write(ws, "src/pages/Fresh.tsx", "export default 1;\n");
+    expect(findUnwiredNewFiles(ws, ["src/pages/Fresh.tsx"])).toEqual([
+      "src/pages/Fresh.tsx",
+    ]);
+  });
+
   it("ignores generated docs/configs/tests as candidates", () => {
     const ws = workspace();
     write(ws, "src/main.jsx", "console.log('app');\n");

@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   mkdtempSync,
   mkdirSync,
+  linkSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -224,6 +225,21 @@ describe("file writer physical containment", () => {
         writeWorkspaceFile(root, "linked/escaped.ts", "owned"),
       ).rejects.toThrow(/symlink|workspace|contain/i);
       expect(() => readFileSync(join(outside, "escaped.ts"), "utf8")).toThrow();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not truncate a hard-linked inode outside the workspace",
+    async () => {
+      const root = workspace({});
+      const outside = join(root, "..", `factory-hardlink-${Date.now()}.ts`);
+      dirs.push(outside);
+      writeFileSync(outside, "sentinel");
+      linkSync(outside, join(root, "linked.ts"));
+      await expect(
+        writeWorkspaceFile(root, "linked.ts", "overwritten"),
+      ).rejects.toThrow(/hard-linked/i);
+      expect(readFileSync(outside, "utf8")).toBe("sentinel");
     },
   );
 

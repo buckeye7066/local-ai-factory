@@ -9,6 +9,7 @@ const base = {
   destination: {
     kind: "existing-repo",
     status: "delivered",
+    commitSha: "verified-commit",
   },
   release: null,
 } as unknown as Pick<
@@ -21,6 +22,18 @@ describe("runIsReady", () => {
     expect(runIsReady(base)).toBe(true);
     expect(runIsReady({ ...base, status: "failed" })).toBe(false);
     expect(runIsReady({ ...base, destination: undefined })).toBe(false);
+    expect(
+      runIsReady({
+        ...base,
+        destination: { ...base.destination!, commitSha: null },
+      }),
+    ).toBe(false);
+    expect(
+      runIsReady({
+        ...base,
+        destination: { ...base.destination!, kind: "workspace-only" },
+      }),
+    ).toBe(false);
     expect(
       runIsReady({
         ...base,

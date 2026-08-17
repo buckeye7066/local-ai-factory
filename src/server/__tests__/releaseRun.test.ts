@@ -96,6 +96,15 @@ describe("isPaperOnlyDelivery", () => {
       isPaperOnlyDelivery(["src/App.test.tsx", "packages/api/auth.spec.mts"]),
     ).toBe(true);
   });
+  it("recognizes Python tests beside source as paper", () => {
+    expect(
+      isPaperOnlyDelivery([
+        "backend/test_profile.py",
+        "src/profile_test.py",
+        "pkg/tests/foo.py",
+      ]),
+    ).toBe(true);
+  });
   it("an empty delivery is paper", () => {
     expect(isPaperOnlyDelivery([])).toBe(true);
   });
@@ -113,7 +122,15 @@ describe("releaseRun", () => {
     expect(res.released).toBe(true);
     expect(res.mergedSha).toBe("abc123def");
     expect(res.prUrl).toMatch(/pull\/99/);
-    expect(calls.some((c) => c[1] === "merge" && c.includes("--squash"))).toBe(true);
+    expect(
+      calls.some(
+        (c) =>
+          c[1] === "merge" &&
+          c.includes("--squash") &&
+          c.includes("--match-head-commit") &&
+          c.includes(VERIFIED_SHA),
+      ),
+    ).toBe(true);
     expect(calls.flat().join(" ")).not.toMatch(/--force|--admin/);
   });
 
@@ -127,6 +144,25 @@ describe("releaseRun", () => {
     expect(res.reason).toMatch(/no test command executed/i);
     expect(calls).toHaveLength(0);
   });
+
+  it.each(["SKIPPED", "NEUTRAL", "UNKNOWN"])(
+    "holds when host checks are terminal but %s rather than successful",
+    async (state) => {
+      const { impl, calls } = fakeGh([
+        () => ok("https://github.com/buckeye7066/GrantFlow/pull/130"),
+        () => ok(JSON.stringify([{ state, name: "policy" }])),
+      ]);
+      const res = await releaseRun({
+        ...BASE,
+        qaPassed: true,
+        testStatus: "passing",
+        ghImpl: impl,
+      });
+      expect(res.released).toBe(false);
+      expect(res.reason).toMatch(/all-success|policy/i);
+      expect(calls.some((call) => call[1] === "merge")).toBe(false);
+    },
+  );
 
   /* ---------------------------------------------------------------- *
    * "no checks reported" — absence must be CONFIRMED, never assumed.

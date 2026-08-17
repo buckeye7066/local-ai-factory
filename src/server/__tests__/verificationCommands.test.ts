@@ -74,12 +74,8 @@ describe("verificationCommandsForWorkspace", () => {
     expect(commands.filter((command) => command.isTest)).toEqual([
       { bin: "python", args: ["test_root.py"], isTest: true },
       { bin: "python", args: ["iplay/test_suite.py"], isTest: true },
+      { bin: "python", args: ["-m", "pytest", "-q"], isTest: true },
     ]);
-    expect(commands).not.toContainEqual({
-      bin: "python",
-      args: ["-m", "pytest", "-q"],
-      isTest: true,
-    });
   });
 
   it("keeps JavaScript verification and supports polyglot repositories", () => {
@@ -250,4 +246,34 @@ describe("Python command sandbox", () => {
       false,
     );
   });
+  it("never lets a workflow smoke replace the full pytest suite", () => {
+    const root = workspace();
+    mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(root, "pyproject.toml"), "[tool.pytest.ini_options]\n");
+    writeFileSync(join(root, "test_host.py"), "def test_host(): assert True\n");
+    writeFileSync(
+      join(root, "test_generated.py"),
+      "def test_generated(): assert True\n",
+    );
+    writeFileSync(
+      join(root, ".github", "workflows", "factory.yml"),
+      "steps:\n  - run: python test_generated.py\n",
+    );
+    const plan = verificationPlanForWorkspace(root, {
+      generatedTests: [
+        {
+          path: "test_generated.py",
+          contents: "def test_generated(): assert True\n",
+        },
+      ],
+    });
+    expect(
+      plan.commands.some(
+        (cmd) =>
+          cmd.bin === "python" &&
+          cmd.args.join(" ") === "-m pytest -q",
+      ),
+    ).toBe(true);
+  });
+
 });
