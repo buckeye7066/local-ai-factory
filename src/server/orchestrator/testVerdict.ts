@@ -76,8 +76,25 @@ export function testStatusFor(
  *  - ALL written tests appear               → "passing" may stand;
  *  - "failing"/"unknown" are NEVER upgraded by this check.
  */
-const TEST_FILE_RE = /(\.(test|spec)\.[cm]?[jt]sx?$)|(^|[\\/])__tests__[\\/]/i;
+const TEST_FILE_RE =
+  /(\.(test|spec)\.[cm]?[jt]sx?$)|(^|[\\/])__tests__[\\/]|(^|[\\/])test_[^\\/]+\.py$|_test\.py$/i;
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function outputMentionsRelativePath(output: string, path: string): boolean {
+  const normalizedOutput = output
+    .replace(/\\/g, "/")
+    .replace(/(^|[\s"\'(])\.\//gm, "$1");
+  const relativePath = path.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (!relativePath) return false;
+  const token = new RegExp(
+    `(?:^|[\\s"\'(])${escapeRegex(relativePath)}(?=$|[\\s"\'():,])`,
+    "m",
+  );
+  return token.test(normalizedOutput);
+}
 export function writtenTestFiles(writtenFiles: string[]): string[] {
   return writtenFiles.filter((p) => TEST_FILE_RE.test(p));
 }
@@ -105,11 +122,9 @@ export function relevantTestStatus(
       degraded: base === "passing",
     };
   }
-  const normalizedOutput = executedOutput.replace(/\\/g, "/");
-  const covered = ownTests.filter((p) => {
-    const relativePath = p.replace(/\\/g, "/").replace(/^\.\//, "");
-    return relativePath.length > 0 && normalizedOutput.includes(relativePath);
-  });
+  const covered = ownTests.filter((path) =>
+    outputMentionsRelativePath(executedOutput, path),
+  );
   const uncovered = ownTests.filter((p) => !covered.includes(p));
   if (base !== "passing") {
     return { status: base, uncoveredTestFiles: uncovered, degraded: false };

@@ -5,7 +5,7 @@ import {
   type ProductSpec,
 } from "../../shared/schemas.js";
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
-import { renderBuildCode } from "./codeContext.js";
+import { renderBuildCodeContext } from "./codeContext.js";
 
 /**
  * Reviews the exact changed code, requested behavior, and executable evidence.
@@ -16,7 +16,8 @@ export async function qaCriticAgent(
   commandOutput: string,
   spec?: ProductSpec,
 ): Promise<QaReport> {
-  return deps.provider.generateJson<QaReport>({
+  const codeContext = renderBuildCodeContext(build);
+  const report = await deps.provider.generateJson<QaReport>({
     system:
       `${SYSTEM_PREAMBLE}\nYou are the QA CRITIC agent. Review the exact CURRENT CODE against ` +
       `the spec and acceptance criteria. Be strict but evidence-based. Treat usability blockers, ` +
@@ -31,7 +32,7 @@ SPEC AND ACCEPTANCE CRITERIA:
 ${spec ? JSON.stringify(spec, null, 2) : "(not supplied)"}
 
 CURRENT CODE:
-${renderBuildCode(build)}
+${codeContext.text}
 
 COMMAND / TEST OUTPUT:
 ${commandOutput || "(no commands executed)"}
@@ -43,4 +44,23 @@ Set passed=true only when there are no high or critical code, integration, accep
     temperature: 0.1,
     maxTokens: 12000,
   });
+  if (codeContext.complete) return report;
+  return {
+    summary:
+      `INCOMPLETE CODE REVIEW: ${codeContext.omittedPaths.length} changed file(s) ` +
+      "were not available in full.",
+    passed: false,
+    issues: [
+      {
+        severity: "high",
+        title: "Changed code omitted from QA context",
+        detail:
+          `QA could not inspect these files in full: ${codeContext.omittedPaths.join(", ")}.`,
+        file: codeContext.omittedPaths[0] ?? null,
+        repairInstruction:
+          "Reduce or split the change so every changed file can be reviewed in full.",
+      },
+      ...report.issues,
+    ],
+  };
 }

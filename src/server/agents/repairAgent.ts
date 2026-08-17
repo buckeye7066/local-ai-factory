@@ -5,7 +5,7 @@ import {
   type FileBuild,
 } from "../../shared/schemas.js";
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
-import { renderBuildCode } from "./codeContext.js";
+import { renderBuildCodeContext } from "./codeContext.js";
 
 /**
  * Repairs only files that the run already wrote. Exact current contents are
@@ -17,7 +17,10 @@ export async function repairAgent(
   build: FileBuild,
   commandOutput: string,
 ): Promise<RepairResult> {
-  const allowedPaths = build.files.map((f) => f.path);
+  const codeContext = renderBuildCodeContext(build);
+  // A truncated file is never repairable: the model cannot quote code it was
+  // not shown. Other fully displayed files may still be repaired safely.
+  const allowedPaths = codeContext.fullyShownPaths;
   return deps.provider.generateJson<RepairResult>({
     system:
       `${SYSTEM_PREAMBLE}\nYou are the REPAIR agent. Repair only the allowed files whose ` +
@@ -35,7 +38,7 @@ ALLOWED PATHS:
 ${allowedPaths.join("\n") || "(none)"}
 
 EXACT CURRENT CONTENTS:
-${renderBuildCode(build)}
+${codeContext.text}
 
 COMMAND OUTPUT:
 ${commandOutput || "(none)"}

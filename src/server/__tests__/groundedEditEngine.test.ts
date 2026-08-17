@@ -201,6 +201,44 @@ describe("agent grounding contracts", () => {
   });
 });
 
+describe("bounded agent context fails closed", () => {
+  it("QA cannot pass and repair cannot target a file that was not shown in full", async () => {
+    const largeBuild: FileBuild = {
+      files: [
+        {
+          path: "src/huge.ts",
+          purpose: "huge",
+          contents: "x".repeat(24_001),
+          edits: [],
+        },
+      ],
+    };
+    const qaProvider = new CaptureProvider({
+      summary: "looks fine",
+      passed: true,
+      issues: [],
+    });
+    const report = await qaCriticAgent(
+      { provider: qaProvider },
+      largeBuild,
+      "tests green",
+      spec,
+    );
+    expect(report.passed).toBe(false);
+    expect(report.summary).toMatch(/INCOMPLETE CODE REVIEW/);
+
+    const repairProvider = new CaptureProvider({ notes: "", files: [] });
+    await repairAgent(
+      { provider: repairProvider },
+      { summary: "fix", passed: false, issues: [] },
+      largeBuild,
+      "failed",
+    );
+    expect(repairProvider.lastPrompt).toContain("ALLOWED PATHS:\n(none)");
+    expect(repairProvider.lastPrompt).toContain("truncated");
+  });
+});
+
 describe("repair accounting and scope are mechanical", () => {
   it("refuses paths outside the run's actual change set", () => {
     const partition = partitionRepairFiles(
@@ -264,7 +302,9 @@ describe("refusal ledger survives restart parsing", () => {
         writeRefusals: [refusal],
       }).writeRefusals,
     ).toEqual([refusal]);
-    expect(FactoryCheckpointSchema.parse(base).writeRefusals).toEqual([]);
+    const legacy = FactoryCheckpointSchema.parse(base);
+    expect(legacy.writeRefusals).toEqual([]);
+    expect(legacy.blockingWriteRefusals).toEqual([]);
   });
 });
 
@@ -296,6 +336,29 @@ describe("existing-repo indexing is complete", () => {
     const analysis = await analyzeExistingCodebase(repo);
     expect(analysis.fileTree).toContain("src/App.jsx");
     expect(analysis.fileTree.length).toBeGreaterThan(1_500);
+  });
+});
+
+describe("existing-repo indexing includes safe untracked work", () => {
+  const roots: string[] = [];
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes an untracked real App.jsx for same-stem resolution", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "factory-untracked-"));
+    roots.push(repo);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    mkdirSync(join(repo, "src"));
+    writeFileSync(
+      join(repo, "src", "App.jsx"),
+      "export default function App(){ return null; }",
+    );
+    const analysis = await analyzeExistingCodebase(repo);
+    expect(analysis.fileTree).toContain("src/App.jsx");
   });
 });
 

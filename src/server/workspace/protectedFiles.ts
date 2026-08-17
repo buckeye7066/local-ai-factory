@@ -93,24 +93,28 @@ const SOURCE_RX = /\.(m?[jt]sx?|cjs)$/i;
  */
 export function exportedSymbols(source: string): Set<string> {
   const names = new Set<string>();
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
   const add = (n?: string) => {
-    if (n && n !== "default") names.add(n);
+    if (n) names.add(n);
   };
-  for (const m of source.matchAll(
+  if (/\bexport\s+default\b/.test(code)) names.add("default");
+  for (const m of code.matchAll(
     /export\s+(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g,
   )) add(m[1]);
-  for (const m of source.matchAll(/export\s*\{([^}]*)\}/g)) {
+  for (const m of code.matchAll(/export\s*\{([^}]*)\}/g)) {
     for (const part of (m[1] ?? "").split(",")) {
       const piece = part.trim();
       if (!piece) continue;
-      const asMatch = /as\s+([A-Za-z_$][\w$]*)/.exec(piece);
+      const asMatch = /\bas\s+([A-Za-z_$][\w$]*)/.exec(piece);
       add(asMatch ? asMatch[1] : piece.split(/\s+/)[0]);
     }
   }
-  for (const m of source.matchAll(
+  for (const m of code.matchAll(
     /(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/g,
   )) add(m[1]);
-  for (const m of source.matchAll(/module\.exports\s*=\s*\{([^}]*)\}/g)) {
+  for (const m of code.matchAll(/module\.exports\s*=\s*\{([^}]*)\}/g)) {
     for (const part of (m[1] ?? "").split(",")) {
       const key = part.split(":")[0]?.trim();
       if (key && /^[A-Za-z_$][\w$]*$/.test(key)) add(key);

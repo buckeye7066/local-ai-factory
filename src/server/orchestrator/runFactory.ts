@@ -38,7 +38,7 @@ import {
 import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { assessPhantomImports } from "../workspace/phantomImports.js";
 import { resolveGeneratedWrite } from "../workspace/applyEdits.js";
-import { readTargetFiles } from "../workspace/targetFiles.js";
+import { inspectTargetFiles } from "../workspace/targetFiles.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -151,10 +151,49 @@ export function partitionRepairFiles<T extends { path: string }>(
   const allowed = new Set([...allowedPaths].map(norm));
   const accepted: T[] = [];
   const refusals: Array<{ path: string; reason: string }> = [];
-  const forbiddenRepairPath = (path: string) =>
-    /(^|\/)(__tests__)(\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(^|\/)(?:package\.json|(?:npm-shrinkwrap|package-lock)\.json|pnpm-lock\.yaml|yarn\.lock)$|(^|\/)(?:vitest|jest|playwright|vite)(?:\.[\w-]+)?\.config\.[cm]?[jt]s$/i.test(
-      path,
-    );
+  const forbiddenRepairPath = (path: string) => {
+    const base = path.split("/").pop()?.toLowerCase() ?? "";
+    const testPath =
+      /(^|\/)(?:__tests__|tests?|spec)(\/|$)/i.test(path) ||
+      /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(path) ||
+      /(^|\/)test_[^/]+\.py$/i.test(path) ||
+      /_test\.py$/i.test(path);
+    const protectedBuildFile = new Set([
+      "package.json",
+      "package-lock.json",
+      "npm-shrinkwrap.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "requirements.txt",
+      "requirements-dev.txt",
+      "pyproject.toml",
+      "setup.py",
+      "setup.cfg",
+      "pipfile",
+      "pipfile.lock",
+      "poetry.lock",
+      "pytest.ini",
+      "tox.ini",
+      ".coveragerc",
+      "go.mod",
+      "go.sum",
+      "cargo.toml",
+      "cargo.lock",
+      "pom.xml",
+      "build.gradle",
+      "build.gradle.kts",
+      "composer.json",
+      "composer.lock",
+    ]).has(base);
+    const toolConfig =
+      /(^|\/)(?:vitest|jest|playwright|vite)(?:\.[\w-]+)?\.config\.[cm]?[jt]s$/i.test(
+        path,
+      ) ||
+      /(^|\/)(?:tsconfig(?:\.[\w-]+)?\.json|eslint\.config\.[cm]?[jt]s)$/i.test(
+        path,
+      );
+    return testPath || protectedBuildFile || toolConfig;
+  };
   for (const file of proposed) {
     const path = norm(file.path);
     if (!allowed.has(path)) {
@@ -337,6 +376,7 @@ async function executeRun(
     options: args.options,
     files: [],
     writeRefusals: [],
+    blockingWriteRefusals: [],
     testWriterComplete: false,
     commandOutput: "",
     testsExecuted: false,
@@ -503,19 +543,28 @@ async function executeRun(
   const writeRefusals: Array<{ path: string; reason: string }> = [
     ...checkpoint.writeRefusals,
   ];
-  const recordWriteRefusals = (
+  const blockingWriteRefusals: Array<{ path: string; reason: string }> = [
+    ...checkpoint.blockingWriteRefusals,
+  ];
+  const appendUniqueRefusals = (
+    ledger: Array<{ path: string; reason: string }>,
     incoming: Array<{ path: string; reason: string }>,
   ) => {
-    const known = new Set(
-      writeRefusals.map((item) => `${item.path}\0${item.reason}`),
-    );
+    const known = new Set(ledger.map((item) => `${item.path}\0${item.reason}`));
     for (const item of incoming) {
       const key = `${item.path}\0${item.reason}`;
       if (!known.has(key)) {
         known.add(key);
-        writeRefusals.push(item);
+        ledger.push(item);
       }
     }
+  };
+  const recordWriteRefusals = (
+    incoming: Array<{ path: string; reason: string }>,
+    blocking: boolean,
+  ) => {
+    appendUniqueRefusals(writeRefusals, incoming);
+    if (blocking) appendUniqueRefusals(blockingWriteRefusals, incoming);
   };
 
   /**
@@ -658,10 +707,11 @@ async function executeRun(
     }
     run.files = summarize([...files.values()]);
     saveRunFiles(run.id, [...files.values()]);
-    recordWriteRefusals(refusals);
+    recordWriteRefusals(refusals, stage !== "repair");
     await checkpointNow({
       files: [...files.values()],
       writeRefusals: [...writeRefusals],
+      blockingWriteRefusals: [...blockingWriteRefusals],
     });
     return { candidates: incoming.length, written, refusals };
   };
@@ -683,9 +733,12 @@ async function executeRun(
         "repair",
       );
     }
-    recordWriteRefusals(scoped.refusals);
+    recordWriteRefusals(scoped.refusals, false);
     if (scoped.refusals.length > 0) {
-      await checkpointNow({ writeRefusals: [...writeRefusals] });
+      await checkpointNow({
+        writeRefusals: [...writeRefusals],
+        blockingWriteRefusals: [...blockingWriteRefusals],
+      });
     }
     const applied = scoped.accepted.length
       ? await writeBuild(workspacePath, scoped.accepted, "repair")
@@ -1091,17 +1144,26 @@ async function executeRun(
       // of reconstructed from its filename.
       const baseContext =
         extendMode && repoAnalysis ? buildExistingContext(repoAnalysis) : undefined;
-      const existingContext =
+      const targetInspection =
         baseContext && workspacePath
-          ? {
-              ...baseContext,
-              targetFiles: readTargetFiles(
-                workspacePath,
-                plan,
-                checkpoint.idea ?? "",
-                repoAnalysis?.fileTree ?? [],
-              ),
-            }
+          ? inspectTargetFiles(
+              workspacePath,
+              plan,
+              checkpoint.idea ?? "",
+              repoAnalysis?.fileTree ?? [],
+            )
+          : null;
+      if (targetInspection?.omitted.length) {
+        throw new Error(
+          `Cannot safely build: ${targetInspection.omitted.length} existing target file(s) ` +
+            `could not be read in full (${targetInspection.omitted
+              .map((item) => `${item.path}: ${item.reason}`)
+              .join("; ")}).`,
+        );
+      }
+      const existingContext =
+        baseContext && targetInspection
+          ? { ...baseContext, targetFiles: targetInspection.files }
           : baseContext;
       if (existingContext?.targetFiles?.length) {
         log(
@@ -1310,7 +1372,9 @@ async function executeRun(
     if (!checkpoint.testWriterComplete) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "test_writer");
-      let testPlan = checkpoint.testPlan;
+      let testPlan = checkpoint.testPlan?.files.length
+        ? checkpoint.testPlan
+        : undefined;
       if (!testPlan) {
         log("model_call", `Test Writer agent (${review.name})…`);
         testPlan = await testWriterAgent(
@@ -1327,13 +1391,13 @@ async function executeRun(
                 .join("\n\n") ?? "",
           },
         );
-        await checkpointNow({ testPlan });
       }
       if (!testPlan.files.length && !run.demo) {
         throw new Error(
           "Test Writer produced no change-specific tests; a live build cannot be verified or delivered.",
         );
       }
+      await checkpointNow({ testPlan });
       if (testPlan.files.length) {
         const testTally = await writeBuild(
           workspacePath,
@@ -1632,14 +1696,18 @@ async function executeRun(
     finishStage(run, "final_review", "completed");
 
     const verifiedOutcome =
-      qa.passed && testStatus === "passing" && writeRefusals.length === 0;
+      qa.passed &&
+      testStatus === "passing" &&
+      blockingWriteRefusals.length === 0;
     if (!run.demo && !verifiedOutcome) {
       run.status = "failed";
-      run.resumable = true;
+      // Repair loops are already exhausted by this point. Replaying the same
+      // checkpoint would skip verification/QA and fail identically.
+      run.resumable = false;
       run.error = redactSecrets(
         `Verification gate failed: QA=${qa.passed ? "passed" : "failed"}, ` +
-          `tests=${testStatus}, refusedWrites=${writeRefusals.length}. ` +
-          "No commit, branch push, PR, or release was attempted.",
+          `tests=${testStatus}, refusedRequiredWrites=${blockingWriteRefusals.length}. ` +
+          "No commit, branch push, PR, or release was attempted. Start a new run after correcting the cause.",
       );
       const heldEv = await appendAuditEvent({
         type: "run.verification.held",
@@ -1649,7 +1717,7 @@ async function executeRun(
       await persistAttribution(testStatus, heldEv.seq);
       log(
         "warning",
-        `${run.error} The checkpoint was retained so the run can be repaired and resumed.`,
+        run.error,
       );
       await checkpointNow();
       await flush();
@@ -1674,7 +1742,7 @@ async function executeRun(
         verification: {
           qaPassed: qa.passed,
           testStatus,
-          writeRefusals: writeRefusals.length,
+          writeRefusals: blockingWriteRefusals.length,
         },
       });
       run.destination = {
@@ -1867,7 +1935,11 @@ async function executeRun(
       outcomeOk
         ? `Run finished — ${spec.appName} passed its checks.${releaseNote} Workspace: ${workspacePath}.`
         : `Run finished WITHOUT passing its checks (${
-            testStatus === "passing" ? "QA flagged blockers" : `tests ${testStatus}`
+            blockingWriteRefusals.length > 0
+              ? `${blockingWriteRefusals.length} required write(s) refused`
+              : qa.passed
+                ? `tests ${testStatus}`
+                : "QA flagged blockers"
           }) — ${spec.appName} is NOT ready.${releaseNote} Workspace: ${workspacePath}.`,
     );
     await flush();

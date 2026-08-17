@@ -5,7 +5,7 @@ import {
   type FileBuild,
 } from "../../shared/schemas.js";
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
-import { renderBuildCode } from "./codeContext.js";
+import { renderBuildCodeContext } from "./codeContext.js";
 
 export interface TestWriterContext {
   manifestExcerpt?: string;
@@ -18,6 +18,12 @@ export async function testWriterAgent(
   build: FileBuild,
   context: TestWriterContext = {},
 ): Promise<TestPlan> {
+  const codeContext = renderBuildCodeContext(build);
+  if (!codeContext.complete) {
+    throw new Error(
+      `Test Writer context incomplete; cannot safely test omitted files: ${codeContext.omittedPaths.join(", ")}`,
+    );
+  }
   return deps.provider.generateJson<TestPlan>({
     system:
       `${SYSTEM_PREAMBLE}\nYou are the TEST WRITER agent. Exercise the real modules shown in ` +
@@ -34,7 +40,7 @@ HOST MANIFEST EXCERPT:
 ${context.manifestExcerpt || "(not supplied — use only imports already present in CURRENT CODE)"}
 
 CURRENT CODE:
-${renderBuildCode(build)}
+${codeContext.text}
 
 Return a testPlan string and test files (path, purpose, contents). Use relative paths only.
 The test plan must name which acceptance criterion each test proves.`,

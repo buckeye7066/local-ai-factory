@@ -41,6 +41,15 @@ export const FactoryCheckpointSchema = z.object({
       }),
     )
     .default([]),
+  /** Only refused required builder/test writes block delivery permanently. */
+  blockingWriteRefusals: z
+    .array(
+      z.object({
+        path: z.string(),
+        reason: z.string(),
+      }),
+    )
+    .default([]),
   testWriterComplete: z.boolean().default(false),
   commandOutput: z.string().default(""),
   /**

@@ -3,7 +3,11 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { applyEdits, resolveGeneratedWrite } from "../workspace/applyEdits.js";
-import { mentionedPaths, readTargetFiles } from "../workspace/targetFiles.js";
+import {
+  inspectTargetFiles,
+  mentionedPaths,
+  readTargetFiles,
+} from "../workspace/targetFiles.js";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -109,6 +113,29 @@ describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
     expect(res.reason).toMatch(/more than half|whole-file rewrite/i);
   });
 
+  it("refuses whole-file replacement for source extensions outside JS/TS", () => {
+    const root = workspace({ "native/main.cpp": "int main(){ return 0; }" });
+    const res = resolveGeneratedWrite(root, "native/main.cpp", {
+      contents: "int main(){ launchMissiles(); }",
+      edits: [],
+    });
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/whole-file replacement/i);
+  });
+
+  it("bounds replacement text and cross-edit block-comment tricks", () => {
+    const original = "a".repeat(1_000);
+    expect(
+      applyEdits(original, [{ find: "aaaaa", replace: "b".repeat(600) }]),
+    ).toMatchObject({ ok: false });
+    expect(
+      applyEdits("const a = 1;\nconst b = 2;\n", [
+        { find: "const a = 1;", replace: "const a = 1; /*" },
+        { find: "const b = 2;", replace: "*/ const b = 2;" },
+      ]),
+    ).toMatchObject({ ok: false });
+  });
+
   it("accepts edits against the file's REAL contents", () => {
     const root = workspace({ "src/App.jsx": AUTH_JS });
     const res = resolveGeneratedWrite(root, "src/App.jsx", {
@@ -210,6 +237,28 @@ describe("targetFiles — the builder is given real code to quote", () => {
       readTargetFiles(root, plan, "", ["src/App.jsx"]),
     ).not.toThrow();
     expect(readTargetFiles(root, plan, "", ["src/App.jsx"])).toEqual([]);
+  });
+
+  it("reports an existing target that cannot fit safely in context", () => {
+    const root = workspace({ "src/large.ts": "x".repeat(24_001) });
+    const plan = {
+      tasks: [
+        {
+          order: 1,
+          category: "frontend" as const,
+          title: "Update large file",
+          detail: "Edit src/large.ts",
+        },
+      ],
+    };
+    const inspected = inspectTargetFiles(root, plan, "", ["src/large.ts"]);
+    expect(inspected.files).toEqual([]);
+    expect(inspected.omitted).toEqual([
+      {
+        path: "src/large.ts",
+        reason: "file exceeds the per-file context limit",
+      },
+    ]);
   });
 
   it("skips files the plan names that do not exist yet (those get created)", () => {

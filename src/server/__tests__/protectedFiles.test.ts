@@ -146,6 +146,15 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     expect(verdict.refused).toBe(false);
   });
 
+  it("recognizes default exports but ignores exports hidden in comments", () => {
+    expect(exportedSymbols("export default function App(){}")).toContain(
+      "default",
+    );
+    expect(
+      exportedSymbols("/* export default function App(){} */"),
+    ).not.toContain("default");
+  });
+
   it("refuses a new shadow extension variant beside tracked source", () => {
     const repo = gitWorkspace({
       "App.jsx": "export default function App(){ return null; }",

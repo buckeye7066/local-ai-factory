@@ -307,6 +307,25 @@ describe("relevantTestStatus — a green suite that never ran this run's tests p
     expect(v.uncoveredTestFiles).toEqual(["apps/new/src/App.test.tsx"]);
   });
 
+  it("recognizes Python tests and requires their full relative path token", () => {
+    expect(
+      relevantTestStatus(
+        true,
+        0,
+        ["tests/test_profile.py"],
+        "tests/test_profile.py::test_reload PASSED",
+      ).status,
+    ).toBe("passing");
+    expect(
+      relevantTestStatus(
+        true,
+        0,
+        ["src/App.test.tsx"],
+        "packages/legacy/src/App.test.tsx (3 tests)",
+      ).status,
+    ).toBe("unknown");
+  });
+
   it("never upgrades a failure, and leaves runs that wrote no tests alone", () => {
     expect(relevantTestStatus(true, 1, written, backendOutput).status).toBe("failing");
     expect(relevantTestStatus(false, null, written, "").status).toBe("unknown");

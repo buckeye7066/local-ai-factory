@@ -13,13 +13,17 @@ import { safeResolve } from "./fileWriter.js";
  * the real text is what lets the work actually happen.
  */
 
-const MAX_FILES = 12;
 const MAX_BYTES_PER_FILE = 24_000;
 const MAX_TOTAL_BYTES = 120_000;
 const JS_TS_EXT_RX = /\.[cm]?[jt]sx?$/i;
 
 function jsTsStem(path: string): string | null {
   return JS_TS_EXT_RX.test(path) ? path.replace(JS_TS_EXT_RX, "") : null;
+}
+
+export interface TargetFileInspection {
+  files: { path: string; contents: string }[];
+  omitted: Array<{ path: string; reason: string }>;
 }
 
 /** Path-shaped tokens mentioned anywhere in the plan's tasks. */
@@ -44,13 +48,14 @@ export function mentionedPaths(plan: TaskPlan, ideaText = ""): string[] {
  * names but that does not exist is simply skipped — it is a file the build will
  * CREATE, and creation legitimately supplies full contents.
  */
-export function readTargetFiles(
+export function inspectTargetFiles(
   workspacePath: string,
   plan: TaskPlan,
   ideaText = "",
   fileTree: string[] = [],
-): { path: string; contents: string }[] {
+): TargetFileInspection {
   const out: { path: string; contents: string }[] = [];
+  const omitted: Array<{ path: string; reason: string }> = [];
   let budget = MAX_TOTAL_BYTES;
 
   const candidates = mentionedPaths(plan, ideaText);
@@ -88,17 +93,33 @@ export function readTargetFiles(
     if (basenameHits.length === 1) resolved.add(basenameHits[0]!);
   }
 
-  for (const rel of [...resolved].slice(0, MAX_FILES)) {
+  for (const rel of resolved) {
     try {
       const abs = safeResolve(workspacePath, rel);
       const size = statSync(abs).size;
-      if (size > MAX_BYTES_PER_FILE || size > budget) continue;
+      if (size > MAX_BYTES_PER_FILE) {
+        omitted.push({ path: rel, reason: "file exceeds the per-file context limit" });
+        continue;
+      }
+      if (size > budget) {
+        omitted.push({ path: rel, reason: "total target-file context budget exhausted" });
+        continue;
+      }
       const contents = readFileSync(abs, "utf8");
       budget -= contents.length;
       out.push({ path: rel, contents });
     } catch {
-      /* unreadable — skip, the builder simply won't be shown it */
+      omitted.push({ path: rel, reason: "file could not be read safely" });
     }
   }
-  return out;
+  return { files: out, omitted };
+}
+
+export function readTargetFiles(
+  workspacePath: string,
+  plan: TaskPlan,
+  ideaText = "",
+  fileTree: string[] = [],
+): { path: string; contents: string }[] {
+  return inspectTargetFiles(workspacePath, plan, ideaText, fileTree).files;
 }

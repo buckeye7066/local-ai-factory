@@ -1,5 +1,8 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import { join, relative } from "node:path";
 
 /**
@@ -107,14 +110,18 @@ function clip(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "\n…(truncated)" : s;
 }
 
-function gitTrackedFiles(rootPath: string): string[] | null {
+async function gitWorkspaceFiles(rootPath: string): Promise<string[] | null> {
   try {
-    const output = execFileSync("git", ["-C", rootPath, "ls-files", "-z"], {
-      encoding: "utf8",
-      timeout: 30_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    const files = output
+    const { stdout } = await execFileAsync(
+      "git",
+      ["-C", rootPath, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    );
+    const files = String(stdout)
       .split("\0")
       .map((path) => path.replace(/\\/g, "/"))
       .filter(Boolean);
@@ -128,7 +135,8 @@ export async function analyzeExistingCodebase(rootPath: string): Promise<RepoAna
   // Extend workspaces are git clones. Their tracked index is complete and
   // deterministic, unlike a depth-first directory walk capped at 1,500 items
   // that can fill up on tooling/docs before ever seeing src/App.jsx.
-  const fileTree = gitTrackedFiles(rootPath) ?? (await walk(rootPath, 1500));
+  const fileTree =
+    (await gitWorkspaceFiles(rootPath)) ?? (await walk(rootPath, 1500));
 
   const manifestExcerpts: { path: string; excerpt: string }[] = [];
   let detectedStack: string[] = [];

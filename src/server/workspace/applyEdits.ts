@@ -32,8 +32,10 @@ export function applyEdits(original: string, edits: FileEdit[]): EditOutcome {
   }
   let out = original;
   let quotedCharacters = 0;
+  let replacementCharacters = 0;
   for (const [i, edit] of edits.entries()) {
     quotedCharacters += edit.find.length;
+    replacementCharacters += edit.replace.length;
     if (quotedCharacters > original.length * 0.5) {
       return {
         ok: false,
@@ -42,6 +44,29 @@ export function applyEdits(original: string, edits: FileEdit[]): EditOutcome {
           "split the work into a smaller local change instead of disguising a whole-file rewrite",
       };
     }
+    const replacementLimit = Math.max(200, original.length * 0.5);
+    if (replacementCharacters > replacementLimit) {
+      return {
+        ok: false,
+        reason:
+          `edit ${i + 1}: replacement text exceeds the local-change budget — ` +
+          "split the work into smaller behavior-preserving edits",
+      };
+    }
+    const addedOpenComments =
+      (edit.replace.match(/\/\*/g)?.length ?? 0) -
+      (edit.find.match(/\/\*/g)?.length ?? 0);
+    const addedCloseComments =
+      (edit.replace.match(/\*\//g)?.length ?? 0) -
+      (edit.find.match(/\*\//g)?.length ?? 0);
+    if (addedOpenComments !== addedCloseComments) {
+      return {
+        ok: false,
+        reason:
+          `edit ${i + 1}: unbalanced block-comment delimiters can disable unrelated code`,
+      };
+    }
+
     const first = out.indexOf(edit.find);
     if (first === -1) {
       return {
@@ -126,25 +151,14 @@ export function resolveGeneratedWrite(
       : { contents: null, edited: true, reason: outcome.reason };
   }
 
-  // Existing SOURCE is never replaced wholesale. Named-export checks cannot
-  // protect default-export components, route gates, effects, state, or internal
-  // behavior. A caller must prove it read the file by quoting exact anchors.
-  if (/\.(?:[cm]?[jt]sx?|vue|svelte|py|rb|go|rs|java|cs|php)$/i.test(relPath)) {
-    return {
-      contents: null,
-      edited: true,
-      reason:
-        "whole-file replacement of existing source is refused — return anchored " +
-        "edits that quote the current file exactly",
-    };
-  }
-
-  if (!file.contents.trim()) {
-    return {
-      contents: null,
-      edited: true,
-      reason: "empty replacement for an existing file — nothing to write",
-    };
-  }
-  return { contents: file.contents, edited: true };
+  // Every existing text file is edit-only, regardless of language or extension.
+  // An allowlist inevitably leaves a destructive path for the next stack
+  // (.cpp, .swift, .kt, templates, configs, and so on).
+  return {
+    contents: null,
+    edited: true,
+    reason:
+      "whole-file replacement of an existing file is refused — return anchored " +
+      "edits that quote the current file exactly",
+  };
 }
