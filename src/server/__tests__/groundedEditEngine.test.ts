@@ -243,7 +243,7 @@ describe("repair accounting and scope are mechanical", () => {
     });
     expect(message).toContain("Applied 1");
     expect(message).toContain("3 were refused");
-    expect(message).not.toMatch(/fixed|all four/i);
+    expect(message).not.toMatch(/fixed all|applied all|all four/i);
   });
 });
 

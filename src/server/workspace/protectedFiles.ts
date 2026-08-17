@@ -194,7 +194,12 @@ export function assessProtectedHostWrite(
   // always an accidental shadow entrypoint (for example App.tsx beside the
   // host's real App.jsx). Imports keep resolving the tracked file while the
   // generated feature remains unreachable.
-  if (!isTracked && SOURCE_RX.test(norm)) {
+  if (
+    !isTracked &&
+    SOURCE_RX.test(norm) &&
+    !ROOT_CONFIG_RX.test(base) &&
+    !OTHER_ROOT_CONFIGS_RX.test(base)
+  ) {
     const stem = norm.replace(SOURCE_RX, "");
     const sibling = [...tracked].find(
       (path) =>
