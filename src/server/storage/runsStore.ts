@@ -45,6 +45,7 @@ const CHECKPOINTS_DIR = join(DATA_ROOT, "checkpoints");
 
 const memory = new Map<string, RunRecord>();
 const fileContents = new Map<string, FileContent[]>();
+const atomicReplaceQueues = new Map<string, Promise<void>>();
 
 async function ensureDirs() {
   await mkdir(STORE_DIR, { recursive: true });
@@ -127,6 +128,58 @@ async function safeStorePath(dir: string, id: string): Promise<string> {
 /** True when this platform can refuse to open a symlink at the final component. */
 const HAS_NOFOLLOW = typeof FS.O_NOFOLLOW === "number" && FS.O_NOFOLLOW !== 0;
 
+async function serializeAtomicReplace<T>(
+  path: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const prior = atomicReplaceQueues.get(path) ?? Promise.resolve();
+  let release!: () => void;
+  const turn = new Promise<void>((resolveTurn) => {
+    release = resolveTurn;
+  });
+  const queued = prior.catch(() => {}).then(() => turn);
+  atomicReplaceQueues.set(path, queued);
+
+  await prior.catch(() => {});
+  try {
+    return await work();
+  } finally {
+    release();
+    if (atomicReplaceQueues.get(path) === queued) atomicReplaceQueues.delete(path);
+  }
+}
+
+async function replaceFileAtomically(tempPath: string, path: string): Promise<void> {
+  await serializeAtomicReplace(path, async () => {
+    // Windows can transiently reject a replace while another process, virus
+    // scanner, or indexer has the destination open. Keep the commit atomic and
+    // bounded: retry only those platform errors, and never remove/truncate the
+    // previous generation first.
+    for (let attempt = 0; ; attempt += 1) {
+      const beforeCommit = await lstat(path).catch(() => null);
+      if (beforeCommit?.isSymbolicLink()) {
+        throw new Error(
+          `Refused: store target became a symlink before commit: ${path}`,
+        );
+      }
+
+      try {
+        await rename(tempPath, path);
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException)?.code;
+        const transientWindowsReplace =
+          process.platform === "win32" &&
+          (code === "EPERM" || code === "EACCES" || code === "EBUSY");
+        if (!transientWindowsReplace || attempt >= 7) throw error;
+        await new Promise<void>((resolveRetry) => {
+          setTimeout(resolveRetry, Math.min(5 * 2 ** attempt, 100));
+        });
+      }
+    }
+  });
+}
+
 /**
  * Atomically replace one store file.
  *
@@ -162,11 +215,7 @@ export async function writeFileContained(path: string, data: string): Promise<vo
     await fh.close();
     fh = null;
 
-    const beforeCommit = await lstat(path).catch(() => null);
-    if (beforeCommit?.isSymbolicLink()) {
-      throw new Error(`Refused: store target became a symlink before commit: ${path}`);
-    }
-    await rename(tempPath, path);
+    await replaceFileAtomically(tempPath, path);
 
     // Best-effort directory fsync makes the rename durable on POSIX. Some
     // platforms (notably Windows) do not allow syncing directory handles.
