@@ -156,8 +156,15 @@ describe("verificationCommandsForWorkspace", () => {
     expect(directIndex).toBeLessThan(hostIndex);
     expect(plan.commands[directIndex]).toMatchObject({
       bin: "npx",
-      args: ["--no-install", "vitest", "run", "src/App.test.tsx"],
+      args: [
+        "--no-install",
+        "vitest",
+        "run",
+        "src/App.test.tsx",
+        "--reporter=json",
+      ],
       isTest: true,
+      runner: "vitest",
     });
     expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(true);
   });
@@ -184,6 +191,31 @@ describe("verificationCommandsForWorkspace", () => {
     expect(plan.commands.some((command) => command.isBrowser)).toBe(false);
     expect(plan.incomplete.map((item) => item.reason).join("\n")).toMatch(
       /Playwright|browser/i,
+    );
+  });
+
+  it("does not trust a Playwright harness first observed after builder writes", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run", build: "vite build" },
+        devDependencies: { vitest: "3", "@playwright/test": "1" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+    writeFileSync(join(path, "playwright.config.ts"), "export default {};\n");
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [{
+        path: "tests/profile.spec.ts",
+        contents: "import { test, expect } from '@playwright/test';",
+      }],
+      uiAcceptanceRequired: true,
+      trustedBrowserHarness: false,
+    });
+    expect(plan.commands.some((command) => command.isBrowser)).toBe(false);
+    expect(plan.incomplete.map((item) => item.reason).join("\n")).toMatch(
+      /trusted pre-build/i,
     );
   });
 
@@ -225,6 +257,9 @@ describe("Python command sandbox", () => {
   it("allows only the fixed verification entrypoints", () => {
     expect(isAllowed("python", ["-m", "compileall", "-q", "."])).toBe(true);
     expect(isAllowed("python", ["-m", "pytest", "-q"])).toBe(true);
+    expect(
+      isAllowed("python", ["-m", "pytest", "-vv", "tests/calculator_test.py"]),
+    ).toBe(true);
     expect(isAllowed("python3", ["-m", "unittest", "discover"])).toBe(true);
     expect(
       isAllowed("python", [
@@ -246,6 +281,27 @@ describe("Python command sandbox", () => {
       false,
     );
   });
+  it("directly selects idiomatic *_test.py files with parseable verbose output", () => {
+    const root = workspace();
+    writeFileSync(join(root, "pyproject.toml"), "[tool.pytest.ini_options]\n");
+    const plan = verificationPlanForWorkspace(root, {
+      generatedTests: [{
+        path: "tests/calculator_test.py",
+        contents: "def test_add():\n    assert 1 + 2 == 3\n",
+      }],
+    });
+    expect(
+      plan.commands.find(
+        (cmd) => cmd.directTestPath === "tests/calculator_test.py",
+      ),
+    ).toMatchObject({
+      bin: "python",
+      args: ["-m", "pytest", "-vv", "tests/calculator_test.py"],
+      runner: "pytest",
+    });
+    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(true);
+  });
+
   it("never lets a workflow smoke replace the full pytest suite", () => {
     const root = workspace();
     mkdirSync(join(root, ".github", "workflows"), { recursive: true });

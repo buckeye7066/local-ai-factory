@@ -35,7 +35,10 @@ import {
   withVerificationReceipt,
 } from "../workspace/verificationReceipt.js";
 import { runCommand } from "../workspace/commandRunner.js";
-import { verificationPlanForWorkspace } from "../workspace/verificationCommands.js";
+import {
+  hasPlaywrightHarness,
+  verificationPlanForWorkspace,
+} from "../workspace/verificationCommands.js";
 import {
   enforceWiredIntegration,
   findUnwiredNewFiles,
@@ -78,7 +81,11 @@ import {
 } from "./cancellation.js";
 import { runRepairLoop } from "./repairLoop.js";
 import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
-import { assessGeneratedTests } from "./acceptanceGate.js";
+import {
+  assessExecutedCoverage,
+  assessGeneratedTests,
+} from "./acceptanceGate.js";
+import { parseDirectTestEvidence } from "./directTestEvidence.js";
 import { groundFinalReport } from "./reportGrounding.js";
 import {
   foldTestExit,
@@ -465,11 +472,12 @@ async function executeRun(
   const { config, secrets } = args;
   const { flush, log } = controller(run);
   let checkpoint: FactoryCheckpoint = restored ?? {
-    schemaVersion: 2,
+    schemaVersion: 3,
     runId: run.id,
     idea: args.idea,
     options: args.options,
     files: [],
+    baselineBrowserHarness: false,
     builderExistingPaths: [],
     hostFileBaselines: {},
     writeRefusals: [],
@@ -1021,6 +1029,7 @@ async function executeRun(
         });
         log("info", `Work will be saved to: ${describeDestination(run.destination)}`);
         repoAnalysis = await analyzeExistingCodebase(ingested.path);
+        const baselineBrowserHarness = hasPlaywrightHarness(ingested.path);
         log("info", `Detected stack: ${repoAnalysis.stackSummary}`);
 
         // Multi-program combination: every ADDITIONAL reference — a git repo
@@ -1050,6 +1059,7 @@ async function executeRun(
             additionalRepoSources,
             goals: goalsForSpec,
           },
+          baselineBrowserHarness,
         });
       } else {
         log("info", `Intake: "${run.idea}"`);
@@ -1420,10 +1430,15 @@ async function executeRun(
             errors: ["test plan is unavailable"],
             uiAcceptanceRequired: false,
             browserTestPaths: [],
+            requirements: [],
           };
       const verificationPlan = verificationPlanForWorkspace(workspacePath, {
         generatedTests: checkpoint.testPlan?.files ?? [],
         uiAcceptanceRequired: acceptance.uiAcceptanceRequired,
+        // Extend runs may use only the harness observed before generated writes.
+        // Greenfield code cannot certify itself with a model-authored harness.
+        trustedBrowserHarness:
+          extendMode && checkpoint.baselineBrowserHarness === true,
       });
       verification.incomplete = [
         ...acceptance.errors.map((reason) => ({
@@ -1454,7 +1469,7 @@ async function executeRun(
           { bin: cmd.bin, args: cmd.args, cwd: workspacePath },
           {
             workspaceRoot: config.workspaceRoot,
-            // Real execution by default; hermetic tests disable it via config.
+            // Explicit opt-in only; the command runner is not an OS sandbox.
             allowScriptExecution: config.allowUntrustedScripts,
             // Force-kill an in-flight child if the run is cancelled mid-command.
             shouldCancel: () => isCancelRequested(run.id),
@@ -1476,14 +1491,35 @@ async function executeRun(
         );
         if (res.executed) {
           commandOutput += `\n$ ${res.command}\n${res.stdout}\n${res.stderr}`;
+          const parsedDirect =
+            cmd.directTestPath && cmd.runner
+              ? parseDirectTestEvidence(cmd.runner, res.stdout, res.stderr)
+              : undefined;
+          const directEvidenceValid =
+            parsedDirect === undefined
+              ? undefined
+              : res.exitCode === 0 && parsedDirect.valid;
           verification.executed.push({
             command: res.command,
             exitCode: res.exitCode,
             isTest: cmd.isTest,
             directTestPath: cmd.directTestPath,
             isBrowser: cmd.isBrowser ?? false,
+            runner: cmd.runner,
+            directEvidenceValid,
+            passedCount: parsedDirect?.passedCount,
+            skippedCount: parsedDirect?.skippedCount,
+            passedTestNames: parsedDirect?.passedTestNames,
             outputTail: `${res.stdout}\n${res.stderr}`,
           });
+          if (parsedDirect && !directEvidenceValid) {
+            verification.incomplete!.push({
+              command: res.command,
+              reason:
+                parsedDirect.reason ??
+                `direct ${cmd.runner} test did not exit successfully`,
+            });
+          }
           if (cmd.isTest) {
             testsExecuted = true;
             // A RED TEST SIGNAL IS STICKY. The old condition was
@@ -1511,6 +1547,17 @@ async function executeRun(
           }
         },
       );
+      if (checkpoint.testPlan) {
+        for (const reason of assessExecutedCoverage(
+          checkpoint.testPlan,
+          verification.executed,
+        )) {
+          verification.incomplete!.push({
+            command: "acceptance coverage",
+            reason,
+          });
+        }
+      }
       if (!commandReceipt.ok) {
         verification.incomplete!.push({
           command: "verification tree",
@@ -1717,8 +1764,16 @@ async function executeRun(
       // binding). Classification is deterministic signature matching over the
       // EXECUTED commands' real output — never model judgment.
       const envFailure = qa.passed ? null : classifyEnvironmentFailure(verification);
+      const incompleteVerification = verification.incomplete?.length ?? 0;
       if (qa.passed) {
         log("success", "No high-severity issues — repair loop skipped.");
+        finishStage(run, "repair", "skipped");
+      } else if (!run.demo && incompleteVerification > 0) {
+        log(
+          "warning",
+          `Verification is incomplete in ${incompleteVerification} required place(s); file repair cannot manufacture missing execution evidence, so no paid repair loop will run.`,
+          "repair",
+        );
         finishStage(run, "repair", "skipped");
       } else if (envFailure) {
         log(
@@ -1821,6 +1876,7 @@ async function executeRun(
         (entry) =>
           entry.isTest &&
           entry.exitCode === 0 &&
+          entry.directEvidenceValid === true &&
           typeof entry.directTestPath === "string",
       )
       .map((entry) => entry.directTestPath!);
@@ -1834,7 +1890,7 @@ async function executeRun(
     if (testRelevance.degraded) {
       log(
         "warning",
-        `Test verdict DEGRADED to "unknown": the executed test command exited 0 but its output never mentioned any test file written by this run (${testRelevance.uncoveredTestFiles.join(", ")}). A green suite that did not run this run's tests is not evidence for this run.`,
+        `Test verdict DEGRADED to "unknown": the host suite exited 0 but valid structured direct-runner evidence is missing for test file(s) written by this run (${testRelevance.uncoveredTestFiles.join(", ")}). A green suite that did not run this run's tests is not evidence for this run.`,
       );
     }
     let report = checkpoint.finalReport;

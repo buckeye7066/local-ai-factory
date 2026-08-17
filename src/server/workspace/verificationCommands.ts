@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { normalizeTestPath } from "./testPaths.js";
 
 export interface VerificationCommand {
   bin: string;
@@ -9,6 +10,8 @@ export interface VerificationCommand {
   directTestPath?: string;
   /** True only for a real browser-runner invocation. */
   isBrowser?: boolean;
+  /** Known local runner whose structured output the engine parses. */
+  runner?: "vitest" | "jest" | "playwright" | "pytest";
 }
 
 export interface VerificationPlan {
@@ -205,20 +208,6 @@ function pythonCommands(workspacePath: string): VerificationCommand[] {
   return commands;
 }
 
-function normalizedTestPath(raw: string): string | null {
-  const path = raw.replace(/\\/g, "/").replace(/^\.\//, "");
-  if (
-    !path ||
-    path.startsWith("/") ||
-    path.split("/").includes("..") ||
-    !/(?:\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]+\.py$|_test\.py$)/i.test(
-      path,
-    )
-  ) {
-    return null;
-  }
-  return path;
-}
 
 function dependencies(pkg: Record<string, unknown> | null): Set<string> {
   const out = new Set<string>();
@@ -244,6 +233,18 @@ function hasPlaywrightConfig(workspacePath: string): boolean {
 }
 
 /**
+ * Baseline trust signal. The orchestrator captures this before generated writes;
+ * an extend run may not self-author the harness that certifies its own UI.
+ */
+export function hasPlaywrightHarness(workspacePath: string): boolean {
+  const deps = dependencies(readPackage(workspacePath));
+  return (
+    (deps.has("@playwright/test") || deps.has("playwright")) &&
+    hasPlaywrightConfig(workspacePath)
+  );
+}
+
+/**
  * Full verification contract used by the orchestrator. Existing setup/host
  * checks remain, but each generated test is also selected directly by a known
  * local runner. Missing runners/harnesses are explicit incomplete evidence.
@@ -253,6 +254,8 @@ export function verificationPlanForWorkspace(
   input: {
     generatedTests?: GeneratedVerificationTest[];
     uiAcceptanceRequired?: boolean;
+    /** Captured before builder writes. False prevents a self-authored harness. */
+    trustedBrowserHarness?: boolean;
   } = {},
 ): VerificationPlan {
   const base = [
@@ -272,11 +275,10 @@ export function verificationPlanForWorkspace(
     .map((name) => packageScriptCommand(manager, name));
   const direct: VerificationCommand[] = [];
   const browserHarness =
-    (deps.has("@playwright/test") || deps.has("playwright")) &&
-    hasPlaywrightConfig(workspacePath);
+    input.trustedBrowserHarness ?? hasPlaywrightHarness(workspacePath);
 
   for (const generated of input.generatedTests ?? []) {
-    const path = normalizedTestPath(generated.path);
+    const path = normalizeTestPath(generated.path);
     if (!path) {
       incomplete.push({
         command: generated.path,
@@ -293,7 +295,7 @@ export function verificationPlanForWorkspace(
         incomplete.push({
           command: path,
           reason:
-            "generated browser test has no declared Playwright dependency and tracked root config",
+            "generated browser test has no trusted pre-build Playwright dependency and config",
         });
         continue;
       }
@@ -302,6 +304,7 @@ export function verificationPlanForWorkspace(
         args: ["--no-install", "playwright", "test", path, "--reporter=json"],
         isTest: true,
         isBrowser: true,
+        runner: "playwright",
         directTestPath: path,
       });
       continue;
@@ -309,8 +312,9 @@ export function verificationPlanForWorkspace(
     if (/\.py$/i.test(path)) {
       direct.push({
         bin: "python",
-        args: ["-m", "pytest", "-q", path],
+        args: ["-m", "pytest", "-vv", path],
         isTest: true,
+        runner: "pytest",
         directTestPath: path,
       });
       continue;
@@ -318,15 +322,17 @@ export function verificationPlanForWorkspace(
     if (deps.has("vitest") || String(scripts.test ?? "").includes("vitest")) {
       direct.push({
         bin: "npx",
-        args: ["--no-install", "vitest", "run", path],
+        args: ["--no-install", "vitest", "run", path, "--reporter=json"],
         isTest: true,
+        runner: "vitest",
         directTestPath: path,
       });
     } else if (deps.has("jest") || String(scripts.test ?? "").includes("jest")) {
       direct.push({
         bin: "npx",
-        args: ["--no-install", "jest", "--runInBand", path],
+        args: ["--no-install", "jest", "--runTestsByPath", path, "--json"],
         isTest: true,
+        runner: "jest",
         directTestPath: path,
       });
     } else {

@@ -110,6 +110,16 @@ describe("engine-owned npx verification grammar", () => {
         "vitest",
         "run",
         "src/App.test.tsx",
+        "--reporter=json",
+      ]),
+    ).toBe(true);
+    expect(
+      isAllowedNpxVerification([
+        "--no-install",
+        "jest",
+        "--runTestsByPath",
+        "src/App.test.tsx",
+        "--json",
       ]),
     ).toBe(true);
     expect(

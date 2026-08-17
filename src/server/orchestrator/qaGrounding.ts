@@ -32,6 +32,13 @@ export interface ExecutedCommandResult {
   directTestPath?: string;
   /** True only for a browser-runner invocation. */
   isBrowser?: boolean;
+  runner?: "vitest" | "jest" | "playwright" | "pytest";
+  /** True only when the runner produced parseable, non-skipped passing evidence. */
+  directEvidenceValid?: boolean;
+  passedCount?: number;
+  skippedCount?: number;
+  /** Exact titles reported passed by the structured direct runner. */
+  passedTestNames?: string[];
   /** Bounded tail of the command's stdout+stderr (evidence, not the model's memory of it). */
   outputTail: string;
 }

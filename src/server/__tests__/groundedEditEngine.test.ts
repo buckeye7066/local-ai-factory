@@ -345,9 +345,9 @@ describe("repair accounting and scope are mechanical", () => {
 });
 
 describe("checkpoint safety contract", () => {
-  it("retains refusal ledgers and rejects pre-fix version-1 checkpoints", () => {
+  it("retains refusal ledgers and rejects all pre-v3 checkpoints", () => {
     const base = {
-      schemaVersion: 2 as const,
+      schemaVersion: 3 as const,
       runId: crypto.randomUUID(),
       idea: "test",
       options: {},
@@ -364,9 +364,11 @@ describe("checkpoint safety contract", () => {
     expect(parsed.blockingWriteRefusals).toEqual([refusal]);
     expect(parsed.builderExistingPaths).toEqual([]);
     expect(parsed.hostFileBaselines).toEqual({});
-    expect(() =>
-      FactoryCheckpointSchema.parse({ ...base, schemaVersion: 1 }),
-    ).toThrow();
+    for (const schemaVersion of [1, 2]) {
+      expect(() =>
+        FactoryCheckpointSchema.parse({ ...base, schemaVersion }),
+      ).toThrow();
+    }
   });
 });
 

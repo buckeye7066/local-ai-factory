@@ -343,8 +343,21 @@ export const FileBuildSchema = z.object({
 });
 export type FileBuild = z.infer<typeof FileBuildSchema>;
 
+export const TestCoverageSchema = z.object({
+  /** Stable engine-assigned user-flow or acceptance-criterion id (UF-n / AC-n). */
+  requirementId: z.string(),
+  /** Exact generated test path selected by a direct runner command. */
+  testPath: z.string(),
+  /** Exact active test title that the structured runner must report passed. */
+  testName: z.string(),
+  kind: z.enum(["unit", "integration", "browser"]),
+});
+export type TestCoverage = z.infer<typeof TestCoverageSchema>;
+
 export const TestPlanSchema = z.object({
   testPlan: z.string(),
+  /** Prose is diagnostic only; this mapping is the executable acceptance contract. */
+  coverage: z.array(TestCoverageSchema).optional(),
   files: z
     .array(
       z.object({

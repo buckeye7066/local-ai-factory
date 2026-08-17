@@ -1,6 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
+import {
+  isJavascriptTestPath,
+  isPythonTestPath,
+} from "./testPaths.js";
 
 /**
  * commandRunner.ts — conservative command execution for UNTRUSTED generated
@@ -11,9 +15,9 @@ import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
  *    inside a workspace directory (never the project root).
  *  - SCRIPT GATE: any allowlisted command is refused unless
  *    `allowScriptExecution` is enabled — including dependency installs. The
- *    server enables it by default (real execution is the product default,
- *    owner order 2026-08-13; dry-run mode was removed the same day); hermetic
- *    tests leave it off so they never spawn package managers. An install is
+ *    server keeps it disabled by default because cwd containment is not an OS
+ *    sandbox. An owner may opt in only when Factory Deck itself runs inside a
+ *    disposable container/VM with a workspace-only writable mount. An install is
  *    NOT safe by itself: a generated `.pnpmfile.cjs` runs project-controlled
  *    code during resolution, and `--ignore-scripts` does NOT disable it. So
  *    installs are gated with everything else, and when executed they
@@ -71,16 +75,8 @@ const ALLOWLIST: ReadonlyArray<readonly [string, string]> = [
 /** Python entrypoints Factory Deck itself may schedule for verification. */
 const PYTHON_BINS = new Set(["python", "python3"]);
 
-const DIRECT_PYTHON_TEST =
-  /^(?:[A-Za-z0-9_.-]+\/)*test_[A-Za-z0-9_.-]+\.py$/;
-
 function isSafeDirectPythonTest(arg: string): boolean {
-  const normalized = arg.replace(/\\/g, "/");
-  return (
-    !normalized.startsWith("/") &&
-    !normalized.split("/").includes("..") &&
-    DIRECT_PYTHON_TEST.test(normalized)
-  );
+  return isPythonTestPath(arg);
 }
 
 function isAllowedPython(args: string[]): boolean {
@@ -95,11 +91,14 @@ function isAllowedPython(args: string[]): boolean {
   ) {
     return true;
   }
+  if (module === "pytest" && args.length === 3 && args[2] === "-q") {
+    return true;
+  }
   if (
     module === "pytest" &&
-    (args.length === 3 || args.length === 4) &&
-    args[2] === "-q" &&
-    (args.length === 3 || isSafeDirectPythonTest(args[3]!))
+    args.length === 4 &&
+    (args[2] === "-q" || args[2] === "-vv") &&
+    isSafeDirectPythonTest(args[3]!)
   ) {
     return true;
   }
@@ -123,16 +122,8 @@ function isAllowedPython(args: string[]): boolean {
   );
 }
 
-const DIRECT_JS_TEST =
-  /^(?:[A-Za-z0-9_.@-]+\/)*(?:[A-Za-z0-9_.-]+\.)?(?:test|spec)\.[cm]?[jt]sx?$/;
-
 function isSafeDirectJsTest(arg: string): boolean {
-  const normalized = arg.replace(/\\/g, "/");
-  return (
-    !normalized.startsWith("/") &&
-    !normalized.split("/").includes("..") &&
-    DIRECT_JS_TEST.test(normalized)
-  );
+  return isJavascriptTestPath(arg);
 }
 
 /** Engine-authored local-runner forms only; npx may never download a package. */
@@ -147,16 +138,18 @@ export function isAllowedNpxVerification(args: string[]): boolean {
   }
   if (tool === "vitest") {
     return (
-      args.length === 4 &&
+      args.length === 5 &&
       args[2] === "run" &&
-      isSafeDirectJsTest(args[3]!)
+      isSafeDirectJsTest(args[3]!) &&
+      args[4] === "--reporter=json"
     );
   }
   if (tool === "jest") {
     return (
-      args.length === 4 &&
-      args[2] === "--runInBand" &&
-      isSafeDirectJsTest(args[3]!)
+      args.length === 5 &&
+      args[2] === "--runTestsByPath" &&
+      isSafeDirectJsTest(args[3]!) &&
+      args[4] === "--json"
     );
   }
   if (tool === "playwright") {
@@ -393,8 +386,8 @@ export interface RunCommandOptions {
   /**
    * Approval to execute model-authored scripts/binaries (test, build, run,
    * typecheck, npx). The server passes config.allowUntrustedScripts, which
-   * defaults to TRUE (real execution is the product default); hermetic tests
-   * leave it unset/false so they never spawn package managers.
+   * defaults to FALSE because this module is not an OS sandbox. Enable only
+   * when the whole Factory Deck process is externally sandboxed.
    */
   allowScriptExecution?: boolean;
   /**

@@ -59,7 +59,7 @@ describe("durable checkpoint continuation", () => {
     };
     await store.saveRun(run);
     await store.saveRunCheckpoint({
-      schemaVersion: 2,
+      schemaVersion: 3,
       runId: id,
       idea: "Build a checkpoint proof app",
       options: { demo: true },
@@ -162,7 +162,7 @@ describe("durable checkpoint continuation", () => {
     };
     await store.saveRun(run);
     await store.saveRunCheckpoint({
-      schemaVersion: 2,
+      schemaVersion: 3,
       runId: id,
       idea: "Build a cancel-resume proof app",
       options: { demo: true },
@@ -239,7 +239,7 @@ describe("durable checkpoint continuation", () => {
     };
     await store.saveRun(run);
     await store.saveRunCheckpoint({
-      schemaVersion: 2,
+      schemaVersion: 3,
       runId: id,
       idea: run.idea,
       options: { demo: true },

@@ -20,7 +20,7 @@ import {
  * outputs required to continue without replaying completed provider calls.
  */
 export const FactoryCheckpointSchema = z.object({
-  schemaVersion: z.literal(2),
+  schemaVersion: z.literal(3),
   runId: RunIdSchema,
   idea: z.string(),
   options: RunOptionsSchema,
@@ -30,6 +30,8 @@ export const FactoryCheckpointSchema = z.object({
   research: ResearchFindingsSchema.optional(),
   plan: TaskPlanSchema.optional(),
   build: FileBuildSchema.optional(),
+  /** Captured before builder writes; generated code cannot self-author its browser authority. */
+  baselineBrowserHarness: z.boolean().optional(),
   /** Existing host paths shown in full to the builder; all other host edits are refused. */
   builderExistingPaths: z.array(z.string()).default([]),
   /** Immutable pre-run host contents used to bound cumulative change across repair passes. */
@@ -72,6 +74,11 @@ export const FactoryCheckpointSchema = z.object({
             isTest: z.boolean().optional(),
             directTestPath: z.string().optional(),
             isBrowser: z.boolean().optional(),
+            runner: z.enum(["vitest", "jest", "playwright", "pytest"]).optional(),
+            directEvidenceValid: z.boolean().optional(),
+            passedCount: z.number().int().nonnegative().optional(),
+            skippedCount: z.number().int().nonnegative().optional(),
+            passedTestNames: z.array(z.string()).optional(),
             outputTail: z.string().default(""),
           }),
         )

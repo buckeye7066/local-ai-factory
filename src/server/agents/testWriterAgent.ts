@@ -19,6 +19,16 @@ export async function testWriterAgent(
   context: TestWriterContext = {},
 ): Promise<TestPlan> {
   const codeContext = renderBuildCodeContext(build);
+  const requirements = [
+    ...spec.userFlows.map((text, index) => ({
+      requirementId: `UF-${index + 1}`,
+      text,
+    })),
+    ...spec.acceptanceCriteria.map((text, index) => ({
+      requirementId: `AC-${index + 1}`,
+      text,
+    })),
+  ];
   if (!codeContext.complete) {
     throw new Error(
       `Test Writer context incomplete; cannot safely test omitted files: ${codeContext.omittedPaths.join(", ")}`,
@@ -36,14 +46,20 @@ export async function testWriterAgent(
 SPEC AND ACCEPTANCE CRITERIA:
 ${JSON.stringify(spec, null, 2)}
 
+ENGINE-ASSIGNED ACCEPTANCE REQUIREMENTS (every id must be covered):
+${JSON.stringify(requirements, null, 2)}
+
 HOST MANIFEST EXCERPT:
 ${context.manifestExcerpt || "(not supplied — use only imports already present in CURRENT CODE)"}
 
 CURRENT CODE:
 ${codeContext.text}
 
-Return a testPlan string and test files (path, purpose, contents). Use relative paths only.
-The test plan must name which acceptance criterion each test proves.
+Return a testPlan string, test files (path, purpose, contents), and a coverage array.
+Each coverage record MUST be {requirementId, testPath, testName, kind}, where kind is
+"unit", "integration", or "browser". Use each exact engine-assigned id at least once,
+and make testPath/testName exactly match an active generated test selected by the runner.
+Prose never counts as coverage. Use relative paths only.
 Every test must be active (never skip/todo), named, and contain a real assertion.
 When CURRENT CODE changes interactive JSX/TSX/UI behavior and the acceptance criteria describe
 click/fill/save/edit/reload/persistence, include a Playwright journey ONLY if @playwright/test
