@@ -69,7 +69,11 @@ import {
 import { runRepairLoop } from "./repairLoop.js";
 import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
 import { groundFinalReport } from "./reportGrounding.js";
-import { foldTestExit, freshTestVerdict, testStatusFor } from "./testVerdict.js";
+import {
+  foldTestExit,
+  freshTestVerdict,
+  relevantTestStatus,
+} from "./testVerdict.js";
 import { classifyEnvironmentFailure } from "./envFailure.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
 import { architectAgent } from "../agents/architectAgent.js";
@@ -1363,7 +1367,33 @@ async function executeRun(
     // exited 0. The old fallback promoted a bare model verdict to "passing"
     // with zero tests run — the fabricated-pass defect (run c72fdb26 claimed
     // 278/278 with no repo clone). No execution = "unknown", always.
-    const testStatus = testStatusFor(testsExecuted, testExit);
+    //
+    // AND the exit code must be RELEVANT (2026-08-16, run 5590b773): `npm
+    // test` in the GrantFlow workspace ran the repo's pre-existing backend
+    // suite, exited 0, and the report stamped "Tests passing" while this
+    // run's own written tests never executed. A green suite that never ran
+    // this run's test files proves nothing about this run — the stamp
+    // degrades to "unknown" and the absent files are named.
+    const allWrittenPaths = [
+      ...files.keys(),
+      ...(checkpoint.testPlan?.files ?? []).map((f) => f.path),
+    ];
+    const executedOutputAll = verification.executed
+      .map((e) => `${e.command}\n${e.outputTail}`)
+      .join("\n");
+    const testRelevance = relevantTestStatus(
+      testsExecuted,
+      testExit,
+      allWrittenPaths,
+      executedOutputAll,
+    );
+    const testStatus = testRelevance.status;
+    if (testRelevance.degraded) {
+      log(
+        "warning",
+        `Test verdict DEGRADED to "unknown": the executed test command exited 0 but its output never mentioned any test file written by this run (${testRelevance.uncoveredTestFiles.join(", ")}). A green suite that did not run this run's tests is not evidence for this run.`,
+      );
+    }
     let report = checkpoint.finalReport;
     if (!report) {
       throwIfTimedOut(deadline, timeoutMs);
@@ -1421,6 +1451,7 @@ async function executeRun(
         testStatus,
         writtenFiles: [...files.keys()],
         refusals: writeRefusals,
+        uncoveredTestFiles: testRelevance.uncoveredTestFiles,
       });
       // SCAFFOLDING HONESTY (extend runs). Three consecutive GrantFlow
       // deliveries generated pages/modules that NOTHING pre-existing imports —

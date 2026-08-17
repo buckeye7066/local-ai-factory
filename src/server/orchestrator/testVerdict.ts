@@ -58,3 +58,61 @@ export function testStatusFor(
   if (!testsExecuted) return "unknown";
   return testExit === 0 ? "passing" : "failing";
 }
+
+/**
+ * RELEVANCE: "passing" must mean THIS RUN's tests passed (2026-08-16, live
+ * GrantFlow slice 5590b773). The run wrote src/lib/storage.test.ts and
+ * src/App.test.tsx, `npm test` executed the repository's PRE-EXISTING suite
+ * (a login/database backend), exited 0 — and the report stamped
+ * "Tests passing" beside a caveat saying the output belonged to a different
+ * project. An exit code knows nothing about WHICH tests ran; the executed
+ * output does: every JS test runner prints the test file paths it executed.
+ *
+ * Matching is by basename (path separators differ between the writer and the
+ * runner output). Conservative on purpose:
+ *  - the run wrote NO test files            → exit code stands unchanged;
+ *  - NONE of the written test files appear  → "passing" degrades to
+ *    "unknown" — a green suite that never ran this run's tests proves
+ *    nothing about this run;
+ *  - SOME appear                            → "passing" stands, and the
+ *    absent ones are surfaced by name so the gap is never silent;
+ *  - "failing"/"unknown" are NEVER upgraded by this check.
+ */
+const TEST_FILE_RE = /(\.(test|spec)\.[cm]?[jt]sx?$)|(^|[\\/])__tests__[\\/]/i;
+
+export function writtenTestFiles(writtenFiles: string[]): string[] {
+  return writtenFiles.filter((p) => TEST_FILE_RE.test(p));
+}
+
+export interface RelevantTestVerdict {
+  status: "passing" | "failing" | "unknown";
+  /** Written-by-this-run test files the executed output never mentioned. */
+  uncoveredTestFiles: string[];
+  /** True when a green exit was degraded because none of them ran. */
+  degraded: boolean;
+}
+
+export function relevantTestStatus(
+  testsExecuted: boolean,
+  testExit: number | null,
+  writtenFiles: string[],
+  executedOutput: string,
+): RelevantTestVerdict {
+  const base = testStatusFor(testsExecuted, testExit);
+  const ownTests = writtenTestFiles(writtenFiles);
+  if (!ownTests.length) {
+    return { status: base, uncoveredTestFiles: [], degraded: false };
+  }
+  const covered = ownTests.filter((p) => {
+    const basename = p.split(/[\\/]/).pop() ?? p;
+    return basename.length > 0 && executedOutput.includes(basename);
+  });
+  const uncovered = ownTests.filter((p) => !covered.includes(p));
+  if (base !== "passing") {
+    return { status: base, uncoveredTestFiles: uncovered, degraded: false };
+  }
+  if (!covered.length) {
+    return { status: "unknown", uncoveredTestFiles: uncovered, degraded: true };
+  }
+  return { status: "passing", uncoveredTestFiles: uncovered, degraded: false };
+}

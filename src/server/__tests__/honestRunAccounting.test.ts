@@ -255,3 +255,101 @@ describe("test verdict — a failure or a kill is sticky", () => {
     expect(testStatusFor(false, 0)).toBe("unknown");
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* 6. "Passing" must mean THIS RUN's tests passed (run 5590b773)      */
+/* ------------------------------------------------------------------ */
+
+import { relevantTestStatus, writtenTestFiles } from "../orchestrator/testVerdict.js";
+
+describe("relevantTestStatus — a green suite that never ran this run's tests proves nothing", () => {
+  // The live shape: the run wrote an app + its tests into a monorepo, `npm
+  // test` executed the repo's PRE-EXISTING backend suite, exited 0, and the
+  // report said "Tests passing" beside a caveat that the output belonged to a
+  // different project.
+  const written = [
+    "src/App.tsx",
+    "src/lib/storage.ts",
+    "src/lib/storage.test.ts",
+    "src/App.test.tsx",
+  ];
+  const backendOutput =
+    "$ npm test\n✓ server/auth/otp.test.ts (12 tests)\n✓ server/db/schema.test.ts (9 tests)\nSqliteError: no such column: state";
+
+  it("degrades exit-0 to 'unknown' when NONE of the run's test files appear in the output", () => {
+    const v = relevantTestStatus(true, 0, written, backendOutput);
+    expect(v.status).toBe("unknown");
+    expect(v.degraded).toBe(true);
+    expect(v.uncoveredTestFiles).toEqual(["src/lib/storage.test.ts", "src/App.test.tsx"]);
+  });
+
+  it("keeps 'passing' when the run's tests genuinely ran, naming any that did not", () => {
+    const output = backendOutput + "\n✓ src/lib/storage.test.ts (5 tests)";
+    const v = relevantTestStatus(true, 0, written, output);
+    expect(v.status).toBe("passing");
+    expect(v.degraded).toBe(false);
+    expect(v.uncoveredTestFiles).toEqual(["src/App.test.tsx"]);
+  });
+
+  it("matches by basename so Windows paths in the write log still match runner output", () => {
+    const v = relevantTestStatus(true, 0, ["src\\App.test.tsx"], "✓ src/App.test.tsx (3 tests)");
+    expect(v.status).toBe("passing");
+  });
+
+  it("never upgrades a failure, and leaves runs that wrote no tests alone", () => {
+    expect(relevantTestStatus(true, 1, written, backendOutput).status).toBe("failing");
+    expect(relevantTestStatus(false, null, written, "").status).toBe("unknown");
+    const noTests = relevantTestStatus(true, 0, ["src/App.tsx"], backendOutput);
+    expect(noTests.status).toBe("passing");
+    expect(noTests.degraded).toBe(false);
+  });
+
+  it("writtenTestFiles recognizes test/spec suffixes and __tests__ dirs only", () => {
+    expect(
+      writtenTestFiles([
+        "src/a.test.ts",
+        "src/b.spec.tsx",
+        "src/__tests__/c.ts",
+        "src/contest.ts",
+        "src/latest.tsx",
+      ]),
+    ).toEqual(["src/a.test.ts", "src/b.spec.tsx", "src/__tests__/c.ts"]);
+  });
+});
+
+describe("groundFinalReport — mechanical facts fill the gaps the model leaves", () => {
+  it("backfills an empty whatWasBuilt from the run's write log ('Nothing recorded.' bug)", () => {
+    const out = groundFinalReport({
+      report: baseReport({ whatWasBuilt: [] }),
+      evidence: { executed: [{ command: "npm test", exitCode: 0, outputTail: "ok" }] },
+      testStatus: "passing",
+      writtenFiles: ["src/components/OrgProfileForm.tsx", "src/lib/storage.ts"],
+    });
+    expect(out.whatWasBuilt).toHaveLength(2);
+    expect(out.whatWasBuilt[0]).toContain("OrgProfileForm.tsx");
+  });
+
+  it("never overwrites a whatWasBuilt the reviewer actually provided", () => {
+    const out = groundFinalReport({
+      report: baseReport(),
+      evidence: { executed: [] },
+      testStatus: "unknown",
+      writtenFiles: ["src/x.ts"],
+    });
+    expect(out.whatWasBuilt).toEqual(
+      expect.arrayContaining([expect.stringContaining("dashboard")]),
+    );
+  });
+
+  it("names this run's unexecuted test files as a caveat", () => {
+    const out = groundFinalReport({
+      report: baseReport({ testStatus: "unknown" }),
+      evidence: { executed: [{ command: "npm test", exitCode: 0, outputTail: "other suite" }] },
+      testStatus: "unknown",
+      writtenFiles: ["src/App.test.tsx"],
+      uncoveredTestFiles: ["src/App.test.tsx"],
+    });
+    expect(out.caveats.join("\n")).toContain("THIS RUN'S OWN TESTS DID NOT RUN");
+    expect(out.caveats.join("\n")).toContain("src/App.test.tsx");
+  });
+});

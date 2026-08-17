@@ -32,6 +32,9 @@ export interface GroundReportInput {
   writtenFiles: string[];
   /** Files a guard refused to write, with reasons. */
   refusals?: Array<{ path: string; reason: string }>;
+  /** Test files WRITTEN BY THIS RUN that the executed output never mentioned
+   *  (see relevantTestStatus). Named here so the gap can never be silent. */
+  uncoveredTestFiles?: string[];
 }
 
 /**
@@ -90,6 +93,15 @@ export function groundFinalReport(input: GroundReportInput): FinalReport {
     caveats.push(`Generated file REFUSED (not written): ${r.path} — ${r.reason}`);
   }
 
+  const uncovered = input.uncoveredTestFiles ?? [];
+  if (uncovered.length) {
+    caveats.push(
+      `THIS RUN'S OWN TESTS DID NOT RUN: the executed test output never ` +
+        `mentioned ${uncovered.join(", ")}. Whatever suite did run, it is not ` +
+        `evidence for the files this run wrote.`,
+    );
+  }
+
   // Defang unqualified success claims when the evidence does not support them.
   // The model's wording is preserved but marked, so the owner sees both what
   // it said and that the run did not earn it.
@@ -99,10 +111,21 @@ export function groundFinalReport(input: GroundReportInput): FinalReport {
       ? text.replace(SUCCESS_CLAIM, (m) => `${m} [UNSUPPORTED — testStatus=${testStatus}]`)
       : text;
 
+  // "What was built" is a FACT the orchestrator holds, not a model opinion.
+  // Live run 5590b773 rendered "Nothing recorded." while seven written files
+  // were named elsewhere on the same card — the reviewer simply returned an
+  // empty list and nothing corrected it. When the model records nothing but
+  // files demonstrably reached disk, the mechanical file list IS the answer.
+  const modelBuilt = (report.whatWasBuilt ?? []).map(defang);
+  const whatWasBuilt =
+    modelBuilt.length || !writtenFiles.length
+      ? modelBuilt
+      : writtenFiles.map((p) => `${p} (from the run's write log)`);
+
   return {
     ...report,
     summary: defang(report.summary),
-    whatWasBuilt: (report.whatWasBuilt ?? []).map(defang),
+    whatWasBuilt,
     // Grounded caveats come FIRST so they cannot be buried under model prose.
     caveats: [...caveats, ...(report.caveats ?? []).map(defang)],
   };
