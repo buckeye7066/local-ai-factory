@@ -47,6 +47,12 @@ export interface DeliveryInput {
   runId: string;
   appName: string | null;
   options: RunOptions;
+  /** Required evidence for every real delivery; absence fails closed. */
+  verification?: {
+    qaPassed: boolean;
+    testStatus: "passing" | "failing" | "skipped" | "unknown";
+    writeRefusals: number;
+  };
 }
 
 function commitMessage(input: DeliveryInput): string {
@@ -144,6 +150,23 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
         "REFUSED: this run used the offline mock provider, so its output is " +
         "simulated and was NOT written to the target repo. Re-run against a " +
         "real provider (free route or a paid key) to deliver real work.",
+      deliveredAt: now,
+    };
+  }
+
+  const verification = input.verification;
+  if (
+    !verification ||
+    !verification.qaPassed ||
+    verification.testStatus !== "passing" ||
+    verification.writeRefusals > 0
+  ) {
+    return {
+      ...dest,
+      status: "skipped",
+      detail:
+        "REFUSED: verification gate did not pass, so no commit, branch push, PR, " +
+        "or release was attempted.",
       deliveredAt: now,
     };
   }

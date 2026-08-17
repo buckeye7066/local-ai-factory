@@ -124,6 +124,57 @@ export interface WriteTally {
   refusals: Array<{ path: string; reason: string }>;
 }
 
+export function repairOutcomeMessage(tally: WriteTally): string {
+  if (tally.candidates === 0) {
+    return "NO REPAIR APPLIED — the repair agent proposed no files.";
+  }
+  if (tally.written === 0) {
+    return `NO REPAIR APPLIED — all ${tally.refusals.length} proposed write(s) were refused.`;
+  }
+  if (tally.refusals.length > 0) {
+    return (
+      `Applied ${tally.written} repair file(s); ${tally.refusals.length} were refused. ` +
+      "Executable verification will determine only what the applied files fixed."
+    );
+  }
+  return (
+    `Applied ${tally.written} repair file(s). ` +
+    "Executable verification will determine whether they fixed the issue."
+  );
+}
+
+export function partitionRepairFiles<T extends { path: string }>(
+  proposed: T[],
+  allowedPaths: Iterable<string>,
+): { accepted: T[]; refusals: Array<{ path: string; reason: string }> } {
+  const norm = (path: string) => path.replace(/\\/g, "/").replace(/^\.\//, "");
+  const allowed = new Set([...allowedPaths].map(norm));
+  const accepted: T[] = [];
+  const refusals: Array<{ path: string; reason: string }> = [];
+  const forbiddenRepairPath = (path: string) =>
+    /(^|\/)(__tests__)(\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(^|\/)(?:package\.json|(?:npm-shrinkwrap|package-lock)\.json|pnpm-lock\.yaml|yarn\.lock)$|(^|\/)(?:vitest|jest|playwright|vite)(?:\.[\w-]+)?\.config\.[cm]?[jt]s$/i.test(
+      path,
+    );
+  for (const file of proposed) {
+    const path = norm(file.path);
+    if (!allowed.has(path)) {
+      refusals.push({
+        path: file.path,
+        reason: "repair scope — the run did not create or modify this file",
+      });
+    } else if (forbiddenRepairPath(path)) {
+      refusals.push({
+        path: file.path,
+        reason:
+          "repair scope — product repair cannot change tests, manifests, lockfiles, or test/build configuration",
+      });
+    } else {
+      accepted.push(file);
+    }
+  }
+  return { accepted, refusals };
+}
+
 /** Raised when the overall run wall-clock timeout fires. */
 export class RunTimeoutError extends Error {
   constructor(limitMs: number) {
@@ -285,6 +336,7 @@ async function executeRun(
     idea: args.idea,
     options: args.options,
     files: [],
+    writeRefusals: [],
     testWriterComplete: false,
     commandOutput: "",
     testsExecuted: false,
@@ -448,7 +500,23 @@ async function executeRun(
    * into the final report so a refusal is surfaced to the owner rather than
    * living only in a log line they may never scroll back to.
    */
-  const writeRefusals: Array<{ path: string; reason: string }> = [];
+  const writeRefusals: Array<{ path: string; reason: string }> = [
+    ...checkpoint.writeRefusals,
+  ];
+  const recordWriteRefusals = (
+    incoming: Array<{ path: string; reason: string }>,
+  ) => {
+    const known = new Set(
+      writeRefusals.map((item) => `${item.path}\0${item.reason}`),
+    );
+    for (const item of incoming) {
+      const key = `${item.path}\0${item.reason}`;
+      if (!known.has(key)) {
+        known.add(key);
+        writeRefusals.push(item);
+      }
+    }
+  };
 
   /**
    * Report a write tally honestly: never announce work that was refused, and
@@ -590,9 +658,43 @@ async function executeRun(
     }
     run.files = summarize([...files.values()]);
     saveRunFiles(run.id, [...files.values()]);
-    await checkpointNow({ files: [...files.values()] });
-    writeRefusals.push(...refusals);
+    recordWriteRefusals(refusals);
+    await checkpointNow({
+      files: [...files.values()],
+      writeRefusals: [...writeRefusals],
+    });
     return { candidates: incoming.length, written, refusals };
+  };
+
+  const writeRepair = async (
+    workspacePath: string,
+    incoming: {
+      path: string;
+      purpose: string;
+      contents: string;
+      edits?: FileEdit[];
+    }[],
+  ): Promise<WriteTally> => {
+    const scoped = partitionRepairFiles(incoming, files.keys());
+    for (const refusal of scoped.refusals) {
+      log(
+        "warning",
+        `REPAIR SCOPE REFUSED: ${refusal.path} — ${refusal.reason}`,
+        "repair",
+      );
+    }
+    recordWriteRefusals(scoped.refusals);
+    if (scoped.refusals.length > 0) {
+      await checkpointNow({ writeRefusals: [...writeRefusals] });
+    }
+    const applied = scoped.accepted.length
+      ? await writeBuild(workspacePath, scoped.accepted, "repair")
+      : { candidates: 0, written: 0, refusals: [] };
+    return {
+      candidates: incoming.length,
+      written: applied.written,
+      refusals: [...scoped.refusals, ...applied.refusals],
+    };
   };
 
   const persistAttribution = async (
@@ -1097,6 +1199,12 @@ async function executeRun(
       // guards above refused. A build whose writes were all refused reported
       // full success.
       reportWrites(builderTally, "builder", "builder");
+      if (!run.demo && builderTally.refusals.length > 0) {
+        throw new Error(
+          `Builder write incomplete: ${builderTally.refusals.length} required file(s) were refused. ` +
+            "The run stops before testing or delivery instead of shipping a partial implementation.",
+        );
+      }
       finishStage(run, "builder", "completed");
       await flush();
     }
@@ -1190,18 +1298,54 @@ async function executeRun(
         testExit,
       });
     };
+    const fullBuild = (): FileBuild => ({
+      files: [...files.values()].map((file) => ({
+        path: file.path,
+        purpose: file.purpose,
+        contents: file.contents,
+        edits: [],
+      })),
+    });
+
     if (!checkpoint.testWriterComplete) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "test_writer");
       let testPlan = checkpoint.testPlan;
       if (!testPlan) {
         log("model_call", `Test Writer agent (${review.name})…`);
-        testPlan = await testWriterAgent({ provider: review }, spec, build);
+        testPlan = await testWriterAgent(
+          { provider: review },
+          spec,
+          fullBuild(),
+          {
+            manifestExcerpt:
+              repoAnalysis?.manifestExcerpts
+                .map(
+                  (manifest) =>
+                    `----- ${manifest.path} -----\n${manifest.excerpt}`,
+                )
+                .join("\n\n") ?? "",
+          },
+        );
         await checkpointNow({ testPlan });
       }
+      if (!testPlan.files.length && !run.demo) {
+        throw new Error(
+          "Test Writer produced no change-specific tests; a live build cannot be verified or delivered.",
+        );
+      }
       if (testPlan.files.length) {
-        const testTally = await writeBuild(workspacePath, testPlan.files, "test_writer");
+        const testTally = await writeBuild(
+          workspacePath,
+          testPlan.files,
+          "test_writer",
+        );
         reportWrites(testTally, "test_writer", "test");
+        if (!run.demo && testTally.refusals.length > 0) {
+          throw new Error(
+            `Test write incomplete: ${testTally.refusals.length} generated test file(s) were refused.`,
+          );
+        }
       }
 
       // Verify the files written by the test writer. The same helper is used
@@ -1213,15 +1357,6 @@ async function executeRun(
       finishStage(run, "test_writer", "completed");
       await flush();
     }
-
-    const fullBuild = (): FileBuild => ({
-      files: [...files.values()].map((file) => ({
-        path: file.path,
-        purpose: file.purpose,
-        contents: file.contents,
-        edits: [],
-      })),
-    });
 
     /* Stage 8 — QA Critic */
     // UNWIRED SCAFFOLDING FAILS QA on extend runs (run 5590b773: seven files
@@ -1249,7 +1384,7 @@ async function executeRun(
       log("model_call", `QA Critic agent (${review.name})…`);
       qa = withWiringGate(
         groundQaReport(
-          await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
+          await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
           verification,
         ),
       );
@@ -1271,17 +1406,15 @@ async function executeRun(
       // before deciding whether another loop slot is available.
       if (checkpoint.pendingRepair) {
         const pending = checkpoint.pendingRepair;
-        if (pending.files.length) {
-          const repairTally = await writeBuild(workspacePath, pending.files, "repair");
-          reportWrites(repairTally, "repair", "repair");
-        }
-        log("info", pending.notes || "Applied checkpointed repair.", "repair");
+        const repairTally = await writeRepair(workspacePath, pending.files);
+        reportWrites(repairTally, "repair", "repair");
+        log("info", repairOutcomeMessage(repairTally), "repair");
         log("info", "Re-running executable verification after repair.", "repair");
         await verifyWorkspace();
         log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
         qa = withWiringGate(
           groundQaReport(
-            await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
+            await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
             verification,
           ),
         );
@@ -1343,23 +1476,11 @@ async function executeRun(
               // Persist before writing so a crash cannot replay the provider call.
               await checkpointNow({ pendingRepair: fix });
             }
-            let repairWrote = 0;
-            if (fix.files.length) {
-              const fixTally = await writeBuild(workspacePath, fix.files, "repair");
-              reportWrites(fixTally, "repair", "repair");
-              repairWrote = fixTally.written;
-            }
-            // "Applied repairs" is only true if something actually changed on
-            // disk. A repair loop whose every write was refused otherwise
-            // re-ran QA against untouched code and reported progress it had
-            // not made.
-            log(
-              "info",
-              repairWrote > 0
-                ? fix.notes || "Applied repairs."
-                : `NO REPAIR APPLIED — nothing reached disk${fix.notes ? ` (model notes: ${fix.notes})` : ""}.`,
-              "repair",
-            );
+            const fixTally = await writeRepair(workspacePath, fix.files);
+            reportWrites(fixTally, "repair", "repair");
+            // Model notes describe intent, not accomplished work. Only the
+            // mechanical write tally may say what actually reached disk.
+            log("info", repairOutcomeMessage(fixTally), "repair");
           },
           verify: verifyWorkspace,
           reverify: async () => {
@@ -1367,7 +1488,7 @@ async function executeRun(
             log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
             const next = withWiringGate(
               groundQaReport(
-                await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
+                await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
                 verification,
               ),
             );
@@ -1510,6 +1631,31 @@ async function executeRun(
     run.finalReport = redactDeep(report);
     finishStage(run, "final_review", "completed");
 
+    const verifiedOutcome =
+      qa.passed && testStatus === "passing" && writeRefusals.length === 0;
+    if (!run.demo && !verifiedOutcome) {
+      run.status = "failed";
+      run.resumable = true;
+      run.error = redactSecrets(
+        `Verification gate failed: QA=${qa.passed ? "passed" : "failed"}, ` +
+          `tests=${testStatus}, refusedWrites=${writeRefusals.length}. ` +
+          "No commit, branch push, PR, or release was attempted.",
+      );
+      const heldEv = await appendAuditEvent({
+        type: "run.verification.held",
+        runId: run.id,
+        detail: run.error,
+      });
+      await persistAttribution(testStatus, heldEv.seq);
+      log(
+        "warning",
+        `${run.error} The checkpoint was retained so the run can be repaired and resumed.`,
+      );
+      await checkpointNow();
+      await flush();
+      return;
+    }
+
     /* Delivery — save the work where the owner said to save it. */
     // Runs only for a build that actually got here: a cancelled or failed run
     // never pushes. Delivery NEVER throws (see deliverRun), so a rejected push
@@ -1525,6 +1671,11 @@ async function executeRun(
         runId: run.id,
         appName: run.appName,
         options: checkpoint.options,
+        verification: {
+          qaPassed: qa.passed,
+          testStatus,
+          writeRefusals: writeRefusals.length,
+        },
       });
       run.destination = {
         ...delivered,
@@ -1705,7 +1856,7 @@ async function executeRun(
     // failed or whose work was held back read "Run complete — X is ready",
     // which the owner reasonably took as success (2026-08-16, run b74e5955).
     // The final line now states what actually happened.
-    const outcomeOk = qa.passed && testStatus === "passing";
+    const outcomeOk = verifiedOutcome;
     const releaseNote = run.release
       ? run.release.released
         ? ` Merged to main (${run.release.mergedSha?.slice(0, 8) ?? "sha unknown"}).`

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 import type { TaskPlan } from "../../shared/schemas.js";
+import { safeResolve } from "./fileWriter.js";
 
 /**
  * targetFiles.ts — find the real files a build is about to change, and read
@@ -16,6 +16,11 @@ import type { TaskPlan } from "../../shared/schemas.js";
 const MAX_FILES = 12;
 const MAX_BYTES_PER_FILE = 24_000;
 const MAX_TOTAL_BYTES = 120_000;
+const JS_TS_EXT_RX = /\.[cm]?[jt]sx?$/i;
+
+function jsTsStem(path: string): string | null {
+  return JS_TS_EXT_RX.test(path) ? path.replace(JS_TS_EXT_RX, "") : null;
+}
 
 /** Path-shaped tokens mentioned anywhere in the plan's tasks. */
 export function mentionedPaths(plan: TaskPlan, ideaText = ""): string[] {
@@ -25,7 +30,7 @@ export function mentionedPaths(plan: TaskPlan, ideaText = ""): string[] {
   ].join("\n");
   const found = new Set<string>();
   for (const m of text.matchAll(
-    /\b((?:[\w.@-]+\/)+[\w.-]+\.[A-Za-z0-9]{1,6})\b/g,
+    /\b((?:(?:[\w.@-]+\/)+)?[\w.-]+\.[A-Za-z0-9]{1,6})\b/g,
   )) {
     const raw = m[1]!.replace(/^\.\//, "");
     if (raw.includes("node_modules")) continue;
@@ -52,18 +57,40 @@ export function readTargetFiles(
   // A bare filename in the plan ("App.jsx") resolves through the real tree.
   const resolved = new Set<string>();
   for (const c of candidates) {
-    if (existsSync(join(workspacePath, c))) {
+    let candidatePath: string;
+    try {
+      candidatePath = safeResolve(workspacePath, c);
+    } catch {
+      continue;
+    }
+    if (existsSync(candidatePath)) {
       resolved.add(c);
       continue;
     }
+
+    // Prompts often name a TypeScript convention while the host uses JSX
+    // (GrantFlow: src/App.tsx vs its real src/App.jsx). A unique same-path,
+    // same-stem JS/TS file is the actual integration point.
+    const requestedStem = jsTsStem(c);
+    const siblingHits = requestedStem
+      ? fileTree.filter((p) => jsTsStem(p) === requestedStem)
+      : [];
+    if (siblingHits.length === 1) {
+      resolved.add(siblingHits[0]!);
+      continue;
+    }
+
+    // A filename-only fallback is safe only when it is unique.
     const base = c.split("/").pop()!;
-    const hit = fileTree.find((p) => p.endsWith(`/${base}`) || p === base);
-    if (hit) resolved.add(hit);
+    const basenameHits = fileTree.filter(
+      (p) => p.endsWith(`/${base}`) || p === base,
+    );
+    if (basenameHits.length === 1) resolved.add(basenameHits[0]!);
   }
 
   for (const rel of [...resolved].slice(0, MAX_FILES)) {
-    const abs = join(workspacePath, rel);
     try {
+      const abs = safeResolve(workspacePath, rel);
       const size = statSync(abs).size;
       if (size > MAX_BYTES_PER_FILE || size > budget) continue;
       const contents = readFileSync(abs, "utf8");

@@ -384,7 +384,10 @@ export const RepairResultSchema = z.object({
       z.object({
         path: z.string(),
         purpose: z.string().default(""),
-        contents: z.string(),
+        /** Full contents are valid only for a genuinely new file. */
+        contents: z.string().default(""),
+        /** Existing files must be changed through exact, grounded anchors. */
+        edits: z.array(FileEditSchema).default([]),
       }),
     )
     .default([]),

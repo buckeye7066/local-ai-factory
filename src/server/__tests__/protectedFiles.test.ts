@@ -146,6 +146,20 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     expect(verdict.refused).toBe(false);
   });
 
+  it("refuses a new shadow extension variant beside tracked source", () => {
+    const repo = gitWorkspace({
+      "App.jsx": "export default function App(){ return null; }",
+    });
+    const verdict = assessProtectedHostWrite(
+      repo,
+      "App.tsx",
+      "export default function App(){ return <Profile />; }",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/App\.jsx/);
+    expect(verdict.reason).toMatch(/shadow extension variant/);
+  });
+
   it("leaves brand-new source files alone", () => {
     const repo = gitWorkspace({ "auth.js": "export const A = 1;" });
     expect(assessProtectedHostWrite(repo, "brandNew.js", "// anything").refused).toBe(false);

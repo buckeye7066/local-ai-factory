@@ -32,6 +32,15 @@ export const FactoryCheckpointSchema = z.object({
   build: FileBuildSchema.optional(),
   testPlan: TestPlanSchema.optional(),
   files: z.array(FileContentSchema).default([]),
+  /** Durable safety ledger: a restart/resume must never forget refused writes. */
+  writeRefusals: z
+    .array(
+      z.object({
+        path: z.string(),
+        reason: z.string(),
+      }),
+    )
+    .default([]),
   testWriterComplete: z.boolean().default(false),
   commandOutput: z.string().default(""),
   /**

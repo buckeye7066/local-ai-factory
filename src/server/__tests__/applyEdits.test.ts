@@ -69,22 +69,44 @@ describe("applyEdits", () => {
 });
 
 describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
-  it("accepts an informed whole-file rewrite (the export guard is what stops destruction)", () => {
+  it("refuses a whole-file source rewrite even when named exports survive", () => {
     const root = workspace({ "services/api/src/middleware/auth.js": AUTH_JS });
     const rewrite = AUTH_JS.replace("sameSite: 'lax'", "sameSite: 'none'");
     const res = resolveGeneratedWrite(root, "services/api/src/middleware/auth.js", {
       contents: rewrite,
       edits: [],
     });
-    expect(res.contents).toContain("sameSite: 'none'");
-    expect(res.edited).toBe(true);
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/anchored edits/i);
   });
 
-  it("refuses an EMPTY replacement — that deletes a file by accident", () => {
-    const root = workspace({ "src/a.js": AUTH_JS });
-    const res = resolveGeneratedWrite(root, "src/a.js", { contents: "   ", edits: [] });
+  it("refuses a default-export App rewrite whose routes could disappear invisibly", () => {
+    const root = workspace({
+      "src/App.tsx": "export default function App(){ return <Routes />; }",
+    });
+    const res = resolveGeneratedWrite(root, "src/App.tsx", {
+      contents: "export default function App(){ return <NewPanel />; }",
+      edits: [],
+    });
     expect(res.contents).toBeNull();
-    expect(res.reason).toMatch(/empty replacement/i);
+    expect(res.reason).toMatch(/whole-file replacement/i);
+  });
+
+  it("refuses a whole-file rewrite disguised as one giant anchored edit", () => {
+    const current =
+      "export default function App(){ return <ExistingRoutes />; }";
+    const root = workspace({ "src/App.jsx": current });
+    const res = resolveGeneratedWrite(root, "src/App.jsx", {
+      contents: "",
+      edits: [
+        {
+          find: current,
+          replace: "export default function App(){ return <Broken />; }",
+        },
+      ],
+    });
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/more than half|whole-file rewrite/i);
   });
 
   it("accepts edits against the file's REAL contents", () => {
@@ -145,6 +167,49 @@ describe("targetFiles — the builder is given real code to quote", () => {
     const paths = files.map((f) => f.path).sort();
     expect(paths).toEqual(["apps/web/src/App.jsx", "apps/web/src/components/Nav.jsx"]);
     expect(files[0].contents).toContain("export const");
+  });
+
+  it("maps requested App.tsx to the host's unique real App.jsx", () => {
+    const root = workspace({
+      "src/App.jsx": "export default function App(){ return null; }",
+      "src/main.jsx": "import App from './App';",
+    });
+    const plan = {
+      tasks: [
+        {
+          order: 1,
+          category: "frontend" as const,
+          title: "Wire the profile",
+          detail: "Update src/App.tsx to render the profile",
+        },
+      ],
+    };
+    const found = readTargetFiles(
+      root,
+      plan,
+      "",
+      ["src/App.jsx", "src/main.jsx"],
+    );
+    expect(found.map((f) => f.path)).toEqual(["src/App.jsx"]);
+    expect(found[0]!.contents).toContain("function App");
+  });
+
+  it("ignores traversal-shaped path tokens without aborting the run", () => {
+    const root = workspace({ "src/App.jsx": "export default function App(){}" });
+    const plan = {
+      tasks: [
+        {
+          order: 1,
+          category: "frontend" as const,
+          title: "Bad path",
+          detail: "Update foo/../../outside.ts",
+        },
+      ],
+    };
+    expect(() =>
+      readTargetFiles(root, plan, "", ["src/App.jsx"]),
+    ).not.toThrow();
+    expect(readTargetFiles(root, plan, "", ["src/App.jsx"])).toEqual([]);
   });
 
   it("skips files the plan names that do not exist yet (those get created)", () => {

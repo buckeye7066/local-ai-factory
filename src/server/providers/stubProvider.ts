@@ -178,7 +178,8 @@ export class StubProvider implements LLMProvider {
             {
               path: "src/streak.ts",
               purpose: "Corrected streak calculation",
-              contents: STREAK_FIXED,
+              contents: "",
+              edits: [{ find: STREAK_BUGGY, replace: STREAK_FIXED }],
             },
           ],
         };

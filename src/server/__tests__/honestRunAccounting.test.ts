@@ -283,25 +283,36 @@ describe("relevantTestStatus — a green suite that never ran this run's tests p
     expect(v.uncoveredTestFiles).toEqual(["src/lib/storage.test.ts", "src/App.test.tsx"]);
   });
 
-  it("keeps 'passing' when the run's tests genuinely ran, naming any that did not", () => {
+  it("requires every generated test to run; partial coverage is not passing", () => {
     const output = backendOutput + "\n✓ src/lib/storage.test.ts (5 tests)";
     const v = relevantTestStatus(true, 0, written, output);
-    expect(v.status).toBe("passing");
-    expect(v.degraded).toBe(false);
+    expect(v.status).toBe("unknown");
+    expect(v.degraded).toBe(true);
     expect(v.uncoveredTestFiles).toEqual(["src/App.test.tsx"]);
   });
 
-  it("matches by basename so Windows paths in the write log still match runner output", () => {
+  it("normalizes Windows separators while requiring the generated relative path", () => {
     const v = relevantTestStatus(true, 0, ["src\\App.test.tsx"], "✓ src/App.test.tsx (3 tests)");
     expect(v.status).toBe("passing");
+  });
+
+  it("does not let a same-basename test in another package prove coverage", () => {
+    const v = relevantTestStatus(
+      true,
+      0,
+      ["apps/new/src/App.test.tsx"],
+      "✓ packages/legacy/src/App.test.tsx (3 tests)",
+    );
+    expect(v.status).toBe("unknown");
+    expect(v.uncoveredTestFiles).toEqual(["apps/new/src/App.test.tsx"]);
   });
 
   it("never upgrades a failure, and leaves runs that wrote no tests alone", () => {
     expect(relevantTestStatus(true, 1, written, backendOutput).status).toBe("failing");
     expect(relevantTestStatus(false, null, written, "").status).toBe("unknown");
     const noTests = relevantTestStatus(true, 0, ["src/App.tsx"], backendOutput);
-    expect(noTests.status).toBe("passing");
-    expect(noTests.degraded).toBe(false);
+    expect(noTests.status).toBe("unknown");
+    expect(noTests.degraded).toBe(true);
   });
 
   it("writtenTestFiles recognizes test/spec suffixes and __tests__ dirs only", () => {

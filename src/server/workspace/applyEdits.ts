@@ -31,7 +31,17 @@ export function applyEdits(original: string, edits: FileEdit[]): EditOutcome {
     return { ok: false, reason: "no edits supplied for an existing file" };
   }
   let out = original;
+  let quotedCharacters = 0;
   for (const [i, edit] of edits.entries()) {
+    quotedCharacters += edit.find.length;
+    if (quotedCharacters > original.length * 0.5) {
+      return {
+        ok: false,
+        reason:
+          `edit ${i + 1}: the edit set quotes more than half of the existing file — ` +
+          "split the work into a smaller local change instead of disguising a whole-file rewrite",
+      };
+    }
     const first = out.indexOf(edit.find);
     if (first === -1) {
       return {
@@ -116,12 +126,19 @@ export function resolveGeneratedWrite(
       : { contents: null, edited: true, reason: outcome.reason };
   }
 
-  // FIX, DON'T BLOCK (owner rule 2026-08-16). The builder is now GIVEN the
-  // file's real contents, so a whole-file answer is an informed rewrite rather
-  // than a reconstruction from the filename. Accept it and let the export guard
-  // catch any actual destruction — refusing outright would stall real work over
-  // a formatting preference. An EMPTY body is still refused: that deletes a file
-  // by accident, never on purpose.
+  // Existing SOURCE is never replaced wholesale. Named-export checks cannot
+  // protect default-export components, route gates, effects, state, or internal
+  // behavior. A caller must prove it read the file by quoting exact anchors.
+  if (/\.(?:[cm]?[jt]sx?|vue|svelte|py|rb|go|rs|java|cs|php)$/i.test(relPath)) {
+    return {
+      contents: null,
+      edited: true,
+      reason:
+        "whole-file replacement of existing source is refused — return anchored " +
+        "edits that quote the current file exactly",
+    };
+  }
+
   if (!file.contents.trim()) {
     return {
       contents: null,

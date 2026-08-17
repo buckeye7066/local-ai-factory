@@ -190,6 +190,28 @@ export function assessProtectedHostWrite(
     }
   }
 
+  // A new JS/TS sibling with the same path stem as tracked source is almost
+  // always an accidental shadow entrypoint (for example App.tsx beside the
+  // host's real App.jsx). Imports keep resolving the tracked file while the
+  // generated feature remains unreachable.
+  if (!isTracked && SOURCE_RX.test(norm)) {
+    const stem = norm.replace(SOURCE_RX, "");
+    const sibling = [...tracked].find(
+      (path) =>
+        path !== norm &&
+        SOURCE_RX.test(path) &&
+        path.replace(SOURCE_RX, "") === stem,
+    );
+    if (sibling) {
+      return {
+        refused: true,
+        reason:
+          `the host already tracks ${sibling} for this source path — edit that real ` +
+          "integration point instead of creating a shadow extension variant",
+      };
+    }
+  }
+
   // Root-level tool configs only from here on.
   if (norm.includes("/")) return { refused: false };
 

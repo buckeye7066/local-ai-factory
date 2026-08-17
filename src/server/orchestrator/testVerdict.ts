@@ -68,14 +68,12 @@ export function testStatusFor(
  * project. An exit code knows nothing about WHICH tests ran; the executed
  * output does: every JS test runner prints the test file paths it executed.
  *
- * Matching is by basename (path separators differ between the writer and the
- * runner output). Conservative on purpose:
- *  - the run wrote NO test files            → exit code stands unchanged;
- *  - NONE of the written test files appear  → "passing" degrades to
- *    "unknown" — a green suite that never ran this run's tests proves
- *    nothing about this run;
- *  - SOME appear                            → "passing" stands, and the
- *    absent ones are surfaced by name so the gap is never silent;
+ * Matching uses the normalized generated relative path. Basename-only matching
+ * can be fooled by a pre-existing test with the same name elsewhere in a monorepo.
+ * Conservative on purpose:
+ *  - the run wrote NO change-specific tests → green degrades to "unknown";
+ *  - ANY written test is absent from output → green degrades to "unknown";
+ *  - ALL written tests appear               → "passing" may stand;
  *  - "failing"/"unknown" are NEVER upgraded by this check.
  */
 const TEST_FILE_RE = /(\.(test|spec)\.[cm]?[jt]sx?$)|(^|[\\/])__tests__[\\/]/i;
@@ -101,18 +99,23 @@ export function relevantTestStatus(
   const base = testStatusFor(testsExecuted, testExit);
   const ownTests = writtenTestFiles(writtenFiles);
   if (!ownTests.length) {
-    return { status: base, uncoveredTestFiles: [], degraded: false };
+    return {
+      status: base === "passing" ? "unknown" : base,
+      uncoveredTestFiles: [],
+      degraded: base === "passing",
+    };
   }
+  const normalizedOutput = executedOutput.replace(/\\/g, "/");
   const covered = ownTests.filter((p) => {
-    const basename = p.split(/[\\/]/).pop() ?? p;
-    return basename.length > 0 && executedOutput.includes(basename);
+    const relativePath = p.replace(/\\/g, "/").replace(/^\.\//, "");
+    return relativePath.length > 0 && normalizedOutput.includes(relativePath);
   });
   const uncovered = ownTests.filter((p) => !covered.includes(p));
   if (base !== "passing") {
     return { status: base, uncoveredTestFiles: uncovered, degraded: false };
   }
-  if (!covered.length) {
+  if (uncovered.length > 0) {
     return { status: "unknown", uncoveredTestFiles: uncovered, degraded: true };
   }
-  return { status: "passing", uncoveredTestFiles: uncovered, degraded: false };
+  return { status: "passing", uncoveredTestFiles: [], degraded: false };
 }

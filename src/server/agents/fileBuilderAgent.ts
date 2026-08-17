@@ -166,9 +166,20 @@ export async function fileBuilderAgent(
     );
   }
 
-  promptParts.push(
-    `Use relative paths only (no leading slash, no ".."). Return { files: [{ path, purpose, contents }] } with full contents for each new/changed file.`,
-  );
+  if (existing) {
+    promptParts.push(
+      `Use relative paths only (no leading slash, no ".."). For a GENUINELY NEW file, return ` +
+        `{ path, purpose, contents, edits: [] }. For an EXISTING file, return ` +
+        `{ path, purpose, contents: "", edits: [{ find, replace }] }; each find must quote ` +
+        `the current file exactly and uniquely. If the requested path differs from a real ` +
+        `same-stem host file shown above (for example App.tsx vs App.jsx), EDIT THE REAL HOST ` +
+        `PATH and never create a sibling extension variant.`,
+    );
+  } else {
+    promptParts.push(
+      `Use relative paths only (no leading slash, no ".."). Return { files: [{ path, purpose, contents, edits: [] }] } with full contents for each file.`,
+    );
+  }
 
   return deps.provider.generateJson<FileBuild>({
     system: systemParts.join("\n"),
