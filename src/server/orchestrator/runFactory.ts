@@ -30,7 +30,11 @@ import { createWorkspace } from "../workspace/createWorkspace.js";
 import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import { verificationCommandsForWorkspace } from "../workspace/verificationCommands.js";
-import { findUnwiredNewFiles, unwiredCaveat } from "../workspace/unwiredFiles.js";
+import {
+  enforceWiredIntegration,
+  findUnwiredNewFiles,
+  unwiredCaveat,
+} from "../workspace/unwiredFiles.js";
 import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { assessPhantomImports } from "../workspace/phantomImports.js";
 import { resolveGeneratedWrite } from "../workspace/applyEdits.js";
@@ -1220,14 +1224,34 @@ async function executeRun(
     });
 
     /* Stage 8 — QA Critic */
+    // UNWIRED SCAFFOLDING FAILS QA on extend runs (run 5590b773: seven files
+    // wired into nothing passed QA and were only CAPTIONED at final review,
+    // after every chance to repair had passed). Deterministic detection, and
+    // it runs again on every repair-loop re-QA, so the loop can only exit
+    // green when the wiring genuinely happened. Best-effort: a scan failure
+    // must never fail a build by itself.
+    const isExtendRun = ingestedWorkspacePath !== null;
+    const withWiringGate = (report: QaReport): QaReport => {
+      try {
+        return enforceWiredIntegration(
+          report,
+          findUnwiredNewFiles(workspacePath, [...files.keys()]),
+          isExtendRun,
+        );
+      } catch {
+        return report;
+      }
+    };
     let qa: QaReport | undefined = checkpoint.qa;
     if (!qa) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "qa_critic");
       log("model_call", `QA Critic agent (${review.name})…`);
-      qa = groundQaReport(
-        await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
-        verification,
+      qa = withWiringGate(
+        groundQaReport(
+          await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
+          verification,
+        ),
       );
       await checkpointNow({ qa });
     }
@@ -1255,9 +1279,11 @@ async function executeRun(
         log("info", "Re-running executable verification after repair.", "repair");
         await verifyWorkspace();
         log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
-        qa = groundQaReport(
-          await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
-          verification,
+        qa = withWiringGate(
+          groundQaReport(
+            await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
+            verification,
+          ),
         );
         await checkpointNow({ qa, pendingRepair: undefined });
         log(qa.passed ? "success" : "warning", `QA: ${qa.summary}`, "repair");
@@ -1339,9 +1365,11 @@ async function executeRun(
           reverify: async () => {
             throwIfTimedOut(deadline, timeoutMs);
             log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
-            const next = groundQaReport(
-              await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
-              verification,
+            const next = withWiringGate(
+              groundQaReport(
+                await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
+                verification,
+              ),
             );
             await checkpointNow({ qa: next, pendingRepair: undefined });
             log(next.passed ? "success" : "warning", `QA: ${next.summary}`, "repair");
