@@ -17,6 +17,7 @@ import { Tabs } from "../ui/Tabs.js";
 import { slideUp } from "../../lib/motion.js";
 import { api } from "../../lib/api.js";
 import type { RunOptions } from "../../../shared/schemas.js";
+import type { PaidRouting } from "./ProviderRoutingCards.js";
 
 /**
  * ExtendExistingPanel — the "enter a program, give it goals" entry point.
@@ -34,9 +35,11 @@ import type { RunOptions } from "../../../shared/schemas.js";
 export function ExtendExistingPanel({
   starting,
   onStart,
+  routing,
 }: {
   starting: boolean;
   onStart: (idea: string, options: RunOptions) => void;
+  routing: PaidRouting;
 }) {
   const [sourceType, setSourceType] = useState<"path" | "git">("path");
   const [location, setLocation] = useState("");
@@ -93,14 +96,14 @@ export function ExtendExistingPanel({
         {repoSource ? (
           <span>
             The finished work is saved in{" "}
-            <strong className="font-mono">{repoSource.location}</strong> — committed
-            on this run's own <code>factory-deck/&lt;run-id&gt;</code> branch and
-            pushed back there. Never a force-push, and never onto main.
+            <strong className="font-mono">{repoSource.location}</strong> — committed on
+            this run's own <code>factory-deck/&lt;run-id&gt;</code> branch and pushed
+            back there. Never a force-push, and never onto main.
           </span>
         ) : (
           <span>
-            No repo attached yet. Factory Deck will resolve one from your prompt
-            below, and the work will be saved back into whichever repo it resolves.
+            No repo attached yet. Factory Deck will resolve one from your prompt below,
+            and the work will be saved back into whichever repo it resolves.
           </span>
         )}
       </div>
@@ -126,7 +129,12 @@ export function ExtendExistingPanel({
             onStart={onStart}
           />
         ) : (
-          <ClarifyMode starting={starting} repoSource={repoSource} onStart={onStart} />
+          <ClarifyMode
+            starting={starting}
+            repoSource={repoSource}
+            onStart={onStart}
+            routing={routing}
+          />
         )}
       </div>
     </motion.div>
@@ -179,10 +187,9 @@ function DirectPromptMode({
         <span>
           <span className="font-medium text-white">This is a big change</span>
           <span className="block text-xs text-slate-400">
-            Break it into small steps automatically. Each step is built, tested,
-            and merged on its own before the next one starts - so a large
-            evolution lands as a series of real, working improvements instead of
-            one giant attempt.
+            Break it into small steps automatically. Each step is built, tested, and
+            merged on its own before the next one starts - so a large evolution lands as
+            a series of real, working improvements instead of one giant attempt.
           </span>
         </span>
       </label>
@@ -206,10 +213,12 @@ function ClarifyMode({
   starting,
   repoSource,
   onStart,
+  routing,
 }: {
   starting: boolean;
   repoSource: { type: "path" | "git"; location: string } | undefined;
   onStart: (idea: string, options: RunOptions) => void;
+  routing: PaidRouting;
 }) {
   const [initialRequest, setInitialRequest] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -225,7 +234,10 @@ function ClarifyMode({
     setBusy(true);
     setError(null);
     try {
-      const res = await api.startClarify(trimmed);
+      const res = await api.startClarify(trimmed, {
+        allowPaidProviderCalls: routing !== "auto",
+        provider: routing === "auto" ? "free" : routing,
+      });
       setSessionId(res.sessionId);
       setQuestion(res.question);
       setConfident(res.confident);

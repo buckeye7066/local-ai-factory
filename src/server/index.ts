@@ -10,6 +10,7 @@ import {
   repoNameProblem,
   ProviderNameSchema,
   type RunSummary,
+  type RunOptions,
 } from "../shared/schemas.js";
 import {
   startRun,
@@ -17,6 +18,7 @@ import {
   runFactoryTracked,
   resumeFactory as resumeFactoryFull,
   MissingProviderCredentialError,
+  PaidProviderAuthorizationError,
   RunNotResumableError,
 } from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
@@ -47,7 +49,7 @@ import {
 import { appendAuditEvent } from "./storage/auditLog.js";
 import { authorizeApiRequest, resolveBindHost } from "./security/access.js";
 import { snapshotRoute, getThresholds, probeLiveness } from "./providers/freeRoute.js";
-import { paidBudgetStatus } from "./providers/paidBudget.js";
+import { BudgetGatedProvider, paidBudgetStatus } from "./providers/paidBudget.js";
 import { createProviderRegistry } from "./providers/index.js";
 import {
   clarificationAgent,
@@ -99,6 +101,7 @@ function routeStatus() {
         lastHour: b.lastHour,
         lastDay: b.lastDay,
         usdLastDay: b.usdLastDay,
+        reserved: b.reserved,
         exhausted: b.exhausted,
         reason: b.reason,
         limits: {
@@ -155,9 +158,30 @@ app.get("/api/route", (_req, res) => {
  * list the client passes into POST /api/runs as options.goals with
  * options.mode="extend".
  */
-function clarificationProvider() {
+function clarificationProvider(
+  allowPaidProviderCalls: boolean,
+  requested: "free" | "anthropic" | "openai",
+) {
   const registry = createProviderRegistry(config, secrets);
-  return registry.resolveLive(undefined, config.defaultCodeProvider);
+  if (!allowPaidProviderCalls) {
+    const free = registry.get("free");
+    if (!free.isConfigured()) {
+      throw new PaidProviderAuthorizationError(
+        "Clarification is FREE-ONLY, but the free provider is unavailable.",
+      );
+    }
+    return free;
+  }
+  if (requested === "anthropic" || requested === "openai") {
+    const paid = registry.get(requested);
+    if (!paid.isConfigured()) {
+      throw new MissingProviderCredentialError([
+        `provider "${requested}" is not configured — cannot clarify on it`,
+      ]);
+    }
+    return new BudgetGatedProvider(paid, requested);
+  }
+  return registry.get("free");
 }
 
 app.post(
@@ -171,9 +195,24 @@ app.post(
       res.status(400).json({ error: "Field 'initialRequest' is required." });
       return;
     }
-    const session = createSession(initialRequest);
+    const allowPaidProviderCalls = req.body?.allowPaidProviderCalls === true;
+    const provider =
+      req.body?.provider === "anthropic" || req.body?.provider === "openai"
+        ? req.body.provider
+        : "free";
+    if (provider !== "free" && !allowPaidProviderCalls) {
+      res.status(409).json({
+        error: "A paid clarification provider requires allowPaidProviderCalls=true.",
+        blocked: true,
+      });
+      return;
+    }
+    const session = createSession(initialRequest, {
+      allowPaidProviderCalls,
+      provider,
+    });
     const turn = await clarificationAgent(
-      { provider: clarificationProvider() },
+      { provider: clarificationProvider(allowPaidProviderCalls, provider) },
       { initialRequest, history: [] },
     );
     updateSession(session.id, {
@@ -236,7 +275,14 @@ app.post(
           ],
         }
       : await clarificationAgent(
-          { provider: clarificationProvider() },
+          {
+            provider: clarificationProvider(
+              session.allowPaidProviderCalls,
+              session.provider === "anthropic" || session.provider === "openai"
+                ? session.provider
+                : "free",
+            ),
+          },
           { initialRequest: session.initialRequest, history },
         );
     updateSession(sessionId, {
@@ -311,9 +357,9 @@ app.post(
     // setting) placed beside `idea` instead of inside `options` used to be
     // silently ignored, turning an extend run into a from-scratch app.
     const allowedTopLevel = new Set(["idea", "options"]);
-    const strayKeys = Object.keys(
-      (req.body ?? {}) as Record<string, unknown>,
-    ).filter((k) => !allowedTopLevel.has(k));
+    const strayKeys = Object.keys((req.body ?? {}) as Record<string, unknown>).filter(
+      (k) => !allowedTopLevel.has(k),
+    );
     if (strayKeys.length) {
       res.status(400).json({
         error:
@@ -405,8 +451,16 @@ app.post(
           hint:
             "Start the FREE route (run the 'Claude Code - FREE (Ollama)' shortcut, " +
             "or set FACTORY_FREE_ENABLED=1 with fcc-server running). " +
-            "A paid ANTHROPIC_API_KEY / OPENAI_API_KEY is optional and used only " +
-            "as a rescue tier. There is no offline/mock fallback.",
+            "A paid ANTHROPIC_API_KEY / OPENAI_API_KEY is optional and is used " +
+            "only after explicit per-run authorization. There is no offline/mock fallback.",
+        });
+        return;
+      }
+      if (err instanceof PaidProviderAuthorizationError) {
+        res.status(409).json({
+          error: err.message,
+          blocked: true,
+          hint: "Choose FREE-ONLY, or deliberately select Claude/OpenAI to authorize paid calls for this run.",
         });
         return;
       }
@@ -433,18 +487,42 @@ app.get(
  * actually RELEASED to main, pauses with the named reason otherwise, and a
  * paused epic is resumable. No approval gates.
  */
-function epicDeps(): EpicDeps {
+function epicDeps(options: RunOptions): EpicDeps {
   return {
     executeSliceRun: (idea, options, onStarted) =>
       runFactoryTracked({ idea, options, config, secrets }, onStarted ?? (() => {})),
     resumeSliceRun: (runId) => resumeFactoryFull(runId, config, secrets),
     plan: async (idea) => {
-      // ONE call whose quality decides every slice downstream: prefer a
-      // configured PAID provider; the free small model produced a 15-minute
-      // crawl on the first real epic. Free remains the keyless fallback.
+      // Planning follows the same authorization as every slice. A configured
+      // key alone can never turn a FREE-ONLY epic into a paid plan.
       const registry = createProviderRegistry(config, secrets);
-      const paid = registry.availablePaid();
-      const provider = registry.resolveLive(paid[0], config.defaultCodeProvider);
+      const paidAuthorized = options.allowPaidProviderCalls === true;
+      const requestedPaid = [options.codeProvider, options.reviewProvider].find(
+        (name) => name === "anthropic" || name === "openai",
+      );
+      let provider;
+      if (!paidAuthorized) {
+        const free = registry.get("free");
+        if (!free.isConfigured()) {
+          throw new PaidProviderAuthorizationError(
+            "This epic is FREE-ONLY, but the free provider is unavailable.",
+          );
+        }
+        provider = free;
+      } else {
+        const paidName = requestedPaid ?? registry.availablePaid()[0];
+        if (paidName) {
+          const paid = registry.get(paidName);
+          if (!paid.isConfigured()) {
+            throw new MissingProviderCredentialError([
+              `provider "${paidName}" is not configured — cannot plan this epic`,
+            ]);
+          }
+          provider = new BudgetGatedProvider(paid, paidName);
+        } else {
+          provider = registry.get("free");
+        }
+      }
       return epicPlannerAgent({ provider }, { idea });
     },
     config,
@@ -463,10 +541,24 @@ app.post(
     if (rejectRemovedDemoOption(req, res)) return;
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
+      res
+        .status(400)
+        .json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
       return;
     }
-    const deps = epicDeps();
+    const explicitlyPaid = [parsed.data.codeProvider, parsed.data.reviewProvider].some(
+      (name) => name === "anthropic" || name === "openai",
+    );
+    if (explicitlyPaid && parsed.data.allowPaidProviderCalls !== true) {
+      res.status(409).json({
+        error:
+          "A paid provider was selected without explicit authorization. " +
+          "Set options.allowPaidProviderCalls=true or choose FREE-ONLY.",
+        blocked: true,
+      });
+      return;
+    }
+    const deps = epicDeps(parsed.data);
     // Respond immediately: planning alone can take minutes on the free route.
     const shell = await createEpicShell(idea, parsed.data);
     void (async () => {
@@ -520,7 +612,19 @@ app.post(
     }
     epic.status = "running";
     epic.statusReason = null;
-    const deps = epicDeps();
+    const parsedOptions = RunOptionsSchema.parse(epic.options);
+    // v1/v2 epic records predate the separate authorization bit. Preserve an
+    // old explicit paid selection, but never infer permission from keys.
+    const explicitlyPaid = [
+      parsedOptions.codeProvider,
+      parsedOptions.reviewProvider,
+    ].some((name) => name === "anthropic" || name === "openai");
+    const resumeOptions = {
+      ...parsedOptions,
+      allowPaidProviderCalls: parsedOptions.allowPaidProviderCalls ?? explicitlyPaid,
+    };
+    epic.options = resumeOptions as Record<string, unknown>;
+    const deps = epicDeps(resumeOptions);
     // Never planned (or planning failed): plan first, then run.
     void (async () => {
       const ready = epic.slices.length === 0 ? await planEpic(epic, deps) : epic;
@@ -567,6 +671,7 @@ const ProviderSwitchSchema = z
   .object({
     codeProvider: ProviderNameSchema.optional(),
     reviewProvider: ProviderNameSchema.optional(),
+    allowPaidProviderCalls: z.boolean().optional(),
   })
   .strict();
 
@@ -581,7 +686,9 @@ app.post(
       // checkpoint). Unknown providers are rejected by resumeRun.
       const wanted = ProviderSwitchSchema.safeParse(req.body ?? {});
       if (!wanted.success) {
-        res.status(400).json({ error: wanted.error.issues[0]?.message ?? "Bad providers." });
+        res
+          .status(400)
+          .json({ error: wanted.error.issues[0]?.message ?? "Bad providers." });
         return;
       }
       const run = await resumeRun(runId, config, secrets, wanted.data);
@@ -596,8 +703,15 @@ app.post(
           error: err.message,
           missing: err.missing,
           blocked: true,
-          hint:
-            "Restore the provider/free-route configuration used by this run, then resume again.",
+          hint: "Restore the provider/free-route configuration used by this run, then resume again.",
+        });
+        return;
+      }
+      if (err instanceof PaidProviderAuthorizationError) {
+        res.status(409).json({
+          error: err.message,
+          blocked: true,
+          hint: "Send allowPaidProviderCalls=true with a configured paid provider, or resume on FREE-ONLY.",
         });
         return;
       }
@@ -684,7 +798,10 @@ app.delete(
       });
       return;
     }
-    const result = await deleteRunAndWorkspace(run, liveWorkspacePaths(await listRuns()));
+    const result = await deleteRunAndWorkspace(
+      run,
+      liveWorkspacePaths(await listRuns()),
+    );
     res.json({ ok: true, ...result });
   }),
 );
@@ -787,9 +904,7 @@ app.get(
     // body is an empty string the UI can render, never a type violation.
     const files = await getRunFiles(runId);
     res.json({
-      files: files.length
-        ? files
-        : run.files.map((f) => ({ ...f, contents: "" })),
+      files: files.length ? files : run.files.map((f) => ({ ...f, contents: "" })),
     });
   }),
 );
@@ -870,7 +985,8 @@ import("node:fs").then(({ appendFileSync, mkdirSync }) => {
 });
 
 void recoverOrphanedEpics().then((n) => {
-  if (n > 0) console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
+  if (n > 0)
+    console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
 });
 const server = app.listen(config.port, bind.host, () => {
   console.log(`[factory] backend listening on http://${bind.host}:${config.port}`);

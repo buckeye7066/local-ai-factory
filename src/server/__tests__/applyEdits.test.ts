@@ -1,13 +1,27 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  linkSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { applyEdits, resolveGeneratedWrite } from "../workspace/applyEdits.js";
-import { mentionedPaths, readTargetFiles } from "../workspace/targetFiles.js";
+import { writeWorkspaceFile } from "../workspace/fileWriter.js";
+import {
+  inspectTargetFiles,
+  mentionedPaths,
+  readTargetFiles,
+} from "../workspace/targetFiles.js";
 
 const dirs: string[] = [];
 afterAll(() => {
-  for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const d of dirs)
+    rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 const BR = String.fromCharCode(10);
@@ -39,7 +53,12 @@ describe("applyEdits", () => {
     expect(out.ok).toBe(true);
     expect(out.contents).toContain("sameSite: 'none', secure: true");
     // every original export survives — the whole point
-    for (const name of ["AUTH_COOKIE", "cookieOptions", "signToken", "requirePremium"]) {
+    for (const name of [
+      "AUTH_COOKIE",
+      "cookieOptions",
+      "signToken",
+      "requirePremium",
+    ]) {
       expect(out.contents).toContain(name);
     }
   });
@@ -69,22 +88,66 @@ describe("applyEdits", () => {
 });
 
 describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
-  it("accepts an informed whole-file rewrite (the export guard is what stops destruction)", () => {
+  it("refuses a whole-file source rewrite even when named exports survive", () => {
     const root = workspace({ "services/api/src/middleware/auth.js": AUTH_JS });
     const rewrite = AUTH_JS.replace("sameSite: 'lax'", "sameSite: 'none'");
     const res = resolveGeneratedWrite(root, "services/api/src/middleware/auth.js", {
       contents: rewrite,
       edits: [],
     });
-    expect(res.contents).toContain("sameSite: 'none'");
-    expect(res.edited).toBe(true);
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/anchored edits/i);
   });
 
-  it("refuses an EMPTY replacement — that deletes a file by accident", () => {
-    const root = workspace({ "src/a.js": AUTH_JS });
-    const res = resolveGeneratedWrite(root, "src/a.js", { contents: "   ", edits: [] });
+  it("refuses a default-export App rewrite whose routes could disappear invisibly", () => {
+    const root = workspace({
+      "src/App.tsx": "export default function App(){ return <Routes />; }",
+    });
+    const res = resolveGeneratedWrite(root, "src/App.tsx", {
+      contents: "export default function App(){ return <NewPanel />; }",
+      edits: [],
+    });
     expect(res.contents).toBeNull();
-    expect(res.reason).toMatch(/empty replacement/i);
+    expect(res.reason).toMatch(/whole-file replacement/i);
+  });
+
+  it("refuses a whole-file rewrite disguised as one giant anchored edit", () => {
+    const current = "export default function App(){ return <ExistingRoutes />; }";
+    const root = workspace({ "src/App.jsx": current });
+    const res = resolveGeneratedWrite(root, "src/App.jsx", {
+      contents: "",
+      edits: [
+        {
+          find: current,
+          replace: "export default function App(){ return <Broken />; }",
+        },
+      ],
+    });
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/more than half|whole-file rewrite/i);
+  });
+
+  it("refuses whole-file replacement for source extensions outside JS/TS", () => {
+    const root = workspace({ "native/main.cpp": "int main(){ return 0; }" });
+    const res = resolveGeneratedWrite(root, "native/main.cpp", {
+      contents: "int main(){ launchMissiles(); }",
+      edits: [],
+    });
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/whole-file replacement/i);
+  });
+
+  it("bounds replacement text and cross-edit block-comment tricks", () => {
+    const original = "a".repeat(1_000);
+    expect(
+      applyEdits(original, [{ find: "aaaaa", replace: "b".repeat(600) }]),
+    ).toMatchObject({ ok: false });
+    expect(
+      applyEdits("const a = 1;\nconst b = 2;\n", [
+        { find: "const a = 1;", replace: "const a = 1; /*" },
+        { find: "const b = 2;", replace: "*/ const b = 2;" },
+      ]),
+    ).toMatchObject({ ok: false });
   });
 
   it("accepts edits against the file's REAL contents", () => {
@@ -108,10 +171,39 @@ describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
     expect(res.edited).toBe(false);
   });
 
-  it("still allows replacing an existing non-source file (docs, data)", () => {
+  it("allows explicit initialization of an existing zero-byte file", () => {
+    const root = workspace({ "src/empty.ts": "" });
+    const res = resolveGeneratedWrite(root, "src/empty.ts", {
+      contents: "export const initialized = true;\n",
+      edits: [],
+    });
+    expect(res.contents).toContain("initialized");
+    expect(res.edited).toBe(true);
+  });
+
+  it("treats only ENOENT as new and refuses an unreadable existing file", () => {
+    const root = workspace({ "src/secret.ts": "export const secret = 1;\n" });
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+    const res = resolveGeneratedWrite(
+      root,
+      "src/secret.ts",
+      { contents: "export const overwritten = true;", edits: [] },
+      () => {
+        throw denied;
+      },
+    );
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/could not be read safely|only ENOENT/i);
+  });
+
+  it("requires anchored edits for existing docs and data too", () => {
     const root = workspace({ "docs/notes.md": "old" });
-    const res = resolveGeneratedWrite(root, "docs/notes.md", { contents: "new", edits: [] });
-    expect(res.contents).toBe("new");
+    const res = resolveGeneratedWrite(root, "docs/notes.md", {
+      contents: "new",
+      edits: [],
+    });
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/whole-file replacement/i);
   });
 
   it("reports a failed anchor instead of writing anything", () => {
@@ -123,6 +215,53 @@ describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
     expect(res.contents).toBeNull();
     expect(res.reason).toMatch(/not found/i);
   });
+});
+
+describe("file writer physical containment", () => {
+  it.skipIf(process.platform === "win32")(
+    "does not follow a symlinked parent outside the workspace",
+    async () => {
+      const root = workspace({});
+      const outside = mkdtempSync(join(tmpdir(), "factory-edits-outside-"));
+      dirs.push(outside);
+      symlinkSync(outside, join(root, "linked"), "dir");
+
+      await expect(
+        writeWorkspaceFile(root, "linked/escaped.ts", "owned"),
+      ).rejects.toThrow(/symlink|workspace|contain/i);
+      expect(() => readFileSync(join(outside, "escaped.ts"), "utf8")).toThrow();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not truncate a hard-linked inode outside the workspace",
+    async () => {
+      const root = workspace({});
+      const outside = join(root, "..", `factory-hardlink-${Date.now()}.ts`);
+      dirs.push(outside);
+      writeFileSync(outside, "sentinel");
+      linkSync(outside, join(root, "linked.ts"));
+      await expect(
+        writeWorkspaceFile(root, "linked.ts", "overwritten"),
+      ).rejects.toThrow(/hard-linked/i);
+      expect(readFileSync(outside, "utf8")).toBe("sentinel");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not overwrite a symlinked final target",
+    async () => {
+      const root = workspace({});
+      const outside = join(root, "..", `factory-outside-${Date.now()}.ts`);
+      dirs.push(outside);
+      writeFileSync(outside, "sentinel");
+      symlinkSync(outside, join(root, "alias.ts"), "file");
+      await expect(writeWorkspaceFile(root, "alias.ts", "overwritten")).rejects.toThrow(
+        /symlink|workspace|contain/i,
+      );
+      expect(readFileSync(outside, "utf8")).toBe("sentinel");
+    },
+  );
 });
 
 describe("targetFiles — the builder is given real code to quote", () => {
@@ -147,14 +286,94 @@ describe("targetFiles — the builder is given real code to quote", () => {
     expect(files[0].contents).toContain("export const");
   });
 
+  it("maps requested App.tsx to the host's unique real App.jsx", () => {
+    const root = workspace({
+      "src/App.jsx": "export default function App(){ return null; }",
+      "src/main.jsx": "import App from './App';",
+    });
+    const plan = {
+      tasks: [
+        {
+          order: 1,
+          category: "frontend" as const,
+          title: "Wire the profile",
+          detail: "Update src/App.tsx to render the profile",
+        },
+      ],
+    };
+    const found = readTargetFiles(root, plan, "", ["src/App.jsx", "src/main.jsx"]);
+    expect(found.map((f) => f.path)).toEqual(["src/App.jsx"]);
+    expect(found[0]!.contents).toContain("function App");
+  });
+
+  it("ignores traversal-shaped path tokens without aborting the run", () => {
+    const root = workspace({ "src/App.jsx": "export default function App(){}" });
+    const plan = {
+      tasks: [
+        {
+          order: 1,
+          category: "frontend" as const,
+          title: "Bad path",
+          detail: "Update foo/../../outside.ts",
+        },
+      ],
+    };
+    expect(() => readTargetFiles(root, plan, "", ["src/App.jsx"])).not.toThrow();
+    expect(readTargetFiles(root, plan, "", ["src/App.jsx"])).toEqual([]);
+  });
+
+  it("reports an existing target that cannot fit safely in context", () => {
+    const root = workspace({ "src/large.ts": "x".repeat(24_001) });
+    const plan = {
+      tasks: [
+        {
+          order: 1,
+          category: "frontend" as const,
+          title: "Update large file",
+          detail: "Edit src/large.ts",
+        },
+      ],
+    };
+    const inspected = inspectTargetFiles(root, plan, "", ["src/large.ts"]);
+    expect(inspected.files).toEqual([]);
+    expect(inspected.omitted).toEqual([
+      {
+        path: "src/large.ts",
+        reason: "file exceeds the per-file context limit",
+      },
+    ]);
+  });
+
   it("skips files the plan names that do not exist yet (those get created)", () => {
     const root = workspace({ "src/a.js": "export const a = 1;" });
     const plan = {
       tasks: [
-        { order: 1, category: "frontend" as const, title: "t", detail: "create src/brand/New.jsx" },
+        {
+          order: 1,
+          category: "frontend" as const,
+          title: "t",
+          detail: "create src/brand/New.jsx",
+        },
       ],
     };
     expect(readTargetFiles(root, plan, "", [])).toEqual([]);
+  });
+
+  it("grounds exact extensionless integration points", () => {
+    const root = workspace({ Dockerfile: "FROM node:20\n" });
+    const plan = {
+      tasks: [
+        {
+          order: 1,
+          category: "backend" as const,
+          title: "Update Dockerfile",
+          detail: "Add the production build step to Dockerfile",
+        },
+      ],
+    };
+    expect(readTargetFiles(root, plan, "", ["Dockerfile"])).toEqual([
+      { path: "Dockerfile", contents: "FROM node:20\n" },
+    ]);
   });
 
   it("extracts path-shaped tokens and ignores prose", () => {
@@ -164,7 +383,8 @@ describe("targetFiles — the builder is given real code to quote", () => {
           order: 1,
           category: "backend" as const,
           title: "Fix login",
-          detail: "touch services/api/src/middleware/auth.js but not the words api or src",
+          detail:
+            "touch services/api/src/middleware/auth.js but not the words api or src",
         },
       ],
     };

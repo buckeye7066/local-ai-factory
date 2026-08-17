@@ -18,16 +18,15 @@ const llmFail: QaReport = {
 };
 
 describe("groundQaReport — executed evidence is the verdict authority", () => {
-  it("a fabricated FAILURE cannot survive all-green executed commands (the 700222c1 class)", () => {
+  it("green commands cannot erase a code or acceptance blocker", () => {
     const grounded = groundQaReport(llmFail, {
       executed: [
         { command: "npm ci", exitCode: 0, outputTail: "added 100 packages" },
         { command: "npm test", exitCode: 0, outputTail: "all green" },
       ],
     });
-    expect(grounded.passed).toBe(true);
-    expect(grounded.summary).toContain("overridden");
-    // The model's claimed issues are retained as advisory, never invented away.
+    expect(grounded.passed).toBe(false);
+    expect(grounded.summary).not.toContain("overridden");
     expect(grounded.issues).toHaveLength(1);
   });
 

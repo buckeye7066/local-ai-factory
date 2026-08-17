@@ -7,13 +7,18 @@ import {
   lstat,
   realpath,
   open,
+  rename,
 } from "node:fs/promises";
 import { constants as FS } from "node:fs";
-import { resolve, join, relative, isAbsolute, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+import { resolve, join, relative, isAbsolute, sep, dirname } from "node:path";
 import { z } from "zod";
 import type { RunRecord, RunSummary, FileContent } from "../../shared/schemas.js";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
-import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
+import {
+  FactoryCheckpointSchema,
+  migrateFactoryCheckpoint,
+} from "../orchestrator/checkpoint.js";
 import {
   RunRecordSchema,
   FileContentSchema,
@@ -123,29 +128,63 @@ async function safeStorePath(dir: string, id: string): Promise<string> {
 const HAS_NOFOLLOW = typeof FS.O_NOFOLLOW === "number" && FS.O_NOFOLLOW !== 0;
 
 /**
- * Write `data` to `path` while NARROWING the lstat→write TOCTOU window: open the
- * final component with O_NOFOLLOW where the platform supports it (POSIX), then
- * re-check the opened fd (`fstat`) is a regular file before writing through it.
+ * Atomically replace one store file.
  *
- * HONEST RESIDUAL: Windows/Node exposes no O_NOFOLLOW, so if a local same-user
- * attacker swaps the final component to a symlink in the narrow window AFTER
- * `safeStorePath`'s lstat and BEFORE this open, the open follows it. Full
- * containment against adversarial same-user filesystem mutation requires
- * OS-level controls (restrictive permissions on the data dir). The fstat
- * re-check still rejects a swap to a non-regular-file (e.g. a directory).
+ * The previous O_TRUNC write could leave a zero-byte or half-JSON checkpoint
+ * after a crash. We now write and fsync a same-directory O_EXCL temp file,
+ * then rename it over the destination. Rename is the commit point: readers see
+ * either the complete prior record or the complete new record, never a prefix.
+ *
+ * The destination is checked for symlinks both by safeStorePath and again
+ * immediately before rename. Rename replaces a final-component symlink rather
+ * than following it; O_NOFOLLOW protects the temporary file where supported.
  */
 export async function writeFileContained(path: string, data: string): Promise<void> {
+  const existing = await lstat(path).catch(() => null);
+  if (existing?.isSymbolicLink()) {
+    throw new Error(`Refused: store target is a symlink: ${path}`);
+  }
+
+  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const flags =
-    FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | (HAS_NOFOLLOW ? FS.O_NOFOLLOW : 0);
-  const fh = await open(path, flags, 0o600);
+    FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | (HAS_NOFOLLOW ? FS.O_NOFOLLOW : 0);
+  let fh: Awaited<ReturnType<typeof open>> | null = null;
   try {
+    fh = await open(tempPath, flags, 0o600);
     const st = await fh.stat();
     if (!st.isFile()) {
-      throw new Error(`Refused: store target is not a regular file: ${path}`);
+      throw new Error(
+        `Refused: temporary store target is not a regular file: ${tempPath}`,
+      );
     }
     await fh.writeFile(data, "utf8");
-  } finally {
+    await fh.sync();
     await fh.close();
+    fh = null;
+
+    const beforeCommit = await lstat(path).catch(() => null);
+    if (beforeCommit?.isSymbolicLink()) {
+      throw new Error(`Refused: store target became a symlink before commit: ${path}`);
+    }
+    await rename(tempPath, path);
+
+    // Best-effort directory fsync makes the rename durable on POSIX. Some
+    // platforms (notably Windows) do not allow syncing directory handles.
+    const dirHandle = await open(dirname(path), FS.O_RDONLY).catch(() => null);
+    if (dirHandle) {
+      await dirHandle.sync().catch(() => {});
+      await dirHandle.close().catch(() => {});
+    }
+  } catch (err) {
+    if (fh) {
+      await fh.close().catch(() => {});
+    }
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  } finally {
+    // If rename succeeded tempPath no longer exists; if any late platform
+    // error occurred this keeps abandoned temp records from accumulating.
+    await rm(tempPath, { force: true }).catch(() => {});
   }
 }
 
@@ -154,13 +193,15 @@ export async function saveRun(run: RunRecord): Promise<void> {
   if (!isValidRunId(run.id)) {
     throw new Error(`Refused: invalid run id (not a UUID): ${JSON.stringify(run.id)}`);
   }
-  memory.set(run.id, run);
   await ensureDirs();
   // Symlink/realpath + lexical containment (throws → caller rejects, fail closed).
   const target = await safeStorePath(STORE_DIR, run.id);
   // Compact JSON: these records are machine-read only, and pretty-printing
   // roughly doubles every run file written during high-frequency polling.
   await writeFileContained(target, JSON.stringify(run));
+  // Do not make an unpersisted state authoritative in memory when durability
+  // failed. Callers get the write error and can surface it explicitly.
+  memory.set(run.id, run);
 }
 
 export function putRunInMemory(run: RunRecord): void {
@@ -175,11 +216,20 @@ export function putRunInMemory(run: RunRecord): void {
 async function normalizeLoaded(run: RunRecord): Promise<RunRecord> {
   if (run.status === "queued" || run.status === "running") {
     run.status = "failed";
-    const hasCheckpoint = Boolean(await getRunCheckpoint(run.id));
+    let hasCheckpoint = false;
+    let checkpointFailure: string | null = null;
+    try {
+      hasCheckpoint = Boolean(await getRunCheckpoint(run.id));
+    } catch (err) {
+      checkpointFailure =
+        err instanceof Error ? err.message : "checkpoint could not be read";
+    }
     run.resumable = hasCheckpoint;
-    run.error = hasCheckpoint
-      ? "Interrupted: the backend restarted while this run was in progress. Resume continues from its last durable checkpoint."
-      : "Interrupted: the backend restarted while this run was in progress, but no durable checkpoint was available. Start a new run.";
+    run.error = checkpointFailure
+      ? `Interrupted: the backend restarted while this run was in progress, but its durable checkpoint is unusable: ${checkpointFailure}`
+      : hasCheckpoint
+        ? "Interrupted: the backend restarted while this run was in progress. Resume continues from its last durable checkpoint."
+        : "Interrupted: the backend restarted while this run was in progress, but no durable checkpoint was available. Start a new run.";
     run.currentStage = null;
     for (const stage of run.stages) {
       if (stage.status === "active") {
@@ -191,7 +241,7 @@ async function normalizeLoaded(run: RunRecord): Promise<RunRecord> {
     }
     run.updatedAt = Date.now();
     // Persist the correction so it survives the next restart too.
-    void saveRun(run).catch(() => {});
+    await saveRun(run);
   }
   return run;
 }
@@ -271,9 +321,7 @@ export async function listRuns(): Promise<RunSummary[]> {
             ...r.destination,
             target: redactSecrets(r.destination.target),
             detail:
-              r.destination.detail == null
-                ? null
-                : redactSecrets(r.destination.detail),
+              r.destination.detail == null ? null : redactSecrets(r.destination.detail),
           }
         : r.destination,
       repairLoops: r.repairLoops,
@@ -319,7 +367,9 @@ export async function pruneOldRuns(keep = 200): Promise<number> {
       // Route deletes through the containment/symlink guard too.
       await rm(await safeStorePath(STORE_DIR, id), { force: true }).catch(() => {});
       await rm(await safeStorePath(FILES_DIR, id), { force: true }).catch(() => {});
-      await rm(await safeStorePath(CHECKPOINTS_DIR, id), { force: true }).catch(() => {});
+      await rm(await safeStorePath(CHECKPOINTS_DIR, id), { force: true }).catch(
+        () => {},
+      );
       removed++;
     }
     return removed;
@@ -357,29 +407,124 @@ export async function deleteRun(id: string): Promise<boolean> {
   return existed;
 }
 
-/** Persist private continuation state; never served by an API route. */
-export async function saveRunCheckpoint(
-  checkpoint: FactoryCheckpoint,
-): Promise<void> {
-  if (!isValidRunId(checkpoint.runId)) {
-    throw new Error("Refused: invalid checkpoint run id.");
+export type CheckpointPersistenceFailure =
+  | "invalid"
+  | "read"
+  | "parse"
+  | "migrate"
+  | "identity"
+  | "write";
+
+/** Explicit checkpoint failure; only a genuinely absent file returns null. */
+export class CheckpointPersistenceError extends Error {
+  constructor(
+    readonly failure: CheckpointPersistenceFailure,
+    readonly runId: string,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(`Checkpoint ${failure} failure for run ${runId}: ${message}`, options);
+    this.name = "CheckpointPersistenceError";
   }
-  await ensureDirs();
-  const target = await safeStorePath(CHECKPOINTS_DIR, checkpoint.runId);
-  await writeFileContained(target, JSON.stringify(checkpoint));
 }
 
-export async function getRunCheckpoint(
-  id: string,
-): Promise<FactoryCheckpoint | null> {
-  if (!isValidRunId(id)) return null;
-  try {
-    const raw = await readFile(await safeStorePath(CHECKPOINTS_DIR, id), "utf8");
-    const parsed = FactoryCheckpointSchema.parse(JSON.parse(raw));
-    return parsed.runId === id ? parsed : null;
-  } catch {
-    return null;
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isMissingFile(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+/** Persist private continuation state; never served by an API route. */
+export async function saveRunCheckpoint(checkpoint: FactoryCheckpoint): Promise<void> {
+  if (!isValidRunId(checkpoint.runId)) {
+    throw new CheckpointPersistenceError(
+      "invalid",
+      checkpoint.runId,
+      "invalid checkpoint run id",
+    );
   }
+  let validated: FactoryCheckpoint;
+  try {
+    validated = FactoryCheckpointSchema.parse(checkpoint);
+  } catch (err) {
+    throw new CheckpointPersistenceError(
+      "invalid",
+      checkpoint.runId,
+      errorMessage(err),
+      { cause: err },
+    );
+  }
+  try {
+    await ensureDirs();
+    const target = await safeStorePath(CHECKPOINTS_DIR, checkpoint.runId);
+    await writeFileContained(target, JSON.stringify(validated));
+  } catch (err) {
+    if (err instanceof CheckpointPersistenceError) throw err;
+    throw new CheckpointPersistenceError("write", checkpoint.runId, errorMessage(err), {
+      cause: err,
+    });
+  }
+}
+
+export async function getRunCheckpoint(id: string): Promise<FactoryCheckpoint | null> {
+  if (!isValidRunId(id)) {
+    throw new CheckpointPersistenceError("invalid", id, "invalid checkpoint run id");
+  }
+  let raw: string;
+  try {
+    raw = await readFile(await safeStorePath(CHECKPOINTS_DIR, id), "utf8");
+  } catch (err) {
+    if (isMissingFile(err)) return null;
+    throw new CheckpointPersistenceError("read", id, errorMessage(err), {
+      cause: err,
+    });
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch (err) {
+    throw new CheckpointPersistenceError(
+      "parse",
+      id,
+      "stored JSON is truncated or malformed",
+      { cause: err },
+    );
+  }
+
+  let parsed: FactoryCheckpoint;
+  try {
+    parsed = migrateFactoryCheckpoint(decoded);
+  } catch (err) {
+    throw new CheckpointPersistenceError("migrate", id, errorMessage(err), {
+      cause: err,
+    });
+  }
+  if (parsed.runId !== id) {
+    throw new CheckpointPersistenceError(
+      "identity",
+      id,
+      `stored runId is ${parsed.runId}`,
+    );
+  }
+
+  // Lazy, atomic rewrite: once a v1/v2 checkpoint has been accepted it is
+  // durably upgraded before execution receives it.
+  const storedVersion =
+    decoded && typeof decoded === "object"
+      ? (decoded as { schemaVersion?: unknown }).schemaVersion
+      : undefined;
+  if (storedVersion !== 3) {
+    await saveRunCheckpoint(parsed);
+  }
+  return parsed;
 }
 
 export async function deleteRunCheckpoint(id: string): Promise<void> {

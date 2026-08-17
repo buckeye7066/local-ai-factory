@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ClarificationHistoryItem } from "../agents/clarificationAgent.js";
+import type { ProviderName } from "../../shared/schemas.js";
 
 /**
  * clarificationStore.ts — in-memory session state for the yes/no clarification
@@ -17,13 +18,19 @@ export interface ClarificationSession {
   status: "active" | "confident" | "abandoned";
   currentQuestion: string | null;
   refinedGoals: string[];
+  /** Routing grant captured at session creation; answers cannot escalate it. */
+  allowPaidProviderCalls: boolean;
+  provider: ProviderName;
   createdAt: number;
   updatedAt: number;
 }
 
 const sessions = new Map<string, ClarificationSession>();
 
-export function createSession(initialRequest: string): ClarificationSession {
+export function createSession(
+  initialRequest: string,
+  routing: { allowPaidProviderCalls: boolean; provider: ProviderName },
+): ClarificationSession {
   const now = Date.now();
   const session: ClarificationSession = {
     id: randomUUID(),
@@ -32,6 +39,8 @@ export function createSession(initialRequest: string): ClarificationSession {
     status: "active",
     currentQuestion: null,
     refinedGoals: [],
+    allowPaidProviderCalls: routing.allowPaidProviderCalls,
+    provider: routing.provider,
     createdAt: now,
     updatedAt: now,
   };

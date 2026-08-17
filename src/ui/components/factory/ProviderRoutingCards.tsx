@@ -12,11 +12,9 @@ export type PaidRouting = "auto" | "anthropic" | "openai";
  * ProviderRoutingCards — how work actually flows across providers, and the
  * owner's control over it.
  *
- * The FREE local route is the default primary. Clicking Claude or OpenAI PINS
- * that paid provider as the PRIMARY for runs started from this screen (the
- * server honors an explicitly requested paid provider; without the pin it
- * always prefers the free route no matter which keys are configured — the
- * checkmarks alone never meant "paid"). Clicking Free returns to free-first.
+ * The FREE local route is the default and is an explicit FREE-ONLY choice.
+ * Clicking Claude or OpenAI both pins that provider and authorizes billable
+ * calls for the run. Merely configuring a key never authorizes spend.
  * The card for whoever is serving right now carries a live marker, so the
  * routing shown here can never disagree with what the deck is doing.
  */
@@ -41,8 +39,8 @@ export function ProviderRoutingCards({
       title: "Free (Ollama / FCC)",
       role:
         routing === "auto"
-          ? "Primary — zero cost"
-          : "Click to return to free-first",
+          ? "FREE-ONLY — no paid calls authorized"
+          : "Click to revoke paid authorization",
       icon: Gift,
       ready: freeReady,
       selected: routing === "auto",
@@ -59,8 +57,8 @@ export function ProviderRoutingCards({
       title: "Claude",
       role:
         routing === "anthropic"
-          ? "Paid PRIMARY — pinned for new runs"
-          : "Paid rescue — click to pin as primary",
+          ? "PAID AUTHORIZED — pinned primary"
+          : "Click to authorize and pin Claude",
       icon: Sparkles,
       ready: anthropicReady,
       selected: routing === "anthropic",
@@ -77,8 +75,8 @@ export function ProviderRoutingCards({
       title: "OpenAI",
       role:
         routing === "openai"
-          ? "Paid PRIMARY — pinned for new runs"
-          : "Paid rescue — click to pin as primary",
+          ? "PAID AUTHORIZED — pinned primary"
+          : "Click to authorize and pin OpenAI",
       icon: Cpu,
       ready: openaiReady,
       selected: routing === "openai",
@@ -158,11 +156,11 @@ export function ProviderRoutingCards({
                 )
               ) : c.ready ? (
                 <Badge tone="emerald" icon={<Check className="h-3 w-3" />}>
-                  Rescue key set
+                  Paid key configured
                 </Badge>
               ) : (
                 <Badge tone="neutral" icon={<AlertTriangle className="h-3 w-3" />}>
-                  No rescue key
+                  No paid key
                 </Badge>
               )}
               {c.serving && <Badge tone="cyan">serving now</Badge>}

@@ -74,8 +74,13 @@ export function NewRunHero({
     onStart(
       ideaText,
       routing !== "auto"
-        ? { ...options, codeProvider: routing, reviewProvider: routing }
-        : options,
+        ? {
+            ...options,
+            codeProvider: routing,
+            reviewProvider: routing,
+            allowPaidProviderCalls: true,
+          }
+        : { ...options, allowPaidProviderCalls: false },
     );
 
   const start = () => {
@@ -156,10 +161,9 @@ export function NewRunHero({
             <span>
               <span className="font-medium text-white">Publish this app</span>
               <span className="block text-xs text-slate-400">
-                List the finished app in your Axiom BioLabs app store and let
-                PromoPilot promote it. Uncheck for something that is just for
-                you - it still gets built, saved to GitHub, and hosted, but
-                never listed or promoted.
+                List the finished app in your Axiom BioLabs app store and let PromoPilot
+                promote it. Uncheck for something that is just for you - it still gets
+                built, saved to GitHub, and hosted, but never listed or promoted.
               </span>
             </span>
           </label>
@@ -167,7 +171,11 @@ export function NewRunHero({
       )}
 
       {runMode === "extend" ? (
-        <ExtendExistingPanel starting={starting} onStart={startWithRouting} />
+        <ExtendExistingPanel
+          starting={starting}
+          onStart={startWithRouting}
+          routing={routing}
+        />
       ) : (
         <NewAppPanel
           idea={idea}
@@ -359,8 +367,8 @@ function NewAppPanel({
         <div className="mt-5 space-y-2">
           {!hasAnyKey && (
             <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
-              No API keys detected — add keys in <code>.env</code> to build. Every
-              run does real work; there is no demo or test mode.
+              No API keys detected — add keys in <code>.env</code> to build. Every run
+              does real work; there is no demo or test mode.
             </Helper>
           )}
         </div>

@@ -1,4 +1,10 @@
-import { RefreshCw, Gauge, TerminalSquare, ShieldCheck } from "lucide-react";
+import {
+  RefreshCw,
+  Gauge,
+  TerminalSquare,
+  ShieldCheck,
+  CreditCard,
+} from "lucide-react";
 import { cn } from "../../lib/cn.js";
 import { Tooltip } from "../ui/Tooltip.js";
 import type { Health } from "../../../shared/schemas.js";
@@ -29,6 +35,15 @@ export function SafetySettingsPreview({ health }: { health: Health | null }) {
       value: health ? "Live" : "—",
       hint: "Allowlisted commands actually run inside the workspace — every run is real work.",
       tone: "safe" as const,
+    },
+    {
+      icon: CreditCard,
+      label: "Paid daily cap",
+      value: health?.route
+        ? `${health.route.paidBudget.limits.perDay} calls · $${health.route.paidBudget.limits.usdPerDay.toFixed(2)}`
+        : "—",
+      hint: "Finite server-enforced ceiling. Paid calls also need explicit per-run authorization and a durable reservation before they start.",
+      tone: "neutral" as const,
     },
   ];
 

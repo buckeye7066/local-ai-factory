@@ -66,16 +66,21 @@ ANTHROPIC_API_KEY=your_real_claude_api_key_here
 OPENAI_API_KEY=your_real_openai_api_key_here
 ANTHROPIC_MODEL=claude-opus-4-8
 OPENAI_MODEL=gpt-5.5
-DEFAULT_CODE_PROVIDER=anthropic
-DEFAULT_REVIEW_PROVIDER=openai
+DEFAULT_CODE_PROVIDER=free
+DEFAULT_REVIEW_PROVIDER=free
 MAX_REPAIR_LOOPS=3
 MAX_MODEL_CALLS_PER_RUN=30
+FACTORY_PAID_RESCUES_PER_HOUR=6
+FACTORY_PAID_RESCUES_PER_DAY=24
+FACTORY_PAID_MAX_USD_PER_DAY=2
 WORKSPACE_ROOT=./workspaces
 ```
 
 > A run needs a real provider. Start the FREE route ("Claude Code - FREE
 > (Ollama)") or set a paid key — there is no offline fallback, because a run
-> with no provider must fail loudly rather than fabricate a result.
+> with no provider must fail loudly rather than fabricate a result. A paid key
+> is configuration, not permission: only deliberately selecting Claude or
+> OpenAI for a run authorizes billable calls.
 
 ---
 
@@ -97,10 +102,12 @@ line run.
   are persisted too. A process-interrupted run is marked failed and
   **Resume** continues from its private durable stage checkpoint without
   replaying completed provider stages. The same action is available as
-  `POST /api/runs/:id/resume`.
+  `POST /api/runs/:id/resume`. Legacy v1/v2 checkpoints are migrated to v3 and
+  atomically rewritten; corrupt checkpoints fail explicitly instead of being
+  treated as absent.
 - **Workspaces** — the generated app folders.
 - **Settings** — shows which keys are configured (never the keys themselves),
-  models, limits, and the dry-run flag.
+  models, and finite execution/spend limits.
 
 ## Run from the CLI
 
@@ -117,7 +124,7 @@ Streams stage-by-stage progress and prints the final workspace path + report.
 This is designed to be safe to run on your own machine:
 
 - **Keys never reach the browser.** They live only in the backend process. The
-  `/api/health` endpoint returns *booleans* (`configured` / `missing`), never
+  `/api/health` endpoint returns _booleans_ (`configured` / `missing`), never
   values. There is no UI field to type a key — add keys by editing `.env`.
 - **Model calls are server-side only.** The frontend talks to a local API.
 - **`.env` is never sent to a model** and is git-ignored.
@@ -125,7 +132,7 @@ This is designed to be safe to run on your own machine:
   `safeResolve`, which rejects absolute paths and `..` traversal
   (`src/server/workspace/fileWriter.ts`).
 - **Commands are conservative.** Only an allowlist (npm/pnpm `install` / `build`
-  / `test` / `typecheck`) may run, and only *inside* a workspace, with `shell`
+  / `test` / `typecheck`) may run, and only _inside_ a workspace, with `shell`
   disabled (no injection surface). Commands really execute — there is no
   preview/dry-run mode (`src/server/workspace/commandRunner.ts`); the allowlist
   and the workspace jail are the safety boundary.
@@ -134,7 +141,15 @@ This is designed to be safe to run on your own machine:
 
 - `MAX_MODEL_CALLS_PER_RUN` hard-caps LLM calls per run.
 - `MAX_REPAIR_LOOPS` bounds the repair loop.
-- The FREE route is the default primary; paid providers are a rescue tier.
+- FREE-ONLY is the default and does not authorize paid fallback.
+- Selecting Claude/OpenAI grants paid permission for that run only. Every paid
+  call then needs a durable capacity/cost reservation under finite hourly,
+  daily, and USD caps.
+- `/api/health` reports settled spend and in-flight reservations using finite,
+  JSON-safe values.
+
+The complete maintenance contract and regression checklist are in
+[`docs/FACTORY_DECK_HARDENING.md`](docs/FACTORY_DECK_HARDENING.md).
 
 ## Changing models
 
@@ -146,17 +161,17 @@ the active values.
 
 ## Scripts
 
-| Script | What it does |
-|---|---|
-| `pnpm dev` | Backend + UI together (dev, hot reload) |
-| `pnpm start` | Production mode: build the UI, then serve everything from the backend on `http://127.0.0.1:5179` (single process, no Vite) |
-| `pnpm server` | Backend only (tsx watch) |
-| `pnpm ui` | Vite UI only |
-| `pnpm factory "<idea>"` | Run the factory from the CLI |
-| `pnpm test` | Vitest suite |
-| `pnpm typecheck` | Type-check server + UI |
-| `pnpm build` | Type-check + production UI build |
-| `pnpm lint` | Prettier formatting check |
+| Script                  | What it does                                                                                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`              | Backend + UI together (dev, hot reload)                                                                                    |
+| `pnpm start`            | Production mode: build the UI, then serve everything from the backend on `http://127.0.0.1:5179` (single process, no Vite) |
+| `pnpm server`           | Backend only (tsx watch)                                                                                                   |
+| `pnpm ui`               | Vite UI only                                                                                                               |
+| `pnpm factory "<idea>"` | Run the factory from the CLI                                                                                               |
+| `pnpm test`             | Vitest suite                                                                                                               |
+| `pnpm typecheck`        | Type-check server + UI                                                                                                     |
+| `pnpm build`            | Type-check + production UI build                                                                                           |
+| `pnpm lint`             | Prettier formatting check                                                                                                  |
 
 ---
 
@@ -190,12 +205,10 @@ pnpm exec tsx scripts/make-icon.ts   # or run scripts\Install-Desktop-Icon.ps1
 
 Double-clicking it launches `pnpm dev` and opens the UI in your browser.
 
-
 ## Purpose Foundry
 
 Purpose Foundry is the optional portfolio assembly-line mode. It coordinates Factory Deck, Scout a Program, Repo Rewards, PromoPilot, FlexFactor, The Crucible, App Store Publisher, and Watchtower through a durable station contract and hash-chained evidence ledger. Every existing application remains independently launchable.
 
 Set `PURPOSE_FOUNDRY_OBSIDIAN_INBOX` to an Obsidian folder to ingest saved Markdown project notes automatically. Run `pnpm install:purpose-foundry-icon` once to create the separate **Purpose Foundry** desktop shortcut; the existing Factory Deck shortcut is unchanged. See [`docs/PURPOSE_FOUNDRY.md`](docs/PURPOSE_FOUNDRY.md).
-
 
 Purpose Foundry launchers do not bypass Windows execution policy. If Windows marks a freshly downloaded checkout as blocked, review the scripts and explicitly run `Get-ChildItem scripts\\*.ps1 | Unblock-File` once before installing the shortcuts.

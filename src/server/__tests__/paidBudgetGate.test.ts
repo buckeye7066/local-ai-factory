@@ -1,10 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   BudgetGatedProvider,
   PaidBudgetExhaustedError,
+  loadLimits,
+  paidBudgetStatus,
   recordPaidCall,
+  releasePaidReservation,
+  reservePaidCall,
   resetPaidBudget,
 } from "../providers/paidBudget.js";
 import { dispatchConcurrent } from "../providers/concurrentDispatcher.js";
@@ -15,9 +19,8 @@ import type { LLMProvider } from "../../shared/types.js";
 // file's own paid-rescue ledger writes (e.g. freeRouteFailover.test.ts).
 const DATA_DIR = ".vitest-factory-data-paid-budget-gate";
 process.env.FACTORY_DATA_DIR = DATA_DIR;
-// Caps are OWNER-SET only (defaults are unlimited since 2026-08-16 — the
-// invented $2/day guardrail was removed). These tests exercise the gate, so
-// they set the limits explicitly, exactly as an owner would.
+// Production defaults are deliberately finite and JSON-safe. Individual tests
+// still pin values so a developer's shell cannot change their meaning.
 process.env.FACTORY_PAID_RESCUES_PER_HOUR = "6";
 process.env.FACTORY_PAID_RESCUES_PER_DAY = "24";
 process.env.FACTORY_PAID_MAX_USD_PER_DAY = "2";
@@ -30,9 +33,20 @@ process.env.FACTORY_PAID_MAX_USD_PER_DAY = "2";
  * on disk too.
  */
 async function resetLedgerCompletely(): Promise<void> {
-  await rm(resolve(process.cwd(), DATA_DIR), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await rm(resolve(process.cwd(), DATA_DIR), {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
   resetPaidBudget();
 }
+
+beforeEach(() => {
+  process.env.FACTORY_PAID_RESCUES_PER_HOUR = "6";
+  process.env.FACTORY_PAID_RESCUES_PER_DAY = "24";
+  process.env.FACTORY_PAID_MAX_USD_PER_DAY = "2";
+});
 
 class AlwaysOkProvider implements LLMProvider {
   calls = 0;
@@ -49,6 +63,114 @@ class AlwaysOkProvider implements LLMProvider {
     return {} as T;
   }
 }
+
+class DeferredProvider extends AlwaysOkProvider {
+  private finish!: () => void;
+  private resolveStarted!: () => void;
+  readonly started: Promise<void>;
+
+  constructor(name: "anthropic" | "openai" | "free") {
+    super(name);
+    this.started = new Promise<void>((resolveStarted) => {
+      this.resolveStarted = resolveStarted;
+    });
+  }
+
+  release(): void {
+    this.finish();
+  }
+
+  override async generateText() {
+    this.calls += 1;
+    this.resolveStarted();
+    await new Promise<void>((resolveFinished) => {
+      this.finish = resolveFinished;
+    });
+    return { text: "ok", provider: this.name };
+  }
+}
+
+describe("paid budget limits and reservations", () => {
+  beforeEach(resetLedgerCompletely);
+
+  it("uses finite JSON-safe defaults", () => {
+    const limits = loadLimits({});
+    expect(limits).toMatchObject({ perHour: 6, perDay: 24, usdPerDay: 2 });
+    expect(Object.values(limits).every(Number.isFinite)).toBe(true);
+    expect(JSON.parse(JSON.stringify(limits))).toEqual(limits);
+  });
+
+  it("reserves the last concurrent slot before the first call starts", async () => {
+    process.env.FACTORY_PAID_RESCUES_PER_HOUR = "1";
+    const inner = new DeferredProvider("anthropic");
+    const gated = new BudgetGatedProvider(inner, "anthropic");
+    const first = gated.generateText({ system: "", prompt: "" });
+    await inner.started;
+
+    expect(paidBudgetStatus().reserved).toBe(1);
+    await expect(gated.generateText({ system: "", prompt: "" })).rejects.toBeInstanceOf(
+      PaidBudgetExhaustedError,
+    );
+    expect(inner.calls).toBe(1);
+
+    inner.release();
+    await expect(first).resolves.toMatchObject({ text: "ok" });
+    expect(paidBudgetStatus().reserved).toBe(0);
+  });
+
+  it("fails closed on a corrupt ledger before reaching a billable provider", async () => {
+    const budgetDir = resolve(process.cwd(), DATA_DIR);
+    await mkdir(budgetDir, { recursive: true });
+    await writeFile(resolve(budgetDir, "paid-rescue-budget.json"), "{bad", "utf8");
+    resetPaidBudget();
+    const inner = new AlwaysOkProvider("openai");
+
+    await expect(
+      new BudgetGatedProvider(inner, "openai").generateText({
+        system: "",
+        prompt: "",
+      }),
+    ).rejects.toBeInstanceOf(PaidBudgetExhaustedError);
+    expect(inner.calls).toBe(0);
+    expect(paidBudgetStatus().reason).toMatch(/unreadable/i);
+  });
+
+  it("retains a reservation when billing is uncertain after an error", async () => {
+    const inner: LLMProvider = {
+      name: "anthropic",
+      isConfigured: () => true,
+      generateText: async () => {
+        throw new Error("connection lost after request was accepted");
+      },
+      async generateJson<T>(): Promise<T> {
+        throw new Error("connection lost after request was accepted");
+      },
+    };
+    await expect(
+      new BudgetGatedProvider(inner, "anthropic").generateText({
+        system: "",
+        prompt: "",
+      }),
+    ).rejects.toThrow(/connection lost/i);
+    expect(paidBudgetStatus().reserved).toBe(1);
+  });
+
+  it("releases the exact concurrent reservation instead of another call's slot", () => {
+    const earlier = reservePaidCall("anthropic", 10, 10);
+    const later = reservePaidCall("anthropic", 20, 20);
+
+    // The later request completes first. Usage is appended independently and
+    // the outer gate releases that request's exact reservation id.
+    recordPaidCall("anthropic", 5, 5);
+    expect(releasePaidReservation(later.id)).toBe(true);
+
+    const duringEarlierCall = paidBudgetStatus();
+    expect(duringEarlierCall.reserved).toBe(1);
+    expect(duringEarlierCall.lastDay).toBe(2); // one settled + earlier reserve
+    expect(releasePaidReservation(earlier.id)).toBe(true);
+    expect(paidBudgetStatus().reserved).toBe(0);
+  });
+});
 
 describe("BudgetGatedProvider", () => {
   beforeEach(resetLedgerCompletely);

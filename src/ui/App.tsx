@@ -30,6 +30,7 @@ import { routeTransition } from "./lib/motion.js";
 import { useClipboard } from "./lib/useClipboard.js";
 import { api, useHealth, useRunPolling } from "./lib/api.js";
 import { useTheme } from "./lib/useTheme.js";
+import { runIsReady } from "./lib/runOutcome.js";
 import type { RunOptions, RunSummary, FileContent } from "../shared/schemas.js";
 
 type View = NavKey | "run";
@@ -151,9 +152,17 @@ export function App() {
     if (!run) return;
     if (run.status !== lastStatus.current) {
       if (run.status === "completed") {
-        toast.success(`${run.appName ?? "App"} is ready`, {
-          description: `Completed in ${run.stages.length} stages · ${run.repairLoops} repair loop(s).`,
-        });
+        if (runIsReady(run)) {
+          toast.success(`${run.appName ?? "App"} is verified and ready`, {
+            description: `Completed in ${run.stages.length} stages · ${run.repairLoops} repair loop(s).`,
+          });
+        } else {
+          toast.warning("Run finished without a verified ready outcome", {
+            description: run.demo
+              ? "This was a simulation; mock output is never delivered."
+              : "Open the run for its delivery and verification status.",
+          });
+        }
         refreshRuns();
       } else if (run.status === "failed") {
         toast.error("Run failed", { description: run.error ?? undefined });
@@ -283,41 +292,43 @@ export function App() {
               every other tab stay usable, and it is keyed by view so simply
               navigating away clears a crashed panel. */}
           <ErrorBoundary label={viewLabel(view)} resetKey={view}>
-          {view === "foundry" && <FoundryFloor />}
+            {view === "foundry" && <FoundryFloor />}
 
-          {view === "new" && (
-            <NewRunHero health={health} starting={starting} onStart={startRun} />
-          )}
+            {view === "new" && (
+              <NewRunHero health={health} starting={starting} onStart={startRun} />
+            )}
 
-          {view === "history" && (
-            <RunHistory
-              runs={runs}
-              loading={runsLoading}
-              onOpen={openRun}
-              onContinue={continueRun}
-              onDelete={deleteRunById}
-              onDeleteFinished={deleteFinishedRuns}
-            />
-          )}
+            {view === "history" && (
+              <RunHistory
+                runs={runs}
+                loading={runsLoading}
+                onOpen={openRun}
+                onContinue={continueRun}
+                onDelete={deleteRunById}
+                onDeleteFinished={deleteFinishedRuns}
+              />
+            )}
 
-          {view === "workspaces" && (
-            <WorkspacesView runs={runs} loading={runsLoading} onOpen={openRun} />
-          )}
+            {view === "workspaces" && (
+              <WorkspacesView runs={runs} loading={runsLoading} onOpen={openRun} />
+            )}
 
-          {view === "settings" && <SettingsPage health={health} />}
+            {view === "settings" && <SettingsPage health={health} />}
 
-          {view === "run" && run && (
-            <RunDetail
-              run={run}
-              files={files}
-              onNewRun={() => setView("new")}
-              refreshRun={refreshRun}
-            />
-          )}
+            {view === "run" && run && (
+              <RunDetail
+                run={run}
+                files={files}
+                onNewRun={() => setView("new")}
+                refreshRun={refreshRun}
+              />
+            )}
 
-          {view === "run" && !run && (
-            <div className="py-20 text-center text-sm text-slate-400">Loading run…</div>
-          )}
+            {view === "run" && !run && (
+              <div className="py-20 text-center text-sm text-slate-400">
+                Loading run…
+              </div>
+            )}
           </ErrorBoundary>
         </motion.div>
       </AnimatePresence>
@@ -467,7 +478,13 @@ function RunDetail({
         </div>
       </div>
 
-      {run.finalReport && <FinalReport report={run.finalReport} onNewRun={onNewRun} />}
+      {run.finalReport && (
+        <FinalReport
+          report={run.finalReport}
+          ready={runIsReady(run)}
+          onNewRun={onNewRun}
+        />
+      )}
     </div>
   );
 }

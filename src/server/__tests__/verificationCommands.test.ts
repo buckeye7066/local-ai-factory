@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { verificationCommandsForWorkspace } from "../workspace/verificationCommands.js";
+import {
+  verificationCommandsForWorkspace,
+  verificationPlanForWorkspace,
+} from "../workspace/verificationCommands.js";
 import { isAllowed } from "../workspace/commandRunner.js";
 
 const workspaces: string[] = [];
@@ -71,12 +74,8 @@ describe("verificationCommandsForWorkspace", () => {
     expect(commands.filter((command) => command.isTest)).toEqual([
       { bin: "python", args: ["test_root.py"], isTest: true },
       { bin: "python", args: ["iplay/test_suite.py"], isTest: true },
+      { bin: "python", args: ["-m", "pytest", "-q"], isTest: true },
     ]);
-    expect(commands).not.toContainEqual({
-      bin: "python",
-      args: ["-m", "pytest", "-q"],
-      isTest: true,
-    });
   });
 
   it("keeps JavaScript verification and supports polyglot repositories", () => {
@@ -127,12 +126,139 @@ describe("verificationCommandsForWorkspace", () => {
     writeFileSync(join(path, "README.md"), "# notes\n");
     expect(verificationCommandsForWorkspace(path)).toEqual([]);
   });
+
+  it("directly selects every generated Vitest file before the host suite", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run", build: "vite build", typecheck: "tsc --noEmit" },
+        devDependencies: { vitest: "3", vite: "6", typescript: "5" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "src/App.test.tsx",
+          contents:
+            "import { test, expect } from 'vitest'; test('x',()=>expect(1).toBe(1));",
+        },
+      ],
+    });
+    expect(plan.incomplete).toEqual([]);
+    const directIndex = plan.commands.findIndex(
+      (command) => command.directTestPath === "src/App.test.tsx",
+    );
+    const hostIndex = plan.commands.findIndex(
+      (command) => command.bin === "npm" && command.args[0] === "test",
+    );
+    expect(directIndex).toBeGreaterThan(-1);
+    expect(directIndex).toBeLessThan(hostIndex);
+    expect(plan.commands[directIndex]).toMatchObject({
+      bin: "npx",
+      args: ["--no-install", "vitest", "run", "src/App.test.tsx", "--reporter=json"],
+      isTest: true,
+      runner: "vitest",
+    });
+    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
+      true,
+    );
+  });
+
+  it("holds UI verification without a declared Playwright harness", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run", build: "vite build" },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "tests/profile.spec.ts",
+          contents: "import { test, expect } from '@playwright/test';",
+        },
+      ],
+      uiAcceptanceRequired: true,
+    });
+    expect(plan.commands.some((command) => command.isBrowser)).toBe(false);
+    expect(plan.incomplete.map((item) => item.reason).join("\n")).toMatch(
+      /Playwright|browser/i,
+    );
+  });
+
+  it("does not trust a Playwright harness first observed after builder writes", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run", build: "vite build" },
+        devDependencies: { vitest: "3", "@playwright/test": "1" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+    writeFileSync(join(path, "playwright.config.ts"), "export default {};\n");
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "tests/profile.spec.ts",
+          contents: "import { test, expect } from '@playwright/test';",
+        },
+      ],
+      uiAcceptanceRequired: true,
+      trustedBrowserHarness: false,
+    });
+    expect(plan.commands.some((command) => command.isBrowser)).toBe(false);
+    expect(plan.incomplete.map((item) => item.reason).join("\n")).toMatch(
+      /trusted pre-build/i,
+    );
+  });
+
+  it("plans a direct Playwright journey only with declared dependency and config", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run", build: "vite build" },
+        devDependencies: { vitest: "3", "@playwright/test": "1" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+    writeFileSync(join(path, "playwright.config.ts"), "export default {};\n");
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "tests/profile.spec.ts",
+          contents: "import { test, expect } from '@playwright/test';",
+        },
+      ],
+      uiAcceptanceRequired: true,
+    });
+    expect(plan.incomplete).toEqual([]);
+    expect(plan.commands.find((command) => command.isBrowser)).toMatchObject({
+      args: [
+        "--no-install",
+        "playwright",
+        "test",
+        "tests/profile.spec.ts",
+        "--reporter=json",
+      ],
+      directTestPath: "tests/profile.spec.ts",
+    });
+  });
 });
 
 describe("Python command sandbox", () => {
   it("allows only the fixed verification entrypoints", () => {
     expect(isAllowed("python", ["-m", "compileall", "-q", "."])).toBe(true);
     expect(isAllowed("python", ["-m", "pytest", "-q"])).toBe(true);
+    expect(
+      isAllowed("python", ["-m", "pytest", "-vv", "tests/calculator_test.py"]),
+    ).toBe(true);
     expect(isAllowed("python3", ["-m", "unittest", "discover"])).toBe(true);
     expect(
       isAllowed("python", [
@@ -153,5 +279,55 @@ describe("Python command sandbox", () => {
     expect(isAllowed("python", ["-m", "pip", "install", "attacker-package"])).toBe(
       false,
     );
+  });
+  it("directly selects idiomatic *_test.py files with parseable verbose output", () => {
+    const root = workspace();
+    writeFileSync(join(root, "pyproject.toml"), "[tool.pytest.ini_options]\n");
+    const plan = verificationPlanForWorkspace(root, {
+      generatedTests: [
+        {
+          path: "tests/calculator_test.py",
+          contents: "def test_add():\n    assert 1 + 2 == 3\n",
+        },
+      ],
+    });
+    expect(
+      plan.commands.find((cmd) => cmd.directTestPath === "tests/calculator_test.py"),
+    ).toMatchObject({
+      bin: "python",
+      args: ["-m", "pytest", "-vv", "tests/calculator_test.py"],
+      runner: "pytest",
+    });
+    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
+      true,
+    );
+  });
+
+  it("never lets a workflow smoke replace the full pytest suite", () => {
+    const root = workspace();
+    mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(root, "pyproject.toml"), "[tool.pytest.ini_options]\n");
+    writeFileSync(join(root, "test_host.py"), "def test_host(): assert True\n");
+    writeFileSync(
+      join(root, "test_generated.py"),
+      "def test_generated(): assert True\n",
+    );
+    writeFileSync(
+      join(root, ".github", "workflows", "factory.yml"),
+      "steps:\n  - run: python test_generated.py\n",
+    );
+    const plan = verificationPlanForWorkspace(root, {
+      generatedTests: [
+        {
+          path: "test_generated.py",
+          contents: "def test_generated(): assert True\n",
+        },
+      ],
+    });
+    expect(
+      plan.commands.some(
+        (cmd) => cmd.bin === "python" && cmd.args.join(" ") === "-m pytest -q",
+      ),
+    ).toBe(true);
   });
 });

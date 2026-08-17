@@ -17,7 +17,7 @@ import type { Health } from "../../../shared/schemas.js";
 import type { Theme } from "../../lib/useTheme.js";
 
 /**
- * LiveRouteBadge — who is serving RIGHT NOW, always on screen.
+ * LiveRouteBadge — who served the latest model call, always on screen.
  *
  * The whole point of the free-primary design is that a switch to a paid
  * provider can never happen quietly. Green means free and costing nothing;
@@ -41,11 +41,12 @@ function LiveRouteBadge({ health }: { health: Health | null }) {
         : "FREE — idle";
 
   const tip = onPaid
-    ? `A paid rescue is serving this call because the free route stalled: ` +
-      `${route.lastFailoverReason ?? "unknown reason"}. ` +
-      `The free route stays primary and is re-probed automatically. ` +
+    ? (route.lastFailoverReason
+        ? `An authorized paid rescue served the latest call after the free route stalled: ${route.lastFailoverReason}. `
+        : `An explicitly authorized paid provider served the latest call. `) +
       `Est. rescue spend in the last 24h: $${spend.toFixed(4)} of ` +
-      `$${route.paidBudget.limits.usdPerDay.toFixed(2)}.`
+      `$${route.paidBudget.limits.usdPerDay.toFixed(2)}. ` +
+      `${route.paidBudget.reserved ?? 0} paid call(s) are currently reserved.`
     : `Running on the FREE local route at zero cost. ` +
       `Free calls: ${route.counts.free}, paid rescues: ` +
       `${route.counts.anthropic + route.counts.openai}. ` +

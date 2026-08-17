@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { FileEdit } from "../../shared/schemas.js";
+import { safeResolveExistingPath } from "./fileWriter.js";
 
 /**
  * applyEdits.ts — turn anchored edits into new file contents, or refuse.
@@ -31,7 +31,41 @@ export function applyEdits(original: string, edits: FileEdit[]): EditOutcome {
     return { ok: false, reason: "no edits supplied for an existing file" };
   }
   let out = original;
+  let quotedCharacters = 0;
+  let replacementCharacters = 0;
   for (const [i, edit] of edits.entries()) {
+    quotedCharacters += edit.find.length;
+    replacementCharacters += edit.replace.length;
+    if (quotedCharacters > original.length * 0.5) {
+      return {
+        ok: false,
+        reason:
+          `edit ${i + 1}: the edit set quotes more than half of the existing file — ` +
+          "split the work into a smaller local change instead of disguising a whole-file rewrite",
+      };
+    }
+    const replacementLimit = Math.max(200, original.length * 0.5);
+    if (replacementCharacters > replacementLimit) {
+      return {
+        ok: false,
+        reason:
+          `edit ${i + 1}: replacement text exceeds the local-change budget — ` +
+          "split the work into smaller behavior-preserving edits",
+      };
+    }
+    const addedOpenComments =
+      (edit.replace.match(/\/\*/g)?.length ?? 0) -
+      (edit.find.match(/\/\*/g)?.length ?? 0);
+    const addedCloseComments =
+      (edit.replace.match(/\*\//g)?.length ?? 0) -
+      (edit.find.match(/\*\//g)?.length ?? 0);
+    if (addedOpenComments !== addedCloseComments) {
+      return {
+        ok: false,
+        reason: `edit ${i + 1}: unbalanced block-comment delimiters can disable unrelated code`,
+      };
+    }
+
     const first = out.indexOf(edit.find);
     if (first === -1) {
       return {
@@ -81,9 +115,22 @@ export function resolveGeneratedWrite(
 ): ResolvedWrite {
   let current: string | null = null;
   try {
-    current = readFile(join(workspacePath, relPath));
-  } catch {
-    current = null;
+    current = readFile(safeResolveExistingPath(workspacePath, relPath));
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code ?? "")
+        : "";
+    if (code === "ENOENT") {
+      current = null;
+    } else {
+      return {
+        contents: null,
+        edited: false,
+        reason:
+          "existing-path state could not be read safely; only ENOENT is treated as a new file",
+      };
+    }
   }
 
   if (current === null) {
@@ -91,7 +138,8 @@ export function resolveGeneratedWrite(
       return {
         contents: null,
         edited: false,
-        reason: "edits were supplied for a file that does not exist yet — send full contents",
+        reason:
+          "edits were supplied for a file that does not exist yet — send full contents",
       };
     }
     // An EMPTY new file is refused for the same reason an empty replacement
@@ -116,18 +164,21 @@ export function resolveGeneratedWrite(
       : { contents: null, edited: true, reason: outcome.reason };
   }
 
-  // FIX, DON'T BLOCK (owner rule 2026-08-16). The builder is now GIVEN the
-  // file's real contents, so a whole-file answer is an informed rewrite rather
-  // than a reconstruction from the filename. Accept it and let the export guard
-  // catch any actual destruction — refusing outright would stall real work over
-  // a formatting preference. An EMPTY body is still refused: that deletes a file
-  // by accident, never on purpose.
-  if (!file.contents.trim()) {
-    return {
-      contents: null,
-      edited: true,
-      reason: "empty replacement for an existing file — nothing to write",
-    };
+  // A zero-byte existing file has no behavior or text to preserve, and the
+  // edit schema cannot express an anchor into it. Treat nonempty contents as
+  // explicit initialization rather than a replacement.
+  if (current.length === 0 && file.contents.trim()) {
+    return { contents: file.contents, edited: true };
   }
-  return { contents: file.contents, edited: true };
+
+  // Every nonempty existing text file is edit-only, regardless of language or extension.
+  // An allowlist inevitably leaves a destructive path for the next stack
+  // (.cpp, .swift, .kt, templates, configs, and so on).
+  return {
+    contents: null,
+    edited: true,
+    reason:
+      "whole-file replacement of an existing file is refused — return anchored " +
+      "edits that quote the current file exactly",
+  };
 }

@@ -27,7 +27,10 @@ describe("RunOptionsSchema is strict", () => {
       goals: ["fix the failing test"],
       maxRepairLoops: 2,
       pushToOrigin: true,
+      allowPaidProviderCalls: false,
     });
-    expect(parsed.success, JSON.stringify(!parsed.success && parsed.error.issues)).toBe(true);
+    expect(parsed.success, JSON.stringify(!parsed.success && parsed.error.issues)).toBe(
+      true,
+    );
   });
 });

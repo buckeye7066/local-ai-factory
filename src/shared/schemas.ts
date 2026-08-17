@@ -343,8 +343,21 @@ export const FileBuildSchema = z.object({
 });
 export type FileBuild = z.infer<typeof FileBuildSchema>;
 
+export const TestCoverageSchema = z.object({
+  /** Stable engine-assigned user-flow or acceptance-criterion id (UF-n / AC-n). */
+  requirementId: z.string(),
+  /** Exact generated test path selected by a direct runner command. */
+  testPath: z.string(),
+  /** Exact active test title that the structured runner must report passed. */
+  testName: z.string(),
+  kind: z.enum(["unit", "integration", "browser"]),
+});
+export type TestCoverage = z.infer<typeof TestCoverageSchema>;
+
 export const TestPlanSchema = z.object({
   testPlan: z.string(),
+  /** Prose is diagnostic only; this mapping is the executable acceptance contract. */
+  coverage: z.array(TestCoverageSchema).optional(),
   files: z
     .array(
       z.object({
@@ -384,7 +397,10 @@ export const RepairResultSchema = z.object({
       z.object({
         path: z.string(),
         purpose: z.string().default(""),
-        contents: z.string(),
+        /** Full contents are valid only for a genuinely new file. */
+        contents: z.string().default(""),
+        /** Existing files must be changed through exact, grounded anchors. */
+        edits: z.array(FileEditSchema).default([]),
       }),
     )
     .default([]),
@@ -500,62 +516,74 @@ export const RunDestinationSchema = z.object({
   detail: z.string().nullable().default(null),
   /** Browsable URL once known (repo page, or a compare/PR link). */
   url: z.string().nullable().default(null),
+  /** Exact commit whose bytes were covered by the verification receipt. */
+  commitSha: z.string().nullable().optional(),
   deliveredAt: z.number().nullable().default(null),
 });
 export type RunDestination = z.infer<typeof RunDestinationSchema>;
 
-export const RunOptionsSchema = z.object({
-  codeProvider: ProviderNameSchema.optional(),
-  reviewProvider: ProviderNameSchema.optional(),
-  demo: z.boolean().optional(),
-  /**
-   * Publish the finished app to the owner's app store (axiombiolabs.org
-   * registry, which PromoPilot promotes from). Default true. Owner order
-   * 2026-08-15: "some things I work on are just for me" - unchecked, the app
-   * is still built, saved to GitHub, and hosted, but never listed or promoted.
-   */
-  publish: z.boolean().optional(),
-  /**
-   * Large evolution: plan the request into ordered slices and run them one at
-   * a time, each fully released before the next (client routes to /api/epics).
-   */
-  epic: z.boolean().optional(),
-  maxRepairLoops: z.number().optional(),
-  /** Client-supplied idempotency key (also accepted via Idempotency-Key header). */
-  idempotencyKey: z.string().min(1).max(200).optional(),
-  /** Optional overall run timeout in ms (overrides FACTORY_RUN_TIMEOUT_MS). */
-  timeoutMs: z.number().int().positive().max(3_600_000).optional(),
-  /**
-   * "new" (default) builds a fresh app from `idea`, exactly as before.
-   * "extend" ingests an existing codebase (from `repoSource`, or resolved
-   * automatically from free text in `idea` when `repoSource` is omitted) and
-   * implements `goals` (or, if empty, `idea` itself) against it in
-   * read-modify-write mode through the same pipeline + quality gates.
-   */
-  mode: z.enum(["new", "extend"]).optional(),
-  /** The TARGET repo — where output is written. */
-  repoSource: RepoSourceSchema.optional(),
-  /**
-   * ADDITIONAL, read-only SOURCE repos referenced alongside the target — e.g.
-   * "take the auth system from A and put it into B" (B = repoSource, A = one
-   * of these). Never written to; only read, understood, and ported from.
-   */
-  additionalRepoSources: z.array(RepoSourceSchema).max(5).optional(),
-  /** Finalized goal list (e.g. from the yes/no clarification loop). */
-  goals: z.array(z.string().min(1)).max(50).optional(),
-  /**
-   * For mode "new": the app/repo name the owner chose, and whether to create
-   * it on GitHub. Required by the UI for a from-scratch app.
-   */
-  newRepo: NewRepoSchema.optional(),
-  /**
-   * For mode "extend": push the run's `factory-deck/<id>` branch back to the
-   * attached repo's origin when the run completes. Default TRUE — the whole
-   * point of attaching a repo is that the work lands in it. Never a
-   * force-push, and never onto main/master: only the run's own branch.
-   */
-  pushToOrigin: z.boolean().optional(),
-})
+export const RunOptionsSchema = z
+  .object({
+    codeProvider: ProviderNameSchema.optional(),
+    reviewProvider: ProviderNameSchema.optional(),
+    /**
+     * Explicit authorization boundary for billable model calls.
+     *
+     * Omitted/false is FREE-ONLY even when paid keys are configured. The UI sets
+     * true only when the operator deliberately selects a paid provider. This
+     * prevents credentials merely existing on the machine from authorizing
+     * critical-stage upgrades, rescue failover, or concurrent paid workers.
+     */
+    allowPaidProviderCalls: z.boolean().optional(),
+    demo: z.boolean().optional(),
+    /**
+     * Publish the finished app to the owner's app store (axiombiolabs.org
+     * registry, which PromoPilot promotes from). Default true. Owner order
+     * 2026-08-15: "some things I work on are just for me" - unchecked, the app
+     * is still built, saved to GitHub, and hosted, but never listed or promoted.
+     */
+    publish: z.boolean().optional(),
+    /**
+     * Large evolution: plan the request into ordered slices and run them one at
+     * a time, each fully released before the next (client routes to /api/epics).
+     */
+    epic: z.boolean().optional(),
+    maxRepairLoops: z.number().optional(),
+    /** Client-supplied idempotency key (also accepted via Idempotency-Key header). */
+    idempotencyKey: z.string().min(1).max(200).optional(),
+    /** Optional overall run timeout in ms (overrides FACTORY_RUN_TIMEOUT_MS). */
+    timeoutMs: z.number().int().positive().max(3_600_000).optional(),
+    /**
+     * "new" (default) builds a fresh app from `idea`, exactly as before.
+     * "extend" ingests an existing codebase (from `repoSource`, or resolved
+     * automatically from free text in `idea` when `repoSource` is omitted) and
+     * implements `goals` (or, if empty, `idea` itself) against it in
+     * read-modify-write mode through the same pipeline + quality gates.
+     */
+    mode: z.enum(["new", "extend"]).optional(),
+    /** The TARGET repo — where output is written. */
+    repoSource: RepoSourceSchema.optional(),
+    /**
+     * ADDITIONAL, read-only SOURCE repos referenced alongside the target — e.g.
+     * "take the auth system from A and put it into B" (B = repoSource, A = one
+     * of these). Never written to; only read, understood, and ported from.
+     */
+    additionalRepoSources: z.array(RepoSourceSchema).max(5).optional(),
+    /** Finalized goal list (e.g. from the yes/no clarification loop). */
+    goals: z.array(z.string().min(1)).max(50).optional(),
+    /**
+     * For mode "new": the app/repo name the owner chose, and whether to create
+     * it on GitHub. Required by the UI for a from-scratch app.
+     */
+    newRepo: NewRepoSchema.optional(),
+    /**
+     * For mode "extend": push the run's `factory-deck/<id>` branch back to the
+     * attached repo's origin when the run completes. Default TRUE — the whole
+     * point of attaching a repo is that the work lands in it. Never a
+     * force-push, and never onto main/master: only the run's own branch.
+     */
+    pushToOrigin: z.boolean().optional(),
+  })
   // Unknown option keys FAIL LOUD instead of being silently stripped. A
   // misplaced or misspelled field (the FutureU `destination` class) used to
   // vanish here, silently turning an extend-a-repo run into a from-scratch
@@ -722,6 +750,7 @@ export const RouteStatusSchema = z.object({
     lastHour: z.number(),
     lastDay: z.number(),
     usdLastDay: z.number(),
+    reserved: z.number().int().nonnegative().optional(),
     exhausted: z.boolean(),
     reason: z.string().nullable(),
     limits: z.object({

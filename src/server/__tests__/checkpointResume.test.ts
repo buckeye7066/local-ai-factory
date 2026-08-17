@@ -13,8 +13,18 @@ const outsideRoot = resolve(process.cwd(), ".test-checkpoint-outside");
 afterAll(async () => {
   delete process.env.FACTORY_DATA_DIR;
   await rm(dataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  await rm(workspaceRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  await rm(outsideRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await rm(workspaceRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
+  await rm(outsideRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
 });
 
 describe("durable checkpoint continuation", () => {
@@ -59,7 +69,7 @@ describe("durable checkpoint continuation", () => {
     };
     await store.saveRun(run);
     await store.saveRunCheckpoint({
-      schemaVersion: 1,
+      schemaVersion: 3,
       runId: id,
       idea: "Build a checkpoint proof app",
       options: { demo: true },
@@ -73,6 +83,10 @@ describe("durable checkpoint continuation", () => {
         acceptanceCriteria: ["completed calls are not replayed"],
       },
       files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
+      writeRefusals: [],
+      blockingWriteRefusals: [],
       testWriterComplete: false,
       commandOutput: "",
       testsExecuted: false,
@@ -158,7 +172,7 @@ describe("durable checkpoint continuation", () => {
     };
     await store.saveRun(run);
     await store.saveRunCheckpoint({
-      schemaVersion: 1,
+      schemaVersion: 3,
       runId: id,
       idea: "Build a cancel-resume proof app",
       options: { demo: true },
@@ -172,6 +186,10 @@ describe("durable checkpoint continuation", () => {
         acceptanceCriteria: ["completed calls are not replayed"],
       },
       files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
+      writeRefusals: [],
+      blockingWriteRefusals: [],
       testWriterComplete: false,
       commandOutput: "",
       testsExecuted: false,
@@ -231,11 +249,15 @@ describe("durable checkpoint continuation", () => {
     };
     await store.saveRun(run);
     await store.saveRunCheckpoint({
-      schemaVersion: 1,
+      schemaVersion: 3,
       runId: id,
       idea: run.idea,
       options: { demo: true },
       files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
+      writeRefusals: [],
+      blockingWriteRefusals: [],
       testWriterComplete: false,
       commandOutput: "",
       testsExecuted: false,
@@ -318,5 +340,81 @@ describe("durable checkpoint continuation", () => {
     expect(normalized?.resumable).toBe(false);
     expect(normalized?.error).toMatch(/no durable checkpoint/i);
     expect(normalized?.error).not.toMatch(/Resume continues/i);
+  });
+
+  it("refuses a paid resume switch without consuming the resumable checkpoint", async () => {
+    vi.resetModules();
+    const store = await import("../storage/runsStore.js");
+    const { resumeRun, PaidProviderAuthorizationError } =
+      await import("../orchestrator/runFactory.js");
+    const { loadConfig, loadSecrets } = await import("../config.js");
+    const id = crypto.randomUUID();
+    const run: RunRecord = {
+      id,
+      idea: "Resume authorization proof",
+      status: "failed",
+      resumable: true,
+      demo: false,
+      codeProvider: "free",
+      reviewProvider: "free",
+      currentStage: null,
+      stages: freshStages(),
+      logs: [],
+      files: [],
+      repairLoops: 0,
+      providerUsage: {
+        free: { calls: 0 },
+        anthropic: { calls: 0 },
+        openai: { calls: 0 },
+        stub: { calls: 0 },
+        mock: { calls: 0 },
+        totalCalls: 0,
+      },
+      finalReport: null,
+      appName: null,
+      workspacePath: null,
+      error: "interrupted",
+      attribution: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    await store.saveRun(run);
+    await store.saveRunCheckpoint({
+      schemaVersion: 3,
+      runId: id,
+      idea: run.idea,
+      options: {
+        codeProvider: "free",
+        reviewProvider: "free",
+        allowPaidProviderCalls: false,
+      },
+      files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
+      writeRefusals: [],
+      blockingWriteRefusals: [],
+      testWriterComplete: false,
+      commandOutput: "",
+      testsExecuted: false,
+      testExit: null,
+      repairLoops: 0,
+      repairComplete: false,
+      updatedAt: Date.now(),
+    });
+
+    await expect(
+      resumeRun(
+        id,
+        { ...loadConfig({}), workspaceRoot },
+        loadSecrets({ OPENAI_API_KEY: "sk-test-openai" }),
+        { codeProvider: "openai", reviewProvider: "openai" },
+      ),
+    ).rejects.toBeInstanceOf(PaidProviderAuthorizationError);
+
+    const preserved = await store.getRunForExecution(id);
+    expect(preserved).toMatchObject({ status: "failed", resumable: true });
+    expect(await store.getRunCheckpoint(id)).toMatchObject({
+      options: { allowPaidProviderCalls: false },
+    });
   });
 });

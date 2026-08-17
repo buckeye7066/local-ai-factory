@@ -77,11 +77,15 @@ describe("deleteRun — the run record, its files and its checkpoint all go", ()
       },
     ]);
     await saveRunCheckpoint({
-      schemaVersion: 1,
+      schemaVersion: 3,
       runId: run.id,
       idea: "i",
       options: {},
       files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
+      writeRefusals: [],
+      blockingWriteRefusals: [],
       testWriterComplete: false,
       commandOutput: "",
       testsExecuted: false,
@@ -227,10 +231,12 @@ describe("push safety", () => {
   it("builds a GitHub compare link for https and ssh remotes", () => {
     expect(
       compareUrlFor("https://github.com/buckeye7066/incognito.git", "factory-deck/ab"),
-    ).toBe("https://github.com/buckeye7066/incognito/compare/factory-deck%2Fab?expand=1");
-    expect(compareUrlFor("git@github.com:buckeye7066/iplay.git", "factory-deck/cd")).toBe(
-      "https://github.com/buckeye7066/iplay/compare/factory-deck%2Fcd?expand=1",
+    ).toBe(
+      "https://github.com/buckeye7066/incognito/compare/factory-deck%2Fab?expand=1",
     );
+    expect(
+      compareUrlFor("git@github.com:buckeye7066/iplay.git", "factory-deck/cd"),
+    ).toBe("https://github.com/buckeye7066/iplay/compare/factory-deck%2Fcd?expand=1");
   });
 
   it("returns null for a non-GitHub remote instead of guessing a URL", () => {

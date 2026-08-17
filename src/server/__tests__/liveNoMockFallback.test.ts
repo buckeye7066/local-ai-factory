@@ -7,6 +7,7 @@ import { loadConfig, loadSecrets } from "../config.js";
 import {
   runFactory,
   MissingProviderCredentialError as RunMissingCred,
+  PaidProviderAuthorizationError,
 } from "../orchestrator/runFactory.js";
 
 const cfg = loadConfig({});
@@ -77,6 +78,28 @@ describe("live path forbids silent mock fallback", () => {
         secrets: loadSecrets({}),
       }),
     ).rejects.toBeInstanceOf(RunMissingCred);
+  });
+
+  it("does not treat a configured paid key as authorization to spend", async () => {
+    await expect(
+      runFactory({
+        idea: "Build without surprise billing",
+        options: {},
+        config: noLiveCfg,
+        secrets: loadSecrets({ OPENAI_API_KEY: "sk-test-openai" }),
+      }),
+    ).rejects.toBeInstanceOf(PaidProviderAuthorizationError);
+  });
+
+  it("rejects a paid pin unless the request carries the explicit authorization bit", async () => {
+    await expect(
+      runFactory({
+        idea: "Build without surprise billing",
+        options: { codeProvider: "openai", reviewProvider: "openai" },
+        config: cfg,
+        secrets: loadSecrets({ OPENAI_API_KEY: "sk-test-openai" }),
+      }),
+    ).rejects.toBeInstanceOf(PaidProviderAuthorizationError);
   });
 
   it("explicit demo still completes offline (dev path only)", async () => {

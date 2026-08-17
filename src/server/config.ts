@@ -41,8 +41,8 @@ function provider(value: string | undefined, fallback: ProviderName): ProviderNa
 
 /**
  * The FREE local route — the FCC proxy that "Claude Code - FREE (Ollama)"
- * turns on. This is the DEFAULT primary for every live run; Anthropic and
- * OpenAI exist only as a rescue tier for when it is genuinely wedged.
+ * turns on. This is the DEFAULT and FREE-ONLY path for every live run;
+ * Anthropic/OpenAI require an explicit per-run authorization bit.
  */
 export interface FreeRouteSettings {
   enabled: boolean;
@@ -87,10 +87,10 @@ export interface AppConfig {
    */
   enableResearch: boolean;
   /**
-   * Execute model-authored scripts (test/build/run/etc.). Defaults to TRUE:
-   * every run does real work (owner order 2026-08-13 — dry-run removed
-   * entirely; the command allowlist and workspace jail remain the safety
-   * boundary). ALLOW_UNTRUSTED_SCRIPTS=0 is only used by hermetic tests.
+   * Execute repository/model-authored scripts without an OS filesystem
+   * sandbox. Defaults FALSE: cwd validation is not a write jail, and a test can
+   * otherwise modify sibling workspaces or host files. Explicit opt-in remains
+   * available for owners who run Factory Deck inside their own container/VM.
    */
   allowUntrustedScripts: boolean;
   /**
@@ -134,9 +134,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     anthropicModel: env.ANTHROPIC_MODEL || "claude-opus-4-8",
     openaiModel: env.OPENAI_MODEL || "gpt-5.5",
-    // FREE-PRIMARY. The paid providers are a rescue tier, never the default —
-    // a config that defaults to paid is the exact failure this deck guards
-    // against.
+    // FREE-ONLY by default. A configured paid key/default is never sufficient
+    // authorization for a run; the request must grant it explicitly.
     defaultCodeProvider: provider(env.DEFAULT_CODE_PROVIDER, "free"),
     defaultReviewProvider: provider(env.DEFAULT_REVIEW_PROVIDER, "free"),
     maxRepairLoops: num(env.MAX_REPAIR_LOOPS, 3),
@@ -151,7 +150,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // Always resolved under the project root; the workspace writer enforces this too.
     workspaceRoot: resolve(process.cwd(), env.WORKSPACE_ROOT || "./workspaces"),
     enableResearch: bool(env.FACTORY_RESEARCH_ENABLED, true),
-    allowUntrustedScripts: bool(env.ALLOW_UNTRUSTED_SCRIPTS, true),
+    allowUntrustedScripts: bool(env.ALLOW_UNTRUSTED_SCRIPTS, false),
     bindLan: bool(env.FACTORY_BIND_LAN, false),
     port: num(env.PORT, 5179),
   };

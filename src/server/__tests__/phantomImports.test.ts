@@ -12,7 +12,8 @@ import {
 
 const dirs: string[] = [];
 afterAll(() => {
-  for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const d of dirs)
+    rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 function repo(manifests: Record<string, unknown>): string {
@@ -32,7 +33,7 @@ describe("importedPackages", () => {
   it("collects bare specifiers and ignores relative/builtin/url forms", () => {
     const src = [
       "import React from 'react';",
-      "import { Link } from \"react-router-dom\";",
+      'import { Link } from "react-router-dom";',
       "import { x } from './local';",
       "const fs = require('node:fs');",
       "const lazy = await import('@scope/pkg/deep');",
@@ -50,7 +51,10 @@ describe("declaredDependencies", () => {
   it("unions every manifest in a monorepo", () => {
     const root = repo({
       "": { dependencies: { react: "19" } },
-      "apps/web": { dependencies: { "react-router": "8" }, devDependencies: { vitest: "3" } },
+      "apps/web": {
+        dependencies: { "react-router": "8" },
+        devDependencies: { vitest: "3" },
+      },
     });
     const deps = declaredDependencies(root);
     expect(deps.has("react")).toBe(true);
@@ -61,7 +65,9 @@ describe("declaredDependencies", () => {
 
 describe("nearestDeclared", () => {
   it("maps react-router-dom to the declared react-router", () => {
-    expect(nearestDeclared("react-router-dom", new Set(["react-router"]))).toBe("react-router");
+    expect(nearestDeclared("react-router-dom", new Set(["react-router"]))).toBe(
+      "react-router",
+    );
   });
   it("returns null when nothing is close", () => {
     expect(nearestDeclared("left-pad", new Set(["react"]))).toBeNull();
@@ -111,14 +117,31 @@ describe("assessPhantomImports (the SermonSmith failure, twice over)", () => {
 
   it("passes once the build declares the dependency itself (manifests are read from disk)", () => {
     const root = repo({ "": { dependencies: { zod: "3" } } });
-    expect(assessPhantomImports(root, "src/a.js", "import z from 'zod';").refused).toBe(false);
+    expect(assessPhantomImports(root, "src/a.js", "import z from 'zod';").refused).toBe(
+      false,
+    );
+  });
+
+  it.each(["cts", "mts"])("checks undeclared imports in .%s files", (ext) => {
+    const root = repo({ "": { dependencies: { react: "19" } } });
+    const verdict = assessPhantomImports(
+      root,
+      `src/worker.${ext}`,
+      "import x from 'left-pad';",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toContain("left-pad");
   });
 
   it("is inert for non-source files and for a workspace with no manifests", () => {
     const root = repo({ "": { dependencies: { react: "19" } } });
-    expect(assessPhantomImports(root, "README.md", "import x from 'nope';").refused).toBe(false);
+    expect(
+      assessPhantomImports(root, "README.md", "import x from 'nope';").refused,
+    ).toBe(false);
     const bare = mkdtempSync(join(tmpdir(), "factory-phantom-bare-"));
     dirs.push(bare);
-    expect(assessPhantomImports(bare, "src/a.js", "import x from 'nope';").refused).toBe(false);
+    expect(
+      assessPhantomImports(bare, "src/a.js", "import x from 'nope';").refused,
+    ).toBe(false);
   });
 });

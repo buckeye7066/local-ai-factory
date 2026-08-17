@@ -59,7 +59,11 @@ import { OpenAIProvider } from "../providers/openaiProvider.js";
 import { FreeProvider } from "../providers/freeProvider.js";
 import { FailoverProvider } from "../providers/failoverProvider.js";
 import { withRetry, ProviderAbortError } from "../providers/types.js";
-import { getCancelSignal, requestCancel, clearCancel } from "../orchestrator/cancellation.js";
+import {
+  getCancelSignal,
+  requestCancel,
+  clearCancel,
+} from "../orchestrator/cancellation.js";
 import { startRun } from "../orchestrator/runFactory.js";
 import { loadConfig, loadSecrets } from "../config.js";
 import type {
@@ -202,7 +206,12 @@ class HangingPaidProvider implements LLMProvider {
     return true;
   }
   async generateText(): Promise<GenerateTextResult> {
-    return withRetry("test.hanging-paid", () => hang<GenerateTextResult>(), 3, this.signal);
+    return withRetry(
+      "test.hanging-paid",
+      () => hang<GenerateTextResult>(),
+      3,
+      this.signal,
+    );
   }
   async generateJson<T>(_input: GenerateJsonInput<T>): Promise<T> {
     return withRetry("test.hanging-paid", () => hang<T>(), 3, this.signal);
@@ -256,7 +265,9 @@ describe("FailoverProvider treats a ProviderAbortError as a hard stop, not a tra
 describe("end-to-end: a hung paid Anthropic call is bounded by FACTORY_RUN_TIMEOUT_MS", () => {
   it("marks the run failed (timed out) instead of hanging past the configured deadline", async () => {
     anthropicCreateCalls.length = 0;
-    const config = { ...loadConfig({ FACTORY_FREE_ENABLED: "0" } as NodeJS.ProcessEnv) };
+    const config = {
+      ...loadConfig({ FACTORY_FREE_ENABLED: "0" } as NodeJS.ProcessEnv),
+    };
     const secrets = loadSecrets({ ANTHROPIC_API_KEY: "sk-test" } as NodeJS.ProcessEnv);
 
     const run = startRun({
@@ -265,6 +276,7 @@ describe("end-to-end: a hung paid Anthropic call is bounded by FACTORY_RUN_TIMEO
         demo: false,
         codeProvider: "anthropic",
         reviewProvider: "anthropic",
+        allowPaidProviderCalls: true,
         timeoutMs: 150,
       },
       config,
