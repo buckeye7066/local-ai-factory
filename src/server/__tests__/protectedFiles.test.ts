@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   assessProtectedHostWrite,
+  exportedSymbols,
   _resetProtectedFilesCache,
 } from "../workspace/protectedFiles.js";
 
