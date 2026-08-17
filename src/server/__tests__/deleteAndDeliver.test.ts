@@ -82,6 +82,7 @@ describe("deleteRun — the run record, its files and its checkpoint all go", ()
       idea: "i",
       options: {},
       files: [],
+      writeRefusals: [],
       testWriterComplete: false,
       commandOutput: "",
       testsExecuted: false,
