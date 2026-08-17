@@ -353,3 +353,56 @@ describe("groundFinalReport — mechanical facts fill the gaps the model leaves"
     expect(out.caveats.join("\n")).toContain("src/App.test.tsx");
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* 7. Unwired scaffolding FAILS QA on extend runs (run 5590b773)      */
+/* ------------------------------------------------------------------ */
+
+import { enforceWiredIntegration } from "../workspace/unwiredFiles.js";
+
+describe("enforceWiredIntegration — features on paper fail QA, not just the caption", () => {
+  const passingQa = () => ({
+    summary: "All good.",
+    passed: true,
+    issues: [] as Array<{
+      severity: "low" | "medium" | "high" | "critical";
+      title: string;
+      detail: string;
+      file: string | null;
+      repairInstruction: string;
+    }>,
+  });
+
+  it("an extend run with unwired files fails QA with a concrete repair instruction", () => {
+    const qa = enforceWiredIntegration(
+      passingQa(),
+      ["src/components/OrgProfileForm.tsx", "src/lib/storage.ts"],
+      true,
+    );
+    expect(qa.passed).toBe(false);
+    expect(qa.summary).toContain("UNWIRED: 2");
+    expect(qa.issues[0].severity).toBe("high");
+    expect(qa.issues[0].detail).toContain("OrgProfileForm.tsx");
+    expect(qa.issues[0].repairInstruction).toContain("EDITING");
+    expect(qa.issues[0].repairInstruction).toContain("Do NOT delete");
+  });
+
+  it("keeps the QA critic's own issues behind the wiring issue", () => {
+    const base = passingQa();
+    base.issues.push({
+      severity: "medium",
+      title: "other",
+      detail: "d",
+      file: null,
+      repairInstruction: "r",
+    });
+    const qa = enforceWiredIntegration(base, ["src/x.ts"], true);
+    expect(qa.issues).toHaveLength(2);
+    expect(qa.issues[1].title).toBe("other");
+  });
+
+  it("fresh-app runs and fully-wired extend runs are untouched", () => {
+    expect(enforceWiredIntegration(passingQa(), ["src/x.ts"], false).passed).toBe(true);
+    expect(enforceWiredIntegration(passingQa(), [], true).passed).toBe(true);
+  });
+});

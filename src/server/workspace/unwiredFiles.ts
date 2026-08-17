@@ -129,3 +129,62 @@ export function unwiredCaveat(unwired: string[]): string | null {
 }
 
 export const _internal = { importFragments };
+
+/**
+ * UNWIRED SCAFFOLDING FAILS QA — it does not merely caption the report
+ * (2026-08-16, run 5590b773). The GrantFlow extend slice's intake said
+ * "You MUST wire the changes into src/App.tsx ..."; the builder wrote seven
+ * new source files, wired NONE of them, QA passed, and the caveat announcing
+ * "not reachable" appeared only at final review — after every chance to fix
+ * it had passed. Features on paper are the exact "interface decoration"
+ * failure the product doctrine forbids.
+ *
+ * This turns the same deterministic detection into a QA verdict: on an
+ * EXTEND run, generated source files that no pre-existing file references
+ * make QA fail with a high-severity issue carrying a concrete repair
+ * instruction, so the EXISTING repair loop gets its shot at wiring — and the
+ * loop's re-QA re-runs the detection, so it can only exit green when the
+ * wiring genuinely happened. Fresh-app runs are untouched (with no prior
+ * code there is no wiring claim to check — findUnwiredNewFiles already
+ * returns [] there).
+ */
+export interface QaLikeReport {
+  summary: string;
+  passed: boolean;
+  issues: Array<{
+    severity: "low" | "medium" | "high" | "critical";
+    title: string;
+    detail: string;
+    file: string | null;
+    repairInstruction: string;
+  }>;
+}
+
+export function enforceWiredIntegration<T extends QaLikeReport>(
+  qa: T,
+  unwired: string[],
+  isExtendRun: boolean,
+): T {
+  if (!isExtendRun || !unwired.length) return qa;
+  return {
+    ...qa,
+    passed: false,
+    summary: `UNWIRED: ${unwired.length} generated file(s) are reachable from nothing pre-existing. ${qa.summary}`,
+    issues: [
+      {
+        severity: "high" as const,
+        title: `${unwired.length} generated source file(s) are wired into nothing`,
+        detail:
+          `No pre-existing source file imports or routes to: ${unwired.join(", ")}. ` +
+          `Until wired, these are unreachable features — interface decoration, not delivered behavior.`,
+        file: unwired[0] ?? null,
+        repairInstruction:
+          `WIRE the generated files into the application's real entry points by EDITING ` +
+          `pre-existing files (imports, routes, component usage) so each becomes reachable. ` +
+          `Do NOT delete the generated files to silence this check, and do NOT create new ` +
+          `unreferenced files as "wiring".`,
+      },
+      ...qa.issues,
+    ],
+  };
+}
