@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   assessProtectedHostWrite,
@@ -14,7 +14,9 @@ function gitWorkspace(files: Record<string, string>): string {
   const path = mkdtempSync(join(tmpdir(), "factory-protected-"));
   workspaces.push(path);
   for (const [rel, contents] of Object.entries(files)) {
-    writeFileSync(join(path, rel), contents);
+    const absolute = join(path, rel);
+    mkdirSync(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, contents);
   }
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", path, ...args], { encoding: "utf8" });
@@ -168,6 +170,21 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     expect(verdict.refused).toBe(true);
     expect(verdict.reason).toMatch(/App\.jsx/);
     expect(verdict.reason).toMatch(/shadow extension variant/);
+  });
+
+  it("refuses nested and CommonJS-TypeScript shadow variants", () => {
+    const repo = gitWorkspace({
+      "src/vite.config.js": "export default {};",
+      "src/App.ts": "export default function App(){ return null; }",
+    });
+    expect(
+      assessProtectedHostWrite(repo, "src/vite.config.ts", "export default {};")
+        .refused,
+    ).toBe(true);
+    expect(
+      assessProtectedHostWrite(repo, "src/App.cts", "export default function App(){}")
+        .refused,
+    ).toBe(true);
   });
 
   it("leaves brand-new source files alone", () => {

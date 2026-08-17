@@ -157,10 +157,14 @@ describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
     expect(res.edited).toBe(false);
   });
 
-  it("still allows replacing an existing non-source file (docs, data)", () => {
+  it("requires anchored edits for existing docs and data too", () => {
     const root = workspace({ "docs/notes.md": "old" });
-    const res = resolveGeneratedWrite(root, "docs/notes.md", { contents: "new", edits: [] });
-    expect(res.contents).toBe("new");
+    const res = resolveGeneratedWrite(root, "docs/notes.md", {
+      contents: "new",
+      edits: [],
+    });
+    expect(res.contents).toBeNull();
+    expect(res.reason).toMatch(/whole-file replacement/i);
   });
 
   it("reports a failed anchor instead of writing anything", () => {

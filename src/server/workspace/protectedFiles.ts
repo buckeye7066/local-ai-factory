@@ -84,7 +84,7 @@ export function _resetProtectedFilesCache(): void {
   baselineCache.clear();
 }
 
-const SOURCE_RX = /\.(m?[jt]sx?|cjs)$/i;
+const SOURCE_RX = /\.[cm]?[jt]sx?$/i;
 
 /**
  * Exported symbol names of a JS/TS module — ESM `export` forms plus the
@@ -198,12 +198,10 @@ export function assessProtectedHostWrite(
   // always an accidental shadow entrypoint (for example App.tsx beside the
   // host's real App.jsx). Imports keep resolving the tracked file while the
   // generated feature remains unreachable.
-  if (
-    !isTracked &&
-    SOURCE_RX.test(norm) &&
-    !ROOT_CONFIG_RX.test(base) &&
-    !OTHER_ROOT_CONFIGS_RX.test(base)
-  ) {
+  const isRootToolConfig =
+    !norm.includes("/") &&
+    (ROOT_CONFIG_RX.test(base) || OTHER_ROOT_CONFIGS_RX.test(base));
+  if (!isTracked && SOURCE_RX.test(norm) && !isRootToolConfig) {
     const stem = norm.replace(SOURCE_RX, "");
     const sibling = [...tracked].find(
       (path) =>
