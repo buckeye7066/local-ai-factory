@@ -34,6 +34,46 @@ New projects run discovery and market evidence before Factory Deck so the
 implementation receives those findings instead of researching after the build.
 Existing project records retain their stored station order for continuity.
 
+## Extend persistence contract
+
+Factory Deck extend runs (including every Foundry Factory Deck dispatch that
+has a target) carry a standing **EXTEND PERSISTENCE CONTRACT**. It was taught
+from a measured GrantFlow extend (ba870e71, later repaired on GrantFlow as
+PR #1266 / `3060385`) so the next run cannot ship the same class of bugs.
+
+Pitfalls the contract names:
+
+- Replacing the host App shell, `server.js`, `schema.sql`, `client.js`, or
+  `migrate.js` with a from-scratch stub
+- Writing factory overlay files (`_gh_*`, `_restore_*`, `*_from_<sha>*`) into
+  the host repo or delivering them to origin
+- Incrementing unique counters (invoice / order / ticket numbers) in the
+  browser instead of an atomic server `INSERT … ON CONFLICT … DO UPDATE …
+  RETURNING`
+- Leaving `createStubEntityClient` / in-memory Maps as the production client
+  for a user-visible entity
+- Rewriting a live router in a new auth/org style instead of nesting under an
+  existing mount
+- Dropping sibling fields when moving one create-path concern server-side
+- Adding a table on only one of: schema.sql extras (both early-return and
+  fresh bootstrap), numbered SQLite migration, numbered Postgres twin, test
+  fixture
+
+Mechanical guards (Factory Deck, not GrantFlow):
+
+- `assessProtectedHostWrite` refuses overlay names and an 80% shrink of host
+  spine files
+- The file-builder EXTEND prompt and `composeExtendIdea` append the contract
+  so spec / architect / planner / builder all see it
+- Extend QA fails if generated paths still include `_gh_*` overlays or a
+  generated client/entity map still contains `createStubEntityClient`
+- Foundry's Factory Deck station injects the same contract into `goals` (and
+  a one-line pointer on `idea`) when a target exists
+
+FlexFactor's `prodready` station is unchanged here. When FlexFactor scores
+these persistence gates, Foundry already forwards `--program` / `--provider`
+and does not absorb that CLI.
+
 ## Adapter configuration
 
 ```dotenv
@@ -129,14 +169,14 @@ Unchanged notes are deduplicated by absolute path and content hash.
 ## Desktop launcher
 
 The existing Factory Deck launcher now creates or repairs the **Purpose Foundry**
-desktop shortcut automatically. The normal `scripts\Install-Desktop-Icon.ps1`
+desktop shortcut automatically. The normal `scripts\\Install-Desktop-Icon.ps1`
 installer also creates both shortcuts together. To repair only Purpose Foundry,
-run `scripts\Install-Purpose-Foundry-Icon.ps1`.
+run `scripts\\Install-Purpose-Foundry-Icon.ps1`.
 
-The Purpose Foundry shortcut uses `assets\purpose-foundry.ico`, starts the same
+The Purpose Foundry shortcut uses `assets\\purpose-foundry.ico`, starts the same
 dependable Factory Deck backend, and opens `?mode=foundry`. The existing Factory
 Deck shortcut continues to open its normal New Run screen.
 
 The launchers do not bypass Windows execution policy. If a downloaded checkout
 is marked as blocked, inspect the scripts and explicitly run
-`Get-ChildItem scripts\*.ps1 | Unblock-File` once.
+`Get-ChildItem scripts\\*.ps1 | Unblock-File` once.
