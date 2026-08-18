@@ -170,14 +170,14 @@ Unchanged notes are deduplicated by absolute path and content hash.
 ## Desktop launcher
 
 The existing Factory Deck launcher now creates or repairs the **Purpose Foundry**
-desktop shortcut automatically. The normal `scripts\\Install-Desktop-Icon.ps1`
+desktop shortcut automatically. The normal `scripts\Install-Desktop-Icon.ps1`
 installer also creates both shortcuts together. To repair only Purpose Foundry,
-run `scripts\\Install-Purpose-Foundry-Icon.ps1`.
+run `scripts\Install-Purpose-Foundry-Icon.ps1`.
 
-The Purpose Foundry shortcut uses `assets\\purpose-foundry.ico`, starts the same
+The Purpose Foundry shortcut uses `assets\purpose-foundry.ico`, starts the same
 dependable Factory Deck backend, and opens `?mode=foundry`. The existing Factory
 Deck shortcut continues to open its normal New Run screen.
 
 The launchers do not bypass Windows execution policy. If a downloaded checkout
 is marked as blocked, inspect the scripts and explicitly run
-`Get-ChildItem scripts\\*.ps1 | Unblock-File` once.
+`Get-ChildItem scripts\*.ps1 | Unblock-File` once.
