@@ -67,8 +67,9 @@ Mechanical guards (Factory Deck, not GrantFlow):
   so spec / architect / planner / builder all see it
 - Extend QA fails if generated paths still include `_gh_*` overlays or a
   generated client/entity map still contains `createStubEntityClient`
-- Foundry's Factory Deck station injects the same contract into `goals` (and
-  a one-line pointer on `idea`) when a target exists
+- Foundry Factory Deck dispatches inherit the same contract: `composeExtendIdea`
+  appends it to every extend idea. Call `withExtendPersistenceGoals` on posted
+  `goals` when a target exists so the posted run options carry it too
 
 FlexFactor's `prodready` station is unchanged here. When FlexFactor scores
 these persistence gates, Foundry already forwards `--program` / `--provider`
