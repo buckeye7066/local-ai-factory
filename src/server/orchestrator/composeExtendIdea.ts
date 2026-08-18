@@ -14,12 +14,29 @@ import type {
  * exists, keep its name, here is its stack, here is what to add" — and, for a
  * multi-program combination, "here is what else to glean from / port in."
  */
+
+/**
+ * Standing rules every extend run must carry — GrantFlow ba870e71 / PR #1266.
+ * Spec, architect, planner, file builder, and Foundry Factory Deck dispatch
+ * all read this same text.
+ */
+export const EXTEND_PERSISTENCE_CONTRACT =
+  "EXTEND PERSISTENCE CONTRACT: Do not regenerate App.jsx/App.tsx/server.js/schema.sql/client.js/migrate.js as whole files — edits only. Never write _gh_* / _restore_* / *_from_<sha>* overlay files into the host repo. Unique counters (invoice/order/ticket numbers) are allocated atomically on the server (INSERT … ON CONFLICT … DO UPDATE … RETURNING), never incremented in the browser. Do not leave createStubEntityClient or in-memory Maps as the production client for a user-visible entity — real route + table + client map, or do not expose it. Do not rewrite a live router in a new auth style; nest new routes under an existing mount. New tables: IF NOT EXISTS extras after schema.sql on BOTH the early-return and fresh-bootstrap paths, plus numbered SQLite AND Postgres twins. Changing one create-path field must not drop sibling fields or calls.";
+
+/** Append the standing contract once so Foundry / Factory Deck cannot omit it. */
+export function withExtendPersistenceGoals(goals: string[]): string[] {
+  if (goals.some((g) => g.includes("EXTEND PERSISTENCE CONTRACT"))) return goals;
+  return [...goals, EXTEND_PERSISTENCE_CONTRACT];
+}
+
 export function composeExtendIdea(
   analysis: RepoAnalysis,
   goals: string[],
   additionalSources: AdditionalSourceContext[] = [],
 ): string {
-  const goalList = goals.map((g, i) => `${i + 1}. ${g}`).join("\n");
+  const goalList = withExtendPersistenceGoals(goals)
+    .map((g, i) => `${i + 1}. ${g}`)
+    .join("\n");
   return [
     `This is NOT a new app. It is an EXISTING application called "${analysis.appNameGuess}" that already ships.`,
     `Keep the appName exactly "${analysis.appNameGuess}" in your response — do not rename it.`,
