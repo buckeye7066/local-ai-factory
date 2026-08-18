@@ -68,8 +68,8 @@ Mechanical guards (Factory Deck, not GrantFlow):
 - Extend QA fails if generated paths still include `_gh_*` overlays or a
   generated client/entity map still contains `createStubEntityClient`
 - Foundry Factory Deck dispatches inherit the same contract: `composeExtendIdea`
-  appends it to every extend idea. Call `withExtendPersistenceGoals` on posted
-  `goals` when a target exists so the posted run options carry it too
+  appends it to every extend idea, and the Factory Deck station also appends it
+  to posted `goals` (plus a one-line `idea` pointer) when a target exists
 
 FlexFactor's `prodready` station is unchanged here. When FlexFactor scores
 these persistence gates, Foundry already forwards `--program` / `--provider`
@@ -79,7 +79,7 @@ and does not absorb that CLI.
 
 ```dotenv
 # Existing Obsidian intake
-PURPOSE_FOUNDRY_OBSIDIAN_INBOX=C:\Users\YourUserName\Documents\Obsidian Vault\Purpose Foundry
+PURPOSE_FOUNDRY_OBSIDIAN_INBOX=C:\\Users\\YourUserName\\Documents\\Obsidian Vault\\Purpose Foundry
 
 # Existing deployed/local programs
 PURPOSE_FOUNDRY_REPO_REWARDS_URL=https://web-production-d7db7.up.railway.app
@@ -90,7 +90,7 @@ PURPOSE_FOUNDRY_GOOGLE_PLAY_TRACK=internal
 # PURPOSE_FOUNDRY_GALAXY_GMS=N
 
 # Existing FlexFactor installation
-PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT=C:\Users\firer\flexfactor\flexfactor.py
+PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT=C:\\Users\\firer\\flexfactor\\flexfactor.py
 PURPOSE_FOUNDRY_PYTHON=python
 PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER=ollama
 PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST=150
@@ -99,8 +99,8 @@ PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST=150
 PURPOSE_FOUNDRY_WATCH_URLS=https://example.app/health,https://api.example.app/health
 ```
 
-`PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER` accepts `ollama`, `anthropic`, or
-`openai`. When omitted, Factory Deck's free route maps to local Ollama; a paid
+`PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER` accepts `ollama`, `anthropic`,
+`openai`, `xai`, or `grok`. When omitted, Factory Deck's free route maps to local Ollama; a paid
 Factory Deck selection maps to the corresponding FlexFactor provider. Cloud
 Scout does not send program context unless
 `PURPOSE_FOUNDRY_ALLOW_REMOTE_PROGRAM_CONTEXT=1` is explicitly configured.
