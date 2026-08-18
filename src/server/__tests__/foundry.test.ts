@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FoundryAdapters,
+  FOUNDRY_FLEXFACTOR_PROVIDER_RE,
   repoRewardsQuery,
   repoSourceFromTarget,
 } from "../foundry/adapters.js";
@@ -19,6 +20,15 @@ import {
 } from "../foundry/model.js";
 
 describe("Purpose Foundry", () => {
+  it("accepts FlexFactor xai and grok providers used by Factory Deck paid routes", () => {
+    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("ollama")).toBe(true);
+    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("anthropic")).toBe(true);
+    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("openai")).toBe(true);
+    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("xai")).toBe(true);
+    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("grok")).toBe(true);
+    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("azure")).toBe(false);
+  });
+
   it("turns an Obsidian note into a versioned project constitution", async () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);

@@ -68,8 +68,8 @@ Mechanical guards (Factory Deck, not GrantFlow):
 - Extend QA fails if generated paths still include `_gh_*` overlays or a
   generated client/entity map still contains `createStubEntityClient`
 - Foundry Factory Deck dispatches inherit the same contract: `composeExtendIdea`
-  appends it to every extend idea. Call `withExtendPersistenceGoals` on posted
-  `goals` when a target exists so the posted run options carry it too
+  appends it to every extend idea, and the Factory Deck station also appends it
+  to posted `goals` (plus a one-line `idea` pointer) when a target exists
 
 FlexFactor's `prodready` station is unchanged here. When FlexFactor scores
 these persistence gates, Foundry already forwards `--program` / `--provider`
@@ -99,8 +99,8 @@ PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST=150
 PURPOSE_FOUNDRY_WATCH_URLS=https://example.app/health,https://api.example.app/health
 ```
 
-`PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER` accepts `ollama`, `anthropic`, or
-`openai`. When omitted, Factory Deck's free route maps to local Ollama; a paid
+`PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER` accepts `ollama`, `anthropic`,
+`openai`, `xai`, or `grok`. When omitted, Factory Deck's free route maps to local Ollama; a paid
 Factory Deck selection maps to the corresponding FlexFactor provider. Cloud
 Scout does not send program context unless
 `PURPOSE_FOUNDRY_ALLOW_REMOTE_PROGRAM_CONTEXT=1` is explicitly configured.
@@ -170,14 +170,14 @@ Unchanged notes are deduplicated by absolute path and content hash.
 ## Desktop launcher
 
 The existing Factory Deck launcher now creates or repairs the **Purpose Foundry**
-desktop shortcut automatically. The normal `scripts\\Install-Desktop-Icon.ps1`
+desktop shortcut automatically. The normal `scripts\Install-Desktop-Icon.ps1`
 installer also creates both shortcuts together. To repair only Purpose Foundry,
-run `scripts\\Install-Purpose-Foundry-Icon.ps1`.
+run `scripts\Install-Purpose-Foundry-Icon.ps1`.
 
-The Purpose Foundry shortcut uses `assets\\purpose-foundry.ico`, starts the same
+The Purpose Foundry shortcut uses `assets\purpose-foundry.ico`, starts the same
 dependable Factory Deck backend, and opens `?mode=foundry`. The existing Factory
 Deck shortcut continues to open its normal New Run screen.
 
 The launchers do not bypass Windows execution policy. If a downloaded checkout
 is marked as blocked, inspect the scripts and explicitly run
-`Get-ChildItem scripts\\*.ps1 | Unblock-File` once.
+`Get-ChildItem scripts\*.ps1 | Unblock-File` once.
