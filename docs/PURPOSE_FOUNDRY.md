@@ -79,7 +79,7 @@ and does not absorb that CLI.
 
 ```dotenv
 # Existing Obsidian intake
-PURPOSE_FOUNDRY_OBSIDIAN_INBOX=C:\\Users\\YourUserName\\Documents\\Obsidian Vault\\Purpose Foundry
+PURPOSE_FOUNDRY_OBSIDIAN_INBOX=C:\Users\YourUserName\Documents\Obsidian Vault\Purpose Foundry
 
 # Existing deployed/local programs
 PURPOSE_FOUNDRY_REPO_REWARDS_URL=https://web-production-d7db7.up.railway.app
@@ -90,7 +90,7 @@ PURPOSE_FOUNDRY_GOOGLE_PLAY_TRACK=internal
 # PURPOSE_FOUNDRY_GALAXY_GMS=N
 
 # Existing FlexFactor installation
-PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT=C:\\Users\\firer\\flexfactor\\flexfactor.py
+PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT=C:\Users\firer\flexfactor\flexfactor.py
 PURPOSE_FOUNDRY_PYTHON=python
 PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER=ollama
 PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST=150
