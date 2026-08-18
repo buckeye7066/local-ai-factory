@@ -9,6 +9,10 @@ import {
   repoSourceFromTarget,
 } from "../foundry/adapters.js";
 import {
+  EXTEND_PERSISTENCE_CONTRACT,
+  withExtendPersistenceGoals,
+} from "../orchestrator/composeExtendIdea.js";
+import {
   FoundryStore,
   STATIONS,
   intakeFromMarkdown,
@@ -140,6 +144,12 @@ describe("Purpose Foundry", () => {
     expect(second.imported).toBe(0);
     expect(second.unchanged).toBe(1);
     expect(await store.list()).toHaveLength(1);
+  });
+
+  it("carries the extend persistence contract into Factory Deck extend goals", () => {
+    const goals = withExtendPersistenceGoals(["Match people to real funding"]);
+    expect(goals).toContain(EXTEND_PERSISTENCE_CONTRACT);
+    expect(goals[0]).toBe("Match people to real funding");
   });
 
   it("classifies explicit repository targets without guessing prose", () => {

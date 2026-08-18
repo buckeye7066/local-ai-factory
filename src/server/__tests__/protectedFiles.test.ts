@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   assessProtectedHostWrite,
+  isFactoryOverlayPath,
   _resetProtectedFilesCache,
 } from "../workspace/protectedFiles.js";
 
@@ -13,7 +14,9 @@ function gitWorkspace(files: Record<string, string>): string {
   const path = mkdtempSync(join(tmpdir(), "factory-protected-"));
   workspaces.push(path);
   for (const [rel, contents] of Object.entries(files)) {
-    writeFileSync(join(path, rel), contents);
+    const full = join(path, rel);
+    mkdirSync(join(full, ".."), { recursive: true });
+    writeFileSync(full, contents);
   }
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", path, ...args], { encoding: "utf8" });
@@ -79,8 +82,6 @@ describe("assessProtectedHostWrite", () => {
     expect(
       assessProtectedHostWrite(ws, "vitest.config.js", "export default { hijacked: true }").refused,
     ).toBe(true);
-    // The subtle one: NEW vitest.config.ts outranks the tracked .js in vitest's
-    // resolution — writing it redirects discovery without touching a tracked file.
     const hijack = assessProtectedHostWrite(ws, "vitest.config.ts", "export default {}");
     expect(hijack.refused).toBe(true);
     expect(hijack.reason).toMatch(/take precedence/);
@@ -149,5 +150,44 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
   it("leaves brand-new source files alone", () => {
     const repo = gitWorkspace({ "auth.js": "export const A = 1;" });
     expect(assessProtectedHostWrite(repo, "brandNew.js", "// anything").refused).toBe(false);
+  });
+});
+
+describe("factory overlay names (GrantFlow extend ba870e71)", () => {
+  it("classifies _gh_*, root _restore_*, and *_from_<sha>*", () => {
+    expect(isFactoryOverlayPath("_gh_0179.sql")).toBe(true);
+    expect(isFactoryOverlayPath("_gh_CreateInvoice.jsx")).toBe(true);
+    expect(isFactoryOverlayPath("scratch/_gh_main_server.js")).toBe(true);
+    expect(isFactoryOverlayPath("_restore_server_from_2a77487.js")).toBe(true);
+    expect(isFactoryOverlayPath("notes_from_alice.md")).toBe(false);
+    expect(isFactoryOverlayPath("src/App.jsx")).toBe(false);
+  });
+
+  it("refuses overlay writes even in a non-git (new-app) workspace", () => {
+    const path = mkdtempSync(join(tmpdir(), "factory-protected-nogit-"));
+    workspaces.push(path);
+    const verdict = assessProtectedHostWrite(path, "_gh_main_client.js", "export default 1\n");
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/overlay/);
+  });
+
+  it("refuses a tracked host client.js / App.jsx shrink the same way as package.json", () => {
+    const fatClient = `${"export const api = {};\n".repeat(80)}export function keep() {}\n`;
+    const fatApp = `${"import X from './x';\n".repeat(40)}export default function App() { return null }\n`;
+    const ws = gitWorkspace({
+      "src/api/client.js": fatClient,
+      "src/App.jsx": fatApp,
+    });
+    const clientStub = assessProtectedHostWrite(ws, "src/api/client.js", "export const api = {};\n");
+    expect(clientStub.refused).toBe(true);
+    expect(clientStub.reason).toMatch(/collapse the host spine/);
+    const appStub = assessProtectedHostWrite(
+      ws,
+      "src/App.jsx",
+      "export default function App() { return <div/> }\n",
+    );
+    expect(appStub.refused).toBe(true);
+    const grown = assessProtectedHostWrite(ws, "src/api/client.js", `${fatClient}\nexport const extra = 1;\n`);
+    expect(grown.refused).toBe(false);
   });
 });

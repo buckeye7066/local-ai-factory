@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { isFactoryOverlayPath } from "./protectedFiles.js";
 
 /**
  * unwiredFiles.ts — mechanical honesty about SCAFFOLDING in extend runs.
@@ -34,6 +35,8 @@ const SKIP_DIRS = new Set([
 ]);
 const MAX_SCAN_FILES = 4000;
 const MAX_FILE_BYTES = 512 * 1024;
+const STUB_CLIENT_PATH_RX =
+  /(?:^|\/)(?:client|entities|entityResourceMap)[^/]*\.(?:js|ts|jsx|tsx)$/i;
 
 function walkSourceFiles(root: string): string[] {
   const out: string[] = [];
@@ -72,6 +75,29 @@ function importFragments(relPath: string): string[] {
  * result for a new-app run (no pre-existing files) is honest: with no prior
  * code there is no wiring claim to check.
  */
+function persistenceViolationPaths(
+  workspacePath: string,
+  generatedPaths: string[],
+): string[] {
+  const extra: string[] = [];
+  for (const raw of generatedPaths) {
+    const n = raw.replace(/\\/g, "/");
+    if (isFactoryOverlayPath(n)) extra.push(n);
+  }
+  for (const raw of generatedPaths) {
+    const n = raw.replace(/\\/g, "/");
+    if (!STUB_CLIENT_PATH_RX.test(n)) continue;
+    try {
+      if (readFileSync(join(workspacePath, n), "utf8").includes("createStubEntityClient")) {
+        extra.push(n);
+      }
+    } catch {
+      /* not on disk yet — write-time overlay refuse still applies */
+    }
+  }
+  return [...new Set(extra)];
+}
+
 export function findUnwiredNewFiles(
   workspacePath: string,
   generatedPaths: string[],
@@ -79,6 +105,7 @@ export function findUnwiredNewFiles(
   const generated = new Set(
     generatedPaths.map((p) => p.replace(/\\/g, "/")),
   );
+  const persistenceHits = persistenceViolationPaths(workspacePath, generatedPaths);
   const candidates = generatedPaths.filter((p) => {
     const n = p.replace(/\\/g, "/");
     return (
@@ -87,13 +114,13 @@ export function findUnwiredNewFiles(
       (n.startsWith("src/") || n.startsWith("backend/"))
     );
   });
-  if (!candidates.length) return [];
+  if (!candidates.length) return persistenceHits.sort();
 
   const preExisting = walkSourceFiles(workspacePath).filter((abs) => {
     const rel = relative(workspacePath, abs).replace(/\\/g, "/");
     return !generated.has(rel) && !TEST_LIKE.test(rel);
   });
-  if (!preExisting.length) return [];
+  if (!preExisting.length) return persistenceHits.sort();
 
   const texts: string[] = [];
   for (const abs of preExisting) {
@@ -113,7 +140,7 @@ export function findUnwiredNewFiles(
     );
     if (!wired) unwired.push(candidate.replace(/\\/g, "/"));
   }
-  return unwired.sort();
+  return [...new Set([...unwired, ...persistenceHits])].sort();
 }
 
 /** One-line caveat for the final report; null when everything is wired. */
@@ -166,25 +193,114 @@ export function enforceWiredIntegration<T extends QaLikeReport>(
   isExtendRun: boolean,
 ): T {
   if (!isExtendRun || !unwired.length) return qa;
+  const overlays = unwired.filter(isFactoryOverlayPath);
+  const stubClients = unwired.filter(
+    (p) => STUB_CLIENT_PATH_RX.test(p.replace(/\\/g, "/")) && !isFactoryOverlayPath(p),
+  );
+  const rest = unwired.filter(
+    (p) => !overlays.includes(p) && !stubClients.includes(p),
+  );
+  const withPersist = enforceExtendPersistenceQa(
+    qa,
+    overlays,
+    stubClients.map((path) => ({
+      path,
+      contents: "createStubEntityClient",
+    })),
+    true,
+  );
+  if (!rest.length) return withPersist;
   return {
-    ...qa,
+    ...withPersist,
     passed: false,
-    summary: `UNWIRED: ${unwired.length} generated file(s) are reachable from nothing pre-existing. ${qa.summary}`,
+    summary: `UNWIRED: ${rest.length} generated file(s) are reachable from nothing pre-existing. ${withPersist.summary}`,
     issues: [
       {
         severity: "high" as const,
-        title: `${unwired.length} generated source file(s) are wired into nothing`,
+        title: `${rest.length} generated source file(s) are wired into nothing`,
         detail:
-          `No pre-existing source file imports or routes to: ${unwired.join(", ")}. ` +
+          `No pre-existing source file imports or routes to: ${rest.join(", ")}. ` +
           `Until wired, these are unreachable features — interface decoration, not delivered behavior.`,
-        file: unwired[0] ?? null,
+        file: rest[0] ?? null,
         repairInstruction:
           `WIRE the generated files into the application's real entry points by EDITING ` +
           `pre-existing files (imports, routes, component usage) so each becomes reachable. ` +
           `Do NOT delete the generated files to silence this check, and do NOT create new ` +
           `unreferenced files as "wiring".`,
       },
-      ...qa.issues,
+      ...withPersist.issues,
     ],
+  };
+}
+
+/** Overlay names or leftover createStubEntityClient in a generated client/map. */
+export function findPersistenceContractViolations(
+  generatedPaths: string[],
+  generatedFiles?: Iterable<{ path: string; contents: string }>,
+): { overlays: string[]; stubClients: string[] } {
+  const overlays = [
+    ...new Set(
+      generatedPaths.map((p) => p.replace(/\\/g, "/")).filter(isFactoryOverlayPath),
+    ),
+  ].sort();
+  const stubClients: string[] = [];
+  if (generatedFiles) {
+    for (const file of generatedFiles) {
+      const n = file.path.replace(/\\/g, "/");
+      if (
+        STUB_CLIENT_PATH_RX.test(n) &&
+        file.contents.includes("createStubEntityClient")
+      ) {
+        stubClients.push(n);
+      }
+    }
+  }
+  return { overlays, stubClients: [...new Set(stubClients)].sort() };
+}
+
+/**
+ * EXTEND QA net for the ba870e71 persistence pitfalls. Overlay writes are
+ * also refused at assessProtectedHostWrite; this fails QA if any still appear
+ * in the generated set, or if a generated client/entity map still ships
+ * createStubEntityClient.
+ */
+export function enforceExtendPersistenceQa<T extends QaLikeReport>(
+  qa: T,
+  generatedPaths: string[],
+  generatedFiles: Iterable<{ path: string; contents: string }> | undefined,
+  isExtendRun: boolean,
+): T {
+  if (!isExtendRun) return qa;
+  const { overlays, stubClients } = findPersistenceContractViolations(
+    generatedPaths,
+    generatedFiles,
+  );
+  if (!overlays.length && !stubClients.length) return qa;
+  const issues = [...qa.issues];
+  if (overlays.length) {
+    issues.unshift({
+      severity: "high",
+      title: `${overlays.length} factory overlay file(s) must not ship`,
+      detail: `Generated overlay/scratch paths: ${overlays.join(", ")}. These must never be written into an extend workspace or delivered to origin.`,
+      file: overlays[0] ?? null,
+      repairInstruction:
+        "Delete the _gh_* / _restore_* / *_from_<sha>* overlay files. Edit the host files in place instead.",
+    });
+  }
+  if (stubClients.length) {
+    issues.unshift({
+      severity: "high",
+      title: "User-visible entity still uses createStubEntityClient",
+      detail: `${stubClients.join(", ")} still contains createStubEntityClient — toasts succeed, reload loses the data.`,
+      file: stubClients[0] ?? null,
+      repairInstruction:
+        "Replace the stub with a real route + table + client map, or do not expose the entity.",
+    });
+  }
+  return {
+    ...qa,
+    passed: false,
+    summary: `PERSISTENCE: overlay or stub-entity client in generated files. ${qa.summary}`,
+    issues,
   };
 }
