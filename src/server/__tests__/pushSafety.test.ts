@@ -18,6 +18,10 @@ import { pushBranch, commitRunFiles, originUrl } from "../workspace/gitOps.js";
 const git = (args: string[], cwd: string) =>
   execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
+/** Run git against a bare repository, using --git-dir to satisfy safe.bareRepository=explicit. */
+const gitBare = (args: string[], bareDir: string) =>
+  execFileSync("git", ["--git-dir=.", ...args], { cwd: bareDir, encoding: "utf8" }).trim();
+
 /** A bare "remote" plus a working clone with an initial commit on main. */
 async function makeRemoteAndClone() {
   const root = await mkdtemp(join(tmpdir(), "factory-push-"));
@@ -42,13 +46,13 @@ async function makeRemoteAndClone() {
 }
 
 const remoteBranches = (remote: string) =>
-  git(["branch", "--format=%(refname:short)"], remote).split("\n").filter(Boolean);
+  gitBare(["branch", "--format=%(refname:short)"], remote).split("\n").filter(Boolean);
 
 describe("pushBranch — what may reach the owner's repo", () => {
   it("REFUSES to push main, and the remote is genuinely unchanged", async () => {
     const { root, remote, clone } = await makeRemoteAndClone();
     try {
-      const before = git(["rev-parse", "main"], remote);
+      const before = gitBare(["rev-parse", "main"], remote);
       await writeFile(join(clone, "sneaky.txt"), "should never land on main\n");
       const commit = await commitRunFiles(clone, ["sneaky.txt"], "run output");
       expect(commit.committed).toBe(true);
@@ -58,7 +62,7 @@ describe("pushBranch — what may reach the owner's repo", () => {
       expect(res.pushed).toBe(false);
       expect(res.detail).toMatch(/Refused/);
       // The guard is only real if the remote did not move.
-      expect(git(["rev-parse", "main"], remote)).toBe(before);
+      expect(gitBare(["rev-parse", "main"], remote)).toBe(before);
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
@@ -67,7 +71,7 @@ describe("pushBranch — what may reach the owner's repo", () => {
   it("PUSHES the run's own factory-deck branch and the remote really gains it", async () => {
     const { root, remote, clone } = await makeRemoteAndClone();
     try {
-      const mainBefore = git(["rev-parse", "main"], remote);
+      const mainBefore = gitBare(["rev-parse", "main"], remote);
       expect(remoteBranches(remote)).not.toContain("factory-deck/abcd1234");
 
       git(["checkout", "-q", "-b", "factory-deck/abcd1234"], clone);
@@ -81,10 +85,10 @@ describe("pushBranch — what may reach the owner's repo", () => {
       expect(remoteBranches(remote)).toContain("factory-deck/abcd1234");
       // The delivered file is really on the delivered branch...
       expect(
-        git(["show", "factory-deck/abcd1234:feature.txt"], remote),
+        gitBare(["show", "factory-deck/abcd1234:feature.txt"], remote),
       ).toContain("generated");
       // ...and main was not touched.
-      expect(git(["rev-parse", "main"], remote)).toBe(mainBefore);
+      expect(gitBare(["rev-parse", "main"], remote)).toBe(mainBefore);
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
