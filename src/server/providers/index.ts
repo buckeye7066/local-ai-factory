@@ -6,8 +6,21 @@ import { OpenAIProvider } from "./openaiProvider.js";
 import { StubProvider } from "./stubProvider.js";
 import { MockProvider } from "./mockProvider.js";
 import { FreeProvider } from "./freeProvider.js";
-import { FailoverProvider, type RouteLogger } from "./failoverProvider.js";
+import {
+  FailoverProvider,
+  type FreePrimary,
+  type RouteLogger,
+} from "./failoverProvider.js";
 import { recordPaidCall } from "./paidBudget.js";
+import {
+  buildRotator,
+  rotationEnabled,
+  unavailableReason,
+} from "../rotation/aitimeRotation.js";
+import {
+  RotatingProvider,
+  filterRoutableCatalog,
+} from "../rotation/rotatingProvider.js";
 
 export { AnthropicProvider, OpenAIProvider, StubProvider, MockProvider, FreeProvider };
 export { FailoverProvider };
@@ -77,6 +90,11 @@ export function createProviderRegistry(
    * (queue-time validation, health checks) rather than making live calls.
    */
   signal?: AbortSignal,
+  /**
+   * Which consumer this registry serves, for the per-app pin key in the
+   * shared rotation state ("factory-deck" vs "purpose-foundry").
+   */
+  app: string = "factory-deck",
 ): ProviderRegistry {
   const mock = new MockProvider();
   const stub = new StubProvider("stub");
@@ -122,9 +140,46 @@ export function createProviderRegistry(
     signal,
   });
 
+  // Pool-first rotation across every $0 route in the AI Time catalog
+  // (docs/rotation-contract.md v1). Rotation is the DEFAULT $0 primary;
+  // AI_ROTATE=off, or an unusable catalog, restores the FCC-only free route
+  // exactly. Never a silent no-op: when rotation is wanted but unavailable,
+  // the reason is logged. Paid routes never enter this ring — the rescue tier
+  // below remains the only path to paid-metered spending, behind canPayNow().
+  const built = buildRotator(app);
+  // Routes whose credential env var is absent in THIS process are filtered
+  // out locally (never marked in the shared state — other consumers may hold
+  // the key), so rotation only walks pools this process can actually call.
+  const rotator = built ? filterRoutableCatalog(built, config.free.baseUrl, log) : null;
+  if (!built && rotationEnabled()) {
+    log(
+      "warn",
+      `[rotate] rotation unavailable (${unavailableReason()}); ` +
+        `using the FCC free route as the sole $0 primary.`,
+    );
+  }
+  if (rotator?.catalog.isStale) {
+    log(
+      "warn",
+      `[rotate] route catalog is ${Math.round(
+        rotator.catalog.ageSeconds / 3600,
+      )}h old (stale past 3h) — still routing; refresh with ` +
+        `\`python -m aitime.catalog\`.`,
+    );
+  }
+  const freePrimary: FreePrimary = rotator
+    ? new RotatingProvider(rotator, {
+        fccDelegate: free,
+        fccBaseUrl: config.free.baseUrl,
+        tier: "frontier",
+        log,
+        signal,
+      })
+    : free;
+
   /** The chain the deck actually runs on: free primary, paid rescue. */
   const chain = new FailoverProvider(
-    free,
+    freePrimary,
     anthropic,
     openai,
     {
@@ -139,7 +194,9 @@ export function createProviderRegistry(
   );
 
   const byName: Record<ProviderName, LLMProvider> = {
-    free,
+    // "free" is the $0 primary — the rotating provider when rotation is on,
+    // the FCC route alone otherwise. Either way it never spends money.
+    free: freePrimary,
     mock,
     stub,
     anthropic,
@@ -196,7 +253,9 @@ export function createProviderRegistry(
     if (explicitPaid && byName[explicitPaid].isConfigured()) {
       return byName[explicitPaid];
     }
-    if (free.isConfigured()) return chain;
+    // The $0 primary counts as configured when EITHER the FCC proxy is up or
+    // the rotation catalog offers other $0 routes (local ollama, free tiers).
+    if (freePrimary.isConfigured()) return chain;
 
     const order: ProviderName[] = [];
     if (fallback === "anthropic" || fallback === "openai") order.push(fallback);

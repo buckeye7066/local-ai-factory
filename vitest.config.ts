@@ -25,7 +25,16 @@ export default defineConfig({
     // arbitrary fetch) when enabled — off by default for the suite so
     // `npm test` never depends on real network access; dedicated research
     // tests stub `fetch` instead of relying on this flag.
-    env: { FACTORY_DATA_DIR: ".vitest-factory-data", FACTORY_RESEARCH_ENABLED: "0" },
+    // AI_ROTATE off for the suite: this machine's REAL AI Time catalog lives
+    // at %LOCALAPPDATA%\AITime, and a hermetic test that builds a provider
+    // registry must neither route over real backends nor stamp the real
+    // SHARED rotation state file other apps read. Rotation tests opt back in
+    // per-test with vi.stubEnv plus a throwaway AITIME_STATE_DIR.
+    env: {
+      FACTORY_DATA_DIR: ".vitest-factory-data",
+      FACTORY_RESEARCH_ENABLED: "0",
+      AI_ROTATE: "off",
+    },
     globalSetup: ["./vitest.globalSetup.ts"],
     // Load-proof timeouts. The end-to-end suites drive real git and real file
     // I/O; on a machine that is also running a live factory build they blew

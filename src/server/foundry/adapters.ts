@@ -449,7 +449,13 @@ export class FoundryAdapters {
     const flexScript =
       process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT?.trim() ||
       "C:\\Users\\firer\\flexfactor\\flexfactor.py";
-    const reviewProvider = createProviderRegistry(config, secrets).resolveLive(
+    const reviewProvider = createProviderRegistry(
+      config,
+      secrets,
+      undefined,
+      undefined,
+      "purpose-foundry",
+    ).resolveLive(
       undefined,
       config.defaultReviewProvider,
     );
@@ -874,7 +880,13 @@ export class FoundryAdapters {
 
   private async crucible(project: FoundryProject): Promise<AdapterOutcome> {
     const config = getConfig();
-    const provider = createProviderRegistry(config, getSecrets()).resolveLive(
+    const provider = createProviderRegistry(
+      config,
+      getSecrets(),
+      undefined,
+      undefined,
+      "purpose-foundry",
+    ).resolveLive(
       undefined,
       config.defaultReviewProvider,
     );
