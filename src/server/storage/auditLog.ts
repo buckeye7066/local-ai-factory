@@ -25,6 +25,7 @@ export type AuditEventType =
   | "run.cancelled"
   | "run.timeout"
   | "run.budget_exhausted"
+  | "run.verification.held"
   | "workspace.created"
   | "attribution.written"
   | "idempotency.hit"

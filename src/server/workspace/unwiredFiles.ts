@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
+import * as ts from "typescript";
+import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
 import { isFactoryOverlayPath } from "./protectedFiles.js";
 
 /**
@@ -22,8 +24,10 @@ import { isFactoryOverlayPath } from "./protectedFiles.js";
  * path counts as wired, while a name coincidence on a different path does not.
  */
 
-const SOURCE_EXT = /\.(?:js|jsx|ts|tsx|mjs|cjs)$/i;
+const SOURCE_EXT = JS_TS_SOURCE_EXTENSION_RX;
 const TEST_LIKE = /(?:^|[\\/])(?:__tests__|tests?)[\\/]|\.(?:test|spec)\.[a-z]+$/i;
+const CONFIG_LIKE =
+  /(?:^|\/)(?:vitest|jest|playwright|vite)(?:\.[\w-]+)?\.config\.[cm]?[jt]s$/i;
 const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
@@ -46,8 +50,12 @@ function walkSourceFiles(root: string): string[] {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
+    } catch (error) {
+      throw new Error(
+        `Wiring scan could not read ${dir}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -57,16 +65,79 @@ function walkSourceFiles(root: string): string[] {
       }
     }
   }
+  if (stack.length > 0) {
+    throw new Error(
+      `Wiring scan exceeded the ${MAX_SCAN_FILES}-file safety limit.`,
+    );
+  }
   return out;
 }
 
-/** `src/pages/Foo.jsx` → `src/pages/Foo` (and the `pages/Foo` suffix). */
-function importFragments(relPath: string): string[] {
-  const noExt = relPath.replace(/\\/g, "/").replace(SOURCE_EXT, "");
-  const segments = noExt.split("/");
-  const fragments = [noExt];
-  if (segments.length >= 2) fragments.push(segments.slice(-2).join("/"));
-  return fragments;
+function withoutSourceExtension(path: string): string {
+  return path.replace(/\\/g, "/").replace(SOURCE_EXT, "");
+}
+
+function moduleSpecifiers(source: string): string[] {
+  const file = ts.createSourceFile(
+    "factory-wiring.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const found = new Set<string>();
+  const addLiteral = (node: ts.Expression | undefined) => {
+    if (node && ts.isStringLiteralLike(node)) found.add(node.text);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      addLiteral(node.moduleSpecifier);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      addLiteral(node.moduleReference.expression);
+    } else if (ts.isCallExpression(node)) {
+      const dynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const requireCall =
+        ts.isIdentifier(node.expression) && node.expression.text === "require";
+      if (dynamicImport || requireCall) addLiteral(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return [...found];
+}
+
+function referencesModule(
+  sourcePath: string,
+  source: string,
+  candidate: string,
+): boolean {
+  const candidateNoExt = withoutSourceExtension(candidate);
+  const candidateFragments = [
+    candidateNoExt,
+    candidateNoExt.split("/").slice(-2).join("/"),
+  ];
+  for (const rawSpecifier of moduleSpecifiers(source)) {
+    const specifier = withoutSourceExtension(rawSpecifier);
+    if (specifier.startsWith(".")) {
+      const resolved = posix.normalize(
+        posix.join(posix.dirname(sourcePath.replace(/\\/g, "/")), specifier),
+      );
+      if (resolved === candidateNoExt) return true;
+      continue;
+    }
+    const clean = specifier.replace(/^\/+/, "");
+    if (
+      candidateFragments.some(
+        (fragment) => clean === fragment || clean.endsWith(`/${fragment}`),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -103,43 +174,85 @@ export function findUnwiredNewFiles(
   generatedPaths: string[],
 ): string[] {
   const generated = new Set(
-    generatedPaths.map((p) => p.replace(/\\/g, "/")),
+    generatedPaths.map((path) => path.replace(/\\/g, "/")),
   );
+  const candidates = [...generated].filter(
+    (path) =>
+      SOURCE_EXT.test(path) &&
+      !TEST_LIKE.test(path) &&
+      !CONFIG_LIKE.test(path),
+  );
+  // The _gh_* overlay check is independent of wiring: an overlay is a
+  // persistence-contract violation even when nothing imports anything, so it
+  // is reported on every early return below as well.
   const persistenceHits = persistenceViolationPaths(workspacePath, generatedPaths);
-  const candidates = generatedPaths.filter((p) => {
-    const n = p.replace(/\\/g, "/");
-    return (
-      SOURCE_EXT.test(n) &&
-      !TEST_LIKE.test(n) &&
-      (n.startsWith("src/") || n.startsWith("backend/"))
-    );
-  });
   if (!candidates.length) return persistenceHits.sort();
 
-  const preExisting = walkSourceFiles(workspacePath).filter((abs) => {
-    const rel = relative(workspacePath, abs).replace(/\\/g, "/");
+  const preExisting = walkSourceFiles(workspacePath).filter((absolute) => {
+    const rel = relative(workspacePath, absolute).replace(/\\/g, "/");
     return !generated.has(rel) && !TEST_LIKE.test(rel);
   });
+  // With no prior source there is no existing product wiring claim (new app).
   if (!preExisting.length) return persistenceHits.sort();
 
-  const texts: string[] = [];
-  for (const abs of preExisting) {
+  const readBounded = (absolute: string): string => {
+    const size = statSync(absolute).size;
+    if (size > MAX_FILE_BYTES) {
+      throw new Error(
+        `Wiring scan cannot inspect oversized source file: ${absolute}`,
+      );
+    }
+    return readFileSync(absolute, "utf8");
+  };
+  const preExistingSources = preExisting.map((absolute) => ({
+    path: relative(workspacePath, absolute).replace(/\\/g, "/"),
+    contents: readBounded(absolute),
+  }));
+  const generatedTexts = new Map<string, string>();
+  for (const candidate of candidates) {
     try {
-      if (statSync(abs).size > MAX_FILE_BYTES) continue;
-      texts.push(readFileSync(abs, "utf8"));
+      generatedTexts.set(
+        candidate,
+        readBounded(join(workspacePath, candidate)),
+      );
     } catch {
-      /* unreadable pre-existing file is simply not evidence */
+      // A missing/unreadable generated module cannot be proven reachable.
     }
   }
 
-  const unwired: string[] = [];
+  // Seed reachability from real pre-existing code (including host files this
+  // run modified), then traverse imports among generated product modules.
+  // Only actual module specifiers count: comments, strings, and longer path
+  // prefixes cannot certify reachability.
+  const wired = new Set<string>();
   for (const candidate of candidates) {
-    const fragments = importFragments(candidate.replace(/\\/g, "/"));
-    const wired = texts.some((text) =>
-      fragments.some((f) => text.includes(f)),
-    );
-    if (!wired) unwired.push(candidate.replace(/\\/g, "/"));
+    if (
+      preExistingSources.some((source) =>
+        referencesModule(source.path, source.contents, candidate),
+      )
+    ) {
+      wired.add(candidate);
+    }
   }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const sourcePath of [...wired]) {
+      const source = generatedTexts.get(sourcePath);
+      if (!source) continue;
+      for (const candidate of candidates) {
+        if (
+          !wired.has(candidate) &&
+          referencesModule(sourcePath, source, candidate)
+        ) {
+          wired.add(candidate);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  const unwired = candidates.filter((candidate) => !wired.has(candidate));
   return [...new Set([...unwired, ...persistenceHits])].sort();
 }
 
@@ -155,7 +268,7 @@ export function unwiredCaveat(unwired: string[]): string | null {
   );
 }
 
-export const _internal = { importFragments };
+export const _internal = { moduleSpecifiers, referencesModule };
 
 /**
  * UNWIRED SCAFFOLDING FAILS QA — it does not merely caption the report

@@ -14,16 +14,16 @@ describe("config", () => {
     expect(cfg.openaiModel).toBe("gpt-5.5");
     expect(cfg.maxRepairLoops).toBe(3);
     expect(cfg.maxModelCallsPerRun).toBe(30);
-    // Real execution is the default — dry-run was removed entirely
-    // (owner order 2026-08-13). The config has NO dry-run field at all.
-    expect(cfg.allowUntrustedScripts).toBe(true);
+    // Untrusted project code is not executed on the host by default. Owners
+    // may opt in only when Factory Deck itself runs in a container/VM.
+    expect(cfg.allowUntrustedScripts).toBe(false);
     expect("dryRunCommands" in cfg).toBe(false);
   });
 
   it("parses numbers and booleans from env", () => {
-    const cfg = loadConfig({ MAX_REPAIR_LOOPS: "5", ALLOW_UNTRUSTED_SCRIPTS: "0" });
+    const cfg = loadConfig({ MAX_REPAIR_LOOPS: "5", ALLOW_UNTRUSTED_SCRIPTS: "1" });
     expect(cfg.maxRepairLoops).toBe(5);
-    expect(cfg.allowUntrustedScripts).toBe(false);
+    expect(cfg.allowUntrustedScripts).toBe(true);
   });
 
   it("detects configured keys", () => {
