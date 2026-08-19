@@ -451,7 +451,6 @@ export class Rotator {
    * {@link StateStore.update}).
    */
   async nextRoute(opts: NextRouteOpts = {}): Promise<Selection> {
-    const now = opts.now ?? Date.now() / 1000;
     const requested: Tier = TIER_CHAIN.includes(opts.tier as Tier)
       ? (opts.tier as Tier)
       : opts.tier === undefined
@@ -463,6 +462,13 @@ export class Rotator {
     let selection: Selection | null = null;
 
     await this.store.update((state) => {
+      // The clock is read INSIDE the held lock, not at call entry. Concurrent
+      // callers queue on the lock in an order unrelated to when they were
+      // invoked; a timestamp captured before acquisition lets a later-queued
+      // worker stamp an EARLIER time onto its pool, inverting the LRU order
+      // and skewing the rotation (caught live by the CI fairness test —
+      // one pool absorbed 4 of 6 concurrent picks).
+      const now = opts.now ?? Date.now() / 1000;
       const resolvedPin =
         opts.pin ||
         process.env.AI_ROTATE_PIN ||

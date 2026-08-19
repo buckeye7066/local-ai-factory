@@ -565,11 +565,15 @@ describe("shared state", () => {
     );
     const counts = new Map<string, number>();
     for (const p of picks) counts.set(p, (counts.get(p) ?? 0) + 1);
-    // 6 picks over 3 $0 frontier pools: fair is 2 each. Same-millisecond
-    // stamps make ties legal, so mirror the Python suite's bound (fair +50%):
-    // every pool used, none absorbs the burst.
+    // 6 picks over 3 $0 frontier pools must be EXACTLY 2 each. This is
+    // strict on purpose: with the clock read inside the held lock, stamps
+    // are monotonic with lock order, and same-millisecond ties fall to the
+    // calls-count tiebreak — LRU round-robin is deterministic. The first CI
+    // run of this suite caught a real defect here (timestamp captured before
+    // lock acquisition let a later-queued worker stamp an earlier time,
+    // handing one pool 4 of 6 picks); a loose bound would have hidden it.
     expect(counts.size).toBe(3);
-    for (const n of counts.values()) expect(n).toBeLessThanOrEqual(3);
+    for (const n of counts.values()) expect(n).toBe(2);
   });
 
   it("CROSS-PROCESS fairness: 4 workers × 6 picks split evenly across pools", async () => {
@@ -577,8 +581,9 @@ describe("shared state", () => {
     // file. Each worker does 6 selections; 24 picks over 3 pools land ~8 each
     // when read-select-stamp is one locked transaction, while an unlocked
     // read-select piles the burst onto one ledger. File integrity alone is
-    // NOT the assertion — fairness is. Bound mirrors the Python suite:
-    // fair +50% (Python: 4 pools, 40 picks, max ≤ 15).
+    // NOT the assertion — fairness is. Fair is 8; the bound allows +1 for
+    // cross-process same-millisecond ties, while a stampede (unlocked
+    // read-select, or a pre-lock timestamp) lands well past it.
     const worker = path.join(HERE, "helpers", "rotationWorker.ts");
     const run = (): Promise<string[]> =>
       new Promise((resolve, reject) => {
@@ -610,7 +615,7 @@ describe("shared state", () => {
     for (const p of pools) counts.set(p, (counts.get(p) ?? 0) + 1);
     expect(counts.size).toBe(3);
     for (const [pool, n] of counts) {
-      expect(n, `pool ${pool} got ${n}/24 picks`).toBeLessThanOrEqual(12);
+      expect(n, `pool ${pool} got ${n}/24 picks`).toBeLessThanOrEqual(9);
     }
     // And the shared state survived intact.
     const state = new StateStore(path.join(dir, "rotation-state.json")).read();
