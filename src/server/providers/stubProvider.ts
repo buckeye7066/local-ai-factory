@@ -178,7 +178,21 @@ export class StubProvider implements LLMProvider {
             {
               path: "src/streak.ts",
               purpose: "Corrected streak calculation",
-              contents: STREAK_FIXED,
+              contents: "",
+              edits: [
+                {
+                  find:
+                    "  // BUG: counts every completed day regardless of gaps.\n" +
+                    "  return done.length;",
+                  replace:
+                    "  if (!done.length) return 0;\n" +
+                    "  let streak = 1;\n" +
+                    "  for (let i = done.length - 1; " +
+                    "i > 0 && Date.parse(done[i]) - Date.parse(done[i - 1]) <= 129600000; " +
+                    "i--) streak++;\n" +
+                    "  return streak;",
+                },
+              ],
             },
           ],
         };
@@ -236,34 +250,6 @@ export function computeStreak(days: Day[]): number {
     .sort();
   // BUG: counts every completed day regardless of gaps.
   return done.length;
-}
-`;
-
-const STREAK_FIXED = `// Computes the current streak of consecutive completed days.
-export interface Day {
-  date: string; // ISO yyyy-mm-dd
-  completed: boolean;
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-export function computeStreak(days: Day[]): number {
-  const done = days
-    .filter((d) => d.completed)
-    .map((d) => new Date(d.date + "T00:00:00").getTime())
-    .sort((a, b) => a - b);
-  if (done.length === 0) return 0;
-
-  let streak = 1;
-  for (let i = done.length - 1; i > 0; i--) {
-    const gap = done[i] - done[i - 1];
-    if (gap <= DAY_MS * 1.5) {
-      streak++;
-    } else {
-      break; // a missed day resets the current streak
-    }
-  }
-  return streak;
 }
 `;
 

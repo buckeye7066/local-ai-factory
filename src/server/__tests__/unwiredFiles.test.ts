@@ -74,6 +74,64 @@ describe("findUnwiredNewFiles", () => {
     ).toEqual([]);
   });
 
+  it.each(["cts", "mts"])("reports an unwired generated .%s module", (ext) => {
+    const ws = workspace();
+    write(ws, "src/App.ts", "export const App = 1;\n");
+    const path = `apps/web/src/features/Fresh.${ext}`;
+    write(ws, path, "export const Fresh = 1;\n");
+    expect(findUnwiredNewFiles(ws, [path])).toEqual([path]);
+  });
+
+  it.each(["cts", "mts"])("recognizes a pre-existing .%s referrer", (ext) => {
+    const ws = workspace();
+    write(ws, `src/router.${ext}`, "import './features/Fresh';\n");
+    write(ws, "src/unrelated.js", "export const x = 1;\n");
+    write(ws, "src/features/Fresh.mts", "export const Fresh = 1;\n");
+    expect(
+      findUnwiredNewFiles(ws, ["src/features/Fresh.mts"]),
+    ).toEqual([]);
+  });
+
+  it("uses a modified host entrypoint as the root of transitive generated wiring", () => {
+    const ws = workspace();
+    write(ws, "src/App.jsx", "import Fresh from './pages/Fresh';\n");
+    write(ws, "src/bootstrap.js", "export const boot = true;\n");
+    write(ws, "src/pages/Fresh.mts", "import './ProfileForm'; export default 1;\n");
+    write(ws, "src/pages/ProfileForm.tsx", "export default 1;\n");
+    expect(
+      findUnwiredNewFiles(ws, [
+        "src/pages/Fresh.mts",
+        "src/pages/ProfileForm.tsx",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("still reports generated modules when the modified host entrypoint does not wire them", () => {
+    const ws = workspace();
+    write(ws, "src/App.jsx", "export default function App(){ return null; }\n");
+    write(ws, "src/pages/Fresh.mts", "export default 1;\n");
+    expect(findUnwiredNewFiles(ws, ["src/pages/Fresh.mts"])).toEqual([
+      "src/pages/Fresh.mts",
+    ]);
+  });
+
+  it("does not count comments, strings, or longer module prefixes as wiring", () => {
+    const ws = workspace();
+    write(
+      ws,
+      "src/App.tsx",
+      [
+        "// import './pages/Fresh';",
+        "const note = 'pages/Fresh';",
+        "import './pages/Freshness';",
+      ].join("\n"),
+    );
+    write(ws, "src/pages/Fresh.tsx", "export default 1;\n");
+    expect(findUnwiredNewFiles(ws, ["src/pages/Fresh.tsx"])).toEqual([
+      "src/pages/Fresh.tsx",
+    ]);
+  });
+
   it("ignores generated docs/configs/tests as candidates", () => {
     const ws = workspace();
     write(ws, "src/main.jsx", "console.log('app');\n");

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { builtinModules } from "node:module";
+import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
 
 /**
  * phantomImports.ts — a generated file may only import packages the workspace
@@ -139,7 +140,7 @@ export function assessPhantomImports(
   relPath: string,
   contents: string,
 ): PhantomVerdict {
-  if (!/\.(m?[jt]sx?|cjs)$/i.test(relPath)) return { refused: false };
+  if (!JS_TS_SOURCE_EXTENSION_RX.test(relPath)) return { refused: false };
   const declared = declaredDependencies(workspacePath);
   if (declared.size === 0) return { refused: false };
 

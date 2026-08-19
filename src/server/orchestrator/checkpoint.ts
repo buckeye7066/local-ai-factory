@@ -20,7 +20,7 @@ import {
  * outputs required to continue without replaying completed provider calls.
  */
 export const FactoryCheckpointSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(3),
   runId: RunIdSchema,
   idea: z.string(),
   options: RunOptionsSchema,
@@ -30,8 +30,32 @@ export const FactoryCheckpointSchema = z.object({
   research: ResearchFindingsSchema.optional(),
   plan: TaskPlanSchema.optional(),
   build: FileBuildSchema.optional(),
+  /** Captured before builder writes; generated code cannot self-author its browser authority. */
+  baselineBrowserHarness: z.boolean().optional(),
+  /** Existing host paths shown in full to the builder; all other host edits are refused. */
+  builderExistingPaths: z.array(z.string()).default([]),
+  /** Immutable pre-run host contents used to bound cumulative change across repair passes. */
+  hostFileBaselines: z.record(z.string()).default({}),
   testPlan: TestPlanSchema.optional(),
   files: z.array(FileContentSchema).default([]),
+  /** Durable safety ledger: a restart/resume must never forget refused writes. */
+  writeRefusals: z
+    .array(
+      z.object({
+        path: z.string(),
+        reason: z.string(),
+      }),
+    )
+    .default([]),
+  /** Only refused required builder/test writes block delivery permanently. */
+  blockingWriteRefusals: z
+    .array(
+      z.object({
+        path: z.string(),
+        reason: z.string(),
+      }),
+    )
+    .default([]),
   testWriterComplete: z.boolean().default(false),
   commandOutput: z.string().default(""),
   /**
@@ -47,10 +71,28 @@ export const FactoryCheckpointSchema = z.object({
           z.object({
             command: z.string(),
             exitCode: z.number().int().nullable(),
+            isTest: z.boolean().optional(),
+            directTestPath: z.string().optional(),
+            isBrowser: z.boolean().optional(),
+            runner: z.enum(["vitest", "jest", "playwright", "pytest"]).optional(),
+            directEvidenceValid: z.boolean().optional(),
+            passedCount: z.number().int().nonnegative().optional(),
+            skippedCount: z.number().int().nonnegative().optional(),
+            passedTestNames: z.array(z.string()).optional(),
             outputTail: z.string().default(""),
           }),
         )
         .default([]),
+      incomplete: z
+        .array(
+          z.object({
+            command: z.string(),
+            reason: z.string(),
+          }),
+        )
+        .optional(),
+      /** SHA-256 receipt for every deliverable path after the last verification pass. */
+      fileDigests: z.record(z.string()).optional(),
     })
     .optional(),
   testsExecuted: z.boolean().default(false),

@@ -165,16 +165,19 @@ function buildSummaryText(report: FinalReportType): string {
 
 export function FinalReport({
   report,
+  ready,
   onNewRun,
 }: {
   report: FinalReportType;
+  /** Receipt/delivery-backed outcome from the owning run, not report prose. */
+  ready: boolean;
   onNewRun: () => void;
 }) {
   const prefersReducedMotion = usePrefersReducedMotion();
   const { copied, copy } = useClipboard();
 
   const meta = useMemo(() => statusMeta(report.testStatus), [report.testStatus]);
-  const isPassing = report.testStatus === "passing";
+  const isPassing = ready && report.testStatus === "passing";
 
   const usage = report.providerUsage;
   // Demo runs powered by mock (or legacy stub) made zero paid API calls.
@@ -199,7 +202,7 @@ export function FinalReport({
 
   return (
     <div className="relative mx-auto w-full max-w-5xl px-4 py-8">
-      {/* One-shot celebration when the build passed its tests. */}
+      {/* Celebration requires the owning run's receipt-bound ready outcome. */}
       {isPassing && <CompletionCelebration show />}
 
       {/* ----- Hero header ----- */}
