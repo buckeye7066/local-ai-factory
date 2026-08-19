@@ -66,6 +66,28 @@ export function applyEdits(original: string, edits: FileEdit[]): EditOutcome {
           `edit ${i + 1}: unbalanced block-comment delimiters can disable unrelated code`,
       };
     }
+    // A `*/` appearing before its matching `/*` in the replacement text would
+    // close a comment that opened BEFORE the replaced region, silently
+    // commenting out unrelated code. Scan for this even when counts balance.
+    let openDepth = 0;
+    let orphanedClose = false;
+    for (let ci = 0; ci < edit.replace.length - 1; ci++) {
+      if (edit.replace[ci] === "/" && edit.replace[ci + 1] === "*") {
+        openDepth++;
+        ci++;
+      } else if (edit.replace[ci] === "*" && edit.replace[ci + 1] === "/") {
+        if (openDepth === 0) { orphanedClose = true; break; }
+        openDepth--;
+        ci++;
+      }
+    }
+    if (orphanedClose) {
+      return {
+        ok: false,
+        reason:
+          `edit ${i + 1}: replacement closes a block comment that was not opened within the replacement — this would disable code outside the edited region`,
+      };
+    }
 
     const first = out.indexOf(edit.find);
     if (first === -1) {

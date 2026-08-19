@@ -79,7 +79,7 @@ export const FactoryCheckpointSchema = z.object({
             passedCount: z.number().int().nonnegative().optional(),
             skippedCount: z.number().int().nonnegative().optional(),
             passedTestNames: z.array(z.string()).optional(),
-            outputTail: z.string().default(""),
+            outputTail: z.string().max(32_768).default(""),
           }),
         )
         .default([]),

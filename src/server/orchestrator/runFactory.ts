@@ -879,7 +879,7 @@ async function executeRun(
         "repair",
       );
     }
-    recordWriteRefusals(scoped.refusals, true);
+    recordWriteRefusals(scoped.refusals, false);
     if (scoped.refusals.length > 0) {
       await checkpointNow({
         writeRefusals: [...writeRefusals],

@@ -247,6 +247,20 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     ).toBe(true);
   });
 
+  it("refuses a new eslint.config.ts beside a tracked eslint.config.js", () => {
+    const repo = gitWorkspace({
+      "eslint.config.js": "export default [];",
+    });
+    const verdict = assessProtectedHostWrite(
+      repo,
+      "eslint.config.ts",
+      "export default [];",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/eslint\.config\.js/);
+    expect(verdict.reason).toMatch(/shadow extension variant/);
+  });
+
   it("does not accept export decoys inside strings, templates, or regex literals", () => {
     for (const decoy of [
       'const note = "export const auth";',
