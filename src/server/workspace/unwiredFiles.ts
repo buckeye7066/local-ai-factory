@@ -71,14 +71,25 @@ function withoutSourceExtension(path: string): string {
   return path.replace(/\\/g, "/").replace(SOURCE_EXT, "");
 }
 
+function scriptKindForPath(sourcePath: string): ts.ScriptKind {
+  const ext = sourcePath.replace(/^.*\.([^.]+)$/i, "$1").toLowerCase();
+  switch (ext) {
+    case "tsx": return ts.ScriptKind.TSX;
+    case "ts": case "mts": case "cts": return ts.ScriptKind.TS;
+    case "jsx": return ts.ScriptKind.JSX;
+    case "js": case "mjs": case "cjs": return ts.ScriptKind.JS;
+    default: return ts.ScriptKind.TSX;
+  }
+}
+
 function moduleSpecifiers(sourcePath: string, source: string): string[] {
-  const kind = ts.getScriptKindFromFileName(sourcePath);
+  const kind = scriptKindForPath(sourcePath);
   const file = ts.createSourceFile(
     sourcePath,
     source,
     ts.ScriptTarget.Latest,
     true,
-    kind === ts.ScriptKind.Unknown ? ts.ScriptKind.TSX : kind,
+    kind,
   );
   const found = new Set<string>();
   const addLiteral = (node: ts.Expression | undefined) => {
