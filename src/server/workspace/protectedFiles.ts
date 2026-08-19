@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import * as ts from "typescript";
 import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
@@ -21,20 +22,26 @@ import { safeResolveExistingPath } from "./fileWriter.js";
  * redirected without touching any tracked file.
  *
  * The guard is deliberately NOT a blanket write ban (adding a dependency to
- * the host package.json is legitimate extend work). Rules, all scoped to
- * files TRACKED in the workspace's git HEAD (extend runs are clones; new-app
- * workspaces have no git at build time, so the guard is inert there):
+ * the host package.json is legitimate extend work). Rules:
  *
+ *   0. Overlay / scratch names (`_gh_*` anywhere, `_restore_*` and
+ *      `*_from_<sha>*` at repo root): every write refused, git or not —
+ *      GrantFlow extend ba870e71 pushed factory overlays onto the host repo.
  *   1. Tracked LOCKFILES: every generated write refused. Locks are derived
  *      artifacts — package managers may mutate them via commands, agents
  *      must never hand-write them.
- *   2. Tracked package.json: refused when the replacement is DESTRUCTIVE —
+ *   2. Tracked package.json AND host spine files (App, client, server.js,
+ *      schema.sql, migrate.js): refused when the replacement is DESTRUCTIVE —
  *      smaller than 80% of the tracked version. A merge/addition preserves or
- *      grows the manifest; a from-scratch stub collapses it.
+ *      grows the file; a from-scratch stub collapses it.
  *   3. Tracked root build/test configs (vitest/jest/playwright/vite/
  *      tsconfig/eslint): replacement refused outright.
  *   4. NEW root test-config VARIANT while the host tracks another variant of
  *      the same tool (the .ts-outranks-.js hijack): refused.
+ *
+ * Rules 1–4 are scoped to files TRACKED in the workspace's git HEAD (extend
+ * runs are clones; new-app workspaces have no git at build time, so those
+ * rules are inert there). Rule 0 is name-based and always live.
  *
  * Every refusal is loud (the caller logs file + reason), never silent.
  */
@@ -100,6 +107,58 @@ function isProtectedConfig(base: string): boolean {
     OTHER_ROOT_CONFIGS_RX.test(base) ||
     PYTHON_TEST_CONFIGS.has(base.toLowerCase())
   );
+}
+
+/** Host spine files a from-scratch stub would silently replace. */
+const HOST_SPINE_PATHS = new Set([
+  "src/api/client.js",
+  "src/api/client.ts",
+  "backend/server.js",
+  "backend/db/schema.sql",
+  "backend/db/migrate.js",
+  "src/App.jsx",
+  "src/App.tsx",
+]);
+
+/** `_from_` + 7–40 hex chars — a factory SHA overlay, not `notes_from_alice`. */
+const FROM_SHA_RX = /_from_[0-9a-f]{7,40}/i;
+
+/**
+ * Factory scratch / overlay names that must never land in a host repo
+ * (GrantFlow extend ba870e71: `_gh_0179.sql`, `_gh_CreateInvoice.jsx`,
+ * `_restore_server_from_<sha>.js`).
+ */
+export function isFactoryOverlayPath(relPath: string): boolean {
+  const norm = relPath.replace(/\\/g, "/").replace(/^\.\//, "");
+  const base = norm.split("/").pop() ?? norm;
+  if (base.startsWith("_gh_")) return true;
+  const atRoot = !norm.includes("/");
+  if (atRoot && base.startsWith("_restore_")) return true;
+  if (atRoot && FROM_SHA_RX.test(base)) return true;
+  return false;
+}
+
+function refuseDestructiveShrink(
+  workspacePath: string,
+  norm: string,
+  newContents: string,
+  label: string,
+): ProtectedVerdict | null {
+  let currentSize = 0;
+  try {
+    currentSize = statSync(join(workspacePath, norm)).size;
+  } catch {
+    return null;
+  }
+  if (currentSize > 0 && newContents.length < currentSize * 0.8) {
+    return {
+      refused: true,
+      reason:
+        `replacement (${newContents.length} B) would collapse the host ${label} ` +
+        `(${currentSize} B) — additive edits are fine, from-scratch stubs are not`,
+    };
+  }
+  return null;
 }
 
 export interface ProtectedVerdict {
@@ -298,11 +357,22 @@ export function assessProtectedHostWrite(
   relPath: string,
   newContents: string,
 ): ProtectedVerdict {
+  const norm = relPath.replace(/\\/g, "/").replace(/^\.\//, "");
+  const base = norm.split("/").pop() ?? norm;
+
+  // 0. Overlay / scratch names: never written into a workspace or origin.
+  if (isFactoryOverlayPath(norm)) {
+    return {
+      refused: true,
+      reason:
+        "factory overlay/scratch names (_gh_*, _restore_*, *_from_<sha>*) must " +
+        "never be written into the host repo — edit the real files in place",
+    };
+  }
+
   const tracked = baseline(workspacePath);
   if (!tracked) return { refused: false };
 
-  const norm = relPath.replace(/\\/g, "/").replace(/^\.\//, "");
-  const base = norm.split("/").pop() ?? norm;
   const isTracked = tracked.has(norm);
 
   // 1. Lockfiles: derived artifacts, never hand-written. In an extend repo,
@@ -330,6 +400,9 @@ export function assessProtectedHostWrite(
         reason: "the tracked host manifest could not be read safely",
       };
     }
+    // The additive check subsumes the 80% shrink bar main applied here: a
+    // manifest that loses scripts/workspaces/versions is refused even when it
+    // stays long enough to clear a size ratio.
     if (!additiveManifestChange(current, newContents)) {
       return {
         refused: true,
@@ -339,6 +412,13 @@ export function assessProtectedHostWrite(
       };
     }
     return { refused: false };
+  }
+
+  // 2a. Host spine files: same 80% shrink bar (GrantFlow extend rewrote
+  //     App.jsx / client.js / server.js / schema.sql / migrate.js to fit uploads).
+  if (isTracked && HOST_SPINE_PATHS.has(norm)) {
+    const shrink = refuseDestructiveShrink(workspacePath, norm, newContents, "spine file");
+    if (shrink) return shrink;
   }
 
   // 2b. TRACKED SOURCE FILES: a rewrite must not delete the module's public

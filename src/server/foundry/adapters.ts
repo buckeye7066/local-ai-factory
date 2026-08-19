@@ -17,6 +17,7 @@ import { z } from "zod";
 import { getConfig, getSecrets } from "../config.js";
 import { createProviderRegistry } from "../providers/index.js";
 import { getRun } from "../storage/runsStore.js";
+import { withExtendPersistenceGoals } from "../orchestrator/composeExtendIdea.js";
 import { repoNameProblem, RunOptionsSchema } from "../../shared/schemas.js";
 import {
   STATIONS,
@@ -24,6 +25,11 @@ import {
   type FoundryStore,
   type StationId,
 } from "./model.js";
+
+export const FOUNDRY_FLEXFACTOR_PROVIDER_RE =
+  /^(ollama|anthropic|openai|xai|grok)$/;
+export const FOUNDRY_FLEXFACTOR_PROVIDER_ERROR =
+  "PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER must be ollama, anthropic, openai, xai, or grok.";
 
 export type AdapterOutcome = {
   status: "completed" | "needs_attention" | "failed";
@@ -443,7 +449,13 @@ export class FoundryAdapters {
     const flexScript =
       process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT?.trim() ||
       "C:\\Users\\firer\\flexfactor\\flexfactor.py";
-    const reviewProvider = createProviderRegistry(config, secrets).resolveLive(
+    const reviewProvider = createProviderRegistry(
+      config,
+      secrets,
+      undefined,
+      undefined,
+      "purpose-foundry",
+    ).resolveLive(
       undefined,
       config.defaultReviewProvider,
     );
@@ -616,11 +628,12 @@ export class FoundryAdapters {
           ]
         : []),
     ];
+    const extendGoals = target ? withExtendPersistenceGoals(goals) : goals;
     const options = target
       ? RunOptionsSchema.parse({
           mode: "extend",
           ...(repoSource ? { repoSource } : {}),
-          goals,
+          goals: extendGoals,
           pushToOrigin: true,
           idempotencyKey: `purpose-foundry:${project.id}:factory-deck`,
         })
@@ -632,7 +645,7 @@ export class FoundryAdapters {
           }
           return RunOptionsSchema.parse({
             mode: "new",
-            goals,
+            goals: extendGoals,
             newRepo: { name: project.name, private: true, createRemote: true },
             idempotencyKey: `purpose-foundry:${project.id}:factory-deck`,
           });
@@ -644,6 +657,11 @@ export class FoundryAdapters {
       `Success criteria: ${project.constitution.successCriteria.join("; ") || "not specified"}`,
       `Constraints: ${project.constitution.constraints.join("; ") || "none specified"}`,
       `Upstream specialist handoffs: ${upstreamEvidence.length ? JSON.stringify(upstreamEvidence) : "none"}`,
+      ...(target
+        ? [
+            "Honor the EXTEND PERSISTENCE CONTRACT in the run goals (no host-shell rewrite, no _gh_ overlays, atomic server counters, no stub entity clients).",
+          ]
+        : []),
     ].join("\n");
     const runStart = (await this.fetchJson(
       `http://127.0.0.1:${config.port}/api/runs`,
@@ -725,10 +743,8 @@ export class FoundryAdapters {
       (getConfig().defaultCodeProvider === "free"
         ? "ollama"
         : getConfig().defaultCodeProvider);
-    if (!/^(ollama|anthropic|openai)$/.test(provider)) {
-      throw new Error(
-        "PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER must be ollama, anthropic, or openai.",
-      );
+    if (!FOUNDRY_FLEXFACTOR_PROVIDER_RE.test(provider)) {
+      throw new Error(FOUNDRY_FLEXFACTOR_PROVIDER_ERROR);
     }
     const args = [script, mode, "--program", target, "--provider", provider];
     if (mode === "scout") {
@@ -864,7 +880,13 @@ export class FoundryAdapters {
 
   private async crucible(project: FoundryProject): Promise<AdapterOutcome> {
     const config = getConfig();
-    const provider = createProviderRegistry(config, getSecrets()).resolveLive(
+    const provider = createProviderRegistry(
+      config,
+      getSecrets(),
+      undefined,
+      undefined,
+      "purpose-foundry",
+    ).resolveLive(
       undefined,
       config.defaultReviewProvider,
     );

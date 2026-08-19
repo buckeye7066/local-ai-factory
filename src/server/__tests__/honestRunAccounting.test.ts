@@ -382,7 +382,10 @@ describe("groundFinalReport — mechanical facts fill the gaps the model leaves"
 /* 7. Unwired scaffolding FAILS QA on extend runs (run 5590b773)      */
 /* ------------------------------------------------------------------ */
 
-import { enforceWiredIntegration } from "../workspace/unwiredFiles.js";
+import {
+  enforceExtendPersistenceQa,
+  enforceWiredIntegration,
+} from "../workspace/unwiredFiles.js";
 
 describe("enforceWiredIntegration — features on paper fail QA, not just the caption", () => {
   const passingQa = () => ({
@@ -428,5 +431,61 @@ describe("enforceWiredIntegration — features on paper fail QA, not just the ca
   it("fresh-app runs and fully-wired extend runs are untouched", () => {
     expect(enforceWiredIntegration(passingQa(), ["src/x.ts"], false).passed).toBe(true);
     expect(enforceWiredIntegration(passingQa(), [], true).passed).toBe(true);
+  });
+});
+
+describe("enforceExtendPersistenceQa — overlays and stub clients fail extend QA", () => {
+  const passingQa = () => ({
+    summary: "All good.",
+    passed: true,
+    issues: [] as Array<{
+      severity: "low" | "medium" | "high" | "critical";
+      title: string;
+      detail: string;
+      file: string | null;
+      repairInstruction: string;
+    }>,
+  });
+
+  it("fails an extend run that generated _gh_* overlay files", () => {
+    const qa = enforceExtendPersistenceQa(
+      passingQa(),
+      ["_gh_0179.sql", "src/pages/Invoices.jsx"],
+      [],
+      true,
+    );
+    expect(qa.passed).toBe(false);
+    expect(qa.summary).toMatch(/PERSISTENCE/);
+    expect(qa.issues[0].detail).toMatch(/_gh_0179\.sql/);
+  });
+
+  it("fails a generated client.js that still uses createStubEntityClient", () => {
+    const qa = enforceExtendPersistenceQa(
+      passingQa(),
+      ["src/api/client.js"],
+      [
+        {
+          path: "src/api/client.js",
+          contents: "export const Taxonomy = createStubEntityClient('Taxonomy');\n",
+        },
+      ],
+      true,
+    );
+    expect(qa.passed).toBe(false);
+    expect(qa.issues[0].title).toMatch(/createStubEntityClient/);
+  });
+
+  it("leaves fresh-app runs and clean extend writes alone", () => {
+    expect(
+      enforceExtendPersistenceQa(passingQa(), ["_gh_main.sql"], [], false).passed,
+    ).toBe(true);
+    expect(
+      enforceExtendPersistenceQa(
+        passingQa(),
+        ["src/api/client.js"],
+        [{ path: "src/api/client.js", contents: "export const Invoice = api.entities.Invoice;\n" }],
+        true,
+      ).passed,
+    ).toBe(true);
   });
 });

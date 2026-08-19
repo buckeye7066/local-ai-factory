@@ -7,6 +7,7 @@ import {
 } from "../../shared/schemas.js";
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 import type { ResearchFindings } from "./researchAgent.js";
+import { EXTEND_PERSISTENCE_CONTRACT } from "../orchestrator/composeExtendIdea.js";
 
 /**
  * Bounded context about a pre-existing repo, injected only in extend mode.
@@ -95,7 +96,8 @@ export async function fileBuilderAgent(
         `and will be refused release. Three moves are forbidden outright: (1) introducing a new ORM or schema ` +
         `layer (e.g. a prisma/ directory) into a repo that does not already use it; (2) writing tests that ` +
         `reimplement product logic inside the test file instead of importing and exercising the repo's real ` +
-        `modules; (3) writing docs or "audit" files that assert verification you did not perform.`,
+        `modules; (3) writing docs or "audit" files that assert verification you did not perform. ` +
+        EXTEND_PERSISTENCE_CONTRACT,
     );
     promptParts.push(
       `Implement the goals in this spec against the EXISTING (TARGET) repo below.\n\nSPEC (the change to make):\n${JSON.stringify(
