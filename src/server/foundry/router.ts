@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
+import { safeErrorMessage } from "../errors.js";
 import { FoundryAdapters } from "./adapters.js";
 import {
   FoundryIntakeSchema,
@@ -150,7 +151,7 @@ export function createFoundryRouter(
       } catch (error) {
         event = StationEventSchema.parse({
           status: "needs_attention",
-          summary: `Adapter stopped: ${error instanceof Error ? error.message.slice(0, 1_000) : "unknown failure"}`,
+          summary: `Adapter stopped: ${safeErrorMessage(error).slice(0, 1_000)}`,
           artifacts: [],
           evidence: { adapterError: error instanceof Error ? error.name : "unknown" },
         });
@@ -167,7 +168,7 @@ export function createFoundryRouter(
         // adapter result must never complete a different station or crash the server.
         if (!(error instanceof FoundryRouteError && error.status === 409)) {
           console.error(
-            `[foundry] adapter result failed: ${error instanceof Error ? error.message : "unknown error"}`,
+            `[foundry] adapter result failed: ${safeErrorMessage(error)}`,
           );
         }
       } finally {
@@ -175,7 +176,7 @@ export function createFoundryRouter(
       }
     })().catch((error: unknown) => {
       console.error(
-        `[foundry] adapter dispatch failed: ${error instanceof Error ? error.message : "unknown error"}`,
+        `[foundry] adapter dispatch failed: ${safeErrorMessage(error)}`,
       );
     });
   };
@@ -193,7 +194,7 @@ export function createFoundryRouter(
       })
       .catch((error: unknown) => {
         console.error(
-          `[foundry] active-project recovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          `[foundry] active-project recovery failed: ${safeErrorMessage(error)}`,
         );
       });
   });
@@ -202,7 +203,7 @@ export function createFoundryRouter(
   // the explicitly configured inbox folder and imports changed Markdown notes.
   if (obsidianInbox) {
     const scan = () => void store.importObsidianInbox(obsidianInbox).catch((error: unknown) => {
-      console.error(`[foundry] Obsidian scan failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      console.error(`[foundry] Obsidian scan failed: ${safeErrorMessage(error)}`);
     });
     scan();
     const timer = setInterval(scan, 5_000);
@@ -333,7 +334,7 @@ export function createFoundryRouter(
       }
     } catch (error) {
       if (error instanceof FoundryRouteError) {
-        res.status(error.status).json({ error: error.message });
+        res.status(error.status).json({ error: safeErrorMessage(error) });
         return;
       }
       throw error;

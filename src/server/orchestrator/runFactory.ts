@@ -113,6 +113,7 @@ import { releaseRun, isPaperOnlyDelivery } from "./releaseRun.js";
 import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
+import { safeErrorMessage } from "../errors.js";
 
 export interface StartRunArgs {
   idea: string;
@@ -973,7 +974,7 @@ async function executeRun(
             resolved = await repoResolverAgent({ provider: code }, checkpoint.idea);
           } catch (err) {
             if (err instanceof ResolveError) {
-              throw new IngestError(err.message);
+              throw new IngestError(safeErrorMessage(err));
             }
             throw err;
           }
@@ -1208,7 +1209,7 @@ async function executeRun(
         } catch (err) {
           if (err instanceof ProviderAbortError) throw err;
           research = undefined;
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = safeErrorMessage(err);
           log(
             "warning",
             `Research FAILED and was SKIPPED (advisory stage): ${msg.slice(0, 300)} — continuing the build without external recommendations.`,
@@ -1919,7 +1920,7 @@ async function executeRun(
         });
       } catch (err) {
         if (err instanceof ProviderAbortError) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = safeErrorMessage(err);
         log(
           "warning",
           `Final Reviewer FAILED (${msg.slice(0, 200)}) — falling back to a deterministic evidence-based report. The build itself is unaffected.`,

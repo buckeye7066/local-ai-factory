@@ -46,7 +46,8 @@ const SIGNATURES: ReadonlyArray<{
   },
   {
     signature: "native_abi_mismatch",
-    pattern: /was compiled against a different node\.js version|NODE_MODULE_VERSION \d+.*NODE_MODULE_VERSION \d+/is,
+    pattern:
+      /was compiled against a different node\.js version|NODE_MODULE_VERSION \d+.*NODE_MODULE_VERSION \d+/is,
     remedy:
       "The compiled native module targets a different Node ABI. Run `npm rebuild` " +
       "under the Node version the tests run with.",
@@ -60,10 +61,42 @@ const SIGNATURES: ReadonlyArray<{
   },
   {
     signature: "missing_binary",
-    pattern: /'[^']+' is not recognized as an internal or external command|command not found|spawn \S+ ENOENT/i,
+    pattern:
+      /'[^']+' is not recognized as an internal or external command|command not found|spawn \S+ ENOENT/i,
     remedy:
       "A binary the project needs is not installed or not on PATH in the " +
       "sandboxed environment.",
+  },
+  {
+    signature: "disk_full",
+    pattern: /ENOSPC|no space left on device|disk full|not enough disk space/i,
+    remedy:
+      "The workspace or runner disk is full. Free space under WORKSPACE_ROOT " +
+      "(or the system drive) and rerun verification.",
+  },
+  {
+    signature: "out_of_memory",
+    pattern:
+      /ENOMEM|out of memory|heap out of memory|allocation failed|cannot allocate memory|std::bad_alloc/i,
+    remedy:
+      "The command exhausted available memory. Reduce concurrency/workload or " +
+      "run on a machine with more RAM, then rerun verification.",
+  },
+  {
+    signature: "network_unreachable",
+    pattern:
+      /ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|EAI_AGAIN|network unreachable|socket hang up|fetch failed/i,
+    remedy:
+      "A required network or local service endpoint could not be reached from " +
+      "this environment. Verify the URL/service and rerun verification.",
+  },
+  {
+    signature: "request_timeout",
+    pattern:
+      /ETIMEDOUT|ESOCKETTIMEDOUT|request timed out|connect timed out|deadline exceeded/i,
+    remedy:
+      "A required service timed out before responding. Check the service health " +
+      "or timeout budget, then rerun verification.",
   },
   {
     signature: "engine_mismatch",

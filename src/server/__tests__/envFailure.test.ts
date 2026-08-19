@@ -30,16 +30,45 @@ describe("classifyEnvironmentFailure", () => {
       )?.signature,
     ).toBe("native_abi_mismatch");
     expect(
-      classifyEnvironmentFailure(failing("npm ci", "gyp ERR! stack Error: not found: msbuild")),
+      classifyEnvironmentFailure(
+        failing("npm ci", "gyp ERR! stack Error: not found: msbuild"),
+      ),
     ).toMatchObject({ signature: "native_toolchain_failure" });
     expect(
       classifyEnvironmentFailure(
-        failing("npm test", "'playwright' is not recognized as an internal or external command"),
+        failing(
+          "npm test",
+          "'playwright' is not recognized as an internal or external command",
+        ),
       ),
     ).toMatchObject({ signature: "missing_binary" });
     expect(
-      classifyEnvironmentFailure(failing("npm ci", "npm ERR! code EBADENGINE\nUnsupported engine")),
+      classifyEnvironmentFailure(
+        failing("npm ci", "npm ERR! code EBADENGINE\nUnsupported engine"),
+      ),
     ).toMatchObject({ signature: "engine_mismatch" });
+  });
+
+  it("classifies disk, memory, network, and timeout environment failures", () => {
+    expect(
+      classifyEnvironmentFailure(
+        failing("npm test", "Error: ENOSPC: no space left on device, write"),
+      )?.signature,
+    ).toBe("disk_full");
+    expect(
+      classifyEnvironmentFailure(
+        failing("npm test", "FATAL ERROR: JavaScript heap out of memory"),
+      )?.signature,
+    ).toBe("out_of_memory");
+    expect(
+      classifyEnvironmentFailure(
+        failing("npm test", "fetch failed: connect ECONNREFUSED 127.0.0.1:11434"),
+      )?.signature,
+    ).toBe("network_unreachable");
+    expect(
+      classifyEnvironmentFailure(failing("npm test", "request timed out after 30000ms"))
+        ?.signature,
+    ).toBe("request_timeout");
   });
 
   it("does NOT classify ordinary repairable failures (lint, unit assertions)", () => {
@@ -60,7 +89,8 @@ describe("classifyEnvironmentFailure", () => {
           {
             command: "npm test",
             exitCode: 0,
-            outputTail: "✓ classifies 'Could not locate the bindings file' (envFailure.test.ts)",
+            outputTail:
+              "✓ classifies 'Could not locate the bindings file' (envFailure.test.ts)",
           },
         ],
       }),
