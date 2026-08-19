@@ -60,6 +60,8 @@ import {
   questionCap,
 } from "./storage/clarificationStore.js";
 import { createFoundryRouter } from "./foundry/router.js";
+import { safeErrorMessage } from "./errors.js";
+import { redactSecrets } from "./security/redact.js";
 import { findRemovedRunOption } from "./removedOptions.js";
 import { FATAL_EXIT_CODE } from "./exitCodes.js";
 
@@ -311,9 +313,9 @@ app.post(
     // setting) placed beside `idea` instead of inside `options` used to be
     // silently ignored, turning an extend run into a from-scratch app.
     const allowedTopLevel = new Set(["idea", "options"]);
-    const strayKeys = Object.keys(
-      (req.body ?? {}) as Record<string, unknown>,
-    ).filter((k) => !allowedTopLevel.has(k));
+    const strayKeys = Object.keys((req.body ?? {}) as Record<string, unknown>).filter(
+      (k) => !allowedTopLevel.has(k),
+    );
     if (strayKeys.length) {
       res.status(400).json({
         error:
@@ -463,7 +465,9 @@ app.post(
     if (rejectRemovedDemoOption(req, res)) return;
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
+      res
+        .status(400)
+        .json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
       return;
     }
     const deps = epicDeps();
@@ -581,7 +585,9 @@ app.post(
       // checkpoint). Unknown providers are rejected by resumeRun.
       const wanted = ProviderSwitchSchema.safeParse(req.body ?? {});
       if (!wanted.success) {
-        res.status(400).json({ error: wanted.error.issues[0]?.message ?? "Bad providers." });
+        res
+          .status(400)
+          .json({ error: wanted.error.issues[0]?.message ?? "Bad providers." });
         return;
       }
       const run = await resumeRun(runId, config, secrets, wanted.data);
@@ -596,8 +602,7 @@ app.post(
           error: err.message,
           missing: err.missing,
           blocked: true,
-          hint:
-            "Restore the provider/free-route configuration used by this run, then resume again.",
+          hint: "Restore the provider/free-route configuration used by this run, then resume again.",
         });
         return;
       }
@@ -684,7 +689,10 @@ app.delete(
       });
       return;
     }
-    const result = await deleteRunAndWorkspace(run, liveWorkspacePaths(await listRuns()));
+    const result = await deleteRunAndWorkspace(
+      run,
+      liveWorkspacePaths(await listRuns()),
+    );
     res.json({ ok: true, ...result });
   }),
 );
@@ -787,9 +795,7 @@ app.get(
     // body is an empty string the UI can render, never a type violation.
     const files = await getRunFiles(runId);
     res.json({
-      files: files.length
-        ? files
-        : run.files.map((f) => ({ ...f, contents: "" })),
+      files: files.length ? files : run.files.map((f) => ({ ...f, contents: "" })),
     });
   }),
 );
@@ -824,7 +830,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     res.status(400).json({ error: err.issues[0]?.message ?? "Invalid request." });
     return;
   }
-  const message = err instanceof Error ? err.message : "Internal error.";
+  const message = safeErrorMessage(err, "Internal error.");
   console.error(`[factory] request failed: ${message}`);
   res.status(500).json({ error: message });
 });
@@ -853,24 +859,25 @@ if (bind.error) {
 import("node:fs").then(({ appendFileSync, mkdirSync }) => {
   const dir = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".factory");
   const logCrash = (kind: string, err: unknown) => {
-    const line = `[${new Date().toISOString()}] ${kind}: ${
-      err instanceof Error ? (err.stack ?? err.message) : String(err)
-    }
-`;
+    const detail = redactSecrets(
+      err instanceof Error ? (err.stack ?? err.message) : String(err),
+    );
+    const line = `[${new Date().toISOString()}] ${kind}: ${detail}\n`;
     try {
       mkdirSync(dir, { recursive: true });
       appendFileSync(resolve(dir, "crash.log"), line);
     } catch {
       /* the console line below still fires */
     }
-    console.error(`[factory] ${kind}:`, err);
+    console.error(`[factory] ${kind}: ${safeErrorMessage(err)}`);
   };
   process.on("uncaughtException", (err) => logCrash("uncaughtException", err));
   process.on("unhandledRejection", (err) => logCrash("unhandledRejection", err));
 });
 
 void recoverOrphanedEpics().then((n) => {
-  if (n > 0) console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
+  if (n > 0)
+    console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
 });
 const server = app.listen(config.port, bind.host, () => {
   console.log(`[factory] backend listening on http://${bind.host}:${config.port}`);
@@ -922,7 +929,7 @@ server.on("error", (err: NodeJS.ErrnoException) => {
     })();
     return;
   }
-  console.error(`[factory] server error: ${err.message}`);
+  console.error(`[factory] server error: ${safeErrorMessage(err)}`);
   process.exit(1);
 });
 

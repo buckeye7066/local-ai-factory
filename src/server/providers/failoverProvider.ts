@@ -19,6 +19,7 @@ import {
 } from "./freeRoute.js";
 import { canPayNow, PaidBudgetExhaustedError } from "./paidBudget.js";
 import { ProviderAbortError } from "./types.js";
+import { safeErrorMessage } from "../errors.js";
 
 /**
  * failoverProvider.ts — FREE primary, paid rescue, automatic return to free.
@@ -139,12 +140,12 @@ export class FailoverProvider implements LLMProvider {
         // ---- Alive, just busy. Wait. Never escalate. --------------------
         if (err instanceof FreeRouteBackpressureError) {
           backpressureRetries += 1;
-          noteBackpressure(`${label}: ${err.message}`);
+          noteBackpressure(`${label}: ${safeErrorMessage(err)}`);
           if (backpressureRetries <= this.cfg.maxBackpressureRetries) {
             this.log(
               "info",
               `[route] ${label}: free route signalled backpressure ` +
-                `(${err.message}) — waiting ${Math.round(
+                `(${safeErrorMessage(err)}) — waiting ${Math.round(
                   err.retryAfterMs / 1000,
                 )}s and retrying on FREE ` +
                 `[${backpressureRetries}/${this.cfg.maxBackpressureRetries}]. No paid call.`,
@@ -191,7 +192,7 @@ export class FailoverProvider implements LLMProvider {
           this.log(
             "info",
             `[route] ${label}: free attempt ${attempt}/${this.cfg.attempts} failed ` +
-              `(${err instanceof Error ? err.message.slice(0, 160) : "unknown"}); ` +
+              `(${safeErrorMessage(err).slice(0, 160)}); ` +
               `retrying on FREE in ${Math.round(this.cfg.retrySpacingMs / 1000)}s.`,
           );
           this.free.resetTransport();
@@ -215,7 +216,7 @@ export class FailoverProvider implements LLMProvider {
     cause: unknown,
   ): Promise<T> {
     const tiers = this.paidTiers();
-    const causeMsg = cause instanceof Error ? cause.message : String(cause);
+    const causeMsg = safeErrorMessage(cause);
 
     if (tiers.length === 0) {
       // No paid key at all. Keep trying free — that is the whole point.
@@ -267,7 +268,7 @@ export class FailoverProvider implements LLMProvider {
         this.log(
           "warn",
           `[route] ${label}: paid tier ${tierName} also failed ` +
-            `(${err instanceof Error ? err.message.slice(0, 160) : "unknown"}).`,
+            `(${safeErrorMessage(err).slice(0, 160)}).`,
         );
       }
     }

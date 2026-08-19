@@ -13,6 +13,7 @@ export type { ProviderName } from "../../shared/schemas.js";
 
 import type { GenerateJsonInput } from "../../shared/types.js";
 import { ZodError } from "zod";
+import { safeErrorMessage } from "../errors.js";
 
 /** Small helper: sleep used by retry/backoff (kept here so all providers share it). */
 export function sleep(ms: number): Promise<void> {
@@ -117,9 +118,7 @@ export async function withRetry<T>(
   }
   // Surface a sanitized error only — never include payloads.
   throw new Error(
-    `${label} failed after ${used} attempt(s): ${
-      lastErr instanceof Error ? lastErr.message : "unknown error"
-    }`,
+    `${label} failed after ${used} attempt(s): ${safeErrorMessage(lastErr, "unknown error")}`,
   );
 }
 

@@ -73,11 +73,7 @@ import {
 import { runRepairLoop } from "./repairLoop.js";
 import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
 import { groundFinalReport } from "./reportGrounding.js";
-import {
-  foldTestExit,
-  freshTestVerdict,
-  relevantTestStatus,
-} from "./testVerdict.js";
+import { foldTestExit, freshTestVerdict, relevantTestStatus } from "./testVerdict.js";
 import { classifyEnvironmentFailure } from "./envFailure.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
 import { architectAgent } from "../agents/architectAgent.js";
@@ -99,6 +95,7 @@ import { releaseRun, isPaperOnlyDelivery } from "./releaseRun.js";
 import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
+import { describeUserFacingError, safeErrorMessage } from "../errors.js";
 
 export interface StartRunArgs {
   idea: string;
@@ -370,13 +367,23 @@ async function executeRun(
   const code: LLMProvider = withFailover(
     gateIfPaid(
       rawCode,
-      new CountingProvider(rawCode, run, config.maxModelCallsPerRun, attribution(rawCode)),
+      new CountingProvider(
+        rawCode,
+        run,
+        config.maxModelCallsPerRun,
+        attribution(rawCode),
+      ),
     ),
   );
   const review: LLMProvider = withFailover(
     gateIfPaid(
       rawReview,
-      new CountingProvider(rawReview, run, config.maxModelCallsPerRun, attribution(rawReview)),
+      new CountingProvider(
+        rawReview,
+        run,
+        config.maxModelCallsPerRun,
+        attribution(rawReview),
+      ),
     ),
   );
   // CRITICAL-STAGE provider (owner order 2026-08-16: fix known-weak backends
@@ -556,11 +563,7 @@ async function executeRun(
       if (phantom.corrected) finalContents = phantom.corrected;
       if (phantom.refused) {
         const reason = `undeclared dependency — ${phantom.reason}`;
-        log(
-          "warning",
-          `UNDECLARED DEPENDENCY in ${f.path} — ${phantom.reason}`,
-          stage,
-        );
+        log("warning", `UNDECLARED DEPENDENCY in ${f.path} — ${phantom.reason}`, stage);
         refusals.push({ path: f.path, reason });
         continue;
       }
@@ -672,7 +675,7 @@ async function executeRun(
             resolved = await repoResolverAgent({ provider: code }, checkpoint.idea);
           } catch (err) {
             if (err instanceof ResolveError) {
-              throw new IngestError(err.message);
+              throw new IngestError(safeErrorMessage(err));
             }
             throw err;
           }
@@ -905,7 +908,7 @@ async function executeRun(
         } catch (err) {
           if (err instanceof ProviderAbortError) throw err;
           research = undefined;
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = safeErrorMessage(err);
           log(
             "warning",
             `Research FAILED and was SKIPPED (advisory stage): ${msg.slice(0, 300)} — continuing the build without external recommendations.`,
@@ -1041,7 +1044,10 @@ async function executeRun(
         // "build" was one README that QA then honestly passed. A build that
         // cannot fulfill the plan is a failed build, not a small success.
         for (const f of concurrentResult.failures) {
-          log("warning", `Build category FAILED on every provider: ${f.id} — ${f.reason}`);
+          log(
+            "warning",
+            `Build category FAILED on every provider: ${f.id} — ${f.reason}`,
+          );
         }
         for (const id of concurrentResult.empties) {
           log("warning", `Build category returned no files: ${id}`);
@@ -1200,7 +1206,11 @@ async function executeRun(
         await checkpointNow({ testPlan });
       }
       if (testPlan.files.length) {
-        const testTally = await writeBuild(workspacePath, testPlan.files, "test_writer");
+        const testTally = await writeBuild(
+          workspacePath,
+          testPlan.files,
+          "test_writer",
+        );
         reportWrites(testTally, "test_writer", "test");
       }
 
@@ -1448,7 +1458,7 @@ async function executeRun(
         });
       } catch (err) {
         if (err instanceof ProviderAbortError) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = safeErrorMessage(err);
         log(
           "warning",
           `Final Reviewer FAILED (${msg.slice(0, 200)}) — falling back to a deterministic evidence-based report. The build itself is unaffected.`,
@@ -1499,7 +1509,7 @@ async function executeRun(
       } catch (err) {
         log(
           "warning",
-          `Unwired-file scan failed (non-fatal): ${String((err as Error)?.message ?? err)}`,
+          `Unwired-file scan failed (non-fatal): ${safeErrorMessage(err)}`,
           "final_review",
         );
       }
@@ -1784,9 +1794,7 @@ async function executeRun(
     } else {
       run.status = "failed";
       run.resumable = true;
-      // The raw error may embed a provider/library message containing a
-      // secret-shaped value — redact before it is persisted and served by the API.
-      run.error = redactSecrets(err instanceof Error ? err.message : "Unknown error");
+      run.error = describeUserFacingError(err) || "Unknown error.";
       if (run.currentStage) finishStage(run, run.currentStage, "failed");
       log("error", `Run failed: ${run.error}`);
       const ev = await appendAuditEvent({
@@ -1811,9 +1819,16 @@ async function executeRun(
     // audit stranded five repos on 2026-08-11. Restore runs on every exit path
     // and never masks the run's own outcome.
     if (inPlaceRestore) {
-      const res = await git(["checkout", inPlaceRestore.branch], inPlaceRestore.path, 30_000).catch(
-        (err: unknown) => ({ code: 1, stdout: "", stderr: String(err), spawnError: null }),
-      );
+      const res = await git(
+        ["checkout", inPlaceRestore.branch],
+        inPlaceRestore.path,
+        30_000,
+      ).catch((err: unknown) => ({
+        code: 1,
+        stdout: "",
+        stderr: String(err),
+        spawnError: null,
+      }));
       log(
         res.code === 0 ? "info" : "warning",
         res.code === 0
@@ -1949,9 +1964,7 @@ async function prepareResume(
 async function restoreFailedResume(run: RunRecord, err: unknown): Promise<void> {
   run.status = "failed";
   run.resumable = Boolean(await getRunCheckpoint(run.id));
-  run.error = redactSecrets(
-    err instanceof Error ? err.message : "Resume setup failed unexpectedly.",
-  );
+  run.error = describeUserFacingError(err) || "Resume setup failed unexpectedly.";
   await saveRun(run);
 }
 
@@ -1981,7 +1994,8 @@ export async function resumeRun(
       }
     }
     if (providers.codeProvider) prepared.run.codeProvider = providers.codeProvider;
-    if (providers.reviewProvider) prepared.run.reviewProvider = providers.reviewProvider;
+    if (providers.reviewProvider)
+      prepared.run.reviewProvider = providers.reviewProvider;
     prepared.run.logs.push(
       makeLog(
         "info",
