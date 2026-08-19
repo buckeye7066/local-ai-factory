@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   assessProtectedHostWrite,
+  exportedSymbols,
   isFactoryOverlayPath,
   _resetProtectedFilesCache,
 } from "../workspace/protectedFiles.js";
@@ -14,9 +15,9 @@ function gitWorkspace(files: Record<string, string>): string {
   const path = mkdtempSync(join(tmpdir(), "factory-protected-"));
   workspaces.push(path);
   for (const [rel, contents] of Object.entries(files)) {
-    const full = join(path, rel);
-    mkdirSync(join(full, ".."), { recursive: true });
-    writeFileSync(full, contents);
+    const absolute = join(path, rel);
+    mkdirSync(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, contents);
   }
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", path, ...args], { encoding: "utf8" });
@@ -49,7 +50,7 @@ describe("assessProtectedHostWrite", () => {
       '{"name":"grant-flow","private":true,"type":"module","scripts":{"test":"vitest run"}}';
     const verdict = assessProtectedHostWrite(ws, "package.json", stub);
     expect(verdict.refused).toBe(true);
-    expect(verdict.reason).toMatch(/collapse the host manifest/);
+    expect(verdict.reason).toMatch(/dependency-map entries/);
   });
 
   it("ALLOWS additive package.json edits (adding a dependency must keep working)", () => {
@@ -59,6 +60,52 @@ describe("assessProtectedHostWrite", () => {
       '"devDependencies":{"axe-core":"^4.9.0"},"name"',
     );
     expect(assessProtectedHostWrite(ws, "package.json", grown).refused).toBe(false);
+  });
+
+  it.each([
+    [
+      "changes the test script",
+      (manifest: Record<string, any>) => {
+        manifest.scripts.test = "echo src/generated.test.ts";
+      },
+    ],
+    [
+      "adds a pretest hook",
+      (manifest: Record<string, any>) => {
+        manifest.scripts.pretest = "node rewrite-test-config.js";
+      },
+    ],
+    [
+      "removes workspaces",
+      (manifest: Record<string, any>) => {
+        delete manifest.workspaces;
+      },
+    ],
+    [
+      "adds inline test discovery config",
+      (manifest: Record<string, any>) => {
+        manifest.vitest = { include: ["src/generated.test.ts"] };
+      },
+    ],
+  ])("refuses package.json verification laundering: %s", (_name, mutate) => {
+    const host = {
+      name: "host",
+      workspaces: ["apps/*"],
+      scripts: {
+        test: "npm run lint && npm run typecheck && npm run unit",
+        unit: "vitest run",
+        lint: "eslint .",
+        typecheck: "tsc --noEmit",
+      },
+      dependencies: { react: "19" },
+    };
+    const before = JSON.stringify(host);
+    const changed = structuredClone(host) as Record<string, any>;
+    mutate(changed);
+    const after = JSON.stringify(changed);
+    expect(after.length).toBeGreaterThan(before.length * 0.8);
+    const ws = gitWorkspace({ "package.json": before });
+    expect(assessProtectedHostWrite(ws, "package.json", after).refused).toBe(true);
   });
 
   it("refuses every generated write to tracked lockfiles", () => {
@@ -91,6 +138,20 @@ describe("assessProtectedHostWrite", () => {
     const ws = gitWorkspace({ "package.json": HOST_MANIFEST });
     expect(assessProtectedHostWrite(ws, "playwright.config.ts", "export default {}").refused).toBe(false);
     expect(assessProtectedHostWrite(ws, "packages/sub/vitest.config.ts", "export default {}").refused).toBe(false);
+  });
+
+  it("refuses edits to tracked package-level test configuration", () => {
+    const ws = gitWorkspace({
+      "packages/web/vitest.config.ts":
+        "export default { test: { include: ['src/**/*.test.ts'] } };",
+    });
+    expect(
+      assessProtectedHostWrite(
+        ws,
+        "packages/web/vitest.config.ts",
+        "export default { test: { include: ['src/generated.test.ts'] } };",
+      ).refused,
+    ).toBe(true);
   });
 
   it("is inert for non-git (new-app) workspaces", () => {
@@ -147,10 +208,174 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     expect(verdict.refused).toBe(false);
   });
 
+  it("recognizes default exports but ignores exports hidden in comments", () => {
+    expect(exportedSymbols("export default function App(){}")).toContain(
+      "default",
+    );
+    expect(
+      exportedSymbols("/* export default function App(){} */"),
+    ).not.toContain("default");
+  });
+
+  it("refuses a new shadow extension variant beside tracked source", () => {
+    const repo = gitWorkspace({
+      "App.jsx": "export default function App(){ return null; }",
+    });
+    const verdict = assessProtectedHostWrite(
+      repo,
+      "App.tsx",
+      "export default function App(){ return <Profile />; }",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/App\.jsx/);
+    expect(verdict.reason).toMatch(/shadow extension variant/);
+  });
+
+  it("refuses nested and CommonJS-TypeScript shadow variants", () => {
+    const repo = gitWorkspace({
+      "src/vite.config.js": "export default {};",
+      "src/App.ts": "export default function App(){ return null; }",
+    });
+    expect(
+      assessProtectedHostWrite(repo, "src/vite.config.ts", "export default {};")
+        .refused,
+    ).toBe(true);
+    expect(
+      assessProtectedHostWrite(repo, "src/App.cts", "export default function App(){}")
+        .refused,
+    ).toBe(true);
+  });
+
+  it("does not accept export decoys inside strings, templates, or regex literals", () => {
+    for (const decoy of [
+      'const note = "export const auth";',
+      "const note = `export const auth`;",
+      "const note = /export const auth/;",
+    ]) {
+      expect(exportedSymbols(decoy)).not.toContain("auth");
+    }
+    expect(exportedSymbols("export type Auth = { id: string };")).toContain(
+      "Auth",
+    );
+  });
+
+  it("keeps protection active when the tracked-path index exceeds one MiB", () => {
+    const ws = gitWorkspace({ "vitest.config.js": "export default {};\n" });
+    const blob = execFileSync(
+      "git",
+      ["-C", ws, "hash-object", "-w", "--stdin"],
+      { input: "x", encoding: "utf8" },
+    ).trim();
+    const entries = Array.from({ length: 10_000 }, (_, index) => {
+      const path =
+        `bulk/${String(index).padStart(5, "0")}-${"x".repeat(110)}.ts`;
+      return `100644 blob ${blob}\t${path}\0`;
+    }).join("");
+    execFileSync(
+      "git",
+      ["-C", ws, "update-index", "-z", "--index-info"],
+      { input: entries, maxBuffer: 4 * 1024 * 1024 },
+    );
+    const listing = execFileSync("git", ["-C", ws, "ls-files", "-z"], {
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    expect(listing.byteLength).toBeGreaterThan(1024 * 1024);
+    _resetProtectedFilesCache();
+    expect(
+      assessProtectedHostWrite(ws, "vitest.config.ts", "export default {};")
+        .refused,
+    ).toBe(true);
+  });
+
   it("leaves brand-new source files alone", () => {
     const repo = gitWorkspace({ "auth.js": "export const A = 1;" });
     expect(assessProtectedHostWrite(repo, "brandNew.js", "// anything").refused).toBe(false);
   });
+  it("preserves each export-star source independently", () => {
+    const ws = gitWorkspace({
+      "src/index.ts": "export * from './a';\nexport * from './b';\n",
+    });
+    const verdict = assessProtectedHostWrite(
+      ws,
+      "src/index.ts",
+      "export * from './a';\n",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/export/);
+  });
+
+  it.each(["cts", "mts"])("protects tracked eslint.config.%s", (ext) => {
+    const path = `eslint.config.${ext}`;
+    const ws = gitWorkspace({ [path]: "export default [{ rules: {} }];\n" });
+    expect(
+      assessProtectedHostWrite(ws, path, "export default [];\n").refused,
+    ).toBe(true);
+  });
+
+  it("refuses a Python test-config precedence shadow", () => {
+    const ws = gitWorkspace({
+      "pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-q'\n",
+    });
+    const verdict = assessProtectedHostWrite(
+      ws,
+      "pytest.ini",
+      "[pytest]\ntestpaths = generated_only\n",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/Python test configuration|pytest discovery/i);
+  });
+
+  it("refuses a new lockfile that would switch package managers", () => {
+    const ws = gitWorkspace({
+      "package-lock.json": "{\"lockfileVersion\":3}\n",
+      "package.json": "{\"name\":\"host\"}\n",
+    });
+    const verdict = assessProtectedHostWrite(ws, "yarn.lock", "# shadow\n");
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/lockfile|derived artifact/i);
+  });
+
+
+  it("refreshes its tracked-file baseline when an in-place repo HEAD advances", () => {
+    const ws = gitWorkspace({ "src/old.ts": "export const old = 1;\n" });
+    expect(
+      assessProtectedHostWrite(
+        ws,
+        "src/old.ts",
+        "export const old = 1;\nexport const more = 2;\n",
+      ).refused,
+    ).toBe(false);
+
+    writeFileSync(
+      join(ws, "src", "new.ts"),
+      "export const keep = 1;\n",
+    );
+    execFileSync("git", ["-C", ws, "add", "src/new.ts"]);
+    execFileSync(
+      "git",
+      [
+        "-C",
+        ws,
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "-m",
+        "advance",
+      ],
+    );
+
+    const verdict = assessProtectedHostWrite(
+      ws,
+      "src/new.ts",
+      "const removed = 1;\n",
+    );
+    expect(verdict.refused).toBe(true);
+    expect(verdict.reason).toMatch(/drops.*export/i);
+  });
+
 });
 
 describe("factory overlay names (GrantFlow extend ba870e71)", () => {

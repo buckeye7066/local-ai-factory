@@ -26,6 +26,8 @@
     "factory": "tsx src/cli/factory.ts",
     "proof:real-provider": "tsx src/cli/proof-real-provider.ts",
     "proof:free-route": "tsx src/cli/proof-free-route.ts",
+    "rotation:pin": "tsx src/cli/rotation-pin.ts",
+    "proof:rotation": "tsx scripts/smoke-rotation.ts",
     "proof:extend-futureu": "tsx src/cli/proof-extend-futureu.ts",
     "measure:free-route": "node scripts/measure-free-route.mjs",
     "release:check": "node scripts/release-check.mjs",

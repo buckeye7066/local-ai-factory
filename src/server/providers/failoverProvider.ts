@@ -5,7 +5,7 @@ import type {
   GenerateJsonInput,
 } from "../../shared/types.js";
 import type { ProviderName } from "../../shared/schemas.js";
-import type { FreeProvider } from "./freeProvider.js";
+import { PinUnavailable } from "../rotation/aitimeRotation.js";
 import {
   FreeRouteStallError,
   FreeRouteBackpressureError,
@@ -59,6 +59,15 @@ export interface FailoverConfig {
 
 export type RouteLogger = (kind: "info" | "warn", message: string) => void;
 
+/**
+ * What the chain needs from its $0 primary. Satisfied by FreeProvider (the
+ * FCC proxy route) and by RotatingProvider (pool-first rotation across every
+ * $0 route in the AI Time catalog, FCC included).
+ */
+export interface FreePrimary extends LLMProvider {
+  resetTransport(): void;
+}
+
 export class FailoverProvider implements LLMProvider {
   /**
    * Reported identity is the PRIMARY route, which is what the run record and
@@ -68,7 +77,7 @@ export class FailoverProvider implements LLMProvider {
   readonly name: ProviderName = "free";
 
   constructor(
-    private free: FreeProvider,
+    private free: FreePrimary,
     private anthropic: LLMProvider,
     private openai: LLMProvider,
     private cfg: FailoverConfig,
@@ -136,6 +145,12 @@ export class FailoverProvider implements LLMProvider {
         // A deliberate abort (deadline/cancel) is never a free-route retry
         // candidate and must never trigger paid rescue.
         if (err instanceof ProviderAbortError) throw err;
+
+        // An operator PINNED a rotation target that cannot serve. Retrying it
+        // cannot help, and a paid rescue would be exactly the silent
+        // substitution pinning exists to prevent: if the operator said Grok,
+        // either Grok runs or the run stops and says why.
+        if (err instanceof PinUnavailable) throw err;
 
         // ---- Alive, just busy. Wait. Never escalate. --------------------
         if (err instanceof FreeRouteBackpressureError) {

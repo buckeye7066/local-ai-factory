@@ -1,6 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
+import {
+  isJavascriptTestPath,
+  isPythonTestPath,
+} from "./testPaths.js";
 
 /**
  * commandRunner.ts — conservative command execution for UNTRUSTED generated
@@ -11,9 +15,9 @@ import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
  *    inside a workspace directory (never the project root).
  *  - SCRIPT GATE: any allowlisted command is refused unless
  *    `allowScriptExecution` is enabled — including dependency installs. The
- *    server enables it by default (real execution is the product default,
- *    owner order 2026-08-13; dry-run mode was removed the same day); hermetic
- *    tests leave it off so they never spawn package managers. An install is
+ *    server keeps it disabled by default because cwd containment is not an OS
+ *    sandbox. An owner may opt in only when Factory Deck itself runs inside a
+ *    disposable container/VM with a workspace-only writable mount. An install is
  *    NOT safe by itself: a generated `.pnpmfile.cjs` runs project-controlled
  *    code during resolution, and `--ignore-scripts` does NOT disable it. So
  *    installs are gated with everything else, and when executed they
@@ -64,33 +68,47 @@ const ALLOWLIST: ReadonlyArray<readonly [string, string]> = [
   ["pnpm", "typecheck"],
   ["pnpm", "rebuild"],
   ["yarn", "install"],
+  ["yarn", "run"],
   ["yarn", "test"],
-  ["npx", "tsc"],
-  // Prisma client generation — the postinstall step modern installers skip.
-  ["npx", "prisma"],
 ];
 
 /** Python entrypoints Factory Deck itself may schedule for verification. */
 const PYTHON_BINS = new Set(["python", "python3"]);
-const PYTHON_CHECK_MODULES = new Set(["compileall", "pytest", "unittest"]);
-
-const DIRECT_PYTHON_TEST =
-  /^(?:[A-Za-z0-9_.-]+\/)*test_[A-Za-z0-9_.-]+\.py$/;
 
 function isSafeDirectPythonTest(arg: string): boolean {
-  const normalized = arg.replace(/\\/g, "/");
-  return (
-    !normalized.startsWith("/") &&
-    !normalized.split("/").includes("..") &&
-    DIRECT_PYTHON_TEST.test(normalized)
-  );
+  return isPythonTestPath(arg);
 }
 
 function isAllowedPython(args: string[]): boolean {
   if (args.length === 1 && isSafeDirectPythonTest(args[0]!)) return true;
   if (args[0] !== "-m") return false;
   const module = args[1] ?? "";
-  if (PYTHON_CHECK_MODULES.has(module)) return true;
+  if (
+    module === "compileall" &&
+    args.length === 4 &&
+    args[2] === "-q" &&
+    args[3] === "."
+  ) {
+    return true;
+  }
+  if (module === "pytest" && args.length === 3 && args[2] === "-q") {
+    return true;
+  }
+  if (
+    module === "pytest" &&
+    args.length === 4 &&
+    (args[2] === "-q" || args[2] === "-vv") &&
+    isSafeDirectPythonTest(args[3]!)
+  ) {
+    return true;
+  }
+  if (
+    module === "unittest" &&
+    args.length === 3 &&
+    args[2] === "discover"
+  ) {
+    return true;
+  }
   // Dependency installation is deliberately narrow: only a requirements file
   // in the workspace, with pip's version check disabled. The script-execution
   // approval gate still applies because Python packages may execute build hooks.
@@ -102,6 +120,47 @@ function isAllowedPython(args: string[]): boolean {
     args[4] === "-r" &&
     args[5] === "requirements.txt"
   );
+}
+
+function isSafeDirectJsTest(arg: string): boolean {
+  return isJavascriptTestPath(arg);
+}
+
+/** Engine-authored local-runner forms only; npx may never download a package. */
+export function isAllowedNpxVerification(args: string[]): boolean {
+  if (args[0] !== "--no-install") return false;
+  const tool = args[1] ?? "";
+  if (tool === "prisma") {
+    return args.length === 3 && args[2] === "generate";
+  }
+  if (tool === "tsc") {
+    return args.length === 3 && args[2] === "--noEmit";
+  }
+  if (tool === "vitest") {
+    return (
+      args.length === 5 &&
+      args[2] === "run" &&
+      isSafeDirectJsTest(args[3]!) &&
+      args[4] === "--reporter=json"
+    );
+  }
+  if (tool === "jest") {
+    return (
+      args.length === 5 &&
+      args[2] === "--runTestsByPath" &&
+      isSafeDirectJsTest(args[3]!) &&
+      args[4] === "--json"
+    );
+  }
+  if (tool === "playwright") {
+    return (
+      args.length === 5 &&
+      args[2] === "test" &&
+      isSafeDirectJsTest(args[3]!) &&
+      args[4] === "--reporter=json"
+    );
+  }
+  return false;
 }
 
 export interface CommandRequest {
@@ -123,6 +182,7 @@ export interface CommandResult {
 
 export function isAllowed(bin: string, args: string[]): boolean {
   if (PYTHON_BINS.has(bin)) return isAllowedPython(args);
+  if (bin === "npx") return isAllowedNpxVerification(args);
   const first = args[0] ?? "";
   return ALLOWLIST.some(([b, a]) => b === bin && a === first);
 }
@@ -326,8 +386,8 @@ export interface RunCommandOptions {
   /**
    * Approval to execute model-authored scripts/binaries (test, build, run,
    * typecheck, npx). The server passes config.allowUntrustedScripts, which
-   * defaults to TRUE (real execution is the product default); hermetic tests
-   * leave it unset/false so they never spawn package managers.
+   * defaults to FALSE because this module is not an OS sandbox. Enable only
+   * when the whole Factory Deck process is externally sandboxed.
    */
   allowScriptExecution?: boolean;
   /**

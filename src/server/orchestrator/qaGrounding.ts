@@ -26,6 +26,19 @@ import type { QaReport } from "../../shared/schemas.js";
 export interface ExecutedCommandResult {
   command: string;
   exitCode: number | null;
+  /** Only test-command output may establish that a generated test executed. */
+  isTest?: boolean;
+  /** Exact engine-selected generated test, when this was a direct runner command. */
+  directTestPath?: string;
+  /** True only for a browser-runner invocation. */
+  isBrowser?: boolean;
+  runner?: "vitest" | "jest" | "playwright" | "pytest";
+  /** True only when the runner produced parseable, non-skipped passing evidence. */
+  directEvidenceValid?: boolean;
+  passedCount?: number;
+  skippedCount?: number;
+  /** Exact titles reported passed by the structured direct runner. */
+  passedTestNames?: string[];
   /** Bounded tail of the command's stdout+stderr (evidence, not the model's memory of it). */
   outputTail: string;
 }
@@ -33,6 +46,10 @@ export interface ExecutedCommandResult {
 export interface VerificationEvidence {
   /** Commands that actually ran (skipped/blocked commands are not evidence). */
   executed: ExecutedCommandResult[];
+  /** Required commands that were blocked, unavailable, or could not execute. */
+  incomplete?: Array<{ command: string; reason: string }>;
+  /** Exact checked bytes for every path eligible for delivery. */
+  fileDigests?: Record<string, string>;
 }
 
 /** Cap the per-command evidence carried inside a QA issue. Errors print last. */
@@ -43,7 +60,8 @@ export function groundQaReport(
   evidence: VerificationEvidence,
 ): QaReport {
   const executed = evidence.executed;
-  if (!executed.length) {
+  const incomplete = evidence.incomplete ?? [];
+  if (!executed.length && !incomplete.length) {
     return {
       ...qa,
       summary: `[unverified — no commands executed; model judgment only] ${qa.summary}`,
@@ -51,22 +69,39 @@ export function groundQaReport(
   }
 
   const failures = executed.filter((r) => r.exitCode !== 0);
-  const groundedPassed = failures.length === 0;
+  // Command failures and missing required commands are authoritative, but
+  // green commands only prove what they exercised. They must never erase a
+  // code/acceptance blocker found by the critic.
+  const groundedPassed =
+    failures.length === 0 && incomplete.length === 0 && qa.passed;
 
-  const syntheticIssues = failures.map((f) => ({
-    severity: "critical" as const,
-    title: `Executed command failed: ${f.command} (exit ${f.exitCode ?? "null"})`,
-    detail: f.outputTail.slice(-ISSUE_TAIL_CHARS),
-    file: null,
-    repairInstruction:
-      "Make this command exit 0. The output above is the authoritative error " +
-      "evidence — repair exactly what it reports and do not invent other errors.",
-  }));
+  const syntheticIssues = [
+    ...failures.map((f) => ({
+      severity: "critical" as const,
+      title: `Executed command failed: ${f.command} (exit ${f.exitCode ?? "null"})`,
+      detail: f.outputTail.slice(-ISSUE_TAIL_CHARS),
+      file: null,
+      repairInstruction:
+        "Make this command exit 0. The output above is the authoritative error " +
+        "evidence — repair exactly what it reports and do not invent other errors.",
+    })),
+    ...incomplete.map((item) => ({
+      severity: "critical" as const,
+      title: `Required verification did not execute: ${item.command}`,
+      detail: item.reason,
+      file: null,
+      repairInstruction:
+        "Restore the declared local verification tool or harness and execute this required check.",
+    })),
+  ];
 
-  const overridden = qa.passed !== groundedPassed;
+  const commandFailureOverrodePass =
+    qa.passed && (failures.length > 0 || incomplete.length > 0);
   const prefix =
-    `[grounded: ${executed.length} command(s) executed, ${failures.length} failed` +
-    (overridden ? "; model verdict overridden by executed evidence" : "") +
+    `[grounded: ${executed.length} command(s) executed, ${failures.length} failed, ${incomplete.length} incomplete` +
+    (commandFailureOverrodePass
+      ? "; passing model verdict overridden by missing/failing evidence"
+      : "") +
     `] `;
 
   return {

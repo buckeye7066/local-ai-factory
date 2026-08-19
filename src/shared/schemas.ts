@@ -343,8 +343,21 @@ export const FileBuildSchema = z.object({
 });
 export type FileBuild = z.infer<typeof FileBuildSchema>;
 
+export const TestCoverageSchema = z.object({
+  /** Stable engine-assigned user-flow or acceptance-criterion id (UF-n / AC-n). */
+  requirementId: z.string(),
+  /** Exact generated test path selected by a direct runner command. */
+  testPath: z.string(),
+  /** Exact active test title that the structured runner must report passed. */
+  testName: z.string(),
+  kind: z.enum(["unit", "integration", "browser"]),
+});
+export type TestCoverage = z.infer<typeof TestCoverageSchema>;
+
 export const TestPlanSchema = z.object({
   testPlan: z.string(),
+  /** Prose is diagnostic only; this mapping is the executable acceptance contract. */
+  coverage: z.array(TestCoverageSchema).optional(),
   files: z
     .array(
       z.object({
@@ -384,7 +397,10 @@ export const RepairResultSchema = z.object({
       z.object({
         path: z.string(),
         purpose: z.string().default(""),
-        contents: z.string(),
+        /** Full contents are valid only for a genuinely new file. */
+        contents: z.string().default(""),
+        /** Existing files must be changed through exact, grounded anchors. */
+        edits: z.array(FileEditSchema).default([]),
       }),
     )
     .default([]),
@@ -500,6 +516,8 @@ export const RunDestinationSchema = z.object({
   detail: z.string().nullable().default(null),
   /** Browsable URL once known (repo page, or a compare/PR link). */
   url: z.string().nullable().default(null),
+  /** Exact commit whose bytes were covered by the verification receipt. */
+  commitSha: z.string().nullable().optional(),
   deliveredAt: z.number().nullable().default(null),
 });
 export type RunDestination = z.infer<typeof RunDestinationSchema>;

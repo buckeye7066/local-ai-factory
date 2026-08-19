@@ -101,6 +101,13 @@ describe("deliverRun — a simulated run never writes into a real repo", () => {
       runId: randomUUID(),
       appName: "Mock App",
       options: { demo: true },
+      verification: {
+        qaPassed: false,
+        testStatus: "unknown",
+        writeRefusals: 0,
+        incompleteCommands: 1,
+        fileDigests: {},
+      },
     });
 
     // Not "delivered" — the exact lie the old code told.
@@ -120,6 +127,13 @@ describe("deliverRun — a simulated run never writes into a real repo", () => {
       runId: randomUUID(),
       appName: "Mock App",
       options: { demo: true },
+      verification: {
+        qaPassed: false,
+        testStatus: "unknown",
+        writeRefusals: 0,
+        incompleteCommands: 1,
+        fileDigests: {},
+      },
     });
 
     // The measured defect overwrote package.json with the canned stub app

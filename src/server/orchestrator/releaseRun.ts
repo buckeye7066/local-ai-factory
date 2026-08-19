@@ -37,6 +37,8 @@ export interface ReleaseInput {
   appName: string | null;
   qaPassed: boolean;
   testStatus: "passing" | "failing" | "unknown";
+  /** Exact delivered commit covered by the verification receipt. */
+  verifiedCommitSha: string;
   /** Final-report caveats (unwired scaffolding etc.) surfaced in the PR body. */
   caveats: string[];
   /** True when the delivery contains no wired product change (see isPaperOnlyDelivery). */
@@ -77,7 +79,8 @@ export function repoSlug(repoUrl: string): string | null {
  * host repo does not use) with every command legitimately exiting 0: grounded
  * QA cannot catch a build that verifies its own paper. Paper never auto-merges.
  */
-const PAPER_PATH_RE = /^(docs?\/|tests?\/|__tests__\/|test\/|prisma\/)|\.mdx?$/i;
+const PAPER_PATH_RE =
+  /(?:^|\/)(?:docs?|tests?|__tests__|test|prisma)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$|(?:^|\/)(?:test_[^/]+|[^/]+_test)\.py$|\.mdx?$/i;
 
 export function isPaperOnlyDelivery(filePaths: string[]): boolean {
   if (filePaths.length === 0) return true;
@@ -144,6 +147,17 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
   }
 
   const gate = releaseEligible(input);
+  // Ineligible work must not create external state. A held branch is already
+  // available through delivery; opening a PR before this check made "unknown"
+  // tests and paper-only output look review-ready and triggered host automation.
+  if (!gate.eligible) {
+    return {
+      released: false,
+      prUrl: null,
+      mergedSha: null,
+      reason: gate.reason,
+    };
+  }
   const title = `${input.appName ?? "Factory Deck"}: run ${input.runId.slice(0, 8)}`;
   const caveatBlock = input.caveats.length
     ? `\n\n## Caveats\n${input.caveats.map((c) => `- ${c}`).join("\n")}`
@@ -183,10 +197,6 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
     };
   }
 
-  if (!gate.eligible) {
-    return { released: false, prUrl, mergedSha: null, reason: gate.reason };
-  }
-
   // 2. Wait for the HOST repo's own checks. `gh pr checks` exits 0 when all
   //    checks pass, 8 while pending, non-zero otherwise.
   //
@@ -203,8 +213,6 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
   const graceUntil = Date.now() + (input.noChecksGraceMs ?? NO_CHECKS_GRACE_MS);
   const neededAbsent = input.noChecksConfirmations ?? NO_CHECKS_CONFIRMATIONS;
   let absentObservations = 0;
-  /** True when the host repo's own checks were seen green (not merely absent). */
-  let hostChecksGreen = false;
   for (;;) {
     const checks = await run(
       ["pr", "checks", prUrl, "--json", "state,name"],
@@ -220,7 +228,13 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
         absentObservations >= neededAbsent &&
         Date.now() >= graceUntil
       ) {
-        break;
+        return {
+          released: false,
+          prUrl,
+          mergedSha: null,
+          reason:
+            "host repo has no reported CI checks — release is held because absence is not passing evidence",
+        };
       }
       if (Date.now() > deadline) {
         return {
@@ -254,9 +268,33 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
         reason: `host repo checks failed: ${failed.map((f) => f.name).slice(0, 4).join(", ")}`,
       };
     }
-    const pending = states.filter((s) => /PENDING|QUEUED|IN_PROGRESS|EXPECTED/i.test(s.state));
-    if (states.length && !pending.length) {
-      hostChecksGreen = true;
+    const pending = states.filter((s) =>
+      /PENDING|QUEUED|IN_PROGRESS|EXPECTED/i.test(s.state),
+    );
+    const successful = states.filter((s) => /^SUCCESS$/i.test(s.state));
+    const nonGreenTerminal = states.filter(
+      (s) =>
+        !/^SUCCESS$/i.test(s.state) &&
+        !/PENDING|QUEUED|IN_PROGRESS|EXPECTED/i.test(s.state),
+    );
+    if (nonGreenTerminal.length) {
+      return {
+        released: false,
+        prUrl,
+        mergedSha: null,
+        reason:
+          "host repo checks did not produce an all-success result: " +
+          nonGreenTerminal
+            .map((check) => `${check.name} (${check.state})`)
+            .slice(0, 4)
+            .join(", "),
+      };
+    }
+    if (
+      states.length > 0 &&
+      !pending.length &&
+      successful.length === states.length
+    ) {
       break;
     }
     if (Date.now() > deadline) {
@@ -270,9 +308,45 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
     await sleep(CHECK_POLL_MS);
   }
 
+  // Bind the merge to the exact commit whose bytes passed Factory Deck's
+  // receipt. A branch update after verification must never inherit its green.
+  const head = await run(
+    [
+      "pr",
+      "view",
+      prUrl,
+      "-R",
+      slug,
+      "--json",
+      "headRefOid",
+      "--jq",
+      ".headRefOid",
+    ],
+    process.cwd(),
+    60_000,
+  );
+  if (!succeeded(head) || head.stdout.trim() !== input.verifiedCommitSha) {
+    return {
+      released: false,
+      prUrl,
+      mergedSha: null,
+      reason:
+        "PR head no longer matches the exact verified delivered commit — re-verify before release",
+    };
+  }
+
   // 3. Merge (squash, never force) and confirm with the repo's own record.
   const merge = await run(
-    ["pr", "merge", prUrl, "-R", slug, "--squash"],
+    [
+      "pr",
+      "merge",
+      prUrl,
+      "-R",
+      slug,
+      "--squash",
+      "--match-head-commit",
+      input.verifiedCommitSha,
+    ],
     process.cwd(),
     120_000,
   );
@@ -306,9 +380,7 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
     // claim only the first branch may make; when the repo has no CI the only
     // evidence is the run's own executed tests, and the report must not
     // dress that up as the host repo having approved it.
-    reason: hostChecksGreen
-      ? "merged to main after grounded QA, passing tests, and green host-repo checks"
-      : "merged to main after grounded QA and passing tests — the host repo reports NO CI checks, " +
-        "so its own suite did not gate this merge",
+    reason:
+      "merged to main after grounded QA, passing tests, green host-repo checks, and exact PR-head verification",
   };
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, posix, relative, resolve } from "node:path";
 import type { AppConfig, AppSecrets } from "../config.js";
 import type {
   RunRecord,
@@ -27,9 +27,18 @@ import {
 } from "../providers/index.js";
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
-import { writeWorkspaceFile } from "../workspace/fileWriter.js";
+import { readWorkspaceFile, safeResolve, writeWorkspaceFile } from "../workspace/fileWriter.js";
+import {
+  findUnexpectedWorkspaceChanges,
+  sha256Text,
+  verifyFileDigests,
+  withVerificationReceipt,
+} from "../workspace/verificationReceipt.js";
 import { runCommand } from "../workspace/commandRunner.js";
-import { verificationCommandsForWorkspace } from "../workspace/verificationCommands.js";
+import {
+  hasPlaywrightHarness,
+  verificationPlanForWorkspace,
+} from "../workspace/verificationCommands.js";
 import {
   enforceWiredIntegration,
   findUnwiredNewFiles,
@@ -38,7 +47,7 @@ import {
 import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { assessPhantomImports } from "../workspace/phantomImports.js";
 import { resolveGeneratedWrite } from "../workspace/applyEdits.js";
-import { readTargetFiles } from "../workspace/targetFiles.js";
+import { inspectTargetFiles } from "../workspace/targetFiles.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -72,8 +81,17 @@ import {
 } from "./cancellation.js";
 import { runRepairLoop } from "./repairLoop.js";
 import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
+import {
+  assessExecutedCoverage,
+  assessGeneratedTests,
+} from "./acceptanceGate.js";
+import { parseDirectTestEvidence } from "./directTestEvidence.js";
 import { groundFinalReport } from "./reportGrounding.js";
-import { foldTestExit, freshTestVerdict, relevantTestStatus } from "./testVerdict.js";
+import {
+  foldTestExit,
+  freshTestVerdict,
+  relevantTestStatus,
+} from "./testVerdict.js";
 import { classifyEnvironmentFailure } from "./envFailure.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
 import { architectAgent } from "../agents/architectAgent.js";
@@ -82,20 +100,20 @@ import { fileBuilderAgent } from "../agents/fileBuilderAgent.js";
 import { testWriterAgent } from "../agents/testWriterAgent.js";
 import { qaCriticAgent } from "../agents/qaCriticAgent.js";
 import { repairAgent } from "../agents/repairAgent.js";
+import { renderBuildCodeContext } from "../agents/codeContext.js";
 import { finalReviewerAgent } from "../agents/finalReviewerAgent.js";
 import { repoResolverAgent, ResolveError } from "../agents/repoResolverAgent.js";
 import { ingestExistingRepo, IngestError } from "../workspace/ingestRepo.js";
 import { analyzeExistingCodebase } from "../workspace/analyzeExistingCodebase.js";
 import { composeExtendIdea, buildExistingContext } from "./composeExtendIdea.js";
 import { ingestAdditionalSource } from "./ingestAdditionalSource.js";
-import { buildFilesConcurrently } from "./concurrentBuild.js";
 import { researchAgent } from "../agents/researchAgent.js";
 import { deliverRun, planDestination } from "./deliverRun.js";
 import { releaseRun, isPaperOnlyDelivery } from "./releaseRun.js";
 import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
-import { describeUserFacingError, safeErrorMessage } from "../errors.js";
+import { safeErrorMessage } from "../errors.js";
 
 export interface StartRunArgs {
   idea: string;
@@ -119,6 +137,184 @@ export interface WriteTally {
   written: number;
   /** Files a guard refused, each with the reason. */
   refusals: Array<{ path: string; reason: string }>;
+}
+
+export function repairOutcomeMessage(tally: WriteTally): string {
+  if (tally.candidates === 0) {
+    return "NO REPAIR APPLIED — the repair agent proposed no files.";
+  }
+  if (tally.written === 0) {
+    return `NO REPAIR APPLIED — all ${tally.refusals.length} proposed write(s) were refused.`;
+  }
+  if (tally.refusals.length > 0) {
+    return (
+      `Applied ${tally.written} repair file(s); ${tally.refusals.length} were refused. ` +
+      "Executable verification will determine only what the applied files fixed."
+    );
+  }
+  return (
+    `Applied ${tally.written} repair file(s). ` +
+    "Executable verification will determine whether they fixed the issue."
+  );
+}
+
+/** Canonical slash-separated workspace path used for identity and guard checks. */
+export function normalizeGeneratedPath(path: string): string {
+  return posix
+    .normalize(path.replace(/\\/g, "/"))
+    .replace(/^\.\/+/, "");
+}
+
+/** Do not replay checkpointed generated files whose exact bytes already landed. */
+export function generatedFilesNeedingWrite<
+  T extends { path: string; contents: string },
+>(
+  incoming: T[],
+  written: Iterable<{ path: string; contents: string }>,
+): T[] {
+  const current = new Map(
+    [...written].map((file) => [
+      normalizeGeneratedPath(file.path),
+      file.contents,
+    ]),
+  );
+  return incoming.filter(
+    (file) =>
+      current.get(normalizeGeneratedPath(file.path)) !== file.contents,
+  );
+}
+
+/** A successful retry resolves prior delivery-blocking refusals for that path. */
+export function clearResolvedBlockingWriteRefusals(
+  ledger: Array<{ path: string; reason: string }>,
+  writtenPaths: Iterable<string>,
+): void {
+  const resolved = new Set(
+    [...writtenPaths].map((path) => normalizeGeneratedPath(path)),
+  );
+  for (let index = ledger.length - 1; index >= 0; index -= 1) {
+    if (resolved.has(normalizeGeneratedPath(ledger[index]!.path))) {
+      ledger.splice(index, 1);
+    }
+  }
+}
+
+/**
+ * Bound the final divergence from immutable host bytes, across builder and all
+ * repair passes. Prefix/suffix preservation makes local edits cheap while a
+ * sequential whole-file rewrite remains impossible.
+ */
+export function withinHostChangeBudget(
+  baseline: string,
+  candidate: string,
+): boolean {
+  if (baseline.length === 0) return candidate.length > 0;
+  let prefix = 0;
+  while (
+    prefix < baseline.length &&
+    prefix < candidate.length &&
+    baseline[prefix] === candidate[prefix]
+  ) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < baseline.length - prefix &&
+    suffix < candidate.length - prefix &&
+    baseline[baseline.length - 1 - suffix] ===
+      candidate[candidate.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  const removed = baseline.length - prefix - suffix;
+  const inserted = candidate.length - prefix - suffix;
+  return Math.max(removed, inserted) <= baseline.length * 0.5;
+}
+
+/** Only files created by this run are wiring candidates; modified host files remain referrers. */
+export function generatedPathsForWiring(
+  written: Iterable<{ path: string; status: "generated" | "modified" }>,
+): string[] {
+  return [...written]
+    .filter((file) => file.status === "generated")
+    .map((file) => normalizeGeneratedPath(file.path));
+}
+
+export function partitionRepairFiles<T extends { path: string }>(
+  proposed: T[],
+  allowedPaths: Iterable<string>,
+): { accepted: T[]; refusals: Array<{ path: string; reason: string }> } {
+  const norm = normalizeGeneratedPath;
+  const allowed = new Map(
+    [...allowedPaths].map((path) => {
+      const canonical = norm(path);
+      return [canonical, canonical] as const;
+    }),
+  );
+  const accepted: T[] = [];
+  const refusals: Array<{ path: string; reason: string }> = [];
+  const forbiddenRepairPath = (path: string) => {
+    const base = path.split("/").pop()?.toLowerCase() ?? "";
+    const testPath =
+      /(^|\/)(?:__tests__|tests?|spec)(\/|$)/i.test(path) ||
+      /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(path) ||
+      /(^|\/)test_[^/]+\.py$/i.test(path) ||
+      /_test\.py$/i.test(path);
+    const protectedBuildFile = new Set([
+      "package.json",
+      "package-lock.json",
+      "npm-shrinkwrap.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "requirements.txt",
+      "requirements-dev.txt",
+      "pyproject.toml",
+      "setup.py",
+      "setup.cfg",
+      "pipfile",
+      "pipfile.lock",
+      "poetry.lock",
+      "pytest.ini",
+      "tox.ini",
+      ".coveragerc",
+      "go.mod",
+      "go.sum",
+      "cargo.toml",
+      "cargo.lock",
+      "pom.xml",
+      "build.gradle",
+      "build.gradle.kts",
+      "composer.json",
+      "composer.lock",
+    ]).has(base);
+    const toolConfig =
+      /(^|\/)(?:vitest|jest|playwright|vite)(?:\.[\w-]+)?\.config\.[cm]?[jt]s$/i.test(
+        path,
+      ) ||
+      /(^|\/)(?:tsconfig(?:\.[\w-]+)?\.json|eslint\.config\.[cm]?[jt]s)$/i.test(
+        path,
+      );
+    return testPath || protectedBuildFile || toolConfig;
+  };
+  for (const file of proposed) {
+    const path = norm(file.path);
+    const canonical = allowed.get(path);
+    if (!canonical) {
+      refusals.push({
+        path: file.path,
+        reason: "repair scope — the run did not create or modify this file",
+      });
+    } else if (forbiddenRepairPath(path)) {
+      refusals.push({
+        path: file.path,
+        reason:
+          "repair scope — product repair cannot change tests, manifests, lockfiles, or test/build configuration",
+      });
+    } else {
+      accepted.push({ ...file, path: canonical } as T);
+    }
+  }
+  return { accepted, refusals };
 }
 
 /** Raised when the overall run wall-clock timeout fires. */
@@ -277,11 +473,16 @@ async function executeRun(
   const { config, secrets } = args;
   const { flush, log } = controller(run);
   let checkpoint: FactoryCheckpoint = restored ?? {
-    schemaVersion: 1,
+    schemaVersion: 3,
     runId: run.id,
     idea: args.idea,
     options: args.options,
     files: [],
+    baselineBrowserHarness: false,
+    builderExistingPaths: [],
+    hostFileBaselines: {},
+    writeRefusals: [],
+    blockingWriteRefusals: [],
     testWriterComplete: false,
     commandOutput: "",
     testsExecuted: false,
@@ -367,23 +568,13 @@ async function executeRun(
   const code: LLMProvider = withFailover(
     gateIfPaid(
       rawCode,
-      new CountingProvider(
-        rawCode,
-        run,
-        config.maxModelCallsPerRun,
-        attribution(rawCode),
-      ),
+      new CountingProvider(rawCode, run, config.maxModelCallsPerRun, attribution(rawCode)),
     ),
   );
   const review: LLMProvider = withFailover(
     gateIfPaid(
       rawReview,
-      new CountingProvider(
-        rawReview,
-        run,
-        config.maxModelCallsPerRun,
-        attribution(rawReview),
-      ),
+      new CountingProvider(rawReview, run, config.maxModelCallsPerRun, attribution(rawReview)),
     ),
   );
   // CRITICAL-STAGE provider (owner order 2026-08-16: fix known-weak backends
@@ -417,37 +608,13 @@ async function executeRun(
     attribution(rawCritical),
   );
   const critical: LLMProvider = withFailover(gateIfPaid(rawCritical, criticalCounted));
-  // Every distinct LIVE backend actually configured (free / anthropic / openai,
-  // never the failover chain itself), each still budget-metered — the pool the
-  // concurrent builder dispatches independent work across. Demo runs get just
-  // mock, so concurrency naturally degrades to the single-provider path.
-  //
-  // BUDGET GATE: unlike the failover chain (whose runPaid() checks canPayNow()
-  // before every paid call), a raw registry provider has no such gate built
-  // in — dispatching tasks to it directly would spend past
-  // FACTORY_PAID_RESCUES_PER_HOUR/_PER_DAY/FACTORY_PAID_MAX_USD_PER_DAY with
-  // no one asking first. BudgetGatedProvider re-checks canPayNow() on EVERY
-  // call (not just once when the pool is built), so a burst of concurrent
-  // paid calls that would collectively blow the cap gets stopped mid-burst,
-  // not only refused on the next dispatch.
-  const liveProviderPool: LLMProvider[] = run.demo
-    ? [registry.get("mock")]
-    : registry.availableLive().map((name) => {
-        const metered = new CountingProvider(
-          registry.get(name),
-          run,
-          config.maxModelCallsPerRun,
-          "declared",
-        );
-        return name === "anthropic" || name === "openai"
-          ? new BudgetGatedProvider(metered, name)
-          : metered;
-      });
-
   // The live in-memory view of the workspace, restored from the private
   // checkpoint so a resumed run never needs the redacted API copy.
   const files = new Map<string, FileContent>(
-    checkpoint.files.map((file) => [file.path, file]),
+    checkpoint.files.map((file) => {
+      const path = normalizeGeneratedPath(file.path);
+      return [path, { ...file, path }];
+    }),
   );
 
   /**
@@ -455,7 +622,39 @@ async function executeRun(
    * into the final report so a refusal is surfaced to the owner rather than
    * living only in a log line they may never scroll back to.
    */
-  const writeRefusals: Array<{ path: string; reason: string }> = [];
+  const writeRefusals: Array<{ path: string; reason: string }> = [
+    ...checkpoint.writeRefusals,
+  ];
+  const blockingWriteRefusals: Array<{ path: string; reason: string }> = [
+    ...checkpoint.blockingWriteRefusals,
+  ];
+  const hostFileBaselines: Record<string, string> = {
+    ...checkpoint.hostFileBaselines,
+  };
+  const appendUniqueRefusals = (
+    ledger: Array<{ path: string; reason: string }>,
+    incoming: Array<{ path: string; reason: string }>,
+  ) => {
+    const known = new Set(ledger.map((item) => `${item.path}\0${item.reason}`));
+    for (const item of incoming) {
+      const normalized = {
+        ...item,
+        path: normalizeGeneratedPath(item.path),
+      };
+      const key = `${normalized.path}\0${normalized.reason}`;
+      if (!known.has(key)) {
+        known.add(key);
+        ledger.push(normalized);
+      }
+    }
+  };
+  const recordWriteRefusals = (
+    incoming: Array<{ path: string; reason: string }>,
+    blocking: boolean,
+  ) => {
+    appendUniqueRefusals(writeRefusals, incoming);
+    if (blocking) appendUniqueRefusals(blockingWriteRefusals, incoming);
+  };
 
   /**
    * Report a write tally honestly: never announce work that was refused, and
@@ -500,7 +699,16 @@ async function executeRun(
     workspacePath: string,
     incoming: { path: string; purpose: string; contents: string; edits?: FileEdit[] }[],
     stage: StageId,
+    allowedExistingPaths?: Iterable<string>,
   ): Promise<WriteTally> => {
+    const allowedExisting =
+      allowedExistingPaths === undefined
+        ? null
+        : new Set(
+            [...allowedExistingPaths].map((path) =>
+              normalizeGeneratedPath(path),
+            ),
+          );
     const refusals: Array<{ path: string; reason: string }> = [];
     let written = 0;
     // A cancel during a stage must stop further file writes, not only at stage
@@ -508,22 +716,67 @@ async function executeRun(
     throwIfCancelled(run.id);
     throwIfTimedOut(deadline, timeoutMs);
     for (const f of incoming) {
+      const proposedPath = f.path;
       // Re-check per file so a cancel mid-loop stops the REMAINING writes.
       throwIfCancelled(run.id);
+      let generatedPath: string;
+      let existedBefore = false;
+      try {
+        generatedPath = normalizeGeneratedPath(proposedPath);
+        const absolute = safeResolve(workspacePath, generatedPath);
+        generatedPath = relative(resolve(workspacePath), absolute)
+          .replace(/\\/g, "/");
+        const existing = await lstat(absolute).catch(() => null);
+        existedBefore = Boolean(existing);
+        if (existing && allowedExisting && !allowedExisting.has(generatedPath)) {
+          const reason =
+            "existing file was not supplied in full to this stage — refusing an unseen anchored edit";
+          log("warning", `WRITE REFUSED: ${generatedPath} — ${reason}`, stage);
+          refusals.push({ path: generatedPath, reason });
+          continue;
+        }
+      } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : "invalid workspace path";
+        log("warning", `WRITE REFUSED: ${proposedPath} — ${reason}`, stage);
+        refusals.push({ path: proposedPath, reason });
+        continue;
+      }
+      const priorFile = files.get(generatedPath);
+      const hostExisting =
+        existedBefore && priorFile?.status !== "generated";
+      if (hostExisting && !(generatedPath in hostFileBaselines)) {
+        hostFileBaselines[generatedPath] = await readWorkspaceFile(
+          workspacePath,
+          generatedPath,
+        );
+      }
+
       // ROOT FIX: an existing file is EDITED, never regenerated from its name.
       // resolveGeneratedWrite reads the real file and applies anchored edits;
       // a blind whole-file replacement of existing source is refused outright.
-      const resolved = resolveGeneratedWrite(workspacePath, f.path, {
+      const resolved = resolveGeneratedWrite(workspacePath, generatedPath, {
         contents: f.contents,
         edits: f.edits ?? [],
       });
       if (resolved.contents === null) {
         const reason = resolved.reason ?? "refused";
-        log("warning", `WRITE REFUSED: ${f.path} — ${reason}`, stage);
-        refusals.push({ path: f.path, reason });
+        log("warning", `WRITE REFUSED: ${generatedPath} — ${reason}`, stage);
+        refusals.push({ path: generatedPath, reason });
         continue;
       }
       let finalContents = resolved.contents;
+      const hostBaseline = hostFileBaselines[generatedPath];
+      if (
+        hostBaseline !== undefined &&
+        !withinHostChangeBudget(hostBaseline, finalContents)
+      ) {
+        const reason =
+          "cumulative edits diverge from more than half of the immutable host file";
+        log("warning", `WRITE REFUSED: ${generatedPath} — ${reason}`, stage);
+        refusals.push({ path: generatedPath, reason });
+        continue;
+      }
       throwIfTimedOut(deadline, timeoutMs);
       // PROTECTED HOST FILES (run a8a9c84a): the test-writer replaced the
       // ingested repo's 10,998-byte package.json with a 192-byte stub and the
@@ -532,15 +785,15 @@ async function executeRun(
       // read green. Destructive writes to tracked manifests/lockfiles/root
       // tool configs (and hijack-by-new-variant configs) are refused LOUDLY;
       // additive manifest edits still pass. Inert for new-app workspaces.
-      const verdict = assessProtectedHostWrite(workspacePath, f.path, finalContents);
+      const verdict = assessProtectedHostWrite(workspacePath, generatedPath, finalContents);
       if (verdict.refused) {
         const reason = `protected host file — ${verdict.reason}`;
         log(
           "warning",
-          `PROTECTED HOST FILE: refused generated write of ${f.path} — ${verdict.reason}`,
+          `PROTECTED HOST FILE: refused generated write of ${generatedPath} — ${verdict.reason}`,
           stage,
         );
-        refusals.push({ path: f.path, reason });
+        refusals.push({ path: generatedPath, reason });
         continue;
       }
       // PHANTOM DEPENDENCIES: a generated file may only import packages the
@@ -552,26 +805,32 @@ async function executeRun(
       // FIX, DON'T BLOCK (owner rule 2026-08-16). A specifier with a known
       // right answer is corrected in place; only an import with no declared
       // counterpart is still refused, because the build must declare it.
-      const phantom = assessPhantomImports(workspacePath, f.path, finalContents);
+      const phantom = assessPhantomImports(workspacePath, generatedPath, finalContents);
       if (phantom.corrections?.length) {
         log(
           "info",
-          `Import corrected in ${f.path}: ${phantom.corrections.join(", ")} (matched the repo's declared packages).`,
+          `Import corrected in ${generatedPath}: ${phantom.corrections.join(", ")} (matched the repo's declared packages).`,
           stage,
         );
       }
       if (phantom.corrected) finalContents = phantom.corrected;
       if (phantom.refused) {
         const reason = `undeclared dependency — ${phantom.reason}`;
-        log("warning", `UNDECLARED DEPENDENCY in ${f.path} — ${phantom.reason}`, stage);
-        refusals.push({ path: f.path, reason });
+        log(
+          "warning",
+          `UNDECLARED DEPENDENCY in ${generatedPath} — ${phantom.reason}`,
+          stage,
+        );
+        refusals.push({ path: generatedPath, reason });
         continue;
       }
-      const res = await writeWorkspaceFile(workspacePath, f.path, finalContents);
+      const res = await writeWorkspaceFile(workspacePath, generatedPath, finalContents);
       // And again after the awaited write, before we record/log/persist it.
       throwIfCancelled(run.id);
-      const status: FileContent["status"] = res.existed ? "modified" : "generated";
+      const status: FileContent["status"] =
+        priorFile?.status ?? (res.existed ? "modified" : "generated");
       written++;
+      clearResolvedBlockingWriteRefusals(blockingWriteRefusals, [res.path]);
       files.set(res.path, {
         path: res.path,
         purpose: f.purpose,
@@ -593,9 +852,49 @@ async function executeRun(
     }
     run.files = summarize([...files.values()]);
     saveRunFiles(run.id, [...files.values()]);
-    await checkpointNow({ files: [...files.values()] });
-    writeRefusals.push(...refusals);
+    recordWriteRefusals(refusals, true);
+    await checkpointNow({
+      files: [...files.values()],
+      hostFileBaselines: { ...hostFileBaselines },
+      writeRefusals: [...writeRefusals],
+      blockingWriteRefusals: [...blockingWriteRefusals],
+    });
     return { candidates: incoming.length, written, refusals };
+  };
+
+  const writeRepair = async (
+    workspacePath: string,
+    incoming: {
+      path: string;
+      purpose: string;
+      contents: string;
+      edits?: FileEdit[];
+    }[],
+    fullyShownPaths: Iterable<string>,
+  ): Promise<WriteTally> => {
+    const scoped = partitionRepairFiles(incoming, fullyShownPaths);
+    for (const refusal of scoped.refusals) {
+      log(
+        "warning",
+        `REPAIR SCOPE REFUSED: ${refusal.path} — ${refusal.reason}`,
+        "repair",
+      );
+    }
+    recordWriteRefusals(scoped.refusals, true);
+    if (scoped.refusals.length > 0) {
+      await checkpointNow({
+        writeRefusals: [...writeRefusals],
+        blockingWriteRefusals: [...blockingWriteRefusals],
+      });
+    }
+    const applied = scoped.accepted.length
+      ? await writeBuild(workspacePath, scoped.accepted, "repair")
+      : { candidates: 0, written: 0, refusals: [] };
+    return {
+      candidates: incoming.length,
+      written: applied.written,
+      refusals: [...scoped.refusals, ...applied.refusals],
+    };
   };
 
   const persistAttribution = async (
@@ -731,6 +1030,7 @@ async function executeRun(
         });
         log("info", `Work will be saved to: ${describeDestination(run.destination)}`);
         repoAnalysis = await analyzeExistingCodebase(ingested.path);
+        const baselineBrowserHarness = hasPlaywrightHarness(ingested.path);
         log("info", `Detected stack: ${repoAnalysis.stackSummary}`);
 
         // Multi-program combination: every ADDITIONAL reference — a git repo
@@ -760,6 +1060,7 @@ async function executeRun(
             additionalRepoSources,
             goals: goalsForSpec,
           },
+          baselineBrowserHarness,
         });
       } else {
         log("info", `Intake: "${run.idea}"`);
@@ -984,6 +1285,7 @@ async function executeRun(
       await flush();
     }
     let build: FileBuild | undefined = checkpoint.build;
+    let builderExistingPaths = checkpoint.builderExistingPaths;
     if (!build) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "builder");
@@ -992,17 +1294,30 @@ async function executeRun(
       // of reconstructed from its filename.
       const baseContext =
         extendMode && repoAnalysis ? buildExistingContext(repoAnalysis) : undefined;
-      const existingContext =
+      const targetInspection =
         baseContext && workspacePath
-          ? {
-              ...baseContext,
-              targetFiles: readTargetFiles(
-                workspacePath,
-                plan,
-                checkpoint.idea ?? "",
-                repoAnalysis?.fileTree ?? [],
-              ),
-            }
+          ? inspectTargetFiles(
+              workspacePath,
+              plan,
+              checkpoint.idea ?? "",
+              repoAnalysis?.fileTree ?? [],
+            )
+          : null;
+      if (targetInspection?.omitted.length) {
+        throw new Error(
+          `Cannot safely build: ${targetInspection.omitted.length} existing target file(s) ` +
+            `could not be read in full (${targetInspection.omitted
+              .map((item) => `${item.path}: ${item.reason}`)
+              .join("; ")}).`,
+        );
+      }
+      builderExistingPaths =
+        targetInspection?.files.map((file) =>
+          normalizeGeneratedPath(file.path),
+        ) ?? [];
+      const existingContext =
+        baseContext && targetInspection
+          ? { ...baseContext, targetFiles: targetInspection.files }
           : baseContext;
       if (existingContext?.targetFiles?.length) {
         log(
@@ -1011,19 +1326,19 @@ async function executeRun(
         );
       }
       if (extendMode) {
-        // Only extend-mode goes through the concurrent dispatcher: the task
-        // planner's categories are genuinely independent build units here, and
-        // there is a real multi-backend pool to spread them across. Greenfield
-        // "new app" runs keep the exact original single-call path below,
-        // unchanged, so the free->paid failover chain's resilience on the
-        // builder call is never lost.
+        // Existing-repo tasks are not independent merely because they name
+        // different files: one task commonly imports a type/store/component
+        // another task creates. The former concurrent dispatcher gave every
+        // task the same stale pre-build snapshot and resolved path collisions
+        // by provider completion order, producing timing-dependent, internally
+        // incompatible patches. Until a dependency DAG exists, one grounded
+        // builder call is the only deterministic safe execution model.
         log(
           "model_call",
-          `File Builder agent — dispatching ${plan.tasks.length} task(s) across up to ${liveProviderPool.length} live backend(s)…`,
+          `File Builder agent (${code.name}) — one grounded pass over all ${plan.tasks.length} planned task(s)…`,
         );
-        const concurrentResult = await buildFilesConcurrently(
-          code,
-          liveProviderPool,
+        build = await fileBuilderAgent(
+          { provider: code },
           spec,
           arch,
           plan,
@@ -1031,40 +1346,6 @@ async function executeRun(
           research,
           additionalSourceContexts.length ? additionalSourceContexts : undefined,
         );
-        if (concurrentResult.usedConcurrency) {
-          log(
-            "success",
-            `Concurrent dispatch: ${Object.entries(concurrentResult.tasksByProvider)
-              .map(([name, n]) => `${name}=${n}`)
-              .join(", ")}.`,
-          );
-        }
-        // An incomplete build FAILS LOUDLY with every missing category named.
-        // Run f0077040: 12 of 13 categories silently produced nothing and the
-        // "build" was one README that QA then honestly passed. A build that
-        // cannot fulfill the plan is a failed build, not a small success.
-        for (const f of concurrentResult.failures) {
-          log(
-            "warning",
-            `Build category FAILED on every provider: ${f.id} — ${f.reason}`,
-          );
-        }
-        for (const id of concurrentResult.empties) {
-          log("warning", `Build category returned no files: ${id}`);
-        }
-        const missing =
-          concurrentResult.failures.length + concurrentResult.empties.length;
-        if (missing > 0) {
-          throw new Error(
-            `Build incomplete: ${missing} categor${missing === 1 ? "y" : "ies"} produced no files (` +
-              [
-                ...concurrentResult.failures.map((f) => f.id),
-                ...concurrentResult.empties,
-              ].join(", ") +
-              `). The run fails honestly instead of delivering a fraction of the plan.`,
-          );
-        }
-        build = concurrentResult.build;
       } else {
         log("model_call", `File Builder agent (${code.name})…`);
         build = await fileBuilderAgent(
@@ -1076,7 +1357,7 @@ async function executeRun(
           research,
         );
       }
-      await checkpointNow({ build });
+      await checkpointNow({ build, builderExistingPaths });
     }
     // PAID WORK MUST REACH DISK (run b74e5955, 2026-08-16). A cancel landed
     // between the builder's answers being checkpointed and being WRITTEN. On
@@ -1085,7 +1366,9 @@ async function executeRun(
     // deliver a PR containing only the test-writer's files. Stage bookkeeping
     // is not evidence that files exist — the run's file map is. Any build file
     // missing from it gets written, whatever the stage says.
-    const missingFromWorkspace = build.files.filter((f) => !files.has(f.path));
+    const missingFromWorkspace = build.files.filter(
+      (file) => !files.has(normalizeGeneratedPath(file.path)),
+    );
     if (!stageDone("builder") || missingFromWorkspace.length > 0) {
       if (stageDone("builder") && missingFromWorkspace.length > 0) {
         log(
@@ -1097,12 +1380,19 @@ async function executeRun(
         workspacePath,
         stageDone("builder") ? missingFromWorkspace : build.files,
         "builder",
+        extendMode ? builderExistingPaths : undefined,
       );
       // HONEST COUNT. This used to read `Generated ${build.files.length}
       // files.` — the number the MODEL produced, which counted every file the
       // guards above refused. A build whose writes were all refused reported
       // full success.
       reportWrites(builderTally, "builder", "builder");
+      if (!run.demo && builderTally.refusals.length > 0) {
+        throw new Error(
+          `Builder write incomplete: ${builderTally.refusals.length} required file(s) were refused. ` +
+            "The run stops before testing or delivery instead of shipping a partial implementation.",
+        );
+      }
       finishStage(run, "builder", "completed");
       await flush();
     }
@@ -1111,6 +1401,8 @@ async function executeRun(
     let commandOutput = checkpoint.commandOutput;
     let verification: VerificationEvidence = checkpoint.verification ?? {
       executed: [],
+      incomplete: [],
+      fileDigests: {},
     };
     let testsExecuted = checkpoint.testsExecuted;
     let testExit = checkpoint.testExit;
@@ -1123,27 +1415,62 @@ async function executeRun(
      */
     const verifyWorkspace = async (): Promise<void> => {
       commandOutput = "";
-      verification = { executed: [] };
+      verification = { executed: [], incomplete: [], fileDigests: {} };
       testsExecuted = false;
       testExit = null;
+      const intendedDigests = Object.fromEntries(
+        [...files].map(([path, file]) => [path, sha256Text(file.contents)]),
+      );
       // Distinct from `testExit === null`: a timeout-killed suite legitimately
       // reports a null exit, so null cannot double as "nothing recorded yet".
       let verdict = freshTestVerdict();
-      const verificationCommands = verificationCommandsForWorkspace(workspacePath);
-      if (!verificationCommands.length) {
+      const acceptance = checkpoint.testPlan
+        ? assessGeneratedTests(spec, fullBuild(), checkpoint.testPlan)
+        : {
+            ok: false,
+            errors: ["test plan is unavailable"],
+            uiAcceptanceRequired: false,
+            browserTestPaths: [],
+            requirements: [],
+          };
+      const verificationPlan = verificationPlanForWorkspace(workspacePath, {
+        generatedTests: checkpoint.testPlan?.files ?? [],
+        uiAcceptanceRequired: acceptance.uiAcceptanceRequired,
+        // Extend runs may use only the harness observed before generated writes.
+        // Greenfield code cannot certify itself with a model-authored harness.
+        trustedBrowserHarness:
+          extendMode && checkpoint.baselineBrowserHarness === true,
+      });
+      verification.incomplete = [
+        ...acceptance.errors.map((reason) => ({
+          command: "generated acceptance tests",
+          reason,
+        })),
+        ...verificationPlan.incomplete,
+      ];
+      if (!verificationPlan.commands.length) {
+        verification.incomplete!.push({
+          command: "workspace verification",
+          reason: "no supported project manifest or verification command was found",
+        });
         log(
           "warning",
-          "No supported project manifest detected; command verification skipped.",
+          "No supported project manifest detected; verification is incomplete.",
         );
       }
-      for (const cmd of verificationCommands) {
-        throwIfCancelled(run.id);
+      const commandReceipt = await withVerificationReceipt(
+        workspacePath,
+        files.keys(),
+        intendedDigests,
+        async () => {
+          for (const cmd of verificationPlan.commands) {
+            throwIfCancelled(run.id);
         throwIfTimedOut(deadline, timeoutMs);
         const res = await runCommand(
           { bin: cmd.bin, args: cmd.args, cwd: workspacePath },
           {
             workspaceRoot: config.workspaceRoot,
-            // Real execution by default; hermetic tests disable it via config.
+            // Explicit opt-in only; the command runner is not an OS sandbox.
             allowScriptExecution: config.allowUntrustedScripts,
             // Force-kill an in-flight child if the run is cancelled mid-command.
             shouldCancel: () => isCancelRequested(run.id),
@@ -1165,11 +1492,35 @@ async function executeRun(
         );
         if (res.executed) {
           commandOutput += `\n$ ${res.command}\n${res.stdout}\n${res.stderr}`;
+          const parsedDirect =
+            cmd.directTestPath && cmd.runner
+              ? parseDirectTestEvidence(cmd.runner, res.stdout, res.stderr)
+              : undefined;
+          const directEvidenceValid =
+            parsedDirect === undefined
+              ? undefined
+              : res.exitCode === 0 && parsedDirect.valid;
           verification.executed.push({
             command: res.command,
             exitCode: res.exitCode,
+            isTest: cmd.isTest,
+            directTestPath: cmd.directTestPath,
+            isBrowser: cmd.isBrowser ?? false,
+            runner: cmd.runner,
+            directEvidenceValid,
+            passedCount: parsedDirect?.passedCount,
+            skippedCount: parsedDirect?.skippedCount,
+            passedTestNames: parsedDirect?.passedTestNames,
             outputTail: `${res.stdout}\n${res.stderr}`,
           });
+          if (parsedDirect && !directEvidenceValid) {
+            verification.incomplete!.push({
+              command: res.command,
+              reason:
+                parsedDirect.reason ??
+                `direct ${cmd.runner} test did not exit successfully`,
+            });
+          }
           if (cmd.isTest) {
             testsExecuted = true;
             // A RED TEST SIGNAL IS STICKY. The old condition was
@@ -1187,31 +1538,128 @@ async function executeRun(
             verdict = foldTestExit(verdict, res.exitCode);
             testExit = verdict.testExit;
           }
+            } else {
+              verification.incomplete!.push({
+                command: res.command,
+                reason:
+                  res.reason ?? "required verification command did not execute",
+              });
+            }
+          }
+        },
+      );
+      if (checkpoint.testPlan) {
+        for (const reason of assessExecutedCoverage(
+          checkpoint.testPlan,
+          verification.executed,
+        )) {
+          verification.incomplete!.push({
+            command: "acceptance coverage",
+            reason,
+          });
         }
       }
+      if (!commandReceipt.ok) {
+        verification.incomplete!.push({
+          command: "verification tree",
+          reason:
+            `deliverable bytes changed ${commandReceipt.phase} verification commands: ` +
+            (commandReceipt.reason ?? "unknown mutation"),
+        });
+      }
+      run.files = summarize([...files.values()]);
+      saveRunFiles(run.id, [...files.values()]);
+      const unexpectedChanges = findUnexpectedWorkspaceChanges(
+        workspacePath,
+        files.keys(),
+      );
+      if (unexpectedChanges.length) {
+        verification.incomplete!.push({
+          command: "verification tree",
+          reason:
+            "verification commands changed unlisted repository paths that would not be delivered: " +
+            unexpectedChanges.slice(0, 20).join(", "),
+        });
+      }
+      // Never adopt command-mutated bytes as a fresh receipt.
+      verification.fileDigests = intendedDigests;
       await checkpointNow({
+        files: [...files.values()],
         commandOutput,
         verification,
         testsExecuted,
         testExit,
       });
     };
+    const fullBuild = (): FileBuild => ({
+      files: [...files.values()].map((file) => ({
+        path: file.path,
+        purpose: file.purpose,
+        contents: file.contents,
+        edits: [],
+      })),
+    });
+
     if (!checkpoint.testWriterComplete) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "test_writer");
-      let testPlan = checkpoint.testPlan;
+      let testPlan = checkpoint.testPlan?.files.length
+        ? checkpoint.testPlan
+        : undefined;
       if (!testPlan) {
         log("model_call", `Test Writer agent (${review.name})…`);
-        testPlan = await testWriterAgent({ provider: review }, spec, build);
-        await checkpointNow({ testPlan });
+        testPlan = await testWriterAgent(
+          { provider: review },
+          spec,
+          fullBuild(),
+          {
+            manifestExcerpt:
+              repoAnalysis?.manifestExcerpts
+                .map(
+                  (manifest) =>
+                    `----- ${manifest.path} -----\n${manifest.excerpt}`,
+                )
+                .join("\n\n") ?? "",
+          },
+        );
       }
-      if (testPlan.files.length) {
-        const testTally = await writeBuild(
-          workspacePath,
-          testPlan.files,
+      if (!testPlan.files.length && !run.demo) {
+        throw new Error(
+          "Test Writer produced no change-specific tests; a live build cannot be verified or delivered.",
+        );
+      }
+      const testAssessment = assessGeneratedTests(spec, fullBuild(), testPlan);
+      if (!run.demo && !testAssessment.ok) {
+        throw new Error(
+          "Generated acceptance tests are not valid evidence: " +
+            testAssessment.errors.join("; "),
+        );
+      }
+      await checkpointNow({ testPlan });
+      const pendingTestFiles = generatedFilesNeedingWrite(
+        testPlan.files,
+        files.values(),
+      );
+      if (pendingTestFiles.length < testPlan.files.length) {
+        log(
+          "info",
+          `Resume: ${testPlan.files.length - pendingTestFiles.length} checkpointed test file(s) already match disk; not writing them twice.`,
           "test_writer",
         );
+      }
+      if (pendingTestFiles.length) {
+        const testTally = await writeBuild(
+          workspacePath,
+          pendingTestFiles,
+          "test_writer",
+          [],
+        );
         reportWrites(testTally, "test_writer", "test");
+        if (!run.demo && testTally.refusals.length > 0) {
+          throw new Error(
+            `Test write incomplete: ${testTally.refusals.length} generated test file(s) were refused.`,
+          );
+        }
       }
 
       // Verify the files written by the test writer. The same helper is used
@@ -1224,43 +1672,51 @@ async function executeRun(
       await flush();
     }
 
-    const fullBuild = (): FileBuild => ({
-      files: [...files.values()].map((file) => ({
-        path: file.path,
-        purpose: file.purpose,
-        contents: file.contents,
-        edits: [],
-      })),
-    });
-
     /* Stage 8 — QA Critic */
     // UNWIRED SCAFFOLDING FAILS QA on extend runs (run 5590b773: seven files
-    // wired into nothing passed QA and were only CAPTIONED at final review,
-    // after every chance to repair had passed). Deterministic detection, and
-    // it runs again on every repair-loop re-QA, so the loop can only exit
-    // green when the wiring genuinely happened. Best-effort: a scan failure
-    // must never fail a build by itself.
+    // wired into nothing passed QA and were only CAPTIONED at final review).
+    // The scan itself is required evidence: unreadable/oversized source cannot
+    // be silently interpreted as "everything is wired."
     const isExtendRun = ingestedWorkspacePath !== null;
     const withWiringGate = (report: QaReport): QaReport => {
       try {
         return enforceWiredIntegration(
           report,
-          findUnwiredNewFiles(workspacePath, [...files.keys()]),
+          findUnwiredNewFiles(workspacePath, generatedPathsForWiring(files.values())),
           isExtendRun,
         );
-      } catch {
-        return report;
+      } catch (error) {
+        if (!isExtendRun) return report;
+        const detail =
+          error instanceof Error ? error.message : String(error);
+        return {
+          ...report,
+          passed: false,
+          summary: `WIRING SCAN INCOMPLETE: ${detail}. ${report.summary}`,
+          issues: [
+            {
+              severity: "high",
+              title: "Required wiring analysis could not complete",
+              detail,
+              file: null,
+              repairInstruction:
+                "Make the repository source tree readable and small enough for deterministic wiring analysis; do not release until the scan completes.",
+            },
+            ...report.issues,
+          ],
+        };
       }
     };
+    const groundCurrentQa = (report: QaReport): QaReport =>
+      run.demo ? report : groundQaReport(report, verification);
     let qa: QaReport | undefined = checkpoint.qa;
     if (!qa) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "qa_critic");
       log("model_call", `QA Critic agent (${review.name})…`);
       qa = withWiringGate(
-        groundQaReport(
-          await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
-          verification,
+        groundCurrentQa(
+          await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
         ),
       );
       await checkpointNow({ qa });
@@ -1281,18 +1737,19 @@ async function executeRun(
       // before deciding whether another loop slot is available.
       if (checkpoint.pendingRepair) {
         const pending = checkpoint.pendingRepair;
-        if (pending.files.length) {
-          const repairTally = await writeBuild(workspacePath, pending.files, "repair");
-          reportWrites(repairTally, "repair", "repair");
-        }
-        log("info", pending.notes || "Applied checkpointed repair.", "repair");
+        const repairTally = await writeRepair(
+          workspacePath,
+          pending.files,
+          renderBuildCodeContext(fullBuild()).fullyShownPaths,
+        );
+        reportWrites(repairTally, "repair", "repair");
+        log("info", repairOutcomeMessage(repairTally), "repair");
         log("info", "Re-running executable verification after repair.", "repair");
         await verifyWorkspace();
         log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
         qa = withWiringGate(
-          groundQaReport(
-            await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
-            verification,
+          groundCurrentQa(
+            await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
           ),
         );
         await checkpointNow({ qa, pendingRepair: undefined });
@@ -1308,8 +1765,16 @@ async function executeRun(
       // binding). Classification is deterministic signature matching over the
       // EXECUTED commands' real output — never model judgment.
       const envFailure = qa.passed ? null : classifyEnvironmentFailure(verification);
+      const incompleteVerification = verification.incomplete?.length ?? 0;
       if (qa.passed) {
         log("success", "No high-severity issues — repair loop skipped.");
+        finishStage(run, "repair", "skipped");
+      } else if (!run.demo && incompleteVerification > 0) {
+        log(
+          "warning",
+          `Verification is incomplete in ${incompleteVerification} required place(s); file repair cannot manufacture missing execution evidence, so no paid repair loop will run.`,
+          "repair",
+        );
         finishStage(run, "repair", "skipped");
       } else if (envFailure) {
         log(
@@ -1353,32 +1818,23 @@ async function executeRun(
               // Persist before writing so a crash cannot replay the provider call.
               await checkpointNow({ pendingRepair: fix });
             }
-            let repairWrote = 0;
-            if (fix.files.length) {
-              const fixTally = await writeBuild(workspacePath, fix.files, "repair");
-              reportWrites(fixTally, "repair", "repair");
-              repairWrote = fixTally.written;
-            }
-            // "Applied repairs" is only true if something actually changed on
-            // disk. A repair loop whose every write was refused otherwise
-            // re-ran QA against untouched code and reported progress it had
-            // not made.
-            log(
-              "info",
-              repairWrote > 0
-                ? fix.notes || "Applied repairs."
-                : `NO REPAIR APPLIED — nothing reached disk${fix.notes ? ` (model notes: ${fix.notes})` : ""}.`,
-              "repair",
+            const fixTally = await writeRepair(
+              workspacePath,
+              fix.files,
+              renderBuildCodeContext(fullBuild()).fullyShownPaths,
             );
+            reportWrites(fixTally, "repair", "repair");
+            // Model notes describe intent, not accomplished work. Only the
+            // mechanical write tally may say what actually reached disk.
+            log("info", repairOutcomeMessage(fixTally), "repair");
           },
           verify: verifyWorkspace,
           reverify: async () => {
             throwIfTimedOut(deadline, timeoutMs);
             log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
             const next = withWiringGate(
-              groundQaReport(
-                await qaCriticAgent({ provider: review }, fullBuild(), commandOutput),
-                verification,
+              groundCurrentQa(
+                await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
               ),
             );
             await checkpointNow({ qa: next, pendingRepair: undefined });
@@ -1416,20 +1872,26 @@ async function executeRun(
       ...files.keys(),
       ...(checkpoint.testPlan?.files ?? []).map((f) => f.path),
     ];
-    const executedOutputAll = verification.executed
-      .map((e) => `${e.command}\n${e.outputTail}`)
-      .join("\n");
+    const directlyExecutedTestPaths = verification.executed
+      .filter(
+        (entry) =>
+          entry.isTest &&
+          entry.exitCode === 0 &&
+          entry.directEvidenceValid === true &&
+          typeof entry.directTestPath === "string",
+      )
+      .map((entry) => entry.directTestPath!);
     const testRelevance = relevantTestStatus(
       testsExecuted,
       testExit,
       allWrittenPaths,
-      executedOutputAll,
+      directlyExecutedTestPaths,
     );
     const testStatus = testRelevance.status;
     if (testRelevance.degraded) {
       log(
         "warning",
-        `Test verdict DEGRADED to "unknown": the executed test command exited 0 but its output never mentioned any test file written by this run (${testRelevance.uncoveredTestFiles.join(", ")}). A green suite that did not run this run's tests is not evidence for this run.`,
+        `Test verdict DEGRADED to "unknown": the host suite exited 0 but valid structured direct-runner evidence is missing for test file(s) written by this run (${testRelevance.uncoveredTestFiles.join(", ")}). A green suite that did not run this run's tests is not evidence for this run.`,
       );
     }
     let report = checkpoint.finalReport;
@@ -1500,18 +1962,33 @@ async function executeRun(
       // present itself as wired. Purely additive — no verdict changes, no
       // file is blocked from delivery.
       try {
-        const unwired = findUnwiredNewFiles(workspacePath, [...files.keys()]);
+        const unwired = findUnwiredNewFiles(workspacePath, generatedPathsForWiring(files.values()));
         const caveat = unwiredCaveat(unwired);
         if (caveat) {
           report = { ...report, caveats: [...report.caveats, caveat] };
           log("warning", caveat, "final_review");
         }
       } catch (err) {
-        log(
-          "warning",
-          `Unwired-file scan failed (non-fatal): ${safeErrorMessage(err)}`,
-          "final_review",
-        );
+        const detail = String((err as Error)?.message ?? err);
+        qa = {
+          ...qa,
+          passed: false,
+          summary: `WIRING SCAN INCOMPLETE: ${detail}. ${qa.summary}`,
+          issues: [
+            {
+              severity: "high",
+              title: "Final wiring analysis could not complete",
+              detail,
+              file: null,
+              repairInstruction:
+                "Do not deliver until deterministic wiring analysis completes successfully.",
+            },
+            ...qa.issues,
+          ],
+        };
+        const caveat = `WIRING SCAN FAILED: ${detail}`;
+        report = { ...report, caveats: [...report.caveats, caveat] };
+        log("warning", caveat, "final_review");
       }
       await checkpointNow({ finalReport: report });
     }
@@ -1519,6 +1996,44 @@ async function executeRun(
     throwIfTimedOut(deadline, timeoutMs);
     run.finalReport = redactDeep(report);
     finishStage(run, "final_review", "completed");
+
+    const receipt = await verifyFileDigests(
+      workspacePath,
+      files.keys(),
+      verification.fileDigests,
+    );
+    const verifiedOutcome =
+      qa.passed &&
+      testStatus === "passing" &&
+      blockingWriteRefusals.length === 0 &&
+      (verification.incomplete?.length ?? 0) === 0 &&
+      receipt.ok;
+    if (!run.demo && !verifiedOutcome) {
+      run.status = "failed";
+      // Repair loops are already exhausted by this point. Replaying the same
+      // checkpoint would skip verification/QA and fail identically.
+      run.resumable = false;
+      run.error = redactSecrets(
+        `Verification gate failed: QA=${qa.passed ? "passed" : "failed"}, ` +
+          `tests=${testStatus}, refusedRequiredWrites=${blockingWriteRefusals.length}, ` +
+          `incompleteVerification=${verification.incomplete?.length ?? 0}, ` +
+          `receipt=${receipt.ok ? "valid" : receipt.reason ?? "invalid"}. ` +
+          "No commit, branch push, PR, or release was attempted. Start a new run after correcting the cause.",
+      );
+      const heldEv = await appendAuditEvent({
+        type: "run.verification.held",
+        runId: run.id,
+        detail: run.error,
+      });
+      await persistAttribution(testStatus, heldEv.seq);
+      log(
+        "warning",
+        run.error,
+      );
+      await checkpointNow();
+      await flush();
+      return;
+    }
 
     /* Delivery — save the work where the owner said to save it. */
     // Runs only for a build that actually got here: a cancelled or failed run
@@ -1535,6 +2050,13 @@ async function executeRun(
         runId: run.id,
         appName: run.appName,
         options: checkpoint.options,
+        verification: {
+          qaPassed: qa.passed,
+          testStatus,
+          writeRefusals: blockingWriteRefusals.length,
+          incompleteCommands: verification.incomplete?.length ?? 0,
+          fileDigests: verification.fileDigests ?? {},
+        },
       });
       run.destination = {
         ...delivered,
@@ -1554,6 +2076,25 @@ async function executeRun(
         detail: delivered.target,
       });
 
+      const deliveryRequired =
+        !run.demo &&
+        delivered.kind !== "workspace-only" &&
+        !(
+          delivered.kind === "existing-repo" &&
+          checkpoint.options.pushToOrigin === false
+        );
+      if (deliveryRequired && delivered.status !== "delivered") {
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Delivery did not complete: ${delivered.detail ?? delivered.status}. ` +
+            "The verified workspace remains available, but this run is not ready and no success event was emitted.",
+        );
+        await checkpointNow();
+        await flush();
+        return;
+      }
+
       /* Release — finish the job (owner order 2026-08-15): an extend run that
        * EARNED it goes to main, and main is what production deploys. The gate
        * is earned evidence only — grounded QA green, tests executed and
@@ -1564,6 +2105,7 @@ async function executeRun(
         delivered.status === "delivered" &&
         delivered.kind === "existing-repo" &&
         delivered.branch &&
+        delivered.commitSha &&
         checkpoint.options.demo !== true &&
         process.env.FACTORY_RELEASE_TO_MAIN !== "0"
       ) {
@@ -1586,6 +2128,7 @@ async function executeRun(
           appName: run.appName,
           qaPassed: qa.passed,
           testStatus,
+          verifiedCommitSha: delivered.commitSha!,
           caveats: report.caveats ?? [],
         });
         log(
@@ -1615,6 +2158,16 @@ async function executeRun(
           runId: run.id,
           detail: release.prUrl ?? delivered.target,
         });
+        if (!release.released) {
+          run.status = "failed";
+          run.resumable = false;
+          run.error = redactSecrets(
+            `Release held: ${release.reason}. The branch remains available, but the run is not complete or production-ready.`,
+          );
+          await checkpointNow();
+          await flush();
+          return;
+        }
       }
 
       /* Deploy — the from-scratch twin of Release (owner order 2026-08-15):
@@ -1660,6 +2213,16 @@ async function executeRun(
             runId: run.id,
             detail: dep.url ?? dep.reason,
           });
+          if (!(dep.deployed && dep.verified)) {
+            run.status = "failed";
+            run.resumable = false;
+            run.error = redactSecrets(
+              `Deployment held: ${dep.reason}. The repository is saved, but the new app is not live and the run is not complete.`,
+            );
+            await checkpointNow();
+            await flush();
+            return;
+          }
 
           /* Store publish — owner order 2026-08-15: a production-ready app is
            * posted to the owner's app store on www.axiombiolabs.org too, and
@@ -1715,7 +2278,7 @@ async function executeRun(
     // failed or whose work was held back read "Run complete — X is ready",
     // which the owner reasonably took as success (2026-08-16, run b74e5955).
     // The final line now states what actually happened.
-    const outcomeOk = qa.passed && testStatus === "passing";
+    const outcomeOk = verifiedOutcome && !run.demo;
     const releaseNote = run.release
       ? run.release.released
         ? ` Merged to main (${run.release.mergedSha?.slice(0, 8) ?? "sha unknown"}).`
@@ -1723,10 +2286,16 @@ async function executeRun(
       : "";
     log(
       outcomeOk ? "success" : "warning",
-      outcomeOk
-        ? `Run finished — ${spec.appName} passed its checks.${releaseNote} Workspace: ${workspacePath}.`
-        : `Run finished WITHOUT passing its checks (${
-            testStatus === "passing" ? "QA flagged blockers" : `tests ${testStatus}`
+      run.demo
+        ? `Simulation finished — ${spec.appName} used mock output and is NOT ready or delivered. Workspace: ${workspacePath}.`
+        : outcomeOk
+          ? `Run finished — ${spec.appName} passed its checks.${releaseNote} Workspace: ${workspacePath}.`
+          : `Run finished WITHOUT passing its checks (${
+            blockingWriteRefusals.length > 0
+              ? `${blockingWriteRefusals.length} required write(s) refused`
+              : qa.passed
+                ? `tests ${testStatus}`
+                : "QA flagged blockers"
           }) — ${spec.appName} is NOT ready.${releaseNote} Workspace: ${workspacePath}.`,
     );
     await flush();
@@ -1794,7 +2363,9 @@ async function executeRun(
     } else {
       run.status = "failed";
       run.resumable = true;
-      run.error = describeUserFacingError(err) || "Unknown error.";
+      // The raw error may embed a provider/library message containing a
+      // secret-shaped value — redact before it is persisted and served by the API.
+      run.error = redactSecrets(err instanceof Error ? err.message : "Unknown error");
       if (run.currentStage) finishStage(run, run.currentStage, "failed");
       log("error", `Run failed: ${run.error}`);
       const ev = await appendAuditEvent({
@@ -1819,16 +2390,9 @@ async function executeRun(
     // audit stranded five repos on 2026-08-11. Restore runs on every exit path
     // and never masks the run's own outcome.
     if (inPlaceRestore) {
-      const res = await git(
-        ["checkout", inPlaceRestore.branch],
-        inPlaceRestore.path,
-        30_000,
-      ).catch((err: unknown) => ({
-        code: 1,
-        stdout: "",
-        stderr: String(err),
-        spawnError: null,
-      }));
+      const res = await git(["checkout", inPlaceRestore.branch], inPlaceRestore.path, 30_000).catch(
+        (err: unknown) => ({ code: 1, stdout: "", stderr: String(err), spawnError: null }),
+      );
       log(
         res.code === 0 ? "info" : "warning",
         res.code === 0
@@ -1964,7 +2528,9 @@ async function prepareResume(
 async function restoreFailedResume(run: RunRecord, err: unknown): Promise<void> {
   run.status = "failed";
   run.resumable = Boolean(await getRunCheckpoint(run.id));
-  run.error = describeUserFacingError(err) || "Resume setup failed unexpectedly.";
+  run.error = redactSecrets(
+    err instanceof Error ? err.message : "Resume setup failed unexpectedly.",
+  );
   await saveRun(run);
 }
 
@@ -1994,8 +2560,7 @@ export async function resumeRun(
       }
     }
     if (providers.codeProvider) prepared.run.codeProvider = providers.codeProvider;
-    if (providers.reviewProvider)
-      prepared.run.reviewProvider = providers.reviewProvider;
+    if (providers.reviewProvider) prepared.run.reviewProvider = providers.reviewProvider;
     prepared.run.logs.push(
       makeLog(
         "info",
