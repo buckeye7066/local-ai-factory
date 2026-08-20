@@ -16,6 +16,7 @@ import {
 import { z } from "zod";
 import { getConfig, getSecrets } from "../config.js";
 import { createProviderRegistry } from "../providers/index.js";
+import { underWorkTheme } from "../orchestrator/themeBind.js";
 import { getRun } from "../storage/runsStore.js";
 import { withExtendPersistenceGoals } from "../orchestrator/composeExtendIdea.js";
 import { repoNameProblem, RunOptionsSchema } from "../../shared/schemas.js";
@@ -30,6 +31,28 @@ export const FOUNDRY_FLEXFACTOR_PROVIDER_RE =
   /^(ollama|anthropic|openai|xai|grok)$/;
 export const FOUNDRY_FLEXFACTOR_PROVIDER_ERROR =
   "PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER must be ollama, anthropic, openai, xai, or grok.";
+
+/** Same directed path as Factory Deck / FlexFactor: coding routes + one open issue. */
+function foundryProviderRegistry() {
+  const config = getConfig();
+  const secrets = getSecrets();
+  return createProviderRegistry(
+    config,
+    secrets,
+    () => {},
+    undefined,
+    "purpose-foundry",
+  );
+}
+
+function flexfactorDirectedScript(): string {
+  // Prefer flexfactor_run.py so directed install() is live even when flexfactor.py
+  // has no install one-liner (shared rule across Factory Deck / FlexFactor).
+  return (
+    process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT?.trim() ||
+    "C:\\Users\\firer\\flexfactor\\flexfactor_run.py"
+  );
+}
 
 export type AdapterOutcome = {
   status: "completed" | "needs_attention" | "failed";
@@ -445,17 +468,8 @@ export class FoundryAdapters {
 
   descriptors(): AdapterDescriptor[] {
     const config = getConfig();
-    const secrets = getSecrets();
-    const flexScript =
-      process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT?.trim() ||
-      "C:\\Users\\firer\\flexfactor\\flexfactor.py";
-    const reviewProvider = createProviderRegistry(
-      config,
-      secrets,
-      undefined,
-      undefined,
-      "purpose-foundry",
-    ).resolveLive(
+    const flexScript = flexfactorDirectedScript();
+    const reviewProvider = foundryProviderRegistry().resolveLive(
       undefined,
       config.defaultReviewProvider,
     );
@@ -734,9 +748,7 @@ export class FoundryAdapters {
         evidence: { missing: "constitution.targets" },
       };
     }
-    const script =
-      process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT?.trim() ||
-      "C:\\Users\\firer\\flexfactor\\flexfactor.py";
+    const script = flexfactorDirectedScript();
     const python = process.env.PURPOSE_FOUNDRY_PYTHON?.trim() || "python";
     const provider =
       process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER?.trim() ||
@@ -880,36 +892,41 @@ export class FoundryAdapters {
 
   private async crucible(project: FoundryProject): Promise<AdapterOutcome> {
     const config = getConfig();
-    const provider = createProviderRegistry(
-      config,
-      getSecrets(),
-      undefined,
-      undefined,
-      "purpose-foundry",
-    ).resolveLive(
-      undefined,
-      config.defaultReviewProvider,
+    const result = await underWorkTheme(
+      {
+        idea: `Purpose Foundry crucible for ${project.name}`,
+        appName: project.name,
+        stage: "crucible",
+        issue:
+          "Disprove every success claim using only supplied evidence; stay on this project's open release risks",
+      },
+      () => {
+        const provider = foundryProviderRegistry().resolveLive(
+          undefined,
+          config.defaultReviewProvider,
+        );
+        return provider.generateJson({
+          system:
+            "You are The Crucible, an independent adversarial release reviewer. Assume the project is not ready. Try to disprove every success claim using only supplied evidence. Never reward effort, optimism, or self-attestation. A claim without evidence is a finding.",
+          prompt: `Review this Purpose Foundry project.\n\nPROJECT:\n${JSON.stringify(
+            {
+              name: project.name,
+              constitution: project.constitution,
+              stationEvidence: project.stations.map((station) => ({
+                stationId: station.stationId,
+                status: station.status,
+                summary: station.summary,
+                artifacts: station.artifacts,
+              })),
+            },
+          )}\n\nReturn hardened only when there are no critical/high unresolved findings and every stated success criterion has concrete evidence. Otherwise return needs_work with exact required fixes.`,
+          schema: CrucibleResultSchema,
+          schemaName: "CrucibleResult",
+          temperature: 0.1,
+          maxTokens: 12_000,
+        });
+      },
     );
-    const result = await provider.generateJson({
-      system:
-        "You are The Crucible, an independent adversarial release reviewer. Assume the project is not ready. Try to disprove every success claim using only supplied evidence. Never reward effort, optimism, or self-attestation. A claim without evidence is a finding.",
-      prompt: `Review this Purpose Foundry project.\n\nPROJECT:\n${JSON.stringify(
-        {
-          name: project.name,
-          constitution: project.constitution,
-          stationEvidence: project.stations.map((station) => ({
-            stationId: station.stationId,
-            status: station.status,
-            summary: station.summary,
-            artifacts: station.artifacts,
-          })),
-        },
-      )}\n\nReturn hardened only when there are no critical/high unresolved findings and every stated success criterion has concrete evidence. Otherwise return needs_work with exact required fixes.`,
-      schema: CrucibleResultSchema,
-      schemaName: "CrucibleResult",
-      temperature: 0.1,
-      maxTokens: 12_000,
-    });
     const artifact = await this.store.writeArtifact(
       project.id,
       "crucible",
@@ -1239,7 +1256,8 @@ export class FoundryAdapters {
     );
     const submittedStores = handoffs.reduce((count, handoff) => {
       const submission = handoff.submission as
-        { results?: unknown[] } | undefined;
+        | { results?: unknown[] }
+        | undefined;
       return (
         count +
         (handoff.submitted && Array.isArray(submission?.results)
