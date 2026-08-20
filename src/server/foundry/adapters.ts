@@ -17,7 +17,6 @@ import { z } from "zod";
 import { getConfig, getSecrets } from "../config.js";
 import { underWorkTheme } from "../orchestrator/themeBind.js";
 import { createProviderRegistry } from "../providers/index.js";
-import { underWorkTheme } from "../orchestrator/themeBind.js";
 import { getRun } from "../storage/runsStore.js";
 import { withExtendPersistenceGoals } from "../orchestrator/composeExtendIdea.js";
 import { repoNameProblem, RunOptionsSchema } from "../../shared/schemas.js";
