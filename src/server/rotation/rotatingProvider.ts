@@ -29,6 +29,7 @@ import {
   ProviderAbortError,
 } from "../providers/types.js";
 import type { FreeProvider } from "../providers/freeProvider.js";
+import { unfitForCodeReason } from "../providers/routeFitness.js";
 import {
   Catalog,
   PinUnavailable,
@@ -352,15 +353,27 @@ export function filterRoutableCatalog(
   const norm = (u: string) => u.replace(/\/+$/, "").toLowerCase();
   const fcc = fccBaseUrl ? norm(fccBaseUrl) : "";
   const missing = new Set<string>();
+  let unfitSkipped = 0;
   const kept = rotator.catalog.routes.filter((r) => {
+    if (unfitForCodeReason(r.id) || unfitForCodeReason(r.model)) {
+      unfitSkipped += 1;
+      return false;
+    }
     if (r.auth_kind === "none" || !r.auth_env) return true;
     if (fcc && norm(r.base_url) === fcc) return true;
     if (process.env[r.auth_env]) return true;
     missing.add(r.auth_env);
     return false;
   });
+  if (unfitSkipped > 0) {
+    log(
+      "warn",
+      `[rotate] ${unfitSkipped} catalog route(s) skipped: unfit for code work ` +
+        `(guard/TTS/vision/embed/media models).`,
+    );
+  }
   if (missing.size > 0) {
-    const dropped = rotator.catalog.routes.length - kept.length;
+    const dropped = rotator.catalog.routes.length - kept.length - unfitSkipped;
     log(
       "warn",
       `[rotate] ${dropped} catalog route(s) skipped: credential env not set in ` +
