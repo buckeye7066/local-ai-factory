@@ -884,7 +884,7 @@ app.use("/api/foundry", createFoundryRouter());
  */
 const uiDist = resolve(process.cwd(), "dist", "ui");
 const servesUi = existsSync(resolve(uiDist, "index.html"));
-ifa (servesUi) {
+if (servesUi) {
   app.use(express.static(uiDist));
   app.get(/^\/(?!api\/).*/, (req, res) => {
     // Never SPA-fallback asset requests: a stale cached index.html referencing
