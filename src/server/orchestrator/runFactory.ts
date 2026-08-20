@@ -110,7 +110,7 @@ import { ingestAdditionalSource } from "./ingestAdditionalSource.js";
 import { researchAgent } from "../agents/researchAgent.js";
 import { deliverRun, planDestination } from "./deliverRun.js";
 import { releaseRun, isPaperOnlyDelivery } from "./releaseRun.js";
-import { planRelease } from "./releasePlan.js";
+import { planRelease, planReleaseOutcome } from "./releasePlan.js";
 import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
@@ -2077,11 +2077,12 @@ async function executeRun(
         detail: delivered.target,
       });
 
-      /* ONE decision, in one place (see releasePlan.ts): the fast-forward
-       * release inside deliverRun and the PR/host-CI release below are two
-       * mechanisms for the same job, and running both on the same run made a
-       * successful run report FAILED (an empty PR) while a PROTECTED trunk
-       * never reached the PR recovery at all. */
+      /* ONE decision, in one place (see releasePlan.ts). Since the 2026-08-20
+       * reversal ("protect factory deck's trunk") the PR/host-CI release below
+       * is the PRIMARY path and `deliverRun`'s fast-forward is its named
+       * fallback — but they are still two mechanisms for the same job, and
+       * running both on the same run made a successful run report FAILED (an
+       * empty PR) while a PROTECTED trunk never reached the PR path at all. */
       const releaseStep = planRelease({
         destination: delivered,
         demo: run.demo || checkpoint.options.demo === true,
@@ -2104,14 +2105,18 @@ async function executeRun(
 
       if (trunkAlreadyReleased) {
         // Record the release honestly from the evidence delivery already has:
-        // the trunk fast-forwarded onto the exact verified commit. No PR was
-        // opened because none was needed.
+        // the trunk fast-forwarded onto the exact verified commit, on the NAMED
+        // FALLBACK path only (no host CI, or an explicit owner opt-in — see
+        // planTrunkAdvance). No PR was opened because there was no gate to open
+        // one against. The log says which path this was, so a trunk advance
+        // that did NOT go through host CI is never mistaken for one that did.
         log(
           "success",
-          `Released: the repo's default branch was fast-forwarded onto ${delivered.branch ?? "the run's branch"} — the work is in production. Production deploys from main pick this up.`,
+          `Released via the direct fast-forward fallback (no host CI gate to wait on): the repo's default branch was fast-forwarded onto ${delivered.branch ?? "the run's branch"} — the work is in production. Production deploys from main pick this up.`,
         );
         run.release = {
           released: true,
+          state: "merged",
           prUrl: null,
           mergedSha: delivered.commitSha ?? null,
           reason: redactSecrets(
@@ -2126,20 +2131,21 @@ async function executeRun(
         });
       }
 
-      /* Release — finish the job (owner order 2026-08-15): an extend run that
-       * EARNED it goes to main, and main is what production deploys. The gate
-       * is earned evidence only — grounded QA green, tests executed and
-       * passing, and the HOST repo's own CI checks green on the PR (see
-       * releaseRun.ts). Anything less leaves the branch + an open PR with the
-       * reason recorded. FACTORY_RELEASE_TO_MAIN=0 opts out.
+      /* Release — THE PRIMARY TRUNK PATH (owner decision 2026-08-20, "protect
+       * factory deck's trunk"): the run's commits reach the trunk only through
+       * a PR the HOST repo's own CI passed. The gate is earned evidence only —
+       * grounded QA green, tests executed and passing, and the host repo's
+       * checks green on the PR (see releaseRun.ts). Anything less leaves the
+       * branch + an open PR with the reason recorded, and auto-merge is armed
+       * when checks outlast the window so a green PR still lands with no human.
+       * FACTORY_RELEASE_TO_MAIN=0 opts out.
        *
-       * Reached now only when the trunk did NOT already move — i.e. this is the
-       * protected-trunk recovery. When the fast-forward succeeded there is
-       * nothing left to release and nothing a PR could contain. */
+       * Skipped only when the trunk ALREADY moved via the named fallback, where
+       * a PR would contain nothing at all. */
       if (releaseStep === "open-pr" && delivered.branch && delivered.commitSha) {
         log(
           "info",
-          "Release: opening the PR against main and waiting on the repo's checks…",
+          "Release: opening the PR against the repo's default branch and waiting on its checks…",
         );
         const paperOnly = isPaperOnlyDelivery([...files.keys()]);
         if (paperOnly) {
@@ -2159,17 +2165,27 @@ async function executeRun(
           verifiedCommitSha: delivered.commitSha!,
           caveats: report.caveats ?? [],
         });
+        /* THREE outcomes, reported as three — the mapping is `planReleaseOutcome`
+         * in releasePlan.ts, not a judgement made here. "pending" is neither a
+         * success nor a failure: the PR is open with auto-merge armed, so it
+         * lands with no human, but the work is NOT on the trunk yet and nothing
+         * here may imply that it is. Calling that FAILED is the same false
+         * report, mirrored. */
+        const outcome = planReleaseOutcome(release.state);
+        const pending = outcome === "pending";
         log(
-          release.released ? "success" : "warning",
+          release.released ? "success" : pending ? "info" : "warning",
           release.released
-            ? `Released: merged to main (${release.mergedSha?.slice(0, 10) ?? "sha unknown"}). Production deploys from main pick this up.`
-            : `Not released to main: ${release.reason}${release.prUrl ? ` — PR left open: ${release.prUrl}` : ""}`,
+            ? `Released: merged to the trunk (${release.mergedSha?.slice(0, 10) ?? "sha unknown"}). Production deploys from the trunk pick this up.`
+            : pending
+              ? `PR open and pending: ${release.reason}${release.prUrl ? ` — ${release.prUrl}` : ""}`
+              : `Not released to the trunk: ${release.reason}${release.prUrl ? ` — PR left open: ${release.prUrl}` : ""}`,
         );
         run.destination = {
           ...run.destination,
           // The protected-trunk recovery: delivery reported "failed" because
-          // the fast-forward was rejected, but the repo's own PR gate has now
-          // merged the same commits. The work IS in the repo, so the
+          // the fallback fast-forward was rejected, but the repo's own PR gate
+          // has now merged the same commits. The work IS in the repo, so the
           // destination must say so — leaving it "failed" would under-report a
           // success just as badly as over-reporting one.
           status:
@@ -2182,23 +2198,30 @@ async function executeRun(
           detail: redactSecrets(
             `${run.destination.detail ?? ""} ${
               release.released
-                ? `Released: merged to main (${release.mergedSha ?? "sha unknown"}).`
-                : `Not auto-released: ${release.reason}.`
+                ? `Released: merged to the trunk (${release.mergedSha ?? "sha unknown"}).`
+                : pending
+                  ? `Not on the trunk yet — ${release.reason}.`
+                  : `Not auto-released: ${release.reason}.`
             }${release.prUrl ? ` PR: ${release.prUrl}` : ""}`.trim(),
           ),
         };
         run.release = {
           released: release.released,
+          state: release.state,
           prUrl: release.prUrl,
           mergedSha: release.mergedSha,
           reason: redactSecrets(release.reason),
         };
         await appendAuditEvent({
-          type: release.released ? "run.release.merged" : "run.release.held",
+          type: release.released
+            ? "run.release.merged"
+            : pending
+              ? "run.release.pending"
+              : "run.release.held",
           runId: run.id,
           detail: release.prUrl ?? delivered.target,
         });
-        if (!release.released) {
+        if (outcome === "fail-run") {
           run.status = "failed";
           run.resumable = false;
           run.error = redactSecrets(

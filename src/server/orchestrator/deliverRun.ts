@@ -17,6 +17,8 @@ import {
   failureText,
   git,
 } from "../workspace/gitOps.js";
+import { detectHostCi } from "../workspace/hostCi.js";
+import { planTrunkAdvance } from "./releasePlan.js";
 
 /**
  * deliverRun.ts — SAVE THE WORK WHERE THE OWNER SAID TO SAVE IT.
@@ -35,18 +37,24 @@ import {
  *
  * Owner order, 2026-08-19:
  *   "The work is pushed to main directly so it is in production."
+ * Owner decision, 2026-08-20:
+ *   "protect factory deck's trunk."
  *
  * A branch pushed and left sitting there is not delivered work — it is work
- * waiting for a human to remember it. So an extend run now ends ON THE TRUNK:
- * the run's own `factory-deck/<id>` branch is still where the commit is
- * authored (it is the audit trail, and it is where a conflict fails safely),
- * but the trunk is then fast-forwarded onto it. If the trunk does not move, the
- * run reports FAILED — never "delivered" with the work parked on a branch.
+ * waiting for a human to remember it. But advancing the trunk on Factory Deck's
+ * own say-so is not the answer either. So an extend run ends with its work
+ * PUBLISHED and ON ITS WAY to the trunk through the HOST repo's own gate: the
+ * run's `factory-deck/<id>` branch carries the commit (it is the audit trail,
+ * and it is where a conflict fails safely), and the trunk advances only through
+ * a pull request the host's CI passed, with auto-merge armed so no human is
+ * needed. `planTrunkAdvance` (releasePlan.ts) makes that call; the direct
+ * fast-forward remains only as its NAMED fallback.
  *
  * Delivery runs ONCE, at the end of a run that actually completed:
- *   - existing-repo → commit the run's own files onto `factory-deck/<id>`, push
- *     it, then fast-forward the repo's real default branch onto it (never
- *     --force; a rejected fast-forward is reported, not overridden);
+ *   - existing-repo → commit the run's own files onto `factory-deck/<id>` and
+ *     push it. The trunk is then either left to the PR gate (the default) or,
+ *     on the named fallback, fast-forwarded onto the branch (never --force; a
+ *     rejected fast-forward is reported, not overridden);
  *   - new-repo      → git init, commit, `gh repo create owner/name --private
  *     --source . --push`;
  *   - workspace-only→ nothing to deliver; say so plainly.
@@ -149,8 +157,9 @@ export function planDestination(args: {
     status: "planned",
     detail:
       `The run's changes will be committed on ${args.branch ?? "its own branch"}, ` +
-      "pushed back to this repo, and then merged into its default branch so the " +
-      "work is in production.",
+      "pushed back to this repo, and opened as a pull request against its default " +
+      "branch — the repo's own CI checks gate the merge, with auto-merge armed so " +
+      "a green PR lands without a human.",
     url: null,
     deliveredAt: null,
   };
@@ -426,11 +435,41 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
       };
     }
 
-    // The branch is published; now put the work IN PRODUCTION. Owner order
-    // 2026-08-19: "The work is pushed to main directly so it is in production."
-    // Everything above this line is the evidence that earns it — the demo gate,
-    // the verification gate, and the receipt check over the committed tree. A
-    // run that did not pass those never reaches here.
+    // The branch is published. WHO IS ALLOWED TO MOVE THE TRUNK FROM HERE is a
+    // single decision, made in releasePlan.ts (owner decision 2026-08-20,
+    // "protect factory deck's trunk"): by default the HOST repo's CI gates it
+    // through a pull request, and delivery stops at the published branch.
+    const ci = detectHostCi(input.workspacePath);
+    const trunkPlan = planTrunkAdvance({
+      directTrunkAdvance: input.options.directTrunkAdvance,
+      hostCi: ci.presence,
+    });
+    if (trunkPlan.path === "pr-gate") {
+      // Delivered = the work reached the repo, on a published branch bound to
+      // the verified commit. It is NOT on the trunk and NOT in production, and
+      // the detail says exactly that — the release step that follows opens the
+      // PR and lets the host repo's checks decide.
+      return {
+        ...dest,
+        branch,
+        status: "delivered",
+        detail:
+          `${verifiedCommit.detail} ${pushed.detail} ${trunkPlan.reason} ` +
+          "The trunk was NOT advanced by this delivery.",
+        url: compareUrlFor(remote, branch),
+        commitSha: verifiedCommit.sha,
+        branchPushed: true,
+        releasedToTrunk: false,
+        trunkAdvancePath: "pr-gate",
+        deliveredAt: now,
+      };
+    }
+
+    // NAMED FALLBACK ONLY (no host CI, or an explicit owner opt-in): put the
+    // work on the trunk directly. Everything above this line is the evidence
+    // that earns it — the demo gate, the verification gate, and the receipt
+    // check over the committed tree. A run that did not pass those never
+    // reaches here.
     const released = await releaseToMain(input.workspacePath, branch);
     if (!released.released) {
       // The branch push SUCCEEDED, so the work exists and is recoverable — but
@@ -448,11 +487,12 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
         branch,
         status: "failed",
         detail:
-          `${verifiedCommit.detail} ${pushed.detail} NOT RELEASED: ${released.detail}`,
+          `${verifiedCommit.detail} ${pushed.detail} ${trunkPlan.reason} NOT RELEASED: ${released.detail}`,
         url: compareUrlFor(remote, branch),
         commitSha: verifiedCommit.sha,
         branchPushed: true,
         releasedToTrunk: false,
+        trunkAdvancePath: "direct-fast-forward",
         deliveredAt: now,
       };
     }
@@ -460,7 +500,7 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
       ...dest,
       branch,
       status: "delivered",
-      detail: `${verifiedCommit.detail} ${pushed.detail} ${released.detail}`,
+      detail: `${verifiedCommit.detail} ${pushed.detail} ${trunkPlan.reason} ${released.detail}`,
       url:
         (released.trunk ? branchUrlFor(remote, released.trunk) : null) ??
         compareUrlFor(remote, branch),
@@ -469,6 +509,7 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
       // The trunk now POINTS AT this branch. Anything downstream that would
       // open a PR from it would be opening an empty one.
       releasedToTrunk: true,
+      trunkAdvancePath: "direct-fast-forward",
       deliveredAt: now,
     };
   } catch (err) {

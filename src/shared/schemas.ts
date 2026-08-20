@@ -531,8 +531,21 @@ export const RunDestinationSchema = z.object({
    * commit, so opening a PR from that branch would be an EMPTY PR — the
    * gated release step must be skipped rather than attempted and reported as
    * a failure. Absent/false means the trunk did not move.
+   *
+   * Since the 2026-08-20 trunk-protection reversal this is true only on the
+   * NAMED FALLBACK path (see `trunkAdvancePath`); the ordinary run leaves the
+   * trunk to the host repo's PR gate.
    */
   releasedToTrunk: z.boolean().optional(),
+  /**
+   * WHICH TRUNK POLICY THIS DELIVERY TOOK — so the report says it rather than
+   * leaving the owner to infer it:
+   *   "pr-gate"            → the host repo's CI gates the trunk (the default);
+   *   "direct-fast-forward"→ the named fallback (no host CI, or an explicit
+   *                          owner opt-in for a local/offline destination).
+   * Optional so run records written before the policy existed still load.
+   */
+  trunkAdvancePath: z.enum(["pr-gate", "direct-fast-forward"]).optional(),
   deliveredAt: z.number().nullable().default(null),
 });
 export type RunDestination = z.infer<typeof RunDestinationSchema>;
@@ -583,17 +596,28 @@ export const RunOptionsSchema = z.object({
   newRepo: NewRepoSchema.optional(),
   /**
    * For mode "extend": publish the run's work back to the attached repo when
-   * the run completes — push the `factory-deck/<id>` branch AND merge it into
-   * the repo's default branch. Default TRUE — the whole point of attaching a
-   * repo is that the work lands in it, in production, not on a branch waiting
-   * for someone to remember it (owner order 2026-08-19).
+   * the run completes — push the `factory-deck/<id>` branch AND land it on the
+   * repo's default branch. Default TRUE — the whole point of attaching a repo
+   * is that the work lands in it, in production, not on a branch waiting for
+   * someone to remember it (owner order 2026-08-19).
    *
-   * The commit is always authored on the run's own branch, never directly on
-   * the trunk, and the trunk only ever moves by FAST-FORWARD from that branch.
-   * Never a force-push: a rejected fast-forward is reported as a failed
-   * delivery, never overridden.
+   * HOW it lands changed on 2026-08-20 ("protect factory deck's trunk"): the
+   * host repository's own CI gates the trunk through a pull request with
+   * auto-merge armed. The commit is always authored on the run's own branch,
+   * never directly on the trunk. Never a force-push.
    */
   pushToOrigin: z.boolean().optional(),
+  /**
+   * ESCAPE HATCH, off by default: let this run fast-forward the trunk itself
+   * instead of going through the host repo's PR gate. Exists for a
+   * local/offline destination that will never have CI or pull requests.
+   *
+   * This is the ONLY way to bypass CI on a repo that HAS CI, and it is a
+   * deliberate, named choice recorded in the run's report
+   * (`destination.trunkAdvancePath === "direct-fast-forward"`). A repo with no
+   * CI at all already takes the fallback without this flag.
+   */
+  directTrunkAdvance: z.boolean().optional(),
 })
   // Unknown option keys FAIL LOUD instead of being silently stripped. A
   // misplaced or misspelled field (the FutureU `destination` class) used to
@@ -677,6 +701,21 @@ export const RunRecordSchema = z.object({
       prUrl: z.string().nullable(),
       mergedSha: z.string().nullable(),
       reason: z.string(),
+      /**
+       * THREE OUTCOMES, NOT TWO. `released` alone cannot tell an open PR that
+       * is still going green apart from one that is blocked, and reporting the
+       * first as a failure is exactly the false FAILED this policy exists to
+       * avoid:
+       *   "merged"  → the work is on the trunk (`released: true`);
+       *   "pending" → the PR is open with auto-merge armed and the host repo's
+       *               checks are still running; it lands with no human, but it
+       *               is NOT in production yet and must never be described as
+       *               if it were;
+       *   "held"    → genuinely blocked (checks failed, evidence gate not met,
+       *               merge refused) — the run fails.
+       * Optional so records written before this field existed still load.
+       */
+      state: z.enum(["merged", "pending", "held"]).optional(),
     })
     .nullable()
     .optional(),
