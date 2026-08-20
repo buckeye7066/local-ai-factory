@@ -3,7 +3,13 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { pushBranch, commitRunFiles, originUrl } from "../workspace/gitOps.js";
+import {
+  pushBranch,
+  commitRunFiles,
+  originUrl,
+  releaseToMain,
+  defaultRemoteBranch,
+} from "../workspace/gitOps.js";
 
 /**
  * Exercises the ACTUAL push path against a local bare remote — no network.
@@ -108,6 +114,125 @@ describe("pushBranch — what may reach the owner's repo", () => {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
   }, 30_000);
+});
+
+describe("releaseToMain — the work actually reaches production", () => {
+  it("FAST-FORWARDS the trunk onto the run's branch, and main really gains the file", async () => {
+    const { root, remote, clone } = await makeRemoteAndClone();
+    try {
+      const mainBefore = gitBare(["rev-parse", "main"], remote);
+
+      git(["checkout", "-q", "-b", "factory-deck/abcd1234"], clone);
+      await writeFile(join(clone, "feature.txt"), "generated\n");
+      expect((await commitRunFiles(clone, ["feature.txt"], "run output")).committed).toBe(
+        true,
+      );
+      expect((await pushBranch(clone, "factory-deck/abcd1234")).pushed).toBe(true);
+
+      const res = await releaseToMain(clone, "factory-deck/abcd1234");
+
+      expect(res.released).toBe(true);
+      expect(res.trunk).toBe("main");
+      // The claim is only real if the TRUNK moved and carries the file.
+      expect(gitBare(["rev-parse", "main"], remote)).not.toBe(mainBefore);
+      expect(gitBare(["show", "main:feature.txt"], remote)).toContain("generated");
+      // The audit-trail branch is still there, not deleted out from under it.
+      expect(remoteBranches(remote)).toContain("factory-deck/abcd1234");
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
+  }, 60_000);
+
+  it("does NOT force the trunk past a conflicting change — it reports and leaves main alone", async () => {
+    const { root, remote, clone } = await makeRemoteAndClone();
+    try {
+      // Someone else edits the SAME file on main after our clone.
+      const other = join(root, "other");
+      execFileSync("git", ["clone", "-q", remote, other]);
+      git(["config", "user.email", "other@example.com"], other);
+      git(["config", "user.name", "Other"], other);
+      await writeFile(join(other, "feature.txt"), "theirs\n");
+      git(["add", "-A"], other);
+      git(["commit", "-q", "-m", "their change"], other);
+      git(["push", "-q", "origin", "main"], other);
+      const mainBefore = gitBare(["rev-parse", "main"], remote);
+
+      // Our run touches the same file on its own branch.
+      git(["checkout", "-q", "-b", "factory-deck/conflict1"], clone);
+      await writeFile(join(clone, "feature.txt"), "ours\n");
+      expect((await commitRunFiles(clone, ["feature.txt"], "run output")).committed).toBe(
+        true,
+      );
+      expect((await pushBranch(clone, "factory-deck/conflict1")).pushed).toBe(true);
+
+      const res = await releaseToMain(clone, "factory-deck/conflict1");
+
+      expect(res.released).toBe(false);
+      expect(res.detail).toMatch(/Could not merge/);
+      // The guard is only real if main did NOT move and still holds their work.
+      expect(gitBare(["rev-parse", "main"], remote)).toBe(mainBefore);
+      expect(gitBare(["show", "main:feature.txt"], remote)).toContain("theirs");
+      // And the aborted merge left the workspace usable, not mid-conflict.
+      expect(git(["status", "--porcelain"], clone)).not.toMatch(/^(UU|AA|DD) /m);
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
+  }, 60_000);
+
+  it("refuses to release when asked to treat a trunk name as the run's branch", async () => {
+    const { root, remote, clone } = await makeRemoteAndClone();
+    try {
+      const before = gitBare(["rev-parse", "main"], remote);
+      const res = await releaseToMain(clone, "main");
+      expect(res.released).toBe(false);
+      expect(res.detail).toMatch(/Refused/);
+      expect(gitBare(["rev-parse", "main"], remote)).toBe(before);
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
+  }, 30_000);
+
+  it("asks the remote for its default branch instead of assuming 'main'", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-trunk-"));
+    try {
+      const remote = join(root, "remote.git");
+      const seed = join(root, "seed");
+      const clone = join(root, "clone");
+      // A repo whose trunk is 'master' — assuming 'main' would push production
+      // work to a branch nobody deploys.
+      execFileSync("git", ["init", "--bare", "-b", "master", remote]);
+      execFileSync("git", ["init", "-b", "master", seed]);
+      git(["config", "user.email", "test@example.com"], seed);
+      git(["config", "user.name", "Test"], seed);
+      await writeFile(join(seed, "README.md"), "# seed\n");
+      git(["add", "-A"], seed);
+      git(["commit", "-q", "-m", "seed"], seed);
+      git(["remote", "add", "origin", remote], seed);
+      git(["push", "-q", "origin", "master"], seed);
+      execFileSync("git", ["clone", "-q", remote, clone]);
+      git(["config", "user.email", "test@example.com"], clone);
+      git(["config", "user.name", "Test"], clone);
+
+      expect(await defaultRemoteBranch(clone)).toBe("master");
+
+      const masterBefore = gitBare(["rev-parse", "master"], remote);
+      git(["checkout", "-q", "-b", "factory-deck/onmaster"], clone);
+      await writeFile(join(clone, "feature.txt"), "generated\n");
+      expect(
+        (await commitRunFiles(clone, ["feature.txt"], "run output")).committed,
+      ).toBe(true);
+      expect((await pushBranch(clone, "factory-deck/onmaster")).pushed).toBe(true);
+
+      const res = await releaseToMain(clone, "factory-deck/onmaster");
+
+      expect(res.released).toBe(true);
+      expect(res.trunk).toBe("master");
+      expect(gitBare(["rev-parse", "master"], remote)).not.toBe(masterBefore);
+      expect(gitBare(["show", "master:feature.txt"], remote)).toContain("generated");
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
+  }, 60_000);
 });
 
 describe("commitRunFiles — only the run's own output is committed", () => {

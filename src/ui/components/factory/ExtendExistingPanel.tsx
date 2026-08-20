@@ -79,8 +79,10 @@ export function ExtendExistingPanel({
       </div>
 
       {/* WHERE THE WORK LANDS — stated before the run starts, not after.
-          The repo attached above IS the destination: the run commits onto its
-          own factory-deck/* branch and pushes that branch back to this repo. */}
+          The repo attached above IS the destination. The run commits onto its
+          own factory-deck/* branch (the audit trail), pushes it, and then
+          fast-forwards the repo's default branch onto it, so the finished work
+          is on main and therefore in production. Owner order 2026-08-19. */}
       <div
         className={cn(
           "mt-3 flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px] leading-relaxed",
@@ -94,8 +96,11 @@ export function ExtendExistingPanel({
           <span>
             The finished work is saved in{" "}
             <strong className="font-mono">{repoSource.location}</strong> — committed
-            on this run's own <code>factory-deck/&lt;run-id&gt;</code> branch and
-            pushed back there. Never a force-push, and never onto main.
+            on this run's own <code>factory-deck/&lt;run-id&gt;</code> branch, pushed
+            back there, then <strong>merged into main</strong>, so it is in
+            production. The branch stays as the audit trail. Never a force-push:
+            main only ever fast-forwards, and a rejected fast-forward is reported
+            rather than overridden.
           </span>
         ) : (
           <span>

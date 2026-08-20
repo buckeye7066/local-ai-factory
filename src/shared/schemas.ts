@@ -567,10 +567,16 @@ export const RunOptionsSchema = z.object({
    */
   newRepo: NewRepoSchema.optional(),
   /**
-   * For mode "extend": push the run's `factory-deck/<id>` branch back to the
-   * attached repo's origin when the run completes. Default TRUE — the whole
-   * point of attaching a repo is that the work lands in it. Never a
-   * force-push, and never onto main/master: only the run's own branch.
+   * For mode "extend": publish the run's work back to the attached repo when
+   * the run completes — push the `factory-deck/<id>` branch AND merge it into
+   * the repo's default branch. Default TRUE — the whole point of attaching a
+   * repo is that the work lands in it, in production, not on a branch waiting
+   * for someone to remember it (owner order 2026-08-19).
+   *
+   * The commit is always authored on the run's own branch, never directly on
+   * the trunk, and the trunk only ever moves by FAST-FORWARD from that branch.
+   * Never a force-push: a rejected fast-forward is reported as a failed
+   * delivery, never overridden.
    */
   pushToOrigin: z.boolean().optional(),
 })
