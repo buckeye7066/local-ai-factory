@@ -21,6 +21,7 @@ import {
   RotatingProvider,
   filterRoutableCatalog,
 } from "../rotation/rotatingProvider.js";
+import { ThemedProvider } from "../orchestrator/workTheme.js";
 
 export { AnthropicProvider, OpenAIProvider, StubProvider, MockProvider, FreeProvider };
 export { FailoverProvider };
@@ -77,6 +78,11 @@ export interface ProviderRegistry {
   /** Configured PAID providers only — the rescue tier. */
   availablePaid(): ProviderName[];
   missingCredentialNames(): string[];
+}
+
+/** Stamp the run's WorkTheme onto every live call when ALS is bound. */
+function withTheme(provider: LLMProvider): LLMProvider {
+  return provider instanceof ThemedProvider ? provider : new ThemedProvider(provider);
 }
 
 export function createProviderRegistry(
@@ -251,18 +257,18 @@ export function createProviderRegistry(
     const explicitPaid =
       requested === "anthropic" || requested === "openai" ? requested : null;
     if (explicitPaid && byName[explicitPaid].isConfigured()) {
-      return byName[explicitPaid];
+      return withTheme(byName[explicitPaid]);
     }
     // The $0 primary counts as configured when EITHER the FCC proxy is up or
     // the rotation catalog offers other $0 routes (local ollama, free tiers).
-    if (freePrimary.isConfigured()) return chain;
+    if (freePrimary.isConfigured()) return withTheme(chain);
 
     const order: ProviderName[] = [];
     if (fallback === "anthropic" || fallback === "openai") order.push(fallback);
     order.push("anthropic", "openai");
     for (const name of order) {
       const p = byName[name];
-      if (p.isConfigured()) return p;
+      if (p.isConfigured()) return withTheme(p);
     }
     throw new MissingProviderCredentialError(missingCredentialNames());
   }
