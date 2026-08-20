@@ -24,9 +24,12 @@ jobs:
           python3 scripts/bind_worktheme_runfactory.py
           rm -f .github/workflows/restore-runfactory-once.yml
           rm -f scripts/bind_worktheme_runfactory.py
+          # also drop incomplete assemble scaffolding if present
+          rm -rf .pr-parts || true
+          rm -f .github/workflows/assemble-runfactory.yml || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git status
-          git commit -m "fix: restore runFactory.ts and bind withWorkTheme entrypoints"
+          git commit -m "Bind WorkTheme at run entry points so multi-model calls share one issue"
           git push
