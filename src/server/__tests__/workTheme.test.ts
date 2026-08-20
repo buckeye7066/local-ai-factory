@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createWorkTheme,
@@ -27,6 +29,17 @@ class CaptureProvider implements LLMProvider {
 }
 
 describe("workTheme — directed multi-model focus", () => {
+  it("runFactory is restored and binds entrypoints through withWorkTheme", () => {
+    const src = readFileSync(
+      resolve(process.cwd(), "src/server/orchestrator/runFactory.ts"),
+      "utf8",
+    );
+    expect(src.startsWith("@file:")).toBe(false);
+    expect(src.startsWith("PLACEHOLDER_RESTORE_IN_PROGRESS")).toBe(false);
+    expect(src).toContain("export function startRun");
+    expect(src).toContain("withWorkTheme(theme");
+  });
+
   it("stamps the same theme into every provider call", async () => {
     const theme = createWorkTheme({
       idea: "fix GrantFlow publication suite timeouts",
