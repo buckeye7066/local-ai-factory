@@ -5,12 +5,14 @@ import {
   verifyFileDigests,
 } from "../workspace/verificationReceipt.js";
 import {
+  branchUrlFor,
   commitRunFiles,
   compareUrlFor,
   githubCreateRepo,
   initRepo,
   originUrl,
   pushBranch,
+  releaseToMain,
   currentBranch,
   failureText,
   git,
@@ -31,9 +33,20 @@ import {
  * whatever the model decided to call the app. The finished work never reached a
  * repo the owner would ever open again.
  *
+ * Owner order, 2026-08-19:
+ *   "The work is pushed to main directly so it is in production."
+ *
+ * A branch pushed and left sitting there is not delivered work — it is work
+ * waiting for a human to remember it. So an extend run now ends ON THE TRUNK:
+ * the run's own `factory-deck/<id>` branch is still where the commit is
+ * authored (it is the audit trail, and it is where a conflict fails safely),
+ * but the trunk is then fast-forwarded onto it. If the trunk does not move, the
+ * run reports FAILED — never "delivered" with the work parked on a branch.
+ *
  * Delivery runs ONCE, at the end of a run that actually completed:
- *   - existing-repo → commit the run's own files, push `factory-deck/<id>` to
- *     origin (never main, never --force), hand back a compare/PR link;
+ *   - existing-repo → commit the run's own files onto `factory-deck/<id>`, push
+ *     it, then fast-forward the repo's real default branch onto it (never
+ *     --force; a rejected fast-forward is reported, not overridden);
  *   - new-repo      → git init, commit, `gh repo create owner/name --private
  *     --source . --push`;
  *   - workspace-only→ nothing to deliver; say so plainly.
@@ -134,7 +147,10 @@ export function planDestination(args: {
     target: args.originUrl,
     branch: args.branch ?? null,
     status: "planned",
-    detail: `The run's changes will be committed on ${args.branch ?? "its own branch"} and pushed back to this repo.`,
+    detail:
+      `The run's changes will be committed on ${args.branch ?? "its own branch"}, ` +
+      "pushed back to this repo, and then merged into its default branch so the " +
+      "work is in production.",
     url: null,
     deliveredAt: null,
   };
@@ -398,12 +414,48 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
     if (changedDuringCommit) return { ...changedDuringCommit, branch };
     const pushed = await pushBranch(input.workspacePath, branch);
     const remote = (await originUrl(input.workspacePath)) ?? dest.target;
+    if (!pushed.pushed) {
+      return {
+        ...dest,
+        branch,
+        status: "failed",
+        detail: `${verifiedCommit.detail} ${pushed.detail}`,
+        url: null,
+        commitSha: verifiedCommit.sha,
+        deliveredAt: now,
+      };
+    }
+
+    // The branch is published; now put the work IN PRODUCTION. Owner order
+    // 2026-08-19: "The work is pushed to main directly so it is in production."
+    // Everything above this line is the evidence that earns it — the demo gate,
+    // the verification gate, and the receipt check over the committed tree. A
+    // run that did not pass those never reaches here.
+    const released = await releaseToMain(input.workspacePath, branch);
+    if (!released.released) {
+      // The branch push SUCCEEDED, so the work exists and is recoverable — but
+      // it is not on the trunk, so it is NOT in production. Reporting this as
+      // "delivered" would be the silent half-success this deck exists to
+      // prevent. It is a failure with the recovery path spelled out.
+      return {
+        ...dest,
+        branch,
+        status: "failed",
+        detail:
+          `${verifiedCommit.detail} ${pushed.detail} NOT RELEASED: ${released.detail}`,
+        url: compareUrlFor(remote, branch),
+        commitSha: verifiedCommit.sha,
+        deliveredAt: now,
+      };
+    }
     return {
       ...dest,
       branch,
-      status: pushed.pushed ? "delivered" : "failed",
-      detail: `${verifiedCommit.detail} ${pushed.detail}`,
-      url: pushed.pushed ? compareUrlFor(remote, branch) : null,
+      status: "delivered",
+      detail: `${verifiedCommit.detail} ${pushed.detail} ${released.detail}`,
+      url:
+        (released.trunk ? branchUrlFor(remote, released.trunk) : null) ??
+        compareUrlFor(remote, branch),
       commitSha: verifiedCommit.sha,
       deliveredAt: now,
     };

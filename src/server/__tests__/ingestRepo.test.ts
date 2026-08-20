@@ -60,11 +60,14 @@ describe("ingestExistingRepo", () => {
     // saved in"). It used to be severed so nothing could ever push back; that
     // is precisely what stranded every run's output in a scratch folder. What
     // protects the source now is not the absence of a remote but WHAT may be
-    // pushed to it: only this run's own factory-deck/* branch, only once, only
-    // at the end of a completed run, never --force, and never main/master
-    // (gitOps.pushBranch refuses a protected branch outright). Model-authored
-    // commands still cannot push at all — `git push` is not on commandRunner's
-    // allowlist.
+    // pushed to it: the run's commit is only ever AUTHORED on its own
+    // factory-deck/* branch (gitOps.pushBranch refuses a protected branch
+    // outright), only once, only at the end of a completed run that cleared the
+    // verification gate, and never --force. The trunk is then advanced onto
+    // that branch by fast-forward (gitOps.releaseToMain) so the work is in
+    // production — owner order 2026-08-19 — and a rejected fast-forward is
+    // reported as a failed delivery rather than forced. Model-authored commands
+    // still cannot push at all — `git push` is not on commandRunner's allowlist.
     const remote = execFileSync("git", ["remote", "get-url", "origin"], {
       cwd: result.path,
       encoding: "utf8",
