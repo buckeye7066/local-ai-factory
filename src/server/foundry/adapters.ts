@@ -15,6 +15,7 @@ import {
 } from "node:path";
 import { z } from "zod";
 import { getConfig, getSecrets } from "../config.js";
+import { underWorkTheme } from "../orchestrator/themeBind.js";
 import { createProviderRegistry } from "../providers/index.js";
 import { underWorkTheme } from "../orchestrator/themeBind.js";
 import { getRun } from "../storage/runsStore.js";
