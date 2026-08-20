@@ -441,13 +441,73 @@ function epicDeps(): EpicDeps {
       runFactoryTracked({ idea, options, config, secrets }, onStarted ?? (() => {})),
     resumeSliceRun: (runId) => resumeFactoryFull(runId, config, secrets),
     plan: async (idea) => {
-      // ONE call whose quality decides every slice downstream: prefer a
-      // configured PAID provider; the free small model produced a 15-minute
-      // crawl on the first real epic. Free remains the keyless fallback.
+      // FREE PRIMARY, PAID RESCUE, AND BOUNDED -- the same shape every other
+      // call site uses (resolveLive(undefined, config.defaultCodeProvider)).
+      //
+      // This preferred `availablePaid()[0]`, so epic planning ignored
+      // defaultCodeProvider ('free') and went straight to Anthropic.
+      // `anthropicConfigured: true` only says a KEY EXISTS -- it says nothing
+      // about credit. Measured 2026-08-20: two real epics died in ~350ms with
+      // "Your credit balance is too low to access the Anthropic API" while a
+      // healthy free route sat idle at 127.0.0.1:8082 and the launcher banner
+      // promised "all model calls are free". A dead paid key silently killed
+      // the epic, and free must never silently become paid.
+      //
+      // The original concern was real -- a small free model once produced a
+      // 15-minute planning crawl -- but an epic that dies in 350ms is worse
+      // than a slow plan, and this deployment's free route proxies a frontier
+      // model rather than a small local one. Paid is the RESCUE now, and a
+      // rescue that also fails reports BOTH failures, not just the last.
+      //
+      // BOUNDED: planning had no timeout at all. Measured the same day, one
+      // epic sat in status "planning" for 88 minutes with a single call in
+      // flight and no failure, no progress, and no signal to the operator. An
+      // unbounded wait is indistinguishable from a hang.
+      const planTimeoutMs = Number(process.env.FACTORY_PLAN_TIMEOUT_MS ?? 20 * 60 * 1000);
+      const withPlanTimeout = async <T>(label: string, work: Promise<T>): Promise<T> => {
+        let timer: NodeJS.Timeout | undefined;
+        const started = Date.now();
+        try {
+          return await Promise.race([
+            work,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error(
+                  `${label} planning exceeded ${Math.round(planTimeoutMs / 1000)}s `
+                  + `(waited ${Math.round((Date.now() - started) / 1000)}s) and was abandoned. `
+                  + `Raise FACTORY_PLAN_TIMEOUT_MS if this route is simply slow.`,
+                )),
+                planTimeoutMs,
+              );
+              timer.unref?.();
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
+
       const registry = createProviderRegistry(config, secrets);
-      const paid = registry.availablePaid();
-      const provider = registry.resolveLive(paid[0], config.defaultCodeProvider);
-      return epicPlannerAgent({ provider }, { idea });
+      const primary = registry.resolveLive(undefined, config.defaultCodeProvider);
+      try {
+        return await withPlanTimeout("free", epicPlannerAgent({ provider: primary }, { idea }));
+      } catch (primaryErr) {
+        const paid = registry.availablePaid();
+        if (paid.length === 0) throw primaryErr;
+        try {
+          const rescue = registry.resolveLive(paid[0], config.defaultCodeProvider);
+          return await withPlanTimeout(
+            `paid(${paid[0]})`,
+            epicPlannerAgent({ provider: rescue }, { idea }),
+          );
+        } catch (rescueErr) {
+          throw new Error(
+            `planning failed on the free route and on the paid rescue. `
+            + `free: ${String((primaryErr as Error)?.message ?? primaryErr)} | `
+            + `paid(${paid[0]}): ${String((rescueErr as Error)?.message ?? rescueErr)}`,
+          );
+        }
+      }
     },
     config,
     secrets,
