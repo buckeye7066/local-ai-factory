@@ -1,6 +1,6 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 import { getConfig, getSecrets, toHealth, isFactoryHealthPayload } from "./config.js";
@@ -915,8 +915,14 @@ if (bind.error) {
  * .factory/crash.log with a stack before anything else happens. Rejections
  * and exceptions are logged-and-survived: durable checkpoints make a live
  * server strictly better than a dead one, and the log names what happened.
+ *
+ * Handlers MUST register synchronously before listen/orphan-recovery. A prior
+ * dynamic `import("node:fs").then(...)` left a race: early unhandled
+ * rejections (and Node 20+ default rejection exits) killed the process with
+ * exit -1/1 and zero crash.log — the exact overnight failure, re-observed
+ * 2026-08-20 when the launcher printed "backend exited with code -1".
  */
-import("node:fs").then(({ appendFileSync, mkdirSync }) => {
+{
   const dir = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".factory");
   const logCrash = (kind: string, err: unknown) => {
     const detail = redactSecrets(
@@ -933,12 +939,18 @@ import("node:fs").then(({ appendFileSync, mkdirSync }) => {
   };
   process.on("uncaughtException", (err) => logCrash("uncaughtException", err));
   process.on("unhandledRejection", (err) => logCrash("unhandledRejection", err));
-});
+}
 
-void recoverOrphanedEpics().then((n) => {
-  if (n > 0)
-    console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
-});
+void recoverOrphanedEpics()
+  .then((n) => {
+    if (n > 0)
+      console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
+  })
+  .catch((err) => {
+    // Boot must stay up even if epic recovery fails — a wedged audit file
+    // must not take the whole deck down (exit -1 under the launcher).
+    console.error(`[factory] orphan epic recovery failed (continuing):`, err);
+  });
 const server = app.listen(config.port, bind.host, () => {
   console.log(`[factory] backend listening on http://${bind.host}:${config.port}`);
   console.log(
