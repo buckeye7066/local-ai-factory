@@ -116,3 +116,53 @@ import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
 import { safeErrorMessage } from "../errors.js";
+
+export interface StartRunArgs {
+  idea: string;
+  options: RunOptions;
+  config: AppConfig;
+  secrets: AppSecrets;
+}
+
+/**
+ * What one writeBuild call actually did.
+ *
+ * The invariant the owner's no-silent-no-op rule demands:
+ *   candidates === written + refusals.length
+ * A stage that produced files but wrote none must be LOUD, never a success
+ * line quoting the model's output count.
+ */
+export interface WriteTally {
+  /** Files the stage handed to writeBuild. */
+  candidates: number;
+  /** Files that genuinely reached disk. */
+  written: number;
+  /** Files a guard refused, each with the reason. */
+  refusals: Array<{ path: string; reason: string }>;
+}
+
+export function repairOutcomeMessage(tally: WriteTally): string {
+  if (tally.candidates === 0) {
+    return "NO REPAIR APPLIED — the repair agent proposed no files.";
+  }
+  if (tally.written === 0) {
+    return `NO REPAIR APPLIED — all ${tally.refusals.length} proposed write(s) were refused.`;
+  }
+  if (tally.refusals.length > 0) {
+    return (
+      `Applied ${tally.written} repair file(s); ${tally.refusals.length} were refused. ` +
+      "Executable verification will determine only what the applied files fixed."
+    );
+  }
+  return (
+    `Applied ${tally.written} repair file(s). ` +
+    "Executable verification will determine whether they fixed the issue."
+  );
+}
+
+/** Canonical slash-separated workspace path used for identity and guard checks. */
+export function normalizeGeneratedPath(path: string): string {
+  return posix
+    .normalize(path.replace(/\\/g, "/"))
+    .replace(/^\.\/+/, "");
+}
