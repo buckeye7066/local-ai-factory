@@ -39,6 +39,10 @@ export type AuditEventType =
   | "run.delivery.skipped"
   | "run.delivery.planned"
   | "run.release.merged"
+  // The PR is open with auto-merge armed and the host repo's checks are still
+  // running — neither merged nor held. A distinct event because collapsing it
+  // into either of the other two makes the audit trail lie about the trunk.
+  | "run.release.pending"
   | "run.release.held"
   | "run.deploy.live"
   | "run.deploy.held"

@@ -134,6 +134,28 @@ describe("releaseRun", () => {
     expect(calls.flat().join(" ")).not.toMatch(/--force|--admin/);
   });
 
+  it("opens the PR against the repo's REAL default branch, never a hardcoded 'main'", async () => {
+    // `--base main` was hardcoded here, which is exactly the assumption
+    // gitOps.defaultRemoteBranch exists to avoid: a repo whose trunk is
+    // `master` would have had its PR opened against a branch that may not
+    // exist. Omitting --base makes `gh` resolve the base repo's own default.
+    const { impl, calls } = fakeGh([
+      (a) => (a[1] === "create" ? ok("https://github.com/buckeye7066/GrantFlow/pull/140") : ok("")),
+      (a) => (a[1] === "checks" ? ok(JSON.stringify([{ state: "SUCCESS", name: "test" }])) : ok("")),
+      (a) => (a[1] === "merge" ? ok("merged") : ok("")),
+      (a) => (a[1] === "view" ? ok("MERGED beef0001") : ok("")),
+    ]);
+    const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "passing", ghImpl: impl });
+    expect(res.released).toBe(true);
+    const create = calls.find((c) => c[1] === "create");
+    expect(create).toBeDefined();
+    expect(create).not.toContain("--base");
+    expect(create).not.toContain("main");
+    // The head is still pinned to the run's own branch, not guessed.
+    expect(create).toContain("--head");
+    expect(create).toContain(BASE.branch);
+  });
+
   it("creates no PR or other GitHub state when tests did not run", async () => {
     const { impl, calls } = fakeGh([
       () => ok("this must never be called"),
@@ -286,10 +308,56 @@ describe("releaseRun", () => {
     expect(calls.some((c) => c[1] === "merge")).toBe(false);
   });
 
-  it("keeps waiting through pending checks and times out to an open PR", async () => {
-    const { impl } = fakeGh([
+  /* ---------------------------------------------------------------- *
+   * Checks still running when this process stops watching.
+   *
+   * This is the ONLY exit where the PR could still go green on its own,
+   * so it is the whole surface that would otherwise need a human later.
+   * The owner's doctrine bans that gate, so the merge is handed to
+   * GitHub (auto-merge, bound to the same verified head commit) and the
+   * run reports PENDING — not released, and emphatically not "in
+   * production". Reporting it as FAILED is the same false claim as
+   * reporting it merged, just mirrored.
+   * ---------------------------------------------------------------- */
+
+  it("arms auto-merge and reports PENDING when checks outlast the window", async () => {
+    const { impl, calls } = fakeGh([
       () => ok("https://github.com/buckeye7066/GrantFlow/pull/102"),
       () => ok(JSON.stringify([{ state: "PENDING", name: "test" }])),
+      (a) => (a[1] === "merge" ? ok("automatically merge when requirements met") : ok("")),
+    ]);
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      ghImpl: impl,
+      checkTimeoutMs: 1,
+    });
+    // Pending is NOT released and NOT a failure.
+    expect(res.released).toBe(false);
+    expect(res.state).toBe("pending");
+    expect(res.prUrl).toMatch(/pull\/102/);
+    // The report must say the work is not on the trunk, and must not claim it.
+    expect(res.reason).toMatch(/NOT on the trunk and NOT in production/);
+    // No human is needed: GitHub itself will land it, bound to the exact
+    // verified commit, squash, and never with --force or --admin.
+    const auto = calls.find((c) => c[1] === "merge");
+    expect(auto).toBeDefined();
+    expect(auto).toContain("--auto");
+    expect(auto).toContain("--squash");
+    expect(auto).toContain("--match-head-commit");
+    expect(auto).toContain(VERIFIED_SHA);
+    expect(calls.flat().join(" ")).not.toMatch(/--force|--admin/);
+  });
+
+  it("HOLDS (not pending) when auto-merge cannot be armed — nothing would land it", async () => {
+    const { impl } = fakeGh([
+      () => ok("https://github.com/buckeye7066/GrantFlow/pull/105"),
+      () => ok(JSON.stringify([{ state: "PENDING", name: "test" }])),
+      (a) =>
+        a[1] === "merge"
+          ? fail("auto-merge is not enabled for this repository")
+          : ok(""),
     ]);
     const res = await releaseRun({
       ...BASE,
@@ -299,8 +367,8 @@ describe("releaseRun", () => {
       checkTimeoutMs: 1,
     });
     expect(res.released).toBe(false);
-    expect(res.reason).toMatch(/did not finish/i);
-    expect(res.prUrl).toMatch(/pull\/102/);
+    expect(res.state).toBe("held");
+    expect(res.reason).toMatch(/nothing will land it automatically/i);
   });
 
   it("does not claim release when the merge command fails", async () => {
