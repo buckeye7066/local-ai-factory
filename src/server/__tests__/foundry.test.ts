@@ -29,6 +29,44 @@ describe("Purpose Foundry", () => {
     expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("azure")).toBe(false);
   });
 
+  it("uses the directed FlexFactor run script by default in descriptors and process mode", async () => {
+    const previousScript = process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
+    delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
+    try {
+      const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+      const store = new FoundryStore(root);
+      const project = await store.create(
+        intakeFromMarkdown(
+          "---\nproject: GrantFlow\npurpose: Match people to real funding\ntargets: buckeye7066/GrantFlow\n---\n# GrantFlow",
+          "C:/Vault/GrantFlow.md",
+        ),
+      );
+      let receivedArgs: string[] = [];
+      const adapters = new FoundryAdapters(store, {
+        processRunner: async (_python, args) => {
+          receivedArgs = args;
+          return { stdout: "ok", stderr: "", exitCode: 0 };
+        },
+      });
+
+      const descriptors = adapters.descriptors();
+      const scout = descriptors.find((descriptor) => descriptor.stationId === "scout");
+      const flexfactor = descriptors.find(
+        (descriptor) => descriptor.stationId === "flexfactor",
+      );
+      const directedScript = "C:\\Users\\firer\\flexfactor\\flexfactor_run.py";
+      expect(scout?.destination).toBe(directedScript);
+      expect(flexfactor?.destination).toBe(directedScript);
+
+      await adapters.execute(project, "scout");
+      expect(receivedArgs[0]).toBe(directedScript);
+    } finally {
+      if (previousScript === undefined)
+        delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
+      else process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT = previousScript;
+    }
+  });
+
   it("turns an Obsidian note into a versioned project constitution", async () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
