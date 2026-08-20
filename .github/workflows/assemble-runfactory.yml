@@ -1,0 +1,30 @@
+name: assemble-runfactory
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/directed-work-theme]
+    paths:
+      - ".pr-parts/runFactory.part*.ts"
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble and commit runFactory.ts
+        run: |
+          set -euo pipefail
+          test -f .pr-parts/runFactory.part0.ts
+          cat .pr-parts/runFactory.part*.ts > src/server/orchestrator/runFactory.ts
+          wc -l src/server/orchestrator/runFactory.ts
+          git config user.name "buckeye7066"
+          git config user.email "buckeye7066@users.noreply.github.com"
+          git add src/server/orchestrator/runFactory.ts
+          git rm -r .pr-parts || true
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+          git commit -m "Bind WorkTheme at run entry points so multi-model calls share one issue"
+          git push
