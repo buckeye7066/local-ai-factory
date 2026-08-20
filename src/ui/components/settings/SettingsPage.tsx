@@ -240,18 +240,29 @@ export function SettingsPage({ health }: { health: Health | null }) {
                 value={health ? String(health.maxModelCallsPerRun) : DASH}
               />
 
-              {/* Execution row — Factory Deck always does real work (dry-run removed). */}
+              {/* Execution row. There is no dry-run mode, but there IS a script
+                  gate: commandRunner refuses every allowlisted command —
+                  installs, builds and tests alike — unless
+                  ALLOW_UNTRUSTED_SCRIPTS is on, and the server default is OFF.
+                  This badge used to read LIVE whenever the health report
+                  loaded, which told the owner the deck executes what it writes
+                  on exactly the configuration where it cannot. */}
               <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
                 <span className="text-xs text-slate-400">Command execution</span>
-                {!health ? (
+                {!health || health.allowUntrustedScripts === undefined ? (
                   <Badge tone="neutral">{DASH}</Badge>
-                ) : (
+                ) : health.allowUntrustedScripts ? (
                   <Badge
                     tone="emerald"
                     icon={<ShieldCheck className="h-3 w-3" />}
                     className="text-right"
                   >
                     LIVE — allowlisted commands execute in workspaces
+                  </Badge>
+                ) : (
+                  <Badge tone="amber" className="text-right">
+                    BLOCKED — ALLOW_UNTRUSTED_SCRIPTS=0, so installs, builds and
+                    tests are refused
                   </Badge>
                 )}
               </div>

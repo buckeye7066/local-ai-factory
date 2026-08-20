@@ -100,7 +100,8 @@ line run.
   `POST /api/runs/:id/resume`.
 - **Workspaces** — the generated app folders.
 - **Settings** — shows which keys are configured (never the keys themselves),
-  models, limits, and the dry-run flag.
+  models, limits, and whether command execution is live or blocked by the
+  script gate. There is no dry-run flag; that mode was removed.
 
 ## Run from the CLI
 

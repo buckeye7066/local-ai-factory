@@ -150,12 +150,24 @@ export function TopBar({
           </span>
         </Tooltip>
 
-        {/* Execution badge — Factory Deck always does real work (dry-run removed). */}
-        {health && (
-          <Tooltip content="Allowlisted commands execute for real inside workspaces">
+        {/* Execution badge. There is no dry-run mode, but commandRunner's SCRIPT
+            GATE refuses every allowlisted command unless ALLOW_UNTRUSTED_SCRIPTS
+            is on (server default: OFF), so "Live" is a fact to read, never a
+            constant to print. */}
+        {health && health.allowUntrustedScripts !== undefined && (
+          <Tooltip
+            content={
+              health.allowUntrustedScripts
+                ? "Allowlisted commands execute for real inside workspaces"
+                : "Command execution is disabled (ALLOW_UNTRUSTED_SCRIPTS=0): installs, builds and tests are refused, so a run cannot execute what it writes"
+            }
+          >
             <span>
-              <Badge tone="emerald" icon={<ShieldCheck className="h-3 w-3" />}>
-                Live
+              <Badge
+                tone={health.allowUntrustedScripts ? "emerald" : "amber"}
+                icon={<ShieldCheck className="h-3 w-3" />}
+              >
+                {health.allowUntrustedScripts ? "Live" : "Cmds blocked"}
               </Badge>
             </span>
           </Tooltip>

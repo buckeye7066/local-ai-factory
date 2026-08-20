@@ -12,21 +12,36 @@ const succeeded = (r: ExecResult): boolean => r.code === 0 && !r.spawnError;
  * mile is the intake's own Phase 10: open the PR, let the HOST repo's checks
  * run, merge only when they pass, and report the merged SHA.
  *
- * THE GATE IS EARNED EVIDENCE, NEVER MODEL JUDGMENT — three keys, all hard:
+ * WHEN THIS RUNS (corrected 2026-08-19, after the fast-forward release landed).
+ * `deliverRun` now fast-forwards the repo's default branch onto the run's
+ * branch itself, so on the ordinary path the trunk already carries the work
+ * and there is nothing here to merge — a PR from that branch would be EMPTY.
+ * `runFactory` therefore calls this ONLY when the trunk did not move, which in
+ * practice means a PROTECTED trunk rejected the fast-forward. That is the case
+ * this file exists for: land the same commits through the repo's own required
+ * checks instead of around them.
+ *
+ * Consequence worth stating plainly rather than implying otherwise: the host
+ * repo's CI is the final word on a PROTECTED trunk only. An unprotected trunk
+ * is advanced by `gitOps.releaseToMain` on Factory Deck's own evidence (demo
+ * refusal, grounded QA, executed tests, and the file-digest receipt checked
+ * against the committed tree) without waiting for the host repo's checks.
+ *
+ * THE GATE HERE IS EARNED EVIDENCE, NEVER MODEL JUDGMENT — three keys, all hard:
  *   1. the run's grounded QA passed (every executed verification command
  *      exited 0 — qaGrounding is the authority);
  *   2. tests actually EXECUTED and exited 0 (testStatus === "passing";
  *      "unknown" — nothing ran — can never release);
- *   3. the host repository's OWN CI checks go green on the PR (its branch
- *      protections and suites are the final word, exactly as they are for a
- *      human contributor).
+ *   3. the host repository's OWN CI checks go green on the PR.
  * A run that misses any key still delivers its branch + an OPEN PR with the
  * reason recorded — released is a claim only a merge can make, and the
  * deployed-production claim belongs to the repo's own deploy-from-main
  * automation, which the report names rather than asserts.
  *
- * Release failures NEVER fail the run: the build is delivered either way, and
- * pretending otherwise would lie in both directions.
+ * A held release DOES fail the run (runFactory marks it failed with the
+ * reason). An earlier version of this comment claimed the opposite — "release
+ * failures NEVER fail the run" — which was false the moment the trunk became
+ * part of the definition of delivered.
  */
 
 export interface ReleaseInput {

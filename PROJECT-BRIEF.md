@@ -182,9 +182,17 @@ The failover chain is: free → paid rescue → error. The paid rescue is rate-l
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FACTORY_PAID_RESCUES_PER_HOUR` | 6 | Max paid rescues per hour |
-| `FACTORY_PAID_RESCUES_PER_DAY` | 24 | Max paid rescues per day |
-| `FACTORY_PAID_MAX_USD_PER_DAY` | 2 | Daily USD spending cap (estimate) |
+| `FACTORY_PAID_RESCUES_PER_HOUR` | *unlimited* | Max paid rescues per hour |
+| `FACTORY_PAID_RESCUES_PER_DAY` | *unlimited* | Max paid rescues per day |
+| `FACTORY_PAID_MAX_USD_PER_DAY` | *unlimited* | Daily USD spending cap (estimate) |
+
+**There is no default spend cap.** The 6 / 24 / $2 figures this table used to
+print as defaults were removed from the code on 2026-08-16 (owner: "I don't know
+where the $2 a day cap came from. i never asked for it") — `paidBudget.loadLimits`
+falls back to `Infinity` for all three. The ledger still records every paid call
+so spend can be reported honestly, but nothing is refused unless one of these
+variables is set explicitly. `.env.example` ships the old figures as a suggested
+starting point; copying it is what turns the ceiling on.
 
 ---
 
@@ -340,7 +348,15 @@ ALLOW_UNTRUSTED_SCRIPTS=false     # Disable install/build/test execution in test
 - Command execution uses an allowlist sandbox — only known safe commands are permitted.
 - All model outputs are validated against Zod schemas before use.
 - Workspace files are isolated per run under `WORKSPACE_ROOT/<runId>/`.
-- Git push safety: runs may only push to `factory-deck/*` branches, never to `main`.
+- Git push safety: a run's commit is only ever AUTHORED on its own
+  `factory-deck/*` branch (`gitOps.pushBranch` refuses a protected branch
+  outright). Since 2026-08-19 the trunk is then advanced onto that branch by
+  `gitOps.releaseToMain`, so the finished work does reach `main` — by
+  FAST-FORWARD only, never `--force`, and only after the demo refusal, the
+  verification gate and the file-digest receipt over the committed tree. A
+  rejected fast-forward (a protected trunk) is reported and lands through the
+  repo's own PR gate instead; it is never overridden. This bullet used to read
+  "never to `main`", which stopped being true the day the release step landed.
 
 ---
 

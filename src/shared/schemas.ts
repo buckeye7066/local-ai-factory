@@ -518,6 +518,21 @@ export const RunDestinationSchema = z.object({
   url: z.string().nullable().default(null),
   /** Exact commit whose bytes were covered by the verification receipt. */
   commitSha: z.string().nullable().optional(),
+  /**
+   * True once the run's own branch has actually been published to origin.
+   * Distinguishes "nothing reached the repo at all" from "the branch is
+   * there, only the trunk did not move" — the second is recoverable through
+   * the repo's own PR gate and must not be reported as a dead end.
+   */
+  branchPushed: z.boolean().optional(),
+  /**
+   * True when the trunk itself was fast-forwarded onto the branch, i.e. the
+   * work is on main. When this is true the branch and the trunk are the same
+   * commit, so opening a PR from that branch would be an EMPTY PR — the
+   * gated release step must be skipped rather than attempted and reported as
+   * a failure. Absent/false means the trunk did not move.
+   */
+  releasedToTrunk: z.boolean().optional(),
   deliveredAt: z.number().nullable().default(null),
 });
 export type RunDestination = z.infer<typeof RunDestinationSchema>;
