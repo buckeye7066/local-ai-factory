@@ -26,9 +26,29 @@ export function SafetySettingsPreview({ health }: { health: Health | null }) {
     {
       icon: TerminalSquare,
       label: "Command mode",
-      value: health ? "Live" : "—",
-      hint: "Allowlisted commands actually run inside the workspace — every run is real work.",
-      tone: "safe" as const,
+      // NOT a constant. commandRunner's SCRIPT GATE refuses every allowlisted
+      // command — installs included — unless ALLOW_UNTRUSTED_SCRIPTS is on,
+      // and the server default is OFF. Rendering "Live" regardless told the
+      // owner the build really executes while nothing could run. Tri-state,
+      // because the field is optional on the wire: an older server that does
+      // not report it is UNKNOWN, never quietly rendered as either answer.
+      value:
+        !health || health.allowUntrustedScripts === undefined
+          ? "—"
+          : health.allowUntrustedScripts
+            ? "Live"
+            : "Blocked",
+      hint:
+        !health || health.allowUntrustedScripts === undefined
+          ? "The server did not report whether command execution is enabled."
+          : health.allowUntrustedScripts
+            ? "Allowlisted commands actually run inside the workspace — every run is real work."
+            : "Command execution is DISABLED (ALLOW_UNTRUSTED_SCRIPTS=0): installs, builds and tests are refused, so a run cannot execute what it writes. Set ALLOW_UNTRUSTED_SCRIPTS=1 to let them run.",
+      tone: (health?.allowUntrustedScripts === false
+        ? "warn"
+        : health?.allowUntrustedScripts === true
+          ? "safe"
+          : "neutral") as "safe" | "warn" | "neutral",
     },
   ];
 
@@ -47,7 +67,9 @@ export function SafetySettingsPreview({ health }: { health: Health | null }) {
                 "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px]",
                 it.tone === "safe"
                   ? "border-aurora-emerald/25 bg-aurora-emerald/10 text-aurora-emerald"
-                  : "border-white/10 bg-white/[0.04] text-slate-300",
+                  : it.tone === "warn"
+                    ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
+                    : "border-white/10 bg-white/[0.04] text-slate-300",
               )}
             >
               <Icon className="h-3.5 w-3.5" />

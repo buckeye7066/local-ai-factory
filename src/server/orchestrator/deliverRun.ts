@@ -437,6 +437,12 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
       // it is not on the trunk, so it is NOT in production. Reporting this as
       // "delivered" would be the silent half-success this deck exists to
       // prevent. It is a failure with the recovery path spelled out.
+      //
+      // `branchPushed: true` is what tells the caller the difference between
+      // "nothing reached the repo" and "only the trunk did not move". The
+      // second is exactly what a PROTECTED trunk looks like, and the repo's
+      // own PR gate is the correct recovery for it — see runFactory, which
+      // routes this case to releaseRun instead of stopping here.
       return {
         ...dest,
         branch,
@@ -445,6 +451,8 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
           `${verifiedCommit.detail} ${pushed.detail} NOT RELEASED: ${released.detail}`,
         url: compareUrlFor(remote, branch),
         commitSha: verifiedCommit.sha,
+        branchPushed: true,
+        releasedToTrunk: false,
         deliveredAt: now,
       };
     }
@@ -457,6 +465,10 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
         (released.trunk ? branchUrlFor(remote, released.trunk) : null) ??
         compareUrlFor(remote, branch),
       commitSha: verifiedCommit.sha,
+      branchPushed: true,
+      // The trunk now POINTS AT this branch. Anything downstream that would
+      // open a PR from it would be opening an empty one.
+      releasedToTrunk: true,
       deliveredAt: now,
     };
   } catch (err) {

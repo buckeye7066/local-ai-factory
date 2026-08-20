@@ -110,6 +110,7 @@ import { ingestAdditionalSource } from "./ingestAdditionalSource.js";
 import { researchAgent } from "../agents/researchAgent.js";
 import { deliverRun, planDestination } from "./deliverRun.js";
 import { releaseRun, isPaperOnlyDelivery } from "./releaseRun.js";
+import { planRelease } from "./releasePlan.js";
 import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
@@ -2076,14 +2077,20 @@ async function executeRun(
         detail: delivered.target,
       });
 
-      const deliveryRequired =
-        !run.demo &&
-        delivered.kind !== "workspace-only" &&
-        !(
-          delivered.kind === "existing-repo" &&
-          checkpoint.options.pushToOrigin === false
-        );
-      if (deliveryRequired && delivered.status !== "delivered") {
+      /* ONE decision, in one place (see releasePlan.ts): the fast-forward
+       * release inside deliverRun and the PR/host-CI release below are two
+       * mechanisms for the same job, and running both on the same run made a
+       * successful run report FAILED (an empty PR) while a PROTECTED trunk
+       * never reached the PR recovery at all. */
+      const releaseStep = planRelease({
+        destination: delivered,
+        demo: run.demo || checkpoint.options.demo === true,
+        pushToOrigin: checkpoint.options.pushToOrigin,
+        releaseToMainEnabled: process.env.FACTORY_RELEASE_TO_MAIN !== "0",
+      });
+      const trunkAlreadyReleased = releaseStep === "already-on-trunk";
+
+      if (releaseStep === "fail-delivery") {
         run.status = "failed";
         run.resumable = false;
         run.error = redactSecrets(
@@ -2095,20 +2102,41 @@ async function executeRun(
         return;
       }
 
+      if (trunkAlreadyReleased) {
+        // Record the release honestly from the evidence delivery already has:
+        // the trunk fast-forwarded onto the exact verified commit. No PR was
+        // opened because none was needed.
+        log(
+          "success",
+          `Released: the repo's default branch was fast-forwarded onto ${delivered.branch ?? "the run's branch"} — the work is in production. Production deploys from main pick this up.`,
+        );
+        run.release = {
+          released: true,
+          prUrl: null,
+          mergedSha: delivered.commitSha ?? null,
+          reason: redactSecrets(
+            delivered.detail ??
+              "the repo's default branch was fast-forwarded onto the verified commit",
+          ),
+        };
+        await appendAuditEvent({
+          type: "run.release.merged",
+          runId: run.id,
+          detail: delivered.target,
+        });
+      }
+
       /* Release — finish the job (owner order 2026-08-15): an extend run that
        * EARNED it goes to main, and main is what production deploys. The gate
        * is earned evidence only — grounded QA green, tests executed and
        * passing, and the HOST repo's own CI checks green on the PR (see
        * releaseRun.ts). Anything less leaves the branch + an open PR with the
-       * reason recorded. FACTORY_RELEASE_TO_MAIN=0 opts out. */
-      if (
-        delivered.status === "delivered" &&
-        delivered.kind === "existing-repo" &&
-        delivered.branch &&
-        delivered.commitSha &&
-        checkpoint.options.demo !== true &&
-        process.env.FACTORY_RELEASE_TO_MAIN !== "0"
-      ) {
+       * reason recorded. FACTORY_RELEASE_TO_MAIN=0 opts out.
+       *
+       * Reached now only when the trunk did NOT already move — i.e. this is the
+       * protected-trunk recovery. When the fast-forward succeeded there is
+       * nothing left to release and nothing a PR could contain. */
+      if (releaseStep === "open-pr" && delivered.branch && delivered.commitSha) {
         log(
           "info",
           "Release: opening the PR against main and waiting on the repo's checks…",
@@ -2139,6 +2167,18 @@ async function executeRun(
         );
         run.destination = {
           ...run.destination,
+          // The protected-trunk recovery: delivery reported "failed" because
+          // the fast-forward was rejected, but the repo's own PR gate has now
+          // merged the same commits. The work IS in the repo, so the
+          // destination must say so — leaving it "failed" would under-report a
+          // success just as badly as over-reporting one.
+          status:
+            release.released && run.destination.status === "failed"
+              ? "delivered"
+              : run.destination.status,
+          deliveredAt: release.released
+            ? (run.destination.deliveredAt ?? Date.now())
+            : run.destination.deliveredAt,
           detail: redactSecrets(
             `${run.destination.detail ?? ""} ${
               release.released
