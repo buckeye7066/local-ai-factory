@@ -1,0 +1,9 @@
+{
+  "name": "local-ai-factory",
+  "install": "pnpm install --frozen-lockfile\ntest -f .env || cp .env.example .env",
+  "start": "pnpm dev",
+  "ports": [
+    { "name": "backend api", "port": 5179 },
+    { "name": "factory deck ui", "port": 5190 }
+  ]
+}
