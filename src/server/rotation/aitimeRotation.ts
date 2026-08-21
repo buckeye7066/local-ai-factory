@@ -120,7 +120,22 @@ export interface CatalogRoute {
   backend_label: string;
   model: string;
   wire_model: string;
-  api: "anthropic" | "openai" | "ollama" | "gemini";
+  /**
+   * How the route is CALLED. The first four are HTTP wire shapes AI Time's
+   * catalog emits. The last three are the extended transports contributed
+   * process-locally by a consumer that can build them: two local flat-rate
+   * CLIs (bounded subprocess, prompt over stdin) and Cursor. See
+   * providers/extendedTransports.ts — a route with one of these apis is only
+   * ever admitted when its adapter is provably buildable.
+   */
+  api:
+    | "anthropic"
+    | "openai"
+    | "ollama"
+    | "gemini"
+    | "cursor"
+    | "claude-code"
+    | "codex-cli";
   base_url: string;
   /** The quota ledger this route actually drains. */
   pool: string;

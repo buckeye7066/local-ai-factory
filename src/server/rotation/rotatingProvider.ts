@@ -31,6 +31,14 @@ import {
 import type { FreeProvider } from "../providers/freeProvider.js";
 import { unfitForCodeReason } from "../providers/routeFitness.js";
 import {
+  effectiveHttpRoute,
+  extendedRouteUnusableReason,
+  isCliRoute,
+  isExtendedApi,
+  serveCliRoute,
+  synthesizeExtendedRoutes,
+} from "../providers/extendedTransports.js";
+import {
   Catalog,
   PinUnavailable,
   Rotator,
@@ -121,6 +129,17 @@ async function callRoute(
   input: { system: string; prompt: string; temperature?: number; maxTokens?: number },
   signal: AbortSignal | undefined,
 ): Promise<HttpCallResult> {
+  // Fail closed rather than guessing. The `default:` arm below speaks the
+  // OpenAI wire shape, so an extended-transport route arriving here would be
+  // POSTed as HTTP to a base_url that is empty (CLI) or unresolved (Cursor) —
+  // a wrong call dressed up as a normal one. Callers must dispatch extended
+  // apis before reaching this function.
+  if (isExtendedApi(route.api)) {
+    throw new RouteCallError(
+      `route ${route.id}: api '${route.api}' is an extended transport and must ` +
+        `not be called over plain HTTP`,
+    );
+  }
   const base = route.base_url.replace(/\/+$/, "");
   const maxTokens = input.maxTokens ?? 4096;
   let url: string;
@@ -304,6 +323,12 @@ export function retryAfterOf(err: unknown): number | undefined {
 export function isRetryableAcrossPools(err: unknown): boolean {
   if (err instanceof ProviderAbortError) return false;
   if (err instanceof MissingRouteCredentialError) return true;
+  // A local transport failing (binary gone, non-zero exit, EMPTY output,
+  // timeout) says nothing about the OTHER pools — and the whole point of
+  // failing closed there is that the rotator gets a turn somewhere else
+  // instead of the caller receiving a plausible empty answer.
+  const errName = (err as Error)?.name;
+  if (errName === "CliUnavailable" || errName === "CursorUnavailable") return true;
   // A schema-validation failure on a $0 route is a MODEL limitation, not a
   // caller bug: unlike the paid tier (where isNonRetryable treats ZodError as
   // final to stop re-billing 60k-token prompts), rotating to a different free
@@ -353,11 +378,28 @@ export function filterRoutableCatalog(
   const norm = (u: string) => u.replace(/\/+$/, "").toLowerCase();
   const fcc = fccBaseUrl ? norm(fccBaseUrl) : "";
   const missing = new Set<string>();
+  const extendedDropped: Record<string, number> = {};
   let unfitSkipped = 0;
   const kept = rotator.catalog.routes.filter((r) => {
     if (unfitForCodeReason(r.id) || unfitForCodeReason(r.model)) {
       unfitSkipped += 1;
       return false;
+    }
+    // EXTENDED TRANSPORTS must prove they are BUILDABLE here — importable and
+    // constructible — not merely that a binary exists on PATH. This filter's
+    // entire job is that an unbuildable route never reaches the rotator: one
+    // that does gets selected, fails at call time and burns a cooldown on a
+    // pool that was never broken. `claude` and `codex` are both on PATH on
+    // this machine, so a PATH-only guard would admit routes whose adapter is
+    // missing and turn the first sweep into an error tour.
+    if (isExtendedApi(r.api)) {
+      const why = extendedRouteUnusableReason(r);
+      if (why) {
+        extendedDropped[why] = (extendedDropped[why] ?? 0) + 1;
+        return false;
+      }
+      // A CLI/Cursor route carries no HTTP credential of its own.
+      return true;
     }
     if (r.auth_kind === "none" || !r.auth_env) return true;
     if (fcc && norm(r.base_url) === fcc) return true;
@@ -365,6 +407,42 @@ export function filterRoutableCatalog(
     missing.add(r.auth_env);
     return false;
   });
+
+  // Contribute the extended pools this process can build. AI Time's catalog
+  // does not emit them (its generator only produces openai/anthropic/ollama/
+  // gemini rows), so without this the transports would be code that never
+  // runs. Process-local, exactly like the removals above: nothing is written
+  // back to the shared catalog.
+  const keptFromCatalog = kept.length;
+  const extendedCatalogDropped = Object.values(extendedDropped).reduce(
+    (a, b) => a + b,
+    0,
+  );
+  const synthesized = synthesizeExtendedRoutes();
+  const alreadyPresent = new Set(kept.map((r) => r.id));
+  for (const r of synthesized.routes) {
+    if (!alreadyPresent.has(r.id)) kept.push(r);
+  }
+  if (synthesized.routes.length > 0) {
+    log(
+      "info",
+      `[rotate] ${synthesized.routes.length} extended transport pool(s) added: ` +
+        synthesized.routes.map((r) => `${r.id} (${r.pool})`).join(", "),
+    );
+  }
+  for (const [id, why] of Object.entries(synthesized.skipped)) {
+    extendedDropped[`${id}: ${why}`] = (extendedDropped[`${id}: ${why}`] ?? 0) + 1;
+  }
+  if (Object.keys(extendedDropped).length > 0) {
+    log(
+      "warn",
+      `[rotate] extended transport(s) not admitted: ` +
+        Object.entries(extendedDropped)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([why, n]) => (n > 1 ? `${n}x ${why}` : why))
+          .join("; "),
+    );
+  }
   if (unfitSkipped > 0) {
     log(
       "warn",
@@ -373,7 +451,13 @@ export function filterRoutableCatalog(
     );
   }
   if (missing.size > 0) {
-    const dropped = rotator.catalog.routes.length - kept.length - unfitSkipped;
+    // Counted against what the CATALOG offered, so synthesized additions
+    // cannot mask (or inflate) how many real rows were dropped for credentials.
+    const dropped =
+      rotator.catalog.routes.length -
+      keptFromCatalog -
+      unfitSkipped -
+      extendedCatalogDropped;
     log(
       "warn",
       `[rotate] ${dropped} catalog route(s) skipped: credential env not set in ` +
@@ -558,7 +642,17 @@ export class RotatingProvider implements LLMProvider {
       const result = await fcc.generateText(input);
       return result.text;
     }
-    const { text } = await callRoute(route, input, this.opts.signal);
+    if (isCliRoute(route.api)) {
+      // Bounded local subprocess, prompt over stdin. `input.system` already
+      // carries the DIRECTED WORK THEME (ThemedProvider stamped it upstream),
+      // and the adapter prepends it to the piped body, so a rotated CLI call
+      // attacks the same open issue as every HTTP route.
+      return await serveCliRoute(route, input, this.opts.signal);
+    }
+    // Cursor resolves to a concrete OpenAI-compatible endpoint; everything
+    // else is called exactly as the catalog describes it.
+    const wire = (isExtendedApi(route.api) ? effectiveHttpRoute(route) : null) ?? route;
+    const { text } = await callRoute(wire, input, this.opts.signal);
     return text;
   }
 
