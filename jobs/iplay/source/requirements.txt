@@ -1,0 +1,7 @@
+# Runtime dependencies. FFmpeg/FFprobe 6+ must also be available on PATH.
+librosa>=0.10,<0.12
+numpy>=1.26,<3
+Pillow>=10,<13
+scipy>=1.11,<2
+soundfile>=0.12,<1
+yt-dlp>=2025.1,<2027

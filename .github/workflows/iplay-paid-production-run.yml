@@ -1,0 +1,82 @@
+name: iplay-paid-production-run
+
+on:
+  push:
+    branches: ["agent/iplay-paid-run"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iplay-paid-production-run
+  cancel-in-progress: false
+
+jobs:
+  factory-deck:
+    name: Factory Deck — IPlay paid run
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Factory Deck job
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Factory Deck
+        run: pnpm install --frozen-lockfile
+
+      - name: Confirm paid provider credentials
+        shell: pwsh
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if (-not $env:ANTHROPIC_API_KEY) { throw "ANTHROPIC_API_KEY is not available to this workflow." }
+          if (-not $env:OPENAI_API_KEY) { throw "OPENAI_API_KEY is not available to this workflow." }
+          Write-Host "Both paid provider credentials are available (values not displayed)."
+
+      - name: Run IPlay through Factory Deck
+        shell: pwsh
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          FACTORY_FREE_ENABLED: "0"
+          DEFAULT_CODE_PROVIDER: "anthropic"
+          DEFAULT_REVIEW_PROVIDER: "openai"
+          ALLOW_UNTRUSTED_SCRIPTS: "true"
+          WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
+          FACTORY_RUN_TIMEOUT_MS: "21000000"
+          MAX_MODEL_CALLS_PER_RUN: "60"
+          MAX_REPAIR_LOOPS: "3"
+          FACTORY_PAID_RESCUES_PER_HOUR: "60"
+          FACTORY_PAID_RESCUES_PER_DAY: "60"
+          FACTORY_PAID_MAX_USD_PER_DAY: "35"
+          CI: "true"
+        run: pnpm exec tsx scripts/ci/run-iplay-job.ts
+
+      - name: Preserve Factory Deck evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: iplay-factory-deck-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            jobs/iplay/run-result.json
+            .factory/**
+            workspaces/**
