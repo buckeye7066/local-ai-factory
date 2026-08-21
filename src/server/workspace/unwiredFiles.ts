@@ -50,12 +50,9 @@ function walkSourceFiles(root: string): string[] {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch (error) {
-      throw new Error(
-        `Wiring scan could not read ${dir}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+    } catch {
+      // Unreadable directory (permissions, broken symlink, etc.) — skip and continue.
+      continue;
     }
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -77,13 +74,25 @@ function withoutSourceExtension(path: string): string {
   return path.replace(/\\/g, "/").replace(SOURCE_EXT, "");
 }
 
-function moduleSpecifiers(source: string): string[] {
+function scriptKindForPath(sourcePath: string): ts.ScriptKind {
+  const ext = sourcePath.replace(/^.*\.([^.]+)$/i, "$1").toLowerCase();
+  switch (ext) {
+    case "tsx": return ts.ScriptKind.TSX;
+    case "ts": case "mts": case "cts": return ts.ScriptKind.TS;
+    case "jsx": return ts.ScriptKind.JSX;
+    case "js": case "mjs": case "cjs": return ts.ScriptKind.JS;
+    default: return ts.ScriptKind.TSX;
+  }
+}
+
+function moduleSpecifiers(sourcePath: string, source: string): string[] {
+  const kind = scriptKindForPath(sourcePath);
   const file = ts.createSourceFile(
-    "factory-wiring.tsx",
+    sourcePath,
     source,
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TSX,
+    kind,
   );
   const found = new Set<string>();
   const addLiteral = (node: ts.Expression | undefined) => {
@@ -111,7 +120,7 @@ function moduleSpecifiers(source: string): string[] {
 
 function referencesModule(
   sourcePath: string,
-  source: string,
+  specifiers: string[],
   candidate: string,
 ): boolean {
   const candidateNoExt = withoutSourceExtension(candidate);
@@ -119,7 +128,7 @@ function referencesModule(
     candidateNoExt,
     candidateNoExt.split("/").slice(-2).join("/"),
   ];
-  for (const rawSpecifier of moduleSpecifiers(source)) {
+  for (const rawSpecifier of specifiers) {
     const specifier = withoutSourceExtension(rawSpecifier);
     if (specifier.startsWith(".")) {
       const resolved = posix.normalize(
@@ -220,15 +229,27 @@ export function findUnwiredNewFiles(
     }
   }
 
+  // Pre-parse module specifiers once per file; avoid re-parsing the same source
+  // for every candidate (4000 files × N candidates = tens of thousands of full TS parses).
+  const preExistingSpecifiers = preExistingSources.map(({ path, contents }) => ({
+    path,
+    specifiers: moduleSpecifiers(path, contents),
+  }));
+
   // Seed reachability from real pre-existing code (including host files this
   // run modified), then traverse imports among generated product modules.
   // Only actual module specifiers count: comments, strings, and longer path
   // prefixes cannot certify reachability.
+  const generatedSpecifiers = new Map<string, string[]>();
+  for (const [path, source] of generatedTexts) {
+    generatedSpecifiers.set(path, moduleSpecifiers(path, source));
+  }
+
   const wired = new Set<string>();
   for (const candidate of candidates) {
     if (
-      preExistingSources.some((source) =>
-        referencesModule(source.path, source.contents, candidate),
+      preExistingSpecifiers.some(({ path, specifiers }) =>
+        referencesModule(path, specifiers, candidate),
       )
     ) {
       wired.add(candidate);
@@ -238,12 +259,12 @@ export function findUnwiredNewFiles(
   while (changed) {
     changed = false;
     for (const sourcePath of [...wired]) {
-      const source = generatedTexts.get(sourcePath);
-      if (!source) continue;
+      const specifiers = generatedSpecifiers.get(sourcePath);
+      if (!specifiers) continue;
       for (const candidate of candidates) {
         if (
           !wired.has(candidate) &&
-          referencesModule(sourcePath, source, candidate)
+          referencesModule(sourcePath, specifiers, candidate)
         ) {
           wired.add(candidate);
           changed = true;

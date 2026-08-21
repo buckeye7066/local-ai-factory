@@ -79,6 +79,22 @@ describe("applyEdits", () => {
     expect(out.contents).toContain("'sess'");
     expect(out.contents).toContain("String(u)");
   });
+
+  it("refuses an edit whose replacement closes a comment not opened within it", () => {
+    const src = "const a = 1;\nconst b = 2;\n";
+    // The replacement `*/ ... /*` would close a block comment from before the anchor
+    // and open a new one, commenting out everything that follows.
+    const out = applyEdits(src, [{ find: "const b = 2;", replace: "*/ evil(); /*" }]);
+    expect(out.ok).toBe(false);
+    expect(out.reason).toMatch(/closes a block comment/i);
+  });
+
+  it("allows balanced block-comment delimiters in the correct order", () => {
+    const src = "const a = 1;\nconst b = 2;\n";
+    const out = applyEdits(src, [{ find: "const b = 2;", replace: "/* note */ const b = 3;" }]);
+    expect(out.ok).toBe(true);
+    expect(out.contents).toContain("const b = 3;");
+  });
 });
 
 describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {

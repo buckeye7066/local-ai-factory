@@ -457,7 +457,7 @@ export function assessProtectedHostWrite(
   // generated feature remains unreachable.
   const isRootToolConfig =
     !norm.includes("/") &&
-    (ROOT_CONFIG_RX.test(base) || OTHER_ROOT_CONFIGS_RX.test(base));
+    ROOT_CONFIG_RX.test(base);
   if (!isTracked && SOURCE_RX.test(norm) && !isRootToolConfig) {
     const stem = norm.replace(SOURCE_RX, "");
     const sibling = [...tracked].find(
