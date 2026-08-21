@@ -17,9 +17,13 @@ import type { LLMProvider } from "../../shared/types.js";
 
 describe("usability mandate", () => {
   it("SYSTEM_PREAMBLE carries the owner's user-friendliness directive", () => {
-    expect(SYSTEM_PREAMBLE).toMatch(/USER-FRIENDLINESS IS A TOP PRIORITY/);
-    expect(SYSTEM_PREAMBLE).toMatch(/non-technical everyday user/i);
-    expect(SYSTEM_PREAMBLE).toMatch(/what to do\s*next/i);
+    // SYSTEM_PREAMBLE is a lazily-stamped primitive wrapper (see agents/types.ts):
+    // template interpolation calls toString() so the run's directed WorkTheme is
+    // stamped on. Resolve it the same way the agents do before matching.
+    const preamble = String(SYSTEM_PREAMBLE);
+    expect(preamble).toMatch(/USER-FRIENDLINESS IS A TOP PRIORITY/);
+    expect(preamble).toMatch(/non-technical everyday user/i);
+    expect(preamble).toMatch(/what to do\s*next/i);
   });
 
   it("every pipeline agent embeds SYSTEM_PREAMBLE (totality — new agents included)", () => {
