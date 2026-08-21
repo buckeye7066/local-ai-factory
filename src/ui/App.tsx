@@ -29,6 +29,7 @@ import { EmptyState } from "./components/ui/EmptyState.js";
 import { routeTransition } from "./lib/motion.js";
 import { useClipboard } from "./lib/useClipboard.js";
 import { api, useHealth, useRunPolling } from "./lib/api.js";
+import type { EpicSummary } from "./lib/api.js";
 import { useTheme } from "./lib/useTheme.js";
 import { runIsReady } from "./lib/runOutcome.js";
 import type { RunOptions, RunSummary, FileContent } from "../shared/schemas.js";
@@ -67,6 +68,7 @@ export function App() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [epics, setEpics] = useState<EpicSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [files, setFiles] = useState<FileContent[]>([]);
 
@@ -80,6 +82,18 @@ export function App() {
       const { runs: list } = await api.listRuns();
       setRuns(list);
       setRunsLoading(false);
+      // Epics are fetched on the SAME tick, and a failure here must not make
+      // the runs list look offline: a large evolution lives in /api/epics and
+      // only becomes a /api/runs record once a slice actually starts, so an
+      // epic that is planning, paused, or holding pending slices has no run
+      // to represent it. Losing epics is a missing panel; losing runs is a
+      // dead UI, so they get different failure handling.
+      try {
+        const { epics: list2 } = await api.listEpics();
+        setEpics(list2);
+      } catch {
+        /* leave the last known epics on screen */
+      }
       return true;
     } catch {
       /* backend offline — keep what we have and let the poll retry */
@@ -158,10 +172,9 @@ export function App() {
           });
         } else {
           toast.warning("Run finished without a verified ready outcome", {
-            description:
-              run.demo
-                ? "This was a simulation; mock output is never delivered."
-                : "Open the run for its delivery and verification status.",
+            description: run.demo
+              ? "This was a simulation; mock output is never delivered."
+              : "Open the run for its delivery and verification status.",
           });
         }
         refreshRuns();
@@ -293,41 +306,45 @@ export function App() {
               every other tab stay usable, and it is keyed by view so simply
               navigating away clears a crashed panel. */}
           <ErrorBoundary label={viewLabel(view)} resetKey={view}>
-          {view === "foundry" && <FoundryFloor />}
+            {view === "foundry" && <FoundryFloor />}
 
-          {view === "new" && (
-            <NewRunHero health={health} starting={starting} onStart={startRun} />
-          )}
+            {view === "new" && (
+              <NewRunHero health={health} starting={starting} onStart={startRun} />
+            )}
 
-          {view === "history" && (
-            <RunHistory
-              runs={runs}
-              loading={runsLoading}
-              onOpen={openRun}
-              onContinue={continueRun}
-              onDelete={deleteRunById}
-              onDeleteFinished={deleteFinishedRuns}
-            />
-          )}
+            {view === "history" && <EvolutionsPanel epics={epics} onOpen={openRun} />}
 
-          {view === "workspaces" && (
-            <WorkspacesView runs={runs} loading={runsLoading} onOpen={openRun} />
-          )}
+            {view === "history" && (
+              <RunHistory
+                runs={runs}
+                loading={runsLoading}
+                onOpen={openRun}
+                onContinue={continueRun}
+                onDelete={deleteRunById}
+                onDeleteFinished={deleteFinishedRuns}
+              />
+            )}
 
-          {view === "settings" && <SettingsPage health={health} />}
+            {view === "workspaces" && (
+              <WorkspacesView runs={runs} loading={runsLoading} onOpen={openRun} />
+            )}
 
-          {view === "run" && run && (
-            <RunDetail
-              run={run}
-              files={files}
-              onNewRun={() => setView("new")}
-              refreshRun={refreshRun}
-            />
-          )}
+            {view === "settings" && <SettingsPage health={health} />}
 
-          {view === "run" && !run && (
-            <div className="py-20 text-center text-sm text-slate-400">Loading run…</div>
-          )}
+            {view === "run" && run && (
+              <RunDetail
+                run={run}
+                files={files}
+                onNewRun={() => setView("new")}
+                refreshRun={refreshRun}
+              />
+            )}
+
+            {view === "run" && !run && (
+              <div className="py-20 text-center text-sm text-slate-400">
+                Loading run…
+              </div>
+            )}
           </ErrorBoundary>
         </motion.div>
       </AnimatePresence>
@@ -484,6 +501,115 @@ function RunDetail({
           onNewRun={onNewRun}
         />
       )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Evolutions (epics)                                                  */
+/* ------------------------------------------------------------------ */
+
+const SLICE_TONE: Record<string, string> = {
+  released: "bg-emerald-500",
+  running: "bg-aurora-cyan animate-pulse",
+  failed: "bg-rose-500",
+  held: "bg-amber-500",
+  pending: "bg-white/15",
+};
+
+/**
+ * Large evolutions, which the deck could start and never show.
+ *
+ * `createEpic` shipped with no listing counterpart, and the Runs view reads
+ * only `/api/runs` - a record per SLICE RUN. An epic that is planning, paused,
+ * or holding twelve pending slices produces no run at all, so the work was
+ * invisible while the start toast promised its slices would "appear in the
+ * runs list". Nothing is hidden here: a paused epic shows WHY, because
+ * `statusReason` is the field the runner is careful never to leave silent.
+ */
+function EvolutionsPanel({
+  epics,
+  onOpen,
+}: {
+  epics: EpicSummary[];
+  onOpen: (runId: string) => void;
+}) {
+  if (!epics.length) return null;
+  const live = [...epics].sort((a, b) => b.updatedAt - a.updatedAt);
+
+  return (
+    <div className="mb-6">
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-lg font-semibold tracking-tight">Evolutions</h2>
+        <Badge tone="neutral">{live.length}</Badge>
+      </div>
+      <div className="grid grid-cols-1 gap-3">
+        {live.map((e) => {
+          const done = e.slices.filter((s) => s.status === "released").length;
+          const openRunId =
+            e.slices.find((s) => s.status === "running")?.runId ??
+            e.slices.find((s) => s.runId)?.runId ??
+            null;
+          return (
+            <Card key={e.id}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">
+                    {e.summary || e.idea.slice(0, 120)}
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    {e.slices.length > 0
+                      ? `${done} of ${e.slices.length} slice(s) released`
+                      : "Planning — no slices yet"}
+                  </p>
+                </div>
+                <Badge
+                  tone={
+                    e.status === "failed"
+                      ? "rose"
+                      : e.status === "completed"
+                        ? "emerald"
+                        : e.status === "paused"
+                          ? "amber"
+                          : e.status === "running"
+                            ? "cyan"
+                            : "neutral"
+                  }
+                >
+                  {e.status}
+                </Badge>
+              </div>
+
+              {e.slices.length > 0 && (
+                <div className="mt-3 flex gap-1" aria-hidden>
+                  {e.slices.map((s, i) => (
+                    <span
+                      key={`${e.id}-${i}`}
+                      title={`${s.title} — ${s.status}`}
+                      className={`h-1.5 flex-1 rounded-full ${SLICE_TONE[s.status] ?? "bg-white/15"}`}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {/* A paused or failed epic must say WHY. */}
+              {e.statusReason && (
+                <p className="mt-2 text-xs text-amber-300">{e.statusReason}</p>
+              )}
+
+              {openRunId && (
+                <button
+                  type="button"
+                  onClick={() => onOpen(openRunId)}
+                  className="mt-3 text-xs text-aurora-cyan hover:underline"
+                >
+                  Open the slice that is running
+                </button>
+              )}
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }

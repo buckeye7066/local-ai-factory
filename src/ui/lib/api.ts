@@ -28,9 +28,45 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/**
+ * One slice of a large evolution, as the epic runner records it.
+ * Mirrors EpicSliceStateSchema in src/server/orchestrator/epicRunner.ts.
+ */
+export type EpicSliceSummary = {
+  title: string;
+  status: "pending" | "running" | "released" | "held" | "failed";
+  runId: string | null;
+  prUrl: string | null;
+  detail: string | null;
+};
+
+export type EpicSummary = {
+  id: string;
+  idea: string;
+  summary: string;
+  status: "planning" | "running" | "paused" | "completed" | "failed";
+  /** Why it paused or failed - always named, never silent. */
+  statusReason: string | null;
+  slices: EpicSliceSummary[];
+  currentSlice: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export const api = {
   health: () => jsonFetch<Health>("/api/health"),
   listRuns: () => jsonFetch<{ runs: RunSummary[] }>("/api/runs"),
+  /**
+   * Every large evolution the factory knows about.
+   *
+   * The UI could START an epic and never SHOW one: `createEpic` existed with
+   * no listing counterpart, and the Runs view reads only `/api/runs`, which
+   * holds a record per SLICE RUN. So an epic that is planning, paused, or
+   * holding twelve pending slices was invisible - and the start toast's
+   * promise that slices "appear in the runs list" was a promise the code did
+   * not keep. `/api/epics` has always served this; nothing called it.
+   */
+  listEpics: () => jsonFetch<{ epics: EpicSummary[] }>("/api/epics"),
   getRun: (id: string) => jsonFetch<RunRecord>(`/api/runs/${id}`),
   getFiles: (id: string) =>
     jsonFetch<{ files: FileContent[] }>(`/api/runs/${id}/files`),
