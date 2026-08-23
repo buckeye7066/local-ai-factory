@@ -480,6 +480,51 @@ describe("filterRoutableCatalog — process-local credential filtering", () => {
     expect(filtered!.catalog.routes).toHaveLength(1);
   });
 
+  it("hydrates MISSING credentials from the FCC env file, never overwriting live env", () => {
+    // This machine keeps the free-cloud keys in ~/.fcc/.env, not in the
+    // process env of a launcher-started deck. A 2026-08-23 live run dropped
+    // 513 routes as "credential env not set" for exactly that reason.
+    const fccHome = fs.mkdtempSync(path.join(os.tmpdir(), "fcc-home-"));
+    fs.writeFileSync(
+      path.join(fccHome, ".env"),
+      [
+        "# provisioned for the proxy",
+        "TEST_FCC_ONLY_KEY=\"from-fcc-file\"",
+        "TEST_ALREADY_SET_KEY=should-not-win",
+        "TEST_BLANK_IN_FILE=",
+        "",
+      ].join("\n"),
+    );
+    vi.stubEnv("FCC_HOME", fccHome);
+    vi.stubEnv("TEST_ALREADY_SET_KEY", "live-env-wins");
+    vi.stubEnv("TEST_FCC_ONLY_KEY", "");
+    vi.stubEnv("TEST_BLANK_IN_FILE", "");
+    writeCatalog([
+      row("aaa/one", { pool: "pool-a", auth_env: "TEST_FCC_ONLY_KEY" }),
+      row("bbb/one", { pool: "pool-b", auth_env: "TEST_ALREADY_SET_KEY" }),
+      row("ccc/one", { pool: "pool-c", auth_env: "TEST_BLANK_IN_FILE" }),
+    ]);
+    const lines: string[] = [];
+    const filtered = filterRoutableCatalog(
+      buildRotator("factory-deck")!,
+      FCC_URL,
+      (_k, m) => lines.push(m),
+    );
+    expect(filtered!.catalog.routes.map((r) => r.id).sort()).toEqual([
+      "aaa/one",
+      "bbb/one",
+    ]);
+    expect(process.env.TEST_FCC_ONLY_KEY).toBe("from-fcc-file");
+    expect(process.env.TEST_ALREADY_SET_KEY).toBe("live-env-wins");
+    // Names are announced; the VALUE never reaches a log line.
+    const joined = lines.join("\n");
+    expect(joined).toMatch(/credentials loaded from .*TEST_FCC_ONLY_KEY/);
+    expect(joined).not.toMatch(/from-fcc-file/);
+    // A key blank in the file is still reported as missing, loudly.
+    expect(joined).toMatch(/TEST_BLANK_IN_FILE/);
+    fs.rmSync(fccHome, { recursive: true, force: true });
+  });
+
   it("returns null loudly when nothing callable remains", () => {
     writeCatalog([
       row("aaa/one", { pool: "pool-a", auth_env: "NO_SUCH_KEY_EVER_SET" }),

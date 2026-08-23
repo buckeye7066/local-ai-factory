@@ -17,6 +17,9 @@
  * applies unchanged. Reaching around the proxy to api.anthropic.com would
  * convert flat-rate work into metered billing.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   CallIntent,
   LLMProvider,
@@ -451,6 +454,66 @@ export function isRetryableAcrossPools(err: unknown): boolean {
  * Returns null when nothing callable remains, with the reason logged by the
  * caller. Never a silent no-op.
  */
+/**
+ * Where this machine's provider keys actually live. Groq / Cerebras / Gemini /
+ * OpenRouter / NVIDIA NIM credentials are provisioned for the FCC proxy in its
+ * env file, NOT as persisted user environment variables (measured 2026-08-23:
+ * all five exist in ~/.fcc/.env, none in user/machine/process env of a deck
+ * started by scripts/start-factory.ps1). Without hydration the launcher-started
+ * deck dropped 513 of ~650 catalog routes as "credential env not set" and
+ * rotated only the local ollama pool — the 100x-faster free cloud routes that
+ * the rotation contract exists for never engaged. FlexFactor already hydrates
+ * the same way (`_hydrate_route_credentials`); this closes the parity drift.
+ */
+export function fccEnvFile(): string {
+  const fccHome = process.env.FCC_HOME?.trim() || path.join(os.homedir(), ".fcc");
+  return path.join(fccHome, ".env");
+}
+
+/**
+ * Fill MISSING catalog auth_env vars from the FCC env file, read-only.
+ *
+ * Never overwrites a variable that is already set (the live environment is
+ * authoritative). An empty-string value counts as unset, matching the
+ * `process.env[r.auth_env]` truthiness test below. Values are never logged;
+ * the returned NAMES are what the caller says out loud.
+ */
+export function hydrateRouteCredentials(
+  routes: readonly CatalogRoute[],
+  file: string = fccEnvFile(),
+): string[] {
+  const wanted = new Set<string>();
+  for (const r of routes) {
+    if (r.auth_env && !process.env[r.auth_env]) wanted.add(r.auth_env);
+  }
+  if (wanted.size === 0) return [];
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf-8");
+  } catch {
+    return [];
+  }
+  const loaded: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || !line.includes("=")) continue;
+    const eq = line.indexOf("=");
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (wanted.has(key) && value && !process.env[key]) {
+      process.env[key] = value;
+      loaded.push(key);
+    }
+  }
+  return loaded.sort();
+}
+
 export function filterRoutableCatalog(
   rotator: Rotator,
   fccBaseUrl: string,
@@ -460,6 +523,14 @@ export function filterRoutableCatalog(
   const fcc = fccBaseUrl ? norm(fccBaseUrl) : "";
   const missing = new Set<string>();
   const extendedDropped: Record<string, number> = {};
+
+  const hydrated = hydrateRouteCredentials(rotator.catalog.routes);
+  if (hydrated.length) {
+    log(
+      "info",
+      `[rotate] credentials loaded from ${fccEnvFile()}: ${hydrated.join(", ")}`,
+    );
+  }
 
   // A DELIBERATE pin outranks the slow-route exclusion. Without this, pinning
   // Glimmer would drop it here and then fail in resolvePin with "matches no
