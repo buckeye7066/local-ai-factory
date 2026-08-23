@@ -166,10 +166,12 @@ export function rotationExcludedReason(modelOrRouteId: string): string {
         if (entry.rotation_eligible) return "";
         return `excluded from rotation (battery: ${entry.exclusion_reason || "failed"})`;
       }
-      if (entry.answered === false) {
-        return `excluded from rotation (measured: produced no answer${
-          entry.reasoning_only ? " - reasoning-only reply" : ""
-        })`;
+      // The speed prompt allows 48 tokens; a thinking model spends all of
+      // them reasoning, which says nothing about whether it answers -- the
+      // battery decides that (rotation_eligible above). Only a TRULY empty
+      // reply (no answer, no reasoning) is evidence here.
+      if (entry.answered === false && !entry.reasoning_only) {
+        return "excluded from rotation (measured: produced no answer at all)";
       }
       const rate = entry.gen_tok_per_s;
       if (typeof rate === "number" && rate < bench!.floor) {

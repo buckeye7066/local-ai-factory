@@ -196,9 +196,16 @@ describe("the local gate is a measurement when local-bench.json exists", () => {
     expect(keptIds()).toContain("ollama/muse-glimmer:30b");
   });
 
-  it("a reasoning-only reply is held out regardless of rate", () => {
+  it("a reasoning-only speed prompt is NOT a no-answer; the battery decides that", () => {
     writeBench([
       { tag: "qwen3-coder:30b", ok: true, gen_tok_per_s: 30, answered: false, reasoning_only: true },
+    ]);
+    expect(keptIds()).toContain("ollama/qwen3-coder:30b");
+  });
+
+  it("a truly empty reply is held out regardless of rate", () => {
+    writeBench([
+      { tag: "qwen3-coder:30b", ok: true, gen_tok_per_s: 30, answered: false, reasoning_only: false },
     ]);
     expect(keptIds()).not.toContain("ollama/qwen3-coder:30b");
   });
