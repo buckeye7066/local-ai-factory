@@ -181,12 +181,34 @@ async function callRoute(
       };
       break;
     }
-    case "ollama":
+    case "ollama": {
+      // NATIVE endpoint, not the OpenAI-compatible /v1. Measured 2026-08-23:
+      // /v1 ignores `think:false` (deepseek-r1:8b still reasoned to
+      // finish=length with empty content), while /api/chat honours it -- and
+      // on this CPU-only box that is the difference between gemma4:26b never
+      // finishing a planted off-by-one in 551 s of reasoning and fixing it in
+      // 7 s. Local thinking models are therefore called with the reasoning
+      // channel OFF in rotation (FACTORY_OLLAMA_THINK=1 restores it); cloud
+      // routes are fast enough to keep thinking and are untouched.
+      url = `${base.replace(/\/v1$/, "")}/api/chat`;
+      body = {
+        model: route.wire_model,
+        stream: false,
+        think: process.env.FACTORY_OLLAMA_THINK === "1",
+        messages: [
+          { role: "system", content: input.system },
+          { role: "user", content: input.prompt },
+        ],
+        options: {
+          num_predict: maxTokens,
+          ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+        },
+      };
+      break;
+    }
     case "openai":
     default: {
-      // Ollama serves an OpenAI-compatible endpoint under /v1.
-      const root = route.api === "ollama" && !/\/v1$/.test(base) ? `${base}/v1` : base;
-      url = `${root}/chat/completions`;
+      url = `${base}/chat/completions`;
       body = {
         model: route.wire_model,
         max_tokens: maxTokens,
@@ -255,6 +277,21 @@ async function callRoute(
         b["type"] === "text" && typeof b["text"] === "string" ? b["text"] : "",
       )
       .join("");
+  } else if (route.api === "ollama") {
+    // Native /api/chat shape: { message: { content, thinking? }, done_reason }.
+    const message = doc["message"] as Record<string, unknown> | undefined;
+    text = typeof message?.["content"] === "string" ? (message["content"] as string) : "";
+    const thinking =
+      typeof message?.["thinking"] === "string" ? (message["thinking"] as string) : "";
+    if (!text.trim() && thinking.trim()) {
+      throw new RouteCallError(
+        `route ${route.id} spent its whole token budget reasoning and never ` +
+          `answered (done_reason=${String(doc["done_reason"])}, ${thinking.length} ` +
+          `chars of reasoning) -- raise maxTokens or shorten the prompt; this is a ` +
+          `budget timeout, not an empty completion`,
+        res.status,
+      );
+    }
   } else {
     const choices = (doc["choices"] as Array<Record<string, unknown>>) ?? [];
     const message = choices[0]?.["message"] as Record<string, unknown> | undefined;

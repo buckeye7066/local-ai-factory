@@ -111,6 +111,9 @@ interface BenchEntry {
   /** Set by bench_battery.py once the functional tasks have run. */
   rotation_eligible?: boolean;
   exclusion_reason?: string;
+  /** Same, measured with the reasoning channel off (bench_battery --no-think). */
+  rotation_eligible_nothink?: boolean;
+  exclusion_reason_nothink?: string;
 }
 interface BenchTable {
   floor: number;
@@ -171,6 +174,15 @@ export function rotationExcludedReason(modelOrRouteId: string): string {
       // The functional battery (bench_battery.py) is the stronger verdict
       // when it has run: speed AND valid JSON AND a real planted-defect
       // repair AND a real review. Its reason is carried through verbatim.
+      // Local calls run with the reasoning channel OFF (callRoute sends
+      // think:false to /api/chat) unless FACTORY_OLLAMA_THINK=1, so the
+      // no-think battery verdict is the one that matches the call mode.
+      const thinkOn = process.env.FACTORY_OLLAMA_THINK === "1";
+      const useNoThink = !thinkOn && typeof entry.rotation_eligible_nothink === "boolean";
+      if (useNoThink) {
+        if (entry.rotation_eligible_nothink) return "";
+        return `excluded from rotation (battery no-think: ${entry.exclusion_reason_nothink || "failed"})`;
+      }
       if (typeof entry.rotation_eligible === "boolean") {
         if (entry.rotation_eligible) return "";
         return `excluded from rotation (battery: ${entry.exclusion_reason || "failed"})`;

@@ -281,7 +281,9 @@ describe("RotatingProvider", () => {
     expect((init?.headers as Record<string, string>)["x-goog-api-key"]).toBe("g-key");
   });
 
-  it("appends /v1/chat/completions for bare ollama base urls", async () => {
+  it("calls Ollama's NATIVE /api/chat with the reasoning channel off", async () => {
+    // Measured 2026-08-23: /v1 ignores think:false while /api/chat honours it,
+    // and on this CPU that is 551 s of reasoning vs a 7 s fix for gemma4:26b.
     writeCatalog([
       row("ollama/qwen3-coder:30b", {
         pool: "local:ollama",
@@ -290,10 +292,41 @@ describe("RotatingProvider", () => {
         cost_class: "local-unlimited",
       }),
     ]);
-    const fetchFn = stubFetch();
-    await provider().generateText({ system: "s", prompt: "p" });
-    expect(String(fetchFn.mock.calls[0][0])).toBe(
-      "http://127.0.0.1:11434/v1/chat/completions",
+    const fetchFn = stubFetch((url) =>
+      url.endsWith("/api/chat")
+        ? new Response(
+            JSON.stringify({ message: { role: "assistant", content: "native ok" }, done_reason: "stop" }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          )
+        : undefined,
+    );
+    const out = await provider().generateText({ system: "s", prompt: "p" });
+    expect(out.text).toBe("native ok");
+    expect(String(fetchFn.mock.calls[0][0])).toBe("http://127.0.0.1:11434/api/chat");
+    const body = JSON.parse(String((fetchFn.mock.calls[0][1] as RequestInit).body));
+    expect(body.think).toBe(false);
+    expect(body.options.num_predict).toBeGreaterThan(0);
+  });
+
+  it("a reasoning-only native Ollama reply is named as a budget problem", async () => {
+    writeCatalog([
+      row("ollama/gemma4:26b", {
+        pool: "local:ollama",
+        api: "ollama",
+        base_url: "http://127.0.0.1:11434",
+        cost_class: "local-unlimited",
+      }),
+    ]);
+    stubFetch((url) =>
+      url.endsWith("/api/chat")
+        ? new Response(
+            JSON.stringify({ message: { role: "assistant", content: "", thinking: "hmm..." }, done_reason: "length" }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          )
+        : undefined,
+    );
+    await expect(provider().generateText({ system: "s", prompt: "p" })).rejects.toThrow(
+      /reasoning/,
     );
   });
 
