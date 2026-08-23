@@ -107,6 +107,16 @@ const SIGNATURES: ReadonlyArray<{
   },
 ];
 
+/** The environment signature matching one piece of text, if any (error ledger). */
+export function matchEnvironmentSignature(
+  text: string,
+): { signature: string; remedy: string } | null {
+  for (const { signature, pattern, remedy } of SIGNATURES) {
+    if (pattern.test(text)) return { signature, remedy };
+  }
+  return null;
+}
+
 /**
  * Classify the FIRST environment-class failure found in the executed
  * evidence, or null when every failure looks repairable-by-files. Only

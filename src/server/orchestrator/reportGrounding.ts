@@ -35,6 +35,8 @@ export interface GroundReportInput {
   /** Test files WRITTEN BY THIS RUN that the executed output never mentioned
    *  (see relevantTestStatus). Named here so the gap can never be silent. */
   uncoveredTestFiles?: string[];
+  /** Rendered error-ledger lines (errorLedger.ts) — the report's "Errors" section. */
+  errors?: string[];
 }
 
 /**
@@ -128,5 +130,7 @@ export function groundFinalReport(input: GroundReportInput): FinalReport {
     whatWasBuilt,
     // Grounded caveats come FIRST so they cannot be buried under model prose.
     caveats: [...caveats, ...(report.caveats ?? []).map(defang)],
+    // The "Errors" section is the ledger, verbatim — never model prose.
+    errors: [...(input.errors ?? [])],
   };
 }

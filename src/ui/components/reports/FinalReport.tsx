@@ -156,6 +156,11 @@ function buildSummaryText(report: FinalReportType): string {
     "",
     "## Caveats",
     caveats,
+    "",
+    "## Errors",
+    (report.errors ?? []).length > 0
+      ? (report.errors ?? []).map((e) => `  - ${e}`).join("\n")
+      : "  - None recorded",
   ].join("\n");
 }
 
@@ -284,6 +289,17 @@ export function FinalReport({
               icon={<AlertTriangle className="h-4 w-4 text-amber-300" />}
             />
             <BulletList items={report.caveats} empty="None noted." />
+          </Card>
+        </motion.div>
+
+        {/* Error ledger: every error the run hit, with the code and a fix */}
+        <motion.div {...sectionProps}>
+          <Card className="h-full">
+            <CardHeader
+              title="Errors"
+              icon={<AlertTriangle className="h-4 w-4 text-rose-300" />}
+            />
+            <BulletList items={report.errors ?? []} empty="None recorded." />
           </Card>
         </motion.div>
 

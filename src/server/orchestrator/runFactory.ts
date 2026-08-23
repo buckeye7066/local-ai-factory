@@ -92,6 +92,7 @@ import {
 } from "./acceptanceGate.js";
 import { parseDirectTestEvidence } from "./directTestEvidence.js";
 import { groundFinalReport } from "./reportGrounding.js";
+import { ErrorLedger, renderErrorLines } from "./errorLedger.js";
 import {
   foldTestExit,
   freshTestVerdict,
@@ -394,6 +395,7 @@ function createRecord(args: StartRunArgs): RunRecord {
       totalCalls: 0,
     },
     finalReport: null,
+    errorLedger: [],
     appName: null,
     workspacePath: null,
     // Filled in at intake (extend) or at workspace creation (new) — BEFORE any
@@ -427,15 +429,35 @@ function controller(run: RunRecord) {
     touch();
     await saveRun(run);
   };
+  // ERROR LEDGER (owner requirement 2026-08-23): every error-shaped log line
+  // is also recorded as a ledger entry on the run record itself, so the owner
+  // can read what went wrong from /api/runs/<id> without watching logs. The
+  // ledger shares the record's array, so a resumed run keeps its history.
+  if (!Array.isArray(run.errorLedger)) run.errorLedger = [];
+  const ledger = new ErrorLedger(run.id, run.errorLedger);
+  // A run resumed from a record written before the ledger existed still gets
+  // its history: replay the persisted log lines once.
+  if (ledger.entries.length === 0) {
+    for (const line of run.logs) {
+      if (!/^Run failed:/.test(line.message) && ErrorLedger.isErrorLogLine(line.kind, line.message)) {
+        ledger.record({ stage: line.stage, message: line.message });
+      }
+    }
+  }
   const log = (
     kind: LogKind,
     message: string,
     stage: StageId | null = run.currentStage,
   ) => {
     run.logs.push(makeLog(kind, message, stage));
+    // "Run failed:" lines are recorded explicitly by the failure handler,
+    // together with the thrown error's stack (the deck file:line).
+    if (!/^Run failed:/.test(message) && ErrorLedger.isErrorLogLine(kind, message)) {
+      ledger.record({ stage, message });
+    }
     touch();
   };
-  return { touch, flush, log };
+  return { touch, flush, log, ledger };
 }
 
 function throwIfTimedOut(deadline: number | null, limitMs: number): void {
@@ -477,7 +499,7 @@ async function executeRun(
   restored?: FactoryCheckpoint,
 ): Promise<void> {
   const { config, secrets } = args;
-  const { flush, log } = controller(run);
+  const { flush, log, ledger } = controller(run);
   let checkpoint: FactoryCheckpoint = restored ?? {
     schemaVersion: 3,
     runId: run.id,
@@ -915,6 +937,16 @@ async function executeRun(
     const path = await writeAttribution(attr);
     run.attribution = attr;
     log("info", `Attribution written: ${path}`);
+    // The error ledger is mirrored to disk and announced ONCE at run end, on
+    // every terminal path (completed / failed / cancelled / timed out).
+    try {
+      ledger.writeFile();
+    } catch (err) {
+      log("warning", `Error ledger could not be written: ${String((err as Error)?.message ?? err)}`);
+    }
+    const errorsLine = ledger.summaryLine();
+    log("info", errorsLine);
+    console.log(`[run ${run.id.slice(0, 8)}] ${errorsLine}`);
     await appendAuditEvent({
       type: "attribution.written",
       runId: run.id,
@@ -2083,6 +2115,25 @@ async function executeRun(
       // ...and then ENFORCE it. An instruction in a prompt is not a guarantee:
       // the same grounding rule QA verdicts follow is applied to the report's
       // prose deterministically.
+      // ERROR LEDGER: executed failures are program-side errors with a named
+      // command/exit code; anything the signature table could not explain gets
+      // ONE bounded model triage call, labelled unverified.
+      for (const r of verification.executed) {
+        if (r.exitCode === 0 || r.exitCode === null) continue;
+        ledger.record({
+          stage: "qa_critic",
+          message: `\`${r.command}\` exited ${r.exitCode}: ${String(r.outputTail ?? "").slice(-600)}`,
+          command: r.command,
+          exitCode: r.exitCode,
+        });
+      }
+      if (ledger.unresolved().length > 0 && !run.demo) {
+        try {
+          await ledger.suggestWithModel(review);
+        } catch {
+          // A triage failure must never fail the run; entries stay "no suggestion".
+        }
+      }
       report = groundFinalReport({
         report,
         evidence: verification,
@@ -2090,6 +2141,7 @@ async function executeRun(
         writtenFiles: [...files.keys()],
         refusals: writeRefusals,
         uncoveredTestFiles: testRelevance.uncoveredTestFiles,
+        errors: renderErrorLines(ledger.entries),
       });
       // SCAFFOLDING HONESTY (extend runs). Three consecutive GrantFlow
       // deliveries generated pages/modules that NOTHING pre-existing imports —
@@ -2541,6 +2593,7 @@ async function executeRun(
       run.resumable = true;
       run.error = err.message;
       if (run.currentStage) finishStage(run, run.currentStage, "failed");
+      ledger.record({ stage: run.currentStage, message: `Run failed: ${run.error}`, error: err });
       log("error", `Run failed: ${run.error}`);
       const ev = await appendAuditEvent({
         type: "run.timeout",
@@ -2553,6 +2606,7 @@ async function executeRun(
       run.resumable = true;
       run.error = err.message;
       if (run.currentStage) finishStage(run, run.currentStage, "failed");
+      ledger.record({ stage: run.currentStage, message: `Run failed: ${run.error}`, error: err });
       log("error", `Run failed: ${run.error}`);
       const ev = await appendAuditEvent({
         type: "run.budget_exhausted",
@@ -2567,6 +2621,7 @@ async function executeRun(
       // secret-shaped value — redact before it is persisted and served by the API.
       run.error = redactSecrets(err instanceof Error ? err.message : "Unknown error");
       if (run.currentStage) finishStage(run, run.currentStage, "failed");
+      ledger.record({ stage: run.currentStage, message: `Run failed: ${run.error}`, error: err });
       log("error", `Run failed: ${run.error}`);
       const ev = await appendAuditEvent({
         type: "run.failed",

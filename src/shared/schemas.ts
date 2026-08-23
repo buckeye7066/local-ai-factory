@@ -407,6 +407,47 @@ export const RepairResultSchema = z.object({
 });
 export type RepairResult = z.infer<typeof RepairResultSchema>;
 
+/* ------------------------------------------------------------------ */
+/* Error ledger (owner requirement 2026-08-23)                         */
+/* ------------------------------------------------------------------ */
+
+export const ErrorClassificationSchema = z.enum([
+  "deck-defect",
+  "program-defect",
+  "environment",
+  "provider",
+  "budget",
+]);
+export type ErrorClassification = z.infer<typeof ErrorClassificationSchema>;
+
+/**
+ * One error the run hit: when (stage), what (message), which code (deck
+ * file:line + source line, program file, or route id), how it is classified,
+ * and the suggested fix with its provenance. `suggestionSource: "model"`
+ * entries carry the "model suggestion, unverified" label in the text itself.
+ */
+export const ErrorLedgerEntrySchema = z.object({
+  id: z.string(),
+  ts: z.number(),
+  stage: StageIdSchema.nullable().default(null),
+  message: z.string(),
+  code: z.object({
+    kind: z.enum(["deck", "program", "route", "unknown"]).default("unknown"),
+    file: z.string().nullable().default(null),
+    line: z.number().nullable().default(null),
+    sourceLine: z.string().nullable().default(null),
+    route: z.string().nullable().default(null),
+    command: z.string().nullable().default(null),
+    exitCode: z.number().nullable().default(null),
+  }),
+  classification: ErrorClassificationSchema,
+  signature: z.string().nullable().default(null),
+  suggestion: z.string().default(""),
+  suggestionSource: z.enum(["signature", "model", "none"]).default("none"),
+  occurrences: z.number().default(1),
+});
+export type ErrorLedgerEntry = z.infer<typeof ErrorLedgerEntrySchema>;
+
 export const FinalReportSchema = z.object({
   appName: z.string(),
   summary: ReadableStringSchema,
@@ -418,6 +459,8 @@ export const FinalReportSchema = z.object({
   nextImprovements: StringListSchema.default([]),
   workspacePath: z.string(),
   providerUsage: ProviderUsageSchema,
+  /** Rendered error ledger — one readable line per recorded error. */
+  errors: StringListSchema.optional(),
 });
 export type FinalReport = z.infer<typeof FinalReportSchema>;
 
@@ -685,6 +728,8 @@ export const RunRecordSchema = z.object({
   repairLoops: z.number().default(0),
   providerUsage: ProviderUsageSchema,
   finalReport: FinalReportSchema.nullable().default(null),
+  /** Every error the run hit, readable without the logs (see errorLedger.ts). */
+  errorLedger: z.array(ErrorLedgerEntrySchema).optional(),
   appName: z.string().nullable().default(null),
   workspacePath: z.string().nullable().default(null),
   /**

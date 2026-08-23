@@ -710,12 +710,17 @@ export class FoundryAdapters {
       "factory-run.json",
       run,
     );
+    // The run's error ledger (errorLedger.ts) rides the Foundry evidence so
+    // the station shows WHAT failed and the suggested fix, not just "failed".
+    const errorLedger = Array.isArray(run.errorLedger) ? run.errorLedger : [];
     if (run.status !== "completed") {
       return {
         status: "failed",
-        summary: `Factory Deck run ${run.id} ended ${run.status}: ${run.error || "no error detail"}`,
+        summary:
+          `Factory Deck run ${run.id} ended ${run.status}: ${run.error || "no error detail"}` +
+          (errorLedger.length ? ` (${errorLedger.length} error(s) in the run's error ledger)` : ""),
         artifacts: [artifact],
-        evidence: { runId: run.id, status: run.status },
+        evidence: { runId: run.id, status: run.status, errorLedger },
       };
     }
     return {
@@ -731,6 +736,7 @@ export class FoundryAdapters {
         runId: run.id,
         status: run.status,
         destination: run.destination ?? null,
+        errorLedger,
       },
     };
   }
