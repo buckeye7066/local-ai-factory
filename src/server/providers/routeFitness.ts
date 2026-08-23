@@ -99,6 +99,9 @@ interface BenchEntry {
   gen_tok_per_s?: number | null;
   answered?: boolean;
   reasoning_only?: boolean;
+  /** Set by bench_battery.py once the functional tasks have run. */
+  rotation_eligible?: boolean;
+  exclusion_reason?: string;
 }
 interface BenchTable {
   floor: number;
@@ -156,6 +159,13 @@ export function rotationExcludedReason(modelOrRouteId: string): string {
     const bench = localBench();
     const entry = bench?.byTag.get(id.slice("ollama/".length));
     if (entry?.ok) {
+      // The functional battery (bench_battery.py) is the stronger verdict
+      // when it has run: speed AND valid JSON AND a real planted-defect
+      // repair AND a real review. Its reason is carried through verbatim.
+      if (typeof entry.rotation_eligible === "boolean") {
+        if (entry.rotation_eligible) return "";
+        return `excluded from rotation (battery: ${entry.exclusion_reason || "failed"})`;
+      }
       if (entry.answered === false) {
         return `excluded from rotation (measured: produced no answer${
           entry.reasoning_only ? " - reasoning-only reply" : ""

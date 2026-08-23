@@ -213,3 +213,38 @@ describe("the local gate is a measurement when local-bench.json exists", () => {
     expect(keptIds()).toContain("ollama/qwen3-coder:30b");
   });
 });
+
+describe("the functional battery verdict outranks raw speed", () => {
+  function writeBench(models: Array<Record<string, unknown>>): void {
+    fs.writeFileSync(
+      path.join(dir, "local-bench.json"),
+      JSON.stringify({ schema: 1, slow_tok_per_s: 5, models }),
+    );
+  }
+
+  it("a fast model the battery rejected is held out, with the battery's reason", () => {
+    const messages: string[] = [];
+    writeBench([
+      {
+        tag: "qwen3-coder:30b",
+        ok: true,
+        gen_tok_per_s: 40,
+        answered: true,
+        rotation_eligible: false,
+        exclusion_reason: "could not produce valid structured JSON",
+      },
+    ]);
+    const rotator = buildRotator("factory-deck")!;
+    const filtered = filterRoutableCatalog(rotator, FCC_URL, (_k, m) => messages.push(m));
+    expect(filtered!.catalog.routes.map((r) => r.id)).not.toContain("ollama/qwen3-coder:30b");
+    expect(messages.join("\n")).toContain("structured JSON");
+  });
+
+  it("a battery pass admits the route", () => {
+    writeBench([
+      { tag: "muse-glimmer:30b", ok: true, gen_tok_per_s: 9, answered: true,
+        rotation_eligible: true, exclusion_reason: "" },
+    ]);
+    expect(keptIds()).toContain("ollama/muse-glimmer:30b");
+  });
+});
