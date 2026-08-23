@@ -266,4 +266,16 @@ describe("vision models never enter code rotation (parity with flexfactor)", () 
     ]);
     expect(keptIds()).toEqual(["ollama/qwen3-coder:30b"]);
   });
+
+  it("drops deep-research agent products, which reject chat completions outright", () => {
+    // Live 2026-08-23 (IPlay run 751546a5): gemini/deep-research-* answered
+    // every call with HTTP 400 "This model only supports Interactions API."
+    writeCatalog([
+      row("gemini/deep-research-preview-04-2026", { api: "gemini", pool: "gemini:free" }),
+      row("gemini/deep-research-pro-preview-12-2025", { api: "gemini", pool: "gemini:free" }),
+      row("openrouter/perplexity/sonar-deep-research", { pool: "openrouter:free" }),
+      row("gemini/gemini-2.5-flash", { api: "gemini", pool: "gemini:free" }),
+    ]);
+    expect(keptIds()).toEqual(["gemini/gemini-2.5-flash"]);
+  });
 });

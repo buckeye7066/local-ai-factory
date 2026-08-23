@@ -56,6 +56,16 @@ const UNFIT_CODE_PATTERNS: RegExp[] = [
   /\bvision-only\b/i,
   /\bsynthetic-video\b/i,
   /\bai-synthetic-video\b/i,
+  // Agentic "deep research" products are not chat-completion models. Gemini's
+  // deep-research-* routes answer every generateContent call with HTTP 400
+  // "This model only supports Interactions API." (measured live 2026-08-23,
+  // IPlay run 751546a5: two wasted attempts + retry waits in the research
+  // stage), and OpenAI's o*-deep-research / Perplexity sonar-deep-research
+  // are the same product class behind a different wire. They can never author
+  // or review code through this transport, so they are held out exactly like
+  // guard/TTS/vision routes. FlexFactor has the same drift (report, not fix
+  // here).
+  /\bdeep-research\b/i,
 ];
 
 export function unfitForCodeReason(modelOrRouteId: string): string {
