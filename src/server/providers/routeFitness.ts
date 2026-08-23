@@ -29,6 +29,15 @@ const UNFIT_CODE_PATTERNS: RegExp[] = [
   /\btts\b/i,
   /\bwhisper\b/i,
   /\bmoondream\b/i,
+  // Vision models. Parity with flexfactor_directed._UNFIT_CODE_PATTERNS, which
+  // gained these 2026-08-21 after llava:7b was rotated in for code review;
+  // this twin had drifted and kept ollama/llava:7b in the ring (found
+  // 2026-08-23 by the live catalog filter).
+  /\bllava\b/i,
+  /\bbakllava\b/i,
+  /\bminicpm-v\b/i,
+  /qwen[^\s/]*-vl\b/i,
+  /\bpixtral\b/i,
   /\bkosmos\b/i,
   /\bdeplot\b/i,
   /\bvila\b/i,

@@ -255,3 +255,15 @@ describe("the functional battery verdict outranks raw speed", () => {
     expect(keptIds()).toContain("ollama/muse-glimmer:30b");
   });
 });
+
+describe("vision models never enter code rotation (parity with flexfactor)", () => {
+  it("drops llava and its relatives", () => {
+    writeCatalog([
+      row("ollama/llava:7b", { api: "ollama", base_url: "http://127.0.0.1:11434", pool: "local:ollama", cost_class: "local-unlimited" }),
+      row("ollama/bakllava:latest", { api: "ollama", base_url: "http://127.0.0.1:11434", pool: "local:ollama", cost_class: "local-unlimited" }),
+      row("openrouter/qwen/qwen2.5-vl-72b:free", { pool: "openrouter:free" }),
+      row("ollama/qwen3-coder:30b", { api: "ollama", base_url: "http://127.0.0.1:11434", pool: "local:ollama", cost_class: "local-unlimited" }),
+    ]);
+    expect(keptIds()).toEqual(["ollama/qwen3-coder:30b"]);
+  });
+});
