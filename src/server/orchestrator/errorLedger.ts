@@ -133,6 +133,27 @@ const SIGNATURES: readonly Signature[] = [
     },
   },
   {
+    id: "builder_empty_file",
+    pattern: /empty contents for a new file/i,
+    classification: "provider",
+    suggestion: (_m, message) =>
+      `The builder model returned an empty body for ${programFileFrom(message) ?? "a new file"} — a model-quality miss, not a repository fault. Rotation retries on another pool; a route that repeats this loses yield for this purpose.`,
+  },
+  {
+    id: "unseen_anchored_edit_on_resume",
+    pattern: /existing file was not supplied in full to this stage|refusing an unseen anchored edit/i,
+    classification: "deck-defect",
+    suggestion: (_m, message) =>
+      `Deck defect (known 2026-08-23, run 751546a5): a resume replays checkpointed builder files against a workspace that already holds them, so every file reads as an unseen edit and is refused${programFileFrom(message) ? ` (${programFileFrom(message)})` : ""}. Start a fresh run, or fix runFactory's resume path to re-read existing targets in full before replaying writes.`,
+  },
+  {
+    id: "builder_write_incomplete",
+    pattern: /Builder write incomplete|NO BUILDER REACHED DISK|Wrote \d+ of \d+ builder file\(s\); \d+ refused/i,
+    classification: "deck-defect",
+    suggestion: () =>
+      "Consequence line: the run stopped because one or more builder files were refused — see the WRITE REFUSED entries in this ledger for the file and the reason; fix those and resume/re-run.",
+  },
+  {
     id: "git_push_or_pr",
     pattern: /\bgit\b.*(rejected|denied|non-fast-forward)|pull request.*(failed|refused)|auto-merge/i,
     classification: "environment",

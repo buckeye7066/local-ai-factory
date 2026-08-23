@@ -52,6 +52,20 @@ describe("error ledger — deterministic signature table", () => {
     );
     expect(classifyErrorMessage("Run failed: model call budget of 100 exhausted").classification).toBe("budget");
     expect(classifyErrorMessage("fetch failed: ETIMEDOUT").suggestion).toMatch(/retry/i);
+    // Builder write refusals seen on the resumed IPlay run (08:02).
+    const empty = classifyErrorMessage(
+      "WRITE REFUSED: web/client/src/pages/Landing.tsx — empty contents for a new file — nothing to write",
+    );
+    expect(empty.classification).toBe("provider");
+    expect(empty.suggestion).toMatch(/Landing\.tsx/);
+    const unseen = classifyErrorMessage(
+      "WRITE REFUSED: web/client/package.json — existing file was not supplied in full to this stage — refusing an unseen anchored edit",
+    );
+    expect(unseen.classification).toBe("deck-defect");
+    expect(unseen.suggestion).toMatch(/resume/i);
+    expect(classifyErrorMessage("Run failed: Builder write incomplete: 10 required file(s) were refused.").suggestion).toMatch(
+      /WRITE REFUSED/,
+    );
     // envFailure signatures are reused verbatim.
     expect(classifyErrorMessage("Error: Could not locate the bindings file.").classification).toBe("environment");
   });

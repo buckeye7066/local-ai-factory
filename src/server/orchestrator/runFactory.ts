@@ -2566,6 +2566,18 @@ async function executeRun(
           ? new RunCancelledError()
           : new RunTimeoutError(timeoutMs)
         : rawErr;
+    // ERROR LEDGER triage on the failure path: the signature table has
+    // already explained what it can; ONE bounded model call labels the rest
+    // "model suggestion, unverified". Never on cancel, never for demo runs,
+    // never allowed to fail the handler.
+    const triageLedger = async () => {
+      if (run.demo || ledger.unresolved().length === 0) return;
+      try {
+        await ledger.suggestWithModel(review);
+      } catch {
+        // Entries keep "no suggestion".
+      }
+    };
     if (err instanceof RunCancelledError) {
       run.status = "cancelled";
       // A cancel is a PAUSE the owner may want to return from, not a shredder
@@ -2600,6 +2612,7 @@ async function executeRun(
         runId: run.id,
         detail: err.message,
       });
+      await triageLedger();
       await persistAttribution("unknown", ev.seq).catch(() => {});
     } else if (err instanceof ModelBudgetError) {
       run.status = "failed";
@@ -2613,6 +2626,7 @@ async function executeRun(
         runId: run.id,
         detail: err.message,
       });
+      await triageLedger();
       await persistAttribution("unknown", ev.seq).catch(() => {});
     } else {
       run.status = "failed";
@@ -2628,6 +2642,7 @@ async function executeRun(
         runId: run.id,
         detail: run.error,
       });
+      await triageLedger();
       await persistAttribution("unknown", ev.seq).catch(() => {});
     }
     if (run.status === "failed") {
