@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createWorkTheme,
+  resumeWorkTheme,
   stampWorkTheme,
   ThemedProvider,
   withWorkTheme,
@@ -57,6 +58,27 @@ describe("workTheme — directed multi-model focus", () => {
       updateWorkIssue("capacitorUpdaterPlugin missing export");
       expect(currentWorkTheme()?.issue).toContain("capacitorUpdaterPlugin");
     });
+  });
+});
+
+describe("resumeWorkTheme — a resume keeps the run's ORIGINAL purpose", () => {
+  it("themes the resume with the stored idea and app name, not the run id", () => {
+    // Live 2026-08-23: IPlay run 751546a5 resumed after a deck relaunch and every
+    // rotation selection read "for resume 751546a5-..." instead of the purpose.
+    const input = resumeWorkTheme(
+      { idea: "IPlay: make the avatar play the notes actually heard", appName: "iplay" },
+      "751546a5-6a9f-4e7b-a3f8-b64210c21333",
+    );
+    const theme = createWorkTheme(input);
+    expect(theme.theme).toBe("iplay: IPlay: make the avatar play the notes actually heard");
+    expect(theme.theme).not.toMatch(/751546a5/);
+    expect(input.stage).toBe("resume");
+    expect(resumeWorkTheme({ idea: "x" }, "id", "epic-resume").stage).toBe("epic-resume");
+  });
+
+  it("falls back to a resume label only when no record (or idea) exists", () => {
+    expect(resumeWorkTheme(null, "abc").idea).toBe("resume abc");
+    expect(resumeWorkTheme({ idea: "   " }, "abc").idea).toBe("resume abc");
   });
 });
 

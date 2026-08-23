@@ -64,6 +64,27 @@ export function updateWorkIssue(issue: string): void {
     .slice(0, 500);
 }
 
+/**
+ * The theme input for RESUMING a run: the run's ORIGINAL purpose, not the
+ * resume event. Live 2026-08-23 (IPlay run 751546a5, resumed twice after the
+ * shared deck was relaunched): every rotation selection after the resume read
+ * "as author (declared) for resume 751546a5-..." — the purpose slug the
+ * rotator keys its fit, yield and cooldowns on had become the run id, so the
+ * quality learned before the interruption no longer applied and nothing
+ * learned afterwards would reach the next run with the same purpose. The
+ * stored record carries the idea; a record that cannot be found keeps the
+ * old label so the resume is still attributable.
+ */
+export function resumeWorkTheme(
+  run: { idea?: string | null; appName?: string | null } | null | undefined,
+  runId: string,
+  stage: string = "resume",
+): { idea: string; appName?: string | null; stage: string } {
+  const idea = String(run?.idea || "").trim();
+  if (!idea) return { idea: `resume ${runId}`, stage };
+  return { idea, appName: run?.appName ?? null, stage };
+}
+
 export function createWorkTheme(input: {
   idea: string;
   appName?: string | null;

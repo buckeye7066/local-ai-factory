@@ -65,6 +65,7 @@ import { redactSecrets } from "./security/redact.js";
 import { findRemovedRunOption } from "./removedOptions.js";
 import { FATAL_EXIT_CODE } from "./exitCodes.js";
 import { underWorkTheme } from "./orchestrator/themeBind.js";
+import { resumeWorkTheme } from "./orchestrator/workTheme.js";
 
 /**
  * server/index.ts — the LOCAL backend API.
@@ -447,8 +448,8 @@ function epicDeps(): EpicDeps {
       underWorkTheme({ idea, stage: "epic-slice" }, () =>
         runFactoryTracked({ idea, options, config, secrets }, onStarted ?? (() => {})),
       ),
-    resumeSliceRun: (runId) =>
-      underWorkTheme({ idea: `resume epic slice ${runId}`, stage: "epic-resume" }, () =>
+    resumeSliceRun: async (runId) =>
+      underWorkTheme(resumeWorkTheme(await getRun(runId), runId, "epic-resume"), () =>
         resumeFactoryFull(runId, config, secrets),
       ),
     plan: async (idea) => {
@@ -661,8 +662,10 @@ app.post(
           .json({ error: wanted.error.issues[0]?.message ?? "Bad providers." });
         return;
       }
+      // Resume under the run's ORIGINAL purpose so rotation fit/yield/cooldown
+      // stay keyed to the work, not to the resume event (see resumeWorkTheme).
       const run = await underWorkTheme(
-        { idea: `resume ${runId}`, stage: "resume" },
+        resumeWorkTheme(await getRun(runId), runId),
         () => resumeRun(runId, config, secrets, wanted.data),
       );
       res.status(202).json({ ok: true, runId: run.id });
