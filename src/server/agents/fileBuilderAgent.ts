@@ -59,6 +59,11 @@ export async function fileBuilderAgent(
   existing?: ExistingRepoContext,
   research?: ResearchFindings,
   additionalSources?: AdditionalSourceContext[],
+  /**
+   * A corrective pass: the previous answer's refused entries, each with the
+   * guard's reason. Only those entries are wanted back, fixed.
+   */
+  correction?: { refusals: Array<{ path: string; reason: string }> },
 ): Promise<FileBuild> {
   // Byte-for-byte the original greenfield prompt when there's no extra
   // context at all — no behavior change for the "new app" path.
@@ -166,6 +171,25 @@ export async function fileBuilderAgent(
             `  How to integrate: ${r.howToIntegrate}`,
         )
         .join("\n")}`,
+    );
+  }
+
+  if (correction?.refusals.length) {
+    // CORRECTIVE PASS (FutureU run 9b034d37, 2026-08-23): 5 of 8 files
+    // landed and the run died on the other 3 — two edits aimed at paths that
+    // do not exist and one import of an undeclared package. Each refusal
+    // reason is written to be acted on; hand them back once.
+    promptParts.push(
+      "PREVIOUS ATTEMPT — the following entries were REFUSED by the write guards; everything " +
+        "else you returned is already on disk and must NOT be resent. Return ONLY corrected " +
+        "entries for these paths (or for the real host file the change belongs in):\n" +
+        correction.refusals
+          .map((item) => `- ${item.path}: ${item.reason}`)
+          .join("\n") +
+        "\nRules: a path that does not exist cannot be edited — either send full `contents` to create " +
+        "it, or move the edit onto the real existing file shown in CURRENT CONTENTS. Never import a " +
+        "package the manifests do not declare; use what they already declare or add it to the " +
+        "manifest in this same answer. Quote anchors exactly from CURRENT CONTENTS.",
     );
   }
 

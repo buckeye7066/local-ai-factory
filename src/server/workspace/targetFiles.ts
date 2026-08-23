@@ -14,7 +14,11 @@ import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
  * the real text is what lets the work actually happen.
  */
 
-const MAX_BYTES_PER_FILE = 24_000;
+// 24 KB hid FutureU's real routes file (server/api.js, 56 KB) from the builder
+// (run 9b034d37, 2026-08-23); it invented server/routes/index.js instead. The
+// integration point of a small app is often its one big file. 64 KB is still
+// well inside the 120 KB total budget below.
+const MAX_BYTES_PER_FILE = 64_000;
 const MAX_TOTAL_BYTES = 120_000;
 const JS_TS_EXT_RX = JS_TS_SOURCE_EXTENSION_RX;
 

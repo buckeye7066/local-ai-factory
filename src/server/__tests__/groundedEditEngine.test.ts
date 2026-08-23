@@ -127,6 +127,38 @@ describe("agent grounding contracts", () => {
       "full contents for each new/changed file",
     );
     expect(provider.lastPrompt).toContain("EDIT THE REAL HOST PATH");
+    expect(provider.lastPrompt).not.toContain("PREVIOUS ATTEMPT");
+  });
+
+  // FutureU run 9b034d37: the refusal reasons were actionable but the model
+  // never saw them. A corrective pass hands them back, once, verbatim.
+  it("builder corrective pass lists each refusal and asks only for those files", async () => {
+    const provider = new CaptureProvider({ files: [{ path: "src/Card.jsx", purpose: "fixed", contents: "export default 1;", edits: [] }] });
+    await fileBuilderAgent(
+      { provider },
+      spec,
+      arch,
+      plan,
+      {
+        fileTreeExcerpt: "src/App.jsx",
+        manifestExcerpt: '{"dependencies":{"react":"^18"}}',
+        readmeExcerpt: "",
+        targetFiles: [{ path: "src/App.jsx", contents: currentApp }],
+      },
+      undefined,
+      undefined,
+      {
+        refusals: [
+          { path: "server/routes/index.js", reason: "edits were supplied for a file that does not exist yet" },
+          { path: "src/Card.jsx", reason: "undeclared dependency — prop-types" },
+        ],
+      },
+    );
+    expect(provider.lastPrompt).toContain("PREVIOUS ATTEMPT");
+    expect(provider.lastPrompt).toContain("- server/routes/index.js: edits were supplied for a file that does not exist yet");
+    expect(provider.lastPrompt).toContain("- src/Card.jsx: undeclared dependency — prop-types");
+    expect(provider.lastPrompt).toContain("must NOT be resent");
+    expect(provider.lastPrompt).toContain(currentApp);
   });
 
   it("repair receives exact current code and returns anchored edits", async () => {

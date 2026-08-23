@@ -375,7 +375,7 @@ describe("targetFiles — the builder is given real code to quote", () => {
   });
 
   it("reports an existing target that cannot fit safely in context", () => {
-    const root = workspace({ "src/large.ts": "x".repeat(24_001) });
+    const root = workspace({ "src/large.ts": "x".repeat(64_001) });
     const plan = {
       tasks: [
         {
@@ -467,7 +467,7 @@ describe("targetFiles — the builder can ask for real files it was not shown", 
   it("reads the named files in full and reports what it cannot show", () => {
     const root = workspace({
       "server/api.js": "const a = 1;",
-      "big.js": "x".repeat(30_000),
+      "big.js": "x".repeat(70_000),
     });
     const result = inspectExplicitFiles(root, ["server/api.js", "big.js", "missing.js"]);
     expect(result.files).toEqual([{ path: "server/api.js", contents: "const a = 1;" }]);

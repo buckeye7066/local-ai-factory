@@ -1292,6 +1292,8 @@ async function executeRun(
     }
     let build: FileBuild | undefined = checkpoint.build;
     let builderExistingPaths = checkpoint.builderExistingPaths;
+    // The context the builder was grounded in, kept for the corrective pass.
+    let builderContext: Parameters<typeof fileBuilderAgent>[4];
     if (!build) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "builder");
@@ -1395,21 +1397,23 @@ async function executeRun(
                 "model_call",
                 `File Builder agent (${code.name}) — second grounded pass with ${builderExistingPaths.length} real file(s) in view…`,
               );
+              builderContext = {
+                ...existingContext,
+                targetFiles: [...(existingContext.targetFiles ?? []), ...extra.files],
+              };
               build = await fileBuilderAgent(
                 { provider: code },
                 spec,
                 arch,
                 plan,
-                {
-                  ...existingContext,
-                  targetFiles: [...(existingContext.targetFiles ?? []), ...extra.files],
-                },
+                builderContext,
                 research,
                 additionalSourceContexts.length ? additionalSourceContexts : undefined,
               );
             }
           }
         }
+        builderContext ??= existingContext;
       } else {
         log("model_call", `File Builder agent (${code.name})…`);
         build = await fileBuilderAgent(
@@ -1440,7 +1444,7 @@ async function executeRun(
           `Builder stage was marked done but ${missingFromWorkspace.length} of ${build.files.length} generated file(s) were never written — writing them now.`,
         );
       }
-      const builderTally = await writeBuild(
+      let builderTally = await writeBuild(
         workspacePath,
         stageDone("builder") ? missingFromWorkspace : build.files,
         "builder",
@@ -1451,6 +1455,65 @@ async function executeRun(
       // guards above refused. A build whose writes were all refused reported
       // full success.
       reportWrites(builderTally, "builder", "builder");
+      // CORRECTIVE PASS (FutureU run 9b034d37, 2026-08-23). Five of eight
+      // builder files landed; the run then died on three refusals whose
+      // reasons were already specific enough to act on ("edits were supplied
+      // for a file that does not exist yet", "imports prop-types, which the
+      // repo does not declare"). The model never saw them. Hand the refusals
+      // back exactly once; only the corrected entries are written, under the
+      // same guards (files this build already created count as seen). A
+      // refusal after that still fails the run closed.
+      if (
+        !run.demo &&
+        builderTally.refusals.length > 0 &&
+        !stageDone("builder") &&
+        extendMode &&
+        builderContext
+      ) {
+        const refusedPaths = new Set(
+          builderTally.refusals.map((item) => normalizeGeneratedPath(item.path)),
+        );
+        const landed = build.files
+          .map((file) => normalizeGeneratedPath(file.path))
+          .filter((path) => !refusedPaths.has(path));
+        log(
+          "model_call",
+          `File Builder agent (${code.name}) — one corrective pass over ${builderTally.refusals.length} refused file(s)…`,
+        );
+        const correction = await fileBuilderAgent(
+          { provider: code },
+          spec,
+          arch,
+          plan,
+          builderContext,
+          research,
+          additionalSourceContexts.length ? additionalSourceContexts : undefined,
+          { refusals: builderTally.refusals },
+        );
+        const correctionTally = await writeBuild(
+          workspacePath,
+          correction.files,
+          "builder",
+          [...builderExistingPaths, ...landed],
+        );
+        reportWrites(correctionTally, "builder", "builder correction");
+        const stillRefused = new Set(
+          correctionTally.refusals.map((item) => normalizeGeneratedPath(item.path)),
+        );
+        build = {
+          ...build,
+          files: [
+            ...build.files.filter(
+              (file) => !refusedPaths.has(normalizeGeneratedPath(file.path)),
+            ),
+            ...correction.files.filter(
+              (file) => !stillRefused.has(normalizeGeneratedPath(file.path)),
+            ),
+          ],
+        };
+        await checkpointNow({ build, builderExistingPaths });
+        builderTally = correctionTally;
+      }
       if (!run.demo && builderTally.refusals.length > 0) {
         throw new Error(
           `Builder write incomplete: ${builderTally.refusals.length} required file(s) were refused. ` +
