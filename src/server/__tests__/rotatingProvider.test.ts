@@ -20,6 +20,7 @@ import {
   RotatingProvider,
   classifyOutcome,
   filterRoutableCatalog,
+  cloudReasoningKnobs,
   isRetryableAcrossPools,
 } from "../rotation/rotatingProvider.js";
 import { FailoverProvider } from "../providers/failoverProvider.js";
@@ -438,6 +439,39 @@ describe("RotatingProvider", () => {
     const state = new StateStore().read();
     expect(state.pools["pool-b"].calls).toBe(3);
     expect(state.pools["pool-a"]).toBeUndefined();
+  });
+});
+
+describe("cloud reasoning knobs — thinking models keep their output budget", () => {
+  const mk = (id: string, base_url: string) =>
+    ({
+      ...row(id, { base_url, auth_env: "", auth_kind: "none" }),
+    }) as unknown as Parameters<typeof cloudReasoningKnobs>[0];
+
+  it("adds the verified per-backend field and nothing elsewhere", () => {
+    expect(cloudReasoningKnobs(mk("openrouter/x", "https://openrouter.ai/api/v1"))).toEqual({
+      reasoning: { effort: "low" },
+    });
+    expect(cloudReasoningKnobs(mk("nvidia_nim/x", "https://integrate.api.nvidia.com/v1"))).toEqual({
+      chat_template_kwargs: { thinking: false },
+    });
+    expect(cloudReasoningKnobs(mk("groq/x", "https://api.groq.com/openai/v1"))).toEqual({});
+    expect(cloudReasoningKnobs(mk("ollama/x", "http://127.0.0.1:11434"))).toEqual({});
+  });
+
+  it("FACTORY_CLOUD_REASONING=full disables the knobs", () => {
+    vi.stubEnv("FACTORY_CLOUD_REASONING", "full");
+    expect(cloudReasoningKnobs(mk("openrouter/x", "https://openrouter.ai/api/v1"))).toEqual({});
+  });
+
+  it("reaches the wire body of an OpenRouter call", async () => {
+    writeCatalog([
+      row("openrouter/only", { pool: "openrouter:free", base_url: "https://openrouter.ai/api/v1" }),
+    ]);
+    const fetchFn = stubFetch();
+    await provider().generateText({ system: "s", prompt: "p" });
+    const sent = JSON.parse(String(fetchFn.mock.calls[0]![1]?.body)) as Record<string, unknown>;
+    expect(sent.reasoning).toEqual({ effort: "low" });
   });
 });
 

@@ -135,6 +135,23 @@ function authHeaders(route: CatalogRoute): Record<string, string> {
   }
 }
 
+/**
+ * Per-backend knobs that keep cloud THINKING models from spending the whole
+ * output budget on reasoning. The FlexFactor twin's ledger (2026-08-23) showed
+ * 8 of 20 failed calls were OutputBudgetError on OpenRouter free routes; the
+ * local council measured the same lever on Ollama (think:false). Only the
+ * backends whose wire shape is VERIFIED get a field — an unknown field can be
+ * a fatal 400 elsewhere. FACTORY_CLOUD_REASONING=full restores full reasoning.
+ */
+export function cloudReasoningKnobs(route: CatalogRoute): Record<string, unknown> {
+  if ((process.env.FACTORY_CLOUD_REASONING || "").trim().toLowerCase() === "full") return {};
+  const base = String(route.base_url || "").toLowerCase();
+  if (base.includes("openrouter.ai")) return { reasoning: { effort: "low" } };
+  // Verified live on NIM deepseek-v4-flash: accepted.
+  if (base.includes("integrate.api.nvidia.com")) return { chat_template_kwargs: { thinking: false } };
+  return {};
+}
+
 function parseRetryAfter(res: Response): number | undefined {
   const raw = res.headers.get("retry-after");
   if (!raw) return undefined;
@@ -237,6 +254,7 @@ async function callRoute(
           { role: "user", content: input.prompt },
         ],
         ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+        ...cloudReasoningKnobs(route),
       };
       break;
     }
