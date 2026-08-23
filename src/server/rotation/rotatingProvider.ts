@@ -288,11 +288,44 @@ async function callRoute(
 
   if (!res.ok) {
     const detail = (await res.text().catch(() => "")).slice(0, 240);
-    throw new RouteCallError(
-      `route ${route.id} HTTP ${res.status}: ${detail}`,
-      res.status,
-      parseRetryAfter(res),
-    );
+    // Newer api.openai.com models (gpt-5*, o-series, chat-latest) reject the
+    // classic `max_tokens` param with a 400 that NAMES the replacement
+    // ("Use 'max_completion_tokens' instead"). Swap and re-POST inside the
+    // SAME attempt so in auto mode the call's one paid round buys an answer,
+    // not parameter discovery. (FlexFactor twin: _chat_create; run ledger
+    // iplay-20260823-090034 entries 22/117.)
+    if (
+      res.status === 400 &&
+      "max_tokens" in body &&
+      detail.includes("max_completion_tokens") &&
+      /unsupported[ _]parameter/i.test(detail)
+    ) {
+      body["max_completion_tokens"] = body["max_tokens"];
+      delete body["max_tokens"];
+      const retry = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: combined,
+      }).catch(() => null);
+      if (!retry || !retry.ok) {
+        const retryDetail = retry
+          ? (await retry.text().catch(() => "")).slice(0, 240)
+          : detail;
+        throw new RouteCallError(
+          `route ${route.id} HTTP ${retry ? retry.status : res.status}: ${retryDetail}`,
+          retry ? retry.status : res.status,
+          retry ? parseRetryAfter(retry) : parseRetryAfter(res),
+        );
+      }
+      res = retry;
+    } else {
+      throw new RouteCallError(
+        `route ${route.id} HTTP ${res.status}: ${detail}`,
+        res.status,
+        parseRetryAfter(res),
+      );
+    }
   }
 
   const doc = (await res.json().catch(() => null)) as Record<string, unknown> | null;

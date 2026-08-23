@@ -187,6 +187,39 @@ describe("RotatingProvider", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
+  it("a named max_tokens 400 swaps to max_completion_tokens in the SAME attempt", async () => {
+    // Newer api.openai.com models reject `max_tokens` and name the
+    // replacement. The route must answer on the swapped re-POST -- not burn
+    // its one paid round on parameter discovery. (FlexFactor twin:
+    // _chat_create; run ledger iplay-20260823-090034 entries 22/117.)
+    writeCatalog([row("aaa/chat-latest", { pool: "pool-a" })]);
+    const named = JSON.stringify({
+      error: {
+        message:
+          "Unsupported parameter: 'max_tokens' is not supported with this " +
+          "model. Use 'max_completion_tokens' instead.",
+        type: "invalid_request_error",
+        param: "max_tokens",
+        code: "unsupported_parameter",
+      },
+    });
+    const fetchFn = stubFetch((_url, init) => {
+      const body = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
+      if ("max_tokens" in body) return new Response(named, { status: 400 });
+      if ("max_completion_tokens" in body) return undefined; // default 200
+      return new Response("bad body", { status: 500 });
+    });
+    const prov = provider();
+    const out = await prov.generateText({ system: "s", prompt: "p" });
+    expect(out.text).toBe("completed by chat-latest");
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    const second = JSON.parse(
+      String(fetchFn.mock.calls[1][1]?.body ?? "{}"),
+    ) as Record<string, unknown>;
+    expect(second["max_completion_tokens"]).toBeDefined();
+    expect(second["max_tokens"]).toBeUndefined();
+  });
+
   it("every pool failing surfaces the last real error", async () => {
     writeCatalog([
       row("aaa/one", { pool: "pool-a" }),
