@@ -62,10 +62,6 @@ export function inspectTargetFiles(
   ideaText = "",
   fileTree: string[] = [],
 ): TargetFileInspection {
-  const out: { path: string; contents: string }[] = [];
-  const omitted: Array<{ path: string; reason: string }> = [];
-  let budget = MAX_TOTAL_BYTES;
-
   const candidates = mentionedPaths(plan, ideaText);
   // A bare filename in the plan ("App.jsx") resolves through the real tree.
   const resolved = new Set<string>();
@@ -101,6 +97,53 @@ export function inspectTargetFiles(
     if (basenameHits.length === 1) resolved.add(basenameHits[0]!);
   }
 
+  return readResolved(workspacePath, resolved);
+}
+
+/**
+ * Existing workspace files the builder NAMED but was never shown. A planner
+ * that invents paths (FutureU run 53b9d1fb: `src/server/routes/*.ts` for a
+ * repo whose real files are `server/api.js`, `client/src/App.jsx`) leaves
+ * the builder pointing at real host files it has no text for; it answers
+ * with empty edits whose purpose reads "need to see how routes are mounted".
+ * Those paths are the ones to read before a second grounded pass.
+ */
+export function unseenExistingPaths(
+  workspacePath: string,
+  proposed: Iterable<string>,
+  shown: Iterable<string>,
+): string[] {
+  const seen = new Set([...shown].map((rel) => rel.replace(/\\/g, "/")));
+  const out: string[] = [];
+  for (const raw of proposed) {
+    const rel = raw.replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!rel || seen.has(rel) || out.includes(rel)) continue;
+    let abs: string;
+    try {
+      abs = safeResolve(workspacePath, rel);
+    } catch {
+      continue;
+    }
+    if (existsSync(abs) && statSync(abs).isFile()) out.push(rel);
+  }
+  return out;
+}
+
+/** Read explicitly named existing files under the same per-file and total budgets. */
+export function inspectExplicitFiles(
+  workspacePath: string,
+  rels: Iterable<string>,
+): TargetFileInspection {
+  return readResolved(workspacePath, new Set(rels));
+}
+
+function readResolved(
+  workspacePath: string,
+  resolved: Iterable<string>,
+): TargetFileInspection {
+  const out: { path: string; contents: string }[] = [];
+  const omitted: Array<{ path: string; reason: string }> = [];
+  let budget = MAX_TOTAL_BYTES;
   for (const rel of resolved) {
     try {
       const abs = safeResolveExistingPath(workspacePath, rel);

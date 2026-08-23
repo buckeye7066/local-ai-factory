@@ -47,7 +47,11 @@ import {
 import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { assessPhantomImports } from "../workspace/phantomImports.js";
 import { resolveGeneratedWrite } from "../workspace/applyEdits.js";
-import { inspectTargetFiles } from "../workspace/targetFiles.js";
+import {
+  inspectExplicitFiles,
+  inspectTargetFiles,
+  unseenExistingPaths,
+} from "../workspace/targetFiles.js";
 import { summarize } from "../workspace/summarizeFiles.js";
 import {
   saveRun,
@@ -1348,6 +1352,64 @@ async function executeRun(
           research,
           additionalSourceContexts.length ? additionalSourceContexts : undefined,
         );
+        // SECOND GROUNDED PASS (FutureU run 53b9d1fb, 2026-08-23). The
+        // planner named files that do not exist (src/server/routes/*.ts in a
+        // repo whose real files are server/api.js and client/src/App.jsx), so
+        // read-before-write loaded the wrong set. The builder then correctly
+        // chose the REAL host files but had no text to quote and returned
+        // empty edits ("need to see how parent routes are mounted"); every
+        // one was refused as an unseen edit and the run died. The builder is
+        // the only stage that knows which real files the work touches, so
+        // when it names existing files it was not shown, read exactly those
+        // and run the builder once more with them. One extra pass, bounded
+        // by the same per-file and total context budgets; a refusal after
+        // that is still a refusal.
+        if (workspacePath && existingContext) {
+          const unseen = unseenExistingPaths(
+            workspacePath,
+            build.files.map((file) => normalizeGeneratedPath(file.path)),
+            builderExistingPaths,
+          );
+          if (unseen.length > 0) {
+            const extra = inspectExplicitFiles(workspacePath, unseen);
+            if (extra.omitted.length) {
+              log(
+                "warning",
+                `Builder named ${extra.omitted.length} existing file(s) that cannot be shown in full: ${extra.omitted
+                  .map((item) => `${item.path} (${item.reason})`)
+                  .join("; ")}.`,
+              );
+            }
+            if (extra.files.length > 0) {
+              log(
+                "info",
+                `Builder named ${extra.files.length} existing file(s) it had not been shown (${extra.files
+                  .map((file) => file.path)
+                  .join(", ")}) — reading them and running one more grounded pass.`,
+              );
+              builderExistingPaths = [
+                ...builderExistingPaths,
+                ...extra.files.map((file) => normalizeGeneratedPath(file.path)),
+              ];
+              log(
+                "model_call",
+                `File Builder agent (${code.name}) — second grounded pass with ${builderExistingPaths.length} real file(s) in view…`,
+              );
+              build = await fileBuilderAgent(
+                { provider: code },
+                spec,
+                arch,
+                plan,
+                {
+                  ...existingContext,
+                  targetFiles: [...(existingContext.targetFiles ?? []), ...extra.files],
+                },
+                research,
+                additionalSourceContexts.length ? additionalSourceContexts : undefined,
+              );
+            }
+          }
+        }
       } else {
         log("model_call", `File Builder agent (${code.name})…`);
         build = await fileBuilderAgent(

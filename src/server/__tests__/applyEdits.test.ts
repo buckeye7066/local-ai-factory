@@ -13,9 +13,11 @@ import { join, dirname } from "node:path";
 import { applyEdits, resolveGeneratedWrite } from "../workspace/applyEdits.js";
 import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 import {
+  inspectExplicitFiles,
   inspectTargetFiles,
   mentionedPaths,
   readTargetFiles,
+  unseenExistingPaths,
 } from "../workspace/targetFiles.js";
 
 const dirs: string[] = [];
@@ -433,5 +435,42 @@ describe("targetFiles — the builder is given real code to quote", () => {
       ],
     };
     expect(mentionedPaths(plan)).toEqual(["services/api/src/middleware/auth.js"]);
+  });
+});
+
+describe("targetFiles — the builder can ask for real files it was not shown", () => {
+  // FutureU run 53b9d1fb: the planner invented src/server/routes/*.ts, the
+  // builder named the real server/api.js and client/src/App.jsx, and every
+  // edit was refused as unseen. These are the paths a second pass must read.
+  it("lists only existing, not-yet-shown, in-workspace files", () => {
+    const root = workspace({
+      "server/db.js": "module.exports = {};",
+      "server/api.js": "const r = require('express').Router();",
+      "client/src/App.jsx": "export default function App() {}",
+    });
+    const unseen = unseenExistingPaths(
+      root,
+      [
+        "server/db.js",
+        "server/api.js",
+        "./client/src/App.jsx",
+        "client/src/pages/New.jsx",
+        "../outside.js",
+        "server",
+        "server/api.js",
+      ],
+      ["server/db.js"],
+    );
+    expect(unseen).toEqual(["server/api.js", "client/src/App.jsx"]);
+  });
+
+  it("reads the named files in full and reports what it cannot show", () => {
+    const root = workspace({
+      "server/api.js": "const a = 1;",
+      "big.js": "x".repeat(30_000),
+    });
+    const result = inspectExplicitFiles(root, ["server/api.js", "big.js", "missing.js"]);
+    expect(result.files).toEqual([{ path: "server/api.js", contents: "const a = 1;" }]);
+    expect(result.omitted.map((item) => item.path)).toEqual(["big.js", "missing.js"]);
   });
 });
