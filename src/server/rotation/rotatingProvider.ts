@@ -260,6 +260,29 @@ async function callRoute(
     const message = choices[0]?.["message"] as Record<string, unknown> | undefined;
     text =
       typeof message?.["content"] === "string" ? (message["content"] as string) : "";
+    if (!text.trim()) {
+      // Reasoning models (measured 2026-08-22: meta/muse-glimmer-30b on NVIDIA
+      // NIM) put their chain of thought in a SEPARATE field and leave content
+      // null when the token budget runs out before an answer. That is not an
+      // empty completion -- the model worked and was cut off -- and calling it
+      // one sends the next reader looking for a dead route instead of a small
+      // max_tokens. Still retryable (another pool may finish), but named.
+      const reasoning =
+        (typeof message?.["reasoning_content"] === "string" &&
+          (message["reasoning_content"] as string)) ||
+        (typeof message?.["reasoning"] === "string" && (message["reasoning"] as string)) ||
+        "";
+      const finish = choices[0]?.["finish_reason"];
+      if (reasoning.trim()) {
+        throw new RouteCallError(
+          `route ${route.id} spent its whole token budget reasoning and never ` +
+            `answered (finish_reason=${String(finish)}, ${reasoning.length} chars ` +
+            `of reasoning) -- raise maxTokens or shorten the prompt; this is a ` +
+            `budget timeout, not an empty completion`,
+          res.status,
+        );
+      }
+    }
   }
   if (!text.trim()) {
     throw new RouteCallError(`route ${route.id} returned an empty completion`);

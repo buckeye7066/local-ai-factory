@@ -541,3 +541,61 @@ describe("outcome classification", () => {
     expect(isRetryableAcrossPools(boom("connection reset"))).toBe(true);
   });
 });
+
+describe("a reasoning-only reply is a budget problem, not an empty completion", () => {
+  // Measured 2026-08-22 against meta/muse-glimmer-30b on NVIDIA NIM: content
+  // null, reasoning_content populated, finish_reason "length". Reporting that
+  // as "returned an empty completion" points the reader at a dead route when
+  // the real fix is a bigger maxTokens.
+  it("names the reasoning budget in the error and still rotates onward", async () => {
+    writeCatalog([
+      row("nim/reasoner", { pool: "pool-nim" }),
+      row("other/plain", { pool: "pool-other" }),
+    ]);
+    const fetchMock = stubFetch((url) => {
+      if (url.includes("nim.example.invalid")) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  reasoning_content: "We need to answer in one sentence. Probably…",
+                },
+                finish_reason: "length",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return undefined;
+    });
+    const prov = provider();
+    // Two calls: whichever pool goes first, the run must still end with a real
+    // answer from the plain route, and the NIM route's failure must be named.
+    const texts = [
+      (await prov.generateText({ system: "s", prompt: "p" })).text,
+      (await prov.generateText({ system: "s", prompt: "p" })).text,
+    ];
+    expect(texts).toContain("completed by plain");
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("a genuinely empty completion is still reported as one", async () => {
+    writeCatalog([row("nim/empty", { pool: "pool-nim" })]);
+    stubFetch(() =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "" }, finish_reason: "stop" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const prov = provider();
+    await expect(prov.generateText({ system: "s", prompt: "p" })).rejects.toThrow(
+      /empty completion/,
+    );
+  });
+});
