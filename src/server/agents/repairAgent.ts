@@ -47,6 +47,7 @@ Return { notes, files:[{path,purpose,contents:"",edits:[{find,replace}]}] }.
 Every path must be in ALLOWED PATHS and every find string must quote CURRENT CONTENTS exactly.`,
     schema: RepairResultSchema,
     schemaName: "RepairResult",
+    intent: { role: "author", needs: ["code_author", "structured_json"] },
     temperature: 0.1,
     maxTokens: 12000,
   });

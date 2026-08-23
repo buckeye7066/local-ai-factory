@@ -72,6 +72,7 @@ export async function fileBuilderAgent(
       )}\n\nReturn { files: [{ path, purpose, contents }] }.`,
       schema: FileBuildSchema,
       schemaName: "FileBuild",
+      intent: { role: "author", needs: ["code_author", "structured_json"] },
       temperature: 0.2,
       maxTokens: 16000,
     });
@@ -188,6 +189,7 @@ export async function fileBuilderAgent(
     prompt: promptParts.join("\n\n"),
     schema: FileBuildSchema,
     schemaName: "FileBuild",
+    intent: { role: "author", needs: ["code_author", "structured_json"] },
     temperature: 0.2,
     maxTokens: 16000,
   });

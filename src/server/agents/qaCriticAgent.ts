@@ -41,6 +41,7 @@ Return { summary, passed, issues:[{severity,title,detail,file,repairInstruction}
 Set passed=true only when there are no high or critical code, integration, acceptance, or usability issues.`,
     schema: QaReportSchema,
     schemaName: "QaReport",
+    intent: { role: "reviewer", needs: ["code_review", "structured_json", "honest"] },
     temperature: 0.1,
     maxTokens: 12000,
   });

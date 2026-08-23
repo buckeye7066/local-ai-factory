@@ -9,11 +9,29 @@ import type { ProviderName } from "./schemas.js";
  * depends only on this interface, never on a concrete SDK.
  */
 
+/**
+ * What a model call is FOR, so a rotating provider can fit the route to the
+ * job instead of only to the cheapest ledger. Twin of flexfactor_rotation
+ * .CallIntent. Every field optional: a call without an intent rotates exactly
+ * as before.
+ */
+export interface CallIntent {
+  /** author | reviewer | judge | vision */
+  role?: "author" | "reviewer" | "judge" | "vision";
+  /** Capabilities the route MUST have when its capability list is known. */
+  needs?: Array<"code_author" | "structured_json" | "code_review" | "honest" | "vision">;
+  /** Model family the route must not be, when any alternative exists. */
+  avoidFamily?: string;
+  /** Short slug of the program purpose this call serves (journaled). */
+  purpose?: string;
+}
+
 export interface GenerateTextInput {
   system: string;
   prompt: string;
   temperature?: number;
   maxTokens?: number;
+  intent?: CallIntent;
 }
 
 export interface GenerateTextResult {
@@ -31,6 +49,7 @@ export interface GenerateJsonInput<T> {
   schemaName: string;
   temperature?: number;
   maxTokens?: number;
+  intent?: CallIntent;
 }
 
 export interface LLMProvider {

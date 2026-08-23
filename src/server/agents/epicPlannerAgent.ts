@@ -59,6 +59,7 @@ export async function epicPlannerAgent(
       `Return { summary, slices: [{ title, goals, wiringTargets, acceptance }] }.`,
     schema: EpicPlanSchema,
     schemaName: "EpicPlan",
+    intent: { role: "judge", needs: ["structured_json"] },
     temperature: 0.2,
     maxTokens: 16_000,
   });

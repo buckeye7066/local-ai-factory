@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { LLMProvider } from "../../shared/types.js";
+import type { CallIntent, LLMProvider } from "../../shared/types.js";
 import type {
   GenerateJsonInput,
   GenerateTextInput,
@@ -23,6 +23,17 @@ import type {
  *      red: hamiltonPacketBilingual.test.js timed out") without changing the
  *      run's overall theme.
  */
+
+const PURPOSE_VISION_HINTS = [
+  "screenshot", "screen shot", "user interface", " ui ", "visual", "image", "photo",
+  "render", "pixel", "layout", "ocr", "diagram", "video frame", "camera",
+];
+
+/** Does the program's purpose involve looking at pictures? Narrow on purpose. */
+export function purposeNeedsVision(text: string): boolean {
+  const low = ` ${String(text || "").toLowerCase().replace(/\s+/g, " ")} `;
+  return PURPOSE_VISION_HINTS.some((h) => low.includes(h));
+}
 
 export interface WorkTheme {
   /** Stable program / run focus — purpose of the work, not a file list. */
@@ -150,10 +161,29 @@ export class ThemedProvider implements LLMProvider {
     return this.fixed ?? currentWorkTheme();
   }
 
+  /**
+   * Purpose sight for the rotator. The theme already says what the program
+   * is FOR; put that on the call's intent so selection can fit the route to
+   * it and the journal can say which goal each model served. A visual
+   * purpose (screenshots, UI, images) adds a hard `vision` need. Never
+   * overrides an intent the agent set explicitly.
+   */
+  private intentForCall(intent: CallIntent | undefined): CallIntent | undefined {
+    const theme = this.themeForCall();
+    if (!theme) return intent;
+    const out: CallIntent = { ...(intent ?? {}) };
+    if (!out.purpose) out.purpose = theme.theme.slice(0, 80);
+    if (purposeNeedsVision(`${theme.theme} ${theme.issue}`)) {
+      out.needs = [...new Set([...(out.needs ?? []), "vision" as const])];
+    }
+    return out;
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     return this.inner.generateText({
       ...input,
       system: stampWorkTheme(input.system, this.themeForCall()),
+      intent: this.intentForCall(input.intent),
     });
   }
 
@@ -161,6 +191,7 @@ export class ThemedProvider implements LLMProvider {
     return this.inner.generateJson({
       ...input,
       system: stampWorkTheme(input.system, this.themeForCall()),
+      intent: this.intentForCall(input.intent),
     });
   }
 }

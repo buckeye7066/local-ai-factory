@@ -155,6 +155,7 @@ async function runToolResearch(
       prompt: buildPrompt(spec, arch, toolLog),
       schema: ResearchActionSchema,
       schemaName: "ResearchAction",
+      intent: { role: "judge", needs: ["structured_json"] },
       temperature: 0.2,
       maxTokens: 1800,
     });
@@ -275,6 +276,7 @@ async function evaluateCompetitiveDossier(
     ].join("\n\n"),
     schema: CompetitiveSelectionSchema,
     schemaName: "CompetitiveSelection",
+    intent: { role: "judge", needs: ["structured_json"] },
     temperature: 0.1,
     maxTokens: 8000,
   });

@@ -69,6 +69,7 @@ Never invent a browser dependency or config; without an existing harness, say so
 and the deterministic delivery gate will hold the run for missing browser evidence.`,
     schema: TestPlanSchema,
     schemaName: "TestPlan",
+    intent: { role: "author", needs: ["code_author", "structured_json"] },
     temperature: 0.1,
     maxTokens: 12000,
   });

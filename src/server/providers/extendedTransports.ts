@@ -277,6 +277,10 @@ export function synthesizeExtendedRoutes(): SynthesisResult {
       quota_status: "ok",
       resets_at: null,
       note: spec.note,
+      // Purpose sight: the CLI/Cursor transports front frontier coding
+      // models. Declared, not measured -- the battery only covers Ollama.
+      capabilities: ["code_author", "structured_json", "code_review"],
+      capabilities_source: "declared",
     });
   }
   return { routes, skipped };

@@ -149,6 +149,7 @@ export async function repoResolverAgent(
       prompt: buildPrompt(freeformPrompt, toolLog),
       schema: ResolverActionSchema,
       schemaName: "ResolverAction",
+      intent: { role: "judge", needs: ["structured_json"] },
       temperature: 0.1,
       maxTokens: 1200,
     });

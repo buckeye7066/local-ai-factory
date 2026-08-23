@@ -25,6 +25,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { CallIntent } from "../../shared/types.js";
+export type { CallIntent } from "../../shared/types.js";
 
 export const SCHEMA = 1;
 
@@ -150,6 +152,32 @@ export interface CatalogRoute {
   /** ISO timestamp of the next quota reset, when the backend reports one. */
   resets_at: string | null;
   note: string;
+  /**
+   * Purpose sight. Empty = unknown (never a disqualifier). `measured` comes
+   * from bench_battery.py (local routes); `declared` from tier/family (cloud).
+   */
+  capabilities: string[];
+  capabilities_source: "measured" | "declared" | "";
+}
+
+const FAMILY_PATTERNS: Array<[string, string]> = [
+  ["claude", "anthropic"], ["gpt-oss", "gpt-oss"], ["gpt-", "openai"], ["o1", "openai"],
+  ["o3", "openai"], ["o4", "openai"], ["gemma", "gemma"], ["gemini", "gemini"],
+  ["qwen", "qwen"], ["llama", "llama"], ["mistral", "mistral"], ["mixtral", "mistral"],
+  ["codestral", "mistral"], ["deepseek", "deepseek"], ["phi", "phi"], ["grok", "xai"],
+  ["glimmer", "muse"], ["muse", "muse"], ["kimi", "kimi"], ["glm", "glm"],
+  ["nemotron", "nvidia"], ["command", "cohere"],
+];
+
+/**
+ * Coarse family of a model id, for author/reviewer independence. Twin of
+ * flexfactor_rotation.model_family: looks at the LAST path segment so
+ * "openrouter/qwen/qwen3.6-27b" and "ollama/qwen3-coder:30b" both say "qwen".
+ */
+export function modelFamily(modelId: string): string {
+  const seg = String(modelId || "").toLowerCase().split("/").pop() ?? "";
+  for (const [needle, fam] of FAMILY_PATTERNS) if (seg.includes(needle)) return fam;
+  return seg.split(":")[0].split("-")[0] || "unknown";
 }
 
 export function isFreeRoute(route: CatalogRoute): boolean {
@@ -184,6 +212,15 @@ function routeFromJson(raw: Record<string, unknown>): CatalogRoute {
     resets_at:
       typeof raw["resets_at"] === "string" ? (raw["resets_at"] as string) : null,
     note: str("note"),
+    // Older catalogs have neither field; that is "unknown", not empty-on-
+    // purpose, and pickInTier treats it as such.
+    capabilities: Array.isArray(raw["capabilities"])
+      ? (raw["capabilities"] as unknown[]).filter((c): c is string => typeof c === "string")
+      : [],
+    capabilities_source:
+      raw["capabilities_source"] === "measured" || raw["capabilities_source"] === "declared"
+        ? raw["capabilities_source"]
+        : "",
   };
 }
 
@@ -408,12 +445,20 @@ export interface Selection {
   pinned: boolean;
   catalogStale: boolean;
   consideredPools: number;
+  /** Purpose sight: why this route, for what. */
+  intentRole?: string;
+  purpose?: string;
+  fit?: "measured" | "declared" | "unknown" | "";
+  familyNote?: string;
 }
 
 export function describeSelection(s: Selection): string {
   const bits = [`${s.route.id} [${s.route.cost_class}/${s.tier}]`];
   if (s.pinned) bits.push("pinned");
   if (s.demotedFrom) bits.push(`demoted from ${s.demotedFrom}`);
+  if (s.intentRole) bits.push(`as ${s.intentRole}${s.fit ? ` (${s.fit})` : ""}`);
+  if (s.purpose) bits.push(`for ${s.purpose}`);
+  if (s.familyNote) bits.push(s.familyNote);
   if (s.catalogStale) bits.push("stale catalog");
   return bits.join(" ");
 }
@@ -444,6 +489,8 @@ export interface NextRouteOpts {
   pinStrict?: boolean;
   /** Epoch seconds, injectable for tests. */
   now?: number;
+  /** What the call is for; fit is applied BEFORE pool-first selection. */
+  intent?: CallIntent;
 }
 
 /**
@@ -507,11 +554,15 @@ export class Rotator {
       const start = TIER_CHAIN.indexOf(requested);
       for (let i = start; i < TIER_CHAIN.length; i++) {
         const candidateTier = TIER_CHAIN[i];
-        const picked = this.pickInTier(candidateTier, allowPaid, state, now, reasons);
+        const picked = this.pickInTier(candidateTier, allowPaid, state, now, reasons, opts.intent);
         if (!picked) continue;
         picked.requestedTier = requested;
         if (i > start) picked.demotedFrom = requested;
         picked.catalogStale = this.catalog.isStale;
+        if (opts.intent) {
+          picked.intentRole = opts.intent.role ?? "";
+          picked.purpose = opts.intent.purpose ?? "";
+        }
         this.stamp(state, picked, now);
         selection = picked;
         return;
@@ -600,8 +651,10 @@ export class Rotator {
     state: RotationState,
     now: number,
     reasons: Record<string, string>,
+    intent?: CallIntent,
   ): Selection | null {
-    const candidates: CatalogRoute[] = [];
+    let candidates: CatalogRoute[] = [];
+    const needs = intent?.needs ?? [];
     for (const route of this.catalog.routes) {
       if (route.tier !== tier) continue;
       if (!route.enabled) {
@@ -617,9 +670,31 @@ export class Rotator {
         continue;
       }
       if (cooling(state, `route:${route.id}`, now)) continue;
+      // PURPOSE FIT, before pool selection. A route whose capability list is
+      // KNOWN and lacks a hard need is not a candidate for this call -- it
+      // would be picked first (cheapest) and then do the wrong job. A route
+      // with NO capability data is kept (unknown is not failed) and ranked
+      // after known-fit routes inside its pool.
+      if (needs.length > 0 && route.capabilities.length > 0) {
+        const missing = needs.filter((n) => !route.capabilities.includes(n));
+        if (missing.length > 0) {
+          reasons[route.pool] ??= `lacks ${missing.join(",")} for role ${intent?.role ?? "?"}`;
+          continue;
+        }
+      }
       candidates.push(route);
     }
     if (candidates.length === 0) return null;
+
+    let familyNote = "";
+    if (intent?.avoidFamily) {
+      const others = candidates.filter((r) => modelFamily(r.model) !== intent.avoidFamily);
+      if (others.length > 0) candidates = others;
+      else
+        familyNote =
+          `no alternative to family '${intent.avoidFamily}' for ${intent.role ?? "?"}; ` +
+          `independence NOT achieved`;
+    }
 
     // Group by the ledger each route actually drains. THIS is the rotation.
     const pools = new Map<string, CatalogRoute[]>();
@@ -646,15 +721,30 @@ export class Rotator {
       );
     });
     const pool = ordered[0];
+    // Known-fit (measured beats declared) ahead of unknown, inside the pool
+    // that LRU already chose. Pool order is never changed by fit.
+    const fitRank = (r: CatalogRoute): number => {
+      if (needs.length === 0) return 0;
+      if (r.capabilities.length === 0) return 2;
+      return r.capabilities_source === "measured" ? 0 : 1;
+    };
     const routes = pools.get(pool)!.sort((a, b) => {
       return (
+        fitRank(a) - fitRank(b) ||
         this.routeLastUsed(state, a) - this.routeLastUsed(state, b) ||
         (COST_ORDER[a.cost_class] ?? 9) - (COST_ORDER[b.cost_class] ?? 9) ||
         a.id.localeCompare(b.id)
       );
     });
+    const chosen = routes[0];
+    const fit: Selection["fit"] =
+      needs.length === 0
+        ? ""
+        : chosen.capabilities.length === 0
+          ? "unknown"
+          : chosen.capabilities_source || "declared";
     return {
-      route: routes[0],
+      route: chosen,
       pool,
       tier,
       requestedTier: tier,
@@ -662,6 +752,8 @@ export class Rotator {
       pinned: false,
       catalogStale: false,
       consideredPools: ordered.length,
+      fit,
+      familyNote,
     };
   }
 

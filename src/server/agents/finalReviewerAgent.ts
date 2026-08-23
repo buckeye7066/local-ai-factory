@@ -64,6 +64,7 @@ ${fileBlock}
 Return appName, summary, whatWasBuilt, howToRun, testStatus, repairLoops, caveats, nextImprovements, workspacePath, providerUsage.`,
     schema: FinalReportSchema,
     schemaName: "FinalReport",
+    intent: { role: "reviewer", needs: ["code_review", "structured_json", "honest"] },
     temperature: 0.3,
   });
 

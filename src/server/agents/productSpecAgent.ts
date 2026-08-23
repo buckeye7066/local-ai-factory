@@ -27,6 +27,7 @@ from the opening screen without instructions", "every error message says what to
 do next in plain words").`,
     schema: ProductSpecSchema,
     schemaName: "ProductSpec",
+    intent: { role: "judge", needs: ["structured_json"] },
     temperature: 0.3,
     // Extend-mode composes a long idea (existing app + stack + goals), and a
     // real repo's spec comes back with 20-30 features across seven arrays.

@@ -57,6 +57,7 @@ export async function clarificationAgent(
     prompt: `Owner's initial request:\n"${ctx.initialRequest}"\n\nQuestions asked so far and answers:\n${historyText}\n\nDecide: are you confident enough to build this now? If not, ask exactly ONE yes/no question. If yes, set confident=true, nextQuestion=null, and return refinedGoals as a short list of concrete, buildable goal statements incorporating every "yes" answer as a requirement and every "no" answer as an exclusion.\n\nReturn { confident, nextQuestion, rationale, refinedGoals }.`,
     schema: ClarificationTurnSchema,
     schemaName: "ClarificationTurn",
+    intent: { role: "judge", needs: ["structured_json"] },
     temperature: 0.2,
     maxTokens: 1200,
   });

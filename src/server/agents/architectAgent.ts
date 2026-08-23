@@ -19,6 +19,7 @@ export async function architectAgent(
     )}\n\nKeep it as simple as possible. Prefer a local-first single-page app with no backend unless the features truly require one. Return overview, frontend, backend, dataModel, and risks.`,
     schema: ArchitectureSchema,
     schemaName: "Architecture",
+    intent: { role: "judge", needs: ["structured_json"] },
     temperature: 0.3,
     // The prompt embeds the ENTIRE spec, which for an extend run against a real
     // repo is routinely 20-30 core features, and the answer (overview +

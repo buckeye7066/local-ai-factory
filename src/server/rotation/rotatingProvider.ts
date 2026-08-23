@@ -18,6 +18,7 @@
  * convert flat-rate work into metered billing.
  */
 import type {
+  CallIntent,
   LLMProvider,
   GenerateTextInput,
   GenerateTextResult,
@@ -52,6 +53,7 @@ import {
   describeSelection,
   isFreeRoute,
   pinMatches,
+  modelFamily,
 } from "./aitimeRotation.js";
 
 export type RotationLogger = (kind: "info" | "warn", message: string) => void;
@@ -671,10 +673,43 @@ export class RotatingProvider implements LLMProvider {
    * has failed, the error propagates to FailoverProvider, whose existing
    * policy (patient free retries, then budget-gated paid rescue) applies.
    */
+  /**
+   * Purpose sight. Set once per run with the program purpose and any
+   * capability the purpose itself demands (a UI-heavy purpose adds vision);
+   * every call's intent is completed with it so the journal can say which
+   * program goal each route served. Twin of flexfactor's set_purpose.
+   */
+  setPurpose(purpose: string, needs: NonNullable<CallIntent["needs"]> = []): void {
+    this.purpose = String(purpose || "").slice(0, 80);
+    this.purposeNeeds = [...new Set(needs)];
+  }
+
+  private purpose = "";
+  private purposeNeeds: NonNullable<CallIntent["needs"]> = [];
+  private readonly lastFamily = new Map<string, string>();
+
+  private completeIntent(intent?: CallIntent): CallIntent | undefined {
+    if (!intent && !this.purpose) return undefined;
+    const out: CallIntent = { ...(intent ?? {}) };
+    if (this.purpose && !out.purpose) out.purpose = this.purpose;
+    if (this.purposeNeeds.length > 0) {
+      out.needs = [...new Set([...(out.needs ?? []), ...this.purposeNeeds])];
+    }
+    // A reviewer must never be the author's own family when an alternative
+    // exists. Automatic: the last author's family is remembered per provider.
+    if (out.role === "reviewer" && !out.avoidFamily) {
+      const fam = this.lastFamily.get("author");
+      if (fam) out.avoidFamily = fam;
+    }
+    return out;
+  }
+
   private async run<T>(
     label: string,
     invoke: (serve: (input: GenerateTextInput) => Promise<string>) => Promise<T>,
+    rawIntent?: CallIntent,
   ): Promise<T> {
+    const intent = this.completeIntent(rawIntent);
     const attempts = Math.max(1, this.freePoolCount());
     let lastError: unknown = null;
 
@@ -684,6 +719,7 @@ export class RotatingProvider implements LLMProvider {
         selection = await this.rotator.nextRoute({
           tier: this.tier,
           allowPaid: false, // NEVER auto-promote to a paid cost class here.
+          intent,
         });
       } catch (err) {
         // A pinned-and-unavailable target must fail THIS call loudly — never
@@ -696,6 +732,7 @@ export class RotatingProvider implements LLMProvider {
       }
       const route = selection.route;
       this.model = route.model;
+      if (intent?.role) this.lastFamily.set(intent.role, modelFamily(route.model));
       this.opts.onRoute?.(selection);
       if (selection.catalogStale) {
         this.log(
@@ -762,7 +799,7 @@ export class RotatingProvider implements LLMProvider {
   }
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
-    const text = await this.run("generateText", (serve) => serve(input));
+    const text = await this.run("generateText", (serve) => serve(input), input.intent);
     return { text, provider: "free" };
   }
 
@@ -790,6 +827,7 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
           return extractJson(text);
         },
       }),
+      input.intent,
     );
   }
 }
