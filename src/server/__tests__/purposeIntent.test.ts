@@ -149,9 +149,18 @@ describe("the provider wrapper carries purpose", () => {
       onRoute: (s) => seen.push(`${s.route.id}|${s.intentRole}|${s.purpose}`),
     });
     prov.setPurpose("ui-app: checkout screenshots", ["vision"]);
-    for (let i = 0; i < 3; i++) {
+    // Authors are NOT narrowed by a visual purpose (live IPlay run 2026-08-23).
+    const authors = new Set<string>();
+    for (let i = 0; i < 4; i++) {
       await prov.generateText({ system: "s", prompt: "p", intent: { role: "author", needs: ["code_author"] } });
-      expect(seen.at(-1)).toBe("b/vision-coder|author|ui-app: checkout screenshots");
+      authors.add(seen.at(-1)!.split("|")[0]);
+      expect(seen.at(-1)!.endsWith("|author|ui-app: checkout screenshots")).toBe(true);
+    }
+    expect(authors).toEqual(new Set(["a/text-coder", "b/vision-coder"]));
+    // The vision role is.
+    for (let i = 0; i < 3; i++) {
+      await prov.generateText({ system: "s", prompt: "p", intent: { role: "vision" } });
+      expect(seen.at(-1)!.split("|")[0]).toBe("b/vision-coder");
     }
     vi.unstubAllGlobals();
   });
@@ -190,10 +199,13 @@ describe("the work theme supplies purpose to the rotator", () => {
       constraints: [],
     });
     await themed.generateText({ system: "s", prompt: "p", intent: { role: "author", needs: ["code_author"] } });
-    const intent = captured[0].intent as { role: string; needs: string[]; purpose: string };
-    expect(intent.role).toBe("author");
-    expect(intent.purpose).toContain("Checkout UI");
-    expect(intent.needs).toEqual(expect.arrayContaining(["code_author", "vision"]));
+    const author = captured[0].intent as { role: string; needs: string[]; purpose: string };
+    expect(author.role).toBe("author");
+    expect(author.purpose).toContain("Checkout UI");
+    expect(author.needs).toEqual(["code_author"]);            // not narrowed
+    await themed.generateText({ system: "s", prompt: "p", intent: { role: "vision" } });
+    const vision = captured[1].intent as { role: string; needs: string[] };
+    expect(vision.needs).toEqual(expect.arrayContaining(["vision"]));
   });
 
   it("purposeNeedsVision is narrow", () => {

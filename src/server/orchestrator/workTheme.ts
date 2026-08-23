@@ -173,7 +173,10 @@ export class ThemedProvider implements LLMProvider {
     if (!theme) return intent;
     const out: CallIntent = { ...(intent ?? {}) };
     if (!out.purpose) out.purpose = theme.theme.slice(0, 80);
-    if (purposeNeedsVision(`${theme.theme} ${theme.issue}`)) {
+    // Purpose-derived needs attach to the VISION role only (twin of
+    // flexfactor_rotation._complete_intent). A program that PRODUCES video
+    // must not narrow every code author to image-capable models.
+    if (out.role === "vision" && purposeNeedsVision(`${theme.theme} ${theme.issue}`)) {
       out.needs = [...new Set([...(out.needs ?? []), "vision" as const])];
     }
     return out;

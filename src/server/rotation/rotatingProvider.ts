@@ -793,7 +793,9 @@ export class RotatingProvider implements LLMProvider {
     if (!intent && !this.purpose) return undefined;
     const out: CallIntent = { ...(intent ?? {}) };
     if (this.purpose && !out.purpose) out.purpose = this.purpose;
-    if (this.purposeNeeds.length > 0) {
+    // Purpose-derived needs attach to the VISION role only; see
+    // flexfactor_rotation._complete_intent for the live-run reason.
+    if (this.purposeNeeds.length > 0 && out.role === "vision") {
       out.needs = [...new Set([...(out.needs ?? []), ...this.purposeNeeds])];
     }
     // A reviewer must never be the author's own family when an alternative
