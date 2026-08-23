@@ -424,7 +424,7 @@ function cooling(state: RotationState, key: string, now: number): boolean {
 }
 
 /** A pin may name a route id, a backend, a pool, or a bare model id. */
-function pinMatches(route: CatalogRoute, pin: string): boolean {
+export function pinMatches(route: CatalogRoute, pin: string): boolean {
   const p = pin.trim();
   return (
     p === route.id ||

@@ -29,7 +29,10 @@ import {
   ProviderAbortError,
 } from "../providers/types.js";
 import type { FreeProvider } from "../providers/freeProvider.js";
-import { unfitForCodeReason } from "../providers/routeFitness.js";
+import {
+  unfitForCodeReason,
+  rotationExcludedReason,
+} from "../providers/routeFitness.js";
 import {
   effectiveHttpRoute,
   extendedRouteUnusableReason,
@@ -48,6 +51,7 @@ import {
   type Tier,
   describeSelection,
   isFreeRoute,
+  pinMatches,
 } from "./aitimeRotation.js";
 
 export type RotationLogger = (kind: "info" | "warn", message: string) => void;
@@ -379,10 +383,34 @@ export function filterRoutableCatalog(
   const fcc = fccBaseUrl ? norm(fccBaseUrl) : "";
   const missing = new Set<string>();
   const extendedDropped: Record<string, number> = {};
+
+  // A DELIBERATE pin outranks the slow-route exclusion. Without this, pinning
+  // Glimmer would drop it here and then fail in resolvePin with "matches no
+  // route in the catalog" — the operator asks for a route by name and is told
+  // it does not exist. Standalone use is exactly what the exclusion is meant
+  // to leave open, so honour the pin and let rotation keep skipping it.
+  let activePin: string | null = null;
+  try {
+    activePin = process.env.AI_ROTATE_PIN || rotator.store.getPin(rotator.app);
+  } catch {
+    activePin = process.env.AI_ROTATE_PIN || null;
+  }
   let unfitSkipped = 0;
+  const excludedReasons: Record<string, number> = {};
+  let excludedSkipped = 0;
   const kept = rotator.catalog.routes.filter((r) => {
     if (unfitForCodeReason(r.id) || unfitForCodeReason(r.model)) {
       unfitSkipped += 1;
+      return false;
+    }
+    // Real, free and code-capable, but too slow to be ROTATED into on this
+    // machine (see rotationExcludedReason). Standalone use is unaffected:
+    // pinning or an explicit model never comes through this filter.
+    const excluded =
+      rotationExcludedReason(r.id) || rotationExcludedReason(r.model);
+    if (excluded && !(activePin && pinMatches(r, activePin))) {
+      excludedReasons[excluded] = (excludedReasons[excluded] ?? 0) + 1;
+      excludedSkipped += 1;
       return false;
     }
     // EXTENDED TRANSPORTS must prove they are BUILDABLE here — importable and
@@ -450,13 +478,30 @@ export function filterRoutableCatalog(
         `(guard/TTS/vision/embed/media models).`,
     );
   }
+  if (excludedSkipped > 0) {
+    // Said out loud, never silently: a route that vanished from rotation with
+    // no explanation is indistinguishable from a route that was never in the
+    // catalog, and the difference matters when someone asks "why isn't it
+    // being used?".
+    log(
+      "info",
+      `[rotate] ${excludedSkipped} catalog route(s) held out of rotation — ` +
+        Object.entries(excludedReasons)
+          .map(([why, n]) => `${why} x${n}`)
+          .join("; ") +
+        `. Run them standalone (pnpm glimmer) or clear FACTORY_ROTATION_EXCLUDE.`,
+    );
+  }
   if (missing.size > 0) {
     // Counted against what the CATALOG offered, so synthesized additions
     // cannot mask (or inflate) how many real rows were dropped for credentials.
+    // Every skip category must be subtracted here or its routes get miscounted
+    // as credential failures.
     const dropped =
       rotator.catalog.routes.length -
       keptFromCatalog -
       unfitSkipped -
+      excludedSkipped -
       extendedCatalogDropped;
     log(
       "warn",

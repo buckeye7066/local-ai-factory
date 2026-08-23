@@ -58,3 +58,45 @@ export function unfitForCodeReason(modelOrRouteId: string): string {
 export function isFitForCode(modelOrRouteId: string): boolean {
   return !unfitForCodeReason(modelOrRouteId);
 }
+
+/**
+ * Routes that are REAL, free and code-capable but must not be ROTATED INTO on
+ * this machine, because they are far too slow to carry a deck job.
+ *
+ * Muse Glimmer is the case this exists for. It is a 30B dense decoder and this
+ * box has no GPU Ollama can use (`ollama ps` reports 100% CPU), so it generates
+ * at roughly 1-1.5 tokens/second. Rotation is CHEAPEST-FIRST and a local model
+ * is cost class 0 — the front of the queue — so a slow local route is not just
+ * slow, it is *preferentially* slow: picked first, every sweep. A single 2k
+ * token step would take about half an hour.
+ *
+ * So Glimmer is standalone-only by default (owner decision 2026-08-22). Run it
+ * deliberately via `pnpm glimmer` / rotation-pin, not by letting the ring find
+ * it. This is the twin of `_rotation_excluded_reason` in flexfactor.py — if the
+ * policy changes in one it changes in the other, in the same commit.
+ *
+ * Process-local only: nothing here is written into the shared rotation state,
+ * so it cannot bench the pool for FlexFactor or Purpose Foundry.
+ *
+ * Override with FACTORY_ROTATION_EXCLUDE (comma-separated substrings); set it
+ * to the empty string to let Glimmer rotate after all.
+ */
+// Scoped to the LOCAL route on purpose. The catalog also carries
+// nvidia_nim/meta/muse-glimmer-30b (free-tier, strong) and
+// openrouter/meta/muse-glimmer-30b (paid) — the SAME model served from the
+// cloud, at cloud speed. The slowness above is a property of THIS machine's
+// CPU, not of Muse Glimmer, so excluding the cloud rows would deny rotation a
+// good free route for a reason that does not apply to it.
+const ROTATION_EXCLUDE_DEFAULT = "ollama/muse-glimmer";
+
+export function rotationExcludedReason(modelOrRouteId: string): string {
+  const raw =
+    process.env.FACTORY_ROTATION_EXCLUDE ?? ROTATION_EXCLUDE_DEFAULT;
+  const id = String(modelOrRouteId || "").toLowerCase();
+  for (const frag of raw.split(",").map((s) => s.trim().toLowerCase())) {
+    if (frag && id.includes(frag)) {
+      return `excluded from rotation (${frag}: too slow for a rotated job on this CPU)`;
+    }
+  }
+  return "";
+}
