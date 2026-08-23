@@ -26,11 +26,23 @@ export interface EditOutcome {
 }
 
 /** Apply edits in order; each anchor must match exactly once at its turn. */
-export function applyEdits(original: string, edits: FileEdit[]): EditOutcome {
-  if (edits.length === 0) {
+export function applyEdits(original: string, rawEdits: FileEdit[]): EditOutcome {
+  if (rawEdits.length === 0) {
     return { ok: false, reason: "no edits supplied for an existing file" };
   }
-  let out = original;
+  // LINE ENDINGS ARE NOT CONTENT (FutureU run 2c775761, 2026-08-23). Every
+  // checkout on a `core.autocrlf=true` Windows box is CRLF, while the model
+  // quotes the LF text it was shown, so an exact indexOf refused EVERY edit to
+  // an existing file and the run died at the builder. Match on LF-normalized
+  // text and write the file back in the line-ending style it already used.
+  const crlf = original.includes("\r\n");
+  const toLf = (text: string): string => text.replace(/\r\n/g, "\n");
+  const edits = rawEdits.map((edit) => ({
+    ...edit,
+    find: toLf(edit.find),
+    replace: toLf(edit.replace),
+  }));
+  let out = crlf ? toLf(original) : original;
   let quotedCharacters = 0;
   let replacementCharacters = 0;
   for (const [i, edit] of edits.entries()) {
@@ -109,7 +121,7 @@ export function applyEdits(original: string, edits: FileEdit[]): EditOutcome {
     }
     out = out.slice(0, first) + edit.replace + out.slice(first + edit.find.length);
   }
-  return { ok: true, contents: out };
+  return { ok: true, contents: crlf ? out.replace(/\n/g, "\r\n") : out };
 }
 
 export interface ResolvedWrite {

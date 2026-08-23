@@ -95,6 +95,38 @@ describe("applyEdits", () => {
     expect(out.ok).toBe(true);
     expect(out.contents).toContain("const b = 3;");
   });
+
+  // FutureU run 2c775761 (2026-08-23): every file in a core.autocrlf=true
+  // checkout is CRLF, the model quotes LF, and the exact match refused all.
+  it("matches an LF-quoted anchor inside a CRLF file and keeps CRLF on write", () => {
+    const CR = String.fromCharCode(13);
+    const src = ["const a = 1;", "const b = 2;", "const c = 3;", "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;", ""].join(CR + BR);
+    const out = applyEdits(src, [
+      { find: "const b = 2;" + BR + "const c = 3;", replace: "const b = 20;" + BR + "const c = 3;" },
+    ]);
+    expect(out.ok).toBe(true);
+    expect(out.contents).toBe(["const a = 1;", "const b = 20;", "const c = 3;", "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;", ""].join(CR + BR));
+    expect(out.contents).not.toMatch(/[^\r]\n/);
+  });
+
+  it("matches a CRLF-quoted anchor inside an LF file and keeps LF on write", () => {
+    const CR = String.fromCharCode(13);
+    const src = "const a = 1;" + BR + "const b = 2;" + BR + "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;" + BR;
+    const out = applyEdits(src, [
+      { find: "const a = 1;" + CR + BR + "const b = 2;", replace: "const a = 1;" + CR + BR + "const b = 3;" },
+    ]);
+    expect(out.ok).toBe(true);
+    expect(out.contents).toBe("const a = 1;" + BR + "const b = 3;" + BR + "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;" + BR);
+    expect(out.contents).not.toContain(CR);
+  });
+
+  it("still refuses an anchor that is wrong for reasons other than line endings", () => {
+    const CR = String.fromCharCode(13);
+    const src = "const a = 1;" + CR + BR + "const b = 2;" + CR + BR;
+    const out = applyEdits(src, [{ find: "const b = 9;", replace: "x" }]);
+    expect(out.ok).toBe(false);
+    expect(out.reason).toContain("not found");
+  });
 });
 
 describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
