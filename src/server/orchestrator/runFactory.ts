@@ -93,6 +93,8 @@ import {
 import { parseDirectTestEvidence } from "./directTestEvidence.js";
 import { groundFinalReport } from "./reportGrounding.js";
 import { ErrorLedger, renderErrorLines } from "./errorLedger.js";
+import { ThemedProvider } from "./workTheme.js";
+import { PaidFirstOneRoundProvider } from "../providers/paidFirst.js";
 import {
   foldTestExit,
   freshTestVerdict,
@@ -623,19 +625,41 @@ async function executeRun(
     run.codeProvider === "anthropic" || run.codeProvider === "openai"
       ? run.codeProvider
       : undefined;
-  const rawCritical = run.demo
-    ? registry.get("mock")
-    : registry.resolveLive(
-        runPinnedPaid ?? registry.availablePaid()[0] ?? run.codeProvider,
-        config.defaultCodeProvider,
-      );
-  const criticalCounted = new CountingProvider(
-    rawCritical,
-    run,
-    config.maxModelCallsPerRun,
-    attribution(rawCritical),
-  );
-  const critical: LLMProvider = withFailover(gateIfPaid(rawCritical, criticalCounted));
+  const firstPaid = registry.availablePaid()[0];
+  let critical: LLMProvider;
+  if (!run.demo && !runPinnedPaid && firstPaid) {
+    // AUTO MODE (owner decision 2026-08-23: "paid models first followed by
+    // free. Only do one round, though."): a critical call gets ONE attempt on
+    // the first configured paid provider through the budget gate; if it fails
+    // or is refused, the SAME call falls to the free rotator. The free side is
+    // the $0 primary alone — not the failover chain — so there is never a
+    // second paid attempt for that call. Cost is attributed by who served.
+    const paidRaw = registry.resolveLive(firstPaid, config.defaultCodeProvider);
+    const paidOnce = gateIfPaid(
+      paidRaw,
+      new CountingProvider(paidRaw, run, config.maxModelCallsPerRun, attribution(paidRaw)),
+    );
+    const freeRaw = new ThemedProvider(registry.get("free"));
+    const freeOnly = new CountingProvider(
+      freeRaw,
+      run,
+      config.maxModelCallsPerRun,
+      attribution(freeRaw),
+    );
+    critical = new PaidFirstOneRoundProvider(paidOnce, freeOnly, (m) => log("info", m));
+    log("info", `Critical stages: auto mode — paid first (${firstPaid}, one round), then free.`);
+  } else {
+    const rawCritical = run.demo
+      ? registry.get("mock")
+      : registry.resolveLive(runPinnedPaid ?? run.codeProvider, config.defaultCodeProvider);
+    const criticalCounted = new CountingProvider(
+      rawCritical,
+      run,
+      config.maxModelCallsPerRun,
+      attribution(rawCritical),
+    );
+    critical = withFailover(gateIfPaid(rawCritical, criticalCounted));
+  }
   // The live in-memory view of the workspace, restored from the private
   // checkpoint so a resumed run never needs the redacted API copy.
   const files = new Map<string, FileContent>(
