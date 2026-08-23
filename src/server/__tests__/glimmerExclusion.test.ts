@@ -274,6 +274,8 @@ describe("vision models never enter code rotation (parity with flexfactor)", () 
       row("gemini/deep-research-preview-04-2026", { api: "gemini", pool: "gemini:free" }),
       row("gemini/deep-research-pro-preview-12-2025", { api: "gemini", pool: "gemini:free" }),
       row("openrouter/perplexity/sonar-deep-research", { pool: "openrouter:free" }),
+      // Realtime endpoints are speech/WebRTC, not chat: 404 "This is not a chat model".
+      row("openai_api/gpt-realtime-1.5", { pool: "openai:api" }),
       row("gemini/gemini-2.5-flash", { api: "gemini", pool: "gemini:free" }),
     ]);
     expect(keptIds()).toEqual(["gemini/gemini-2.5-flash"]);

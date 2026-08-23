@@ -275,20 +275,31 @@ export class ErrorLedger {
 
     let codeKind: ErrorLedgerEntry["code"]["kind"] = "unknown";
     let classification = classified.classification;
-    if (route && classified.classification === "provider") codeKind = "route";
-    else if (frame && classified.suggestionSource === "none") codeKind = "deck";
+    let suggestion = classified.suggestion;
+    let suggestionSource: ErrorLedgerEntry["suggestionSource"] = classified.suggestionSource;
+    if (route) {
+      // A failure that carries a route id is the PROVIDER's by default, even
+      // when a deck frame is on the stack: the HTTP client frame is where it
+      // surfaced, not the cause. Route failures are never handed to the model
+      // fallback either — that call is itself a rotated call and could
+      // re-enter this ledger.
+      codeKind = "route";
+      if (classified.suggestionSource === "none") {
+        classification = "provider";
+        suggestion = `Provider-side failure on route ${route} — rotation moves to the next pool; retry. If it repeats on this route only, hold the route out or refresh the catalog.`;
+        suggestionSource = "signature";
+      }
+    } else if (frame && classified.suggestionSource === "none") codeKind = "deck";
     else if (programFile && (classification === "program-defect" || input.exitCode !== undefined)) {
       codeKind = "program";
       if (classified.suggestionSource === "none") classification = "program-defect";
-    } else if (route) codeKind = "route";
-    else if (frame) codeKind = "deck";
+    } else if (frame) codeKind = "deck";
     // A command that ran and failed without a known signature is the
     // program's failure, not the deck's.
-    if (input.exitCode !== undefined && input.exitCode !== 0 && classified.suggestionSource === "none") {
+    if (input.exitCode !== undefined && input.exitCode !== 0 && classified.suggestionSource === "none" && !route) {
       classification = "program-defect";
     }
 
-    let suggestion = classified.suggestion;
     if (!suggestion && input.exitCode !== undefined && input.exitCode !== 0) {
       suggestion = programFile
         ? `Fix ${programFile}; the command \`${input.command ?? "?"}\` exited ${input.exitCode}.`
@@ -311,7 +322,7 @@ export class ErrorLedger {
       classification,
       signature: classified.signature,
       suggestion,
-      suggestionSource: suggestion ? classified.suggestionSource : "none",
+      suggestionSource: suggestion ? (suggestionSource === "none" ? "signature" : suggestionSource) : "none",
       occurrences: 1,
     };
     if (this.entries.length >= MAX_ENTRIES) this.entries.shift();
@@ -326,9 +337,9 @@ export class ErrorLedger {
     return /\] \w+: \S+ failed \(|attempt \d+\/\d+ failed|^Run failed:|held-out|HTTP [45]\d\d/.test(message);
   }
 
-  /** Entries still without a suggestion. */
+  /** Entries still without a suggestion. Route failures are never in here. */
   unresolved(): ErrorLedgerEntry[] {
-    return this.entries.filter((e) => e.suggestionSource === "none");
+    return this.entries.filter((e) => e.suggestionSource === "none" && e.code.kind !== "route" && !e.code.route);
   }
 
   /**

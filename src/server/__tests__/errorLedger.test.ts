@@ -125,6 +125,32 @@ describe("ErrorLedger — record, classify, persist, render", () => {
     expect(ledger.unresolved()).toEqual([deck]);
   });
 
+  it("a failure carrying a route id is the provider's even with a deck frame, and is never model-triaged", async () => {
+    const ledger = new ErrorLedger("11111111-2222-3333-4444-555555555555");
+    const entry = ledger.record({
+      stage: "builder",
+      message: "Run failed: route openai_api/gpt-realtime-1.5 HTTP 404: This is not a chat model",
+      error: new Error("This is not a chat model"),
+    });
+    expect(entry.code.kind).toBe("route");
+    expect(entry.code.route).toBe("openai_api/gpt-realtime-1.5");
+    expect(entry.classification).toBe("provider");
+    expect(entry.suggestionSource).toBe("signature");
+    expect(ledger.unresolved()).toEqual([]);
+    let asked = 0;
+    const provider = {
+      name: "stub",
+      isConfigured: () => true,
+      generateText: async () => ({ text: "", provider: "stub" as const }),
+      generateJson: async () => {
+        asked += 1;
+        return { suggestions: [] };
+      },
+    } as unknown as LLMProvider;
+    expect(await ledger.suggestWithModel(provider)).toBe(0);
+    expect(asked).toBe(0);
+  });
+
   it("folds repeats into occurrences instead of duplicating rows", () => {
     const ledger = new ErrorLedger("11111111-2222-3333-4444-555555555555");
     ledger.record({ stage: "builder", message: "route x/y failed (HTTP 429)" });

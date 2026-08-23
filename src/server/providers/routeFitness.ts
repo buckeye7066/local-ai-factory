@@ -66,6 +66,10 @@ const UNFIT_CODE_PATTERNS: RegExp[] = [
   // guard/TTS/vision routes. FlexFactor has the same drift (report, not fix
   // here).
   /\bdeep-research\b/i,
+  // Realtime (speech/WebRTC) endpoints answer 404 "This is not a chat model"
+  // (live FlexFactor run 2026-08-23: openai_api/gpt-realtime-1.5 rotated in as
+  // a light judge). Parity with flexfactor_directed's r"realtime".
+  /\brealtime\b/i,
 ];
 
 export function unfitForCodeReason(modelOrRouteId: string): string {
