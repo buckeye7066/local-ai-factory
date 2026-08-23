@@ -177,3 +177,39 @@ describe("a deliberate pin outranks the exclusion", () => {
     expect(keptIds()).not.toContain("ollama/muse-glimmer:30b");
   });
 });
+
+describe("the local gate is a measurement when local-bench.json exists", () => {
+  function writeBench(models: Array<Record<string, unknown>>, floor = 5): void {
+    fs.writeFileSync(
+      path.join(dir, "local-bench.json"),
+      JSON.stringify({ schema: 1, slow_tok_per_s: floor, models }),
+    );
+  }
+
+  it("a slow measurement holds the route out", () => {
+    writeBench([{ tag: "qwen3-coder:30b", ok: true, gen_tok_per_s: 1.6, answered: true }]);
+    expect(keptIds()).not.toContain("ollama/qwen3-coder:30b");
+  });
+
+  it("a fast measurement admits even a name-listed route", () => {
+    writeBench([{ tag: "muse-glimmer:30b", ok: true, gen_tok_per_s: 40, answered: true }]);
+    expect(keptIds()).toContain("ollama/muse-glimmer:30b");
+  });
+
+  it("a reasoning-only reply is held out regardless of rate", () => {
+    writeBench([
+      { tag: "qwen3-coder:30b", ok: true, gen_tok_per_s: 30, answered: false, reasoning_only: true },
+    ]);
+    expect(keptIds()).not.toContain("ollama/qwen3-coder:30b");
+  });
+
+  it("cloud rows never consult the bench file", () => {
+    writeBench([{ tag: "meta/muse-glimmer-30b", ok: true, gen_tok_per_s: 0.1, answered: true }]);
+    expect(keptIds()).toContain("nvidia_nim/meta/muse-glimmer-30b");
+  });
+
+  it("a corrupt file is ignored, not fatal", () => {
+    fs.writeFileSync(path.join(dir, "local-bench.json"), "{not json");
+    expect(keptIds()).toContain("ollama/qwen3-coder:30b");
+  });
+});

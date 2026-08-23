@@ -12,6 +12,10 @@
  * missing credentials — never write shared-state cooldowns for another app).
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 const UNFIT_CODE_PATTERNS: RegExp[] = [
   /\bprompt-?guard\b/i,
   /\bllama-guard\b/i,
@@ -89,10 +93,87 @@ export function isFitForCode(modelOrRouteId: string): boolean {
 // good free route for a reason that does not apply to it.
 const ROTATION_EXCLUDE_DEFAULT = "ollama/muse-glimmer";
 
+interface BenchEntry {
+  tag: string;
+  ok: boolean;
+  gen_tok_per_s?: number | null;
+  answered?: boolean;
+  reasoning_only?: boolean;
+}
+interface BenchTable {
+  floor: number;
+  byTag: Map<string, BenchEntry>;
+}
+
+let benchCache: { mtimeMs: number; table: BenchTable } | null = null;
+
+function localBenchPath(): string {
+  const base =
+    process.env.AITIME_STATE_DIR ||
+    path.join(process.env.LOCALAPPDATA || os.homedir(), "AITime");
+  return path.join(base, "local-bench.json");
+}
+
+/**
+ * Measured speeds for local models, written by
+ * C:\Users\firer\glimmer\tools\bench_local_models.py — the same prompt through
+ * the same Ollama for every local model. Read-only here; a missing or
+ * unreadable file means "no measurement", never an error. Twin of
+ * flexfactor._local_bench.
+ */
+function localBench(): BenchTable | null {
+  const file = localBenchPath();
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    return null;
+  }
+  if (benchCache && benchCache.mtimeMs === mtimeMs) return benchCache.table;
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as {
+      slow_tok_per_s?: number;
+      models?: BenchEntry[];
+    };
+    const byTag = new Map<string, BenchEntry>();
+    for (const e of raw.models ?? []) {
+      if (e && typeof e.tag === "string") byTag.set(e.tag.toLowerCase(), e);
+    }
+    const table = { floor: Number(raw.slow_tok_per_s) || 5, byTag };
+    benchCache = { mtimeMs, table };
+    return table;
+  } catch {
+    return null;
+  }
+}
+
 export function rotationExcludedReason(modelOrRouteId: string): string {
+  const id = String(modelOrRouteId || "").toLowerCase();
+
+  // Measured first: a local route with a benchmark entry is judged by its
+  // real generation rate, and that verdict outranks the name list below.
+  if (id.startsWith("ollama/")) {
+    const bench = localBench();
+    const entry = bench?.byTag.get(id.slice("ollama/".length));
+    if (entry?.ok) {
+      if (entry.answered === false) {
+        return `excluded from rotation (measured: produced no answer${
+          entry.reasoning_only ? " - reasoning-only reply" : ""
+        })`;
+      }
+      const rate = entry.gen_tok_per_s;
+      if (typeof rate === "number" && rate < bench!.floor) {
+        return (
+          `excluded from rotation (measured ${rate} tok/s on this CPU, below the ` +
+          `${bench!.floor} tok/s floor for a rotated job)`
+        );
+      }
+      return "";
+    }
+  }
+
   const raw =
     process.env.FACTORY_ROTATION_EXCLUDE ?? ROTATION_EXCLUDE_DEFAULT;
-  const id = String(modelOrRouteId || "").toLowerCase();
   for (const frag of raw.split(",").map((s) => s.trim().toLowerCase())) {
     if (frag && id.includes(frag)) {
       return `excluded from rotation (${frag}: too slow for a rotated job on this CPU)`;
