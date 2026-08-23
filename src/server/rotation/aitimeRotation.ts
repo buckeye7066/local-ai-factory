@@ -300,10 +300,50 @@ export interface RotationState {
   cooldowns: Record<string, number>;
   strikes: Record<string, number>;
   pin: Record<string, string | null>;
+  /**
+   * Purpose effectiveness: route id -> purpose (or "*") -> counts of what the
+   * route's WORK did (verified / rejected / noop / build_failed). Written by
+   * reportQuality, read by pickInTier. Optional: older state files lack it.
+   */
+  quality?: Record<string, Record<string, QualityEntry>>;
+}
+
+export interface QualityEntry {
+  verified: number;
+  rejected: number;
+  noop: number;
+  build_failed: number;
+  other: number;
+  last_at: number;
+}
+
+export type QualitySignal = "verified" | "rejected" | "noop" | "build_failed";
+export const QUALITY_SIGNALS: readonly QualitySignal[] = ["verified", "rejected", "noop", "build_failed"];
+export const QUALITY_MIN_ATTEMPTS = 5;
+export const QUALITY_FLOOR = 0.25;
+export const QUALITY_COOLDOWN_S = 1800;
+
+/**
+ * Laplace-smoothed share of attempts whose work was verified:
+ * (verified + 1) / (attempts + 2). No history scores 0.5 -- neither trusted
+ * nor punished -- and one bad result cannot sink a route. Twin of
+ * flexfactor_rotation._yield.
+ */
+export function yieldOf(entry: Partial<QualityEntry> | undefined): number {
+  const v = Number(entry?.verified ?? 0);
+  const attempts =
+    v + Number(entry?.rejected ?? 0) + Number(entry?.noop ?? 0) + Number(entry?.build_failed ?? 0);
+  return (v + 1) / (attempts + 2);
+}
+
+function routeYield(state: RotationState, route: CatalogRoute, purpose: string): number {
+  const q = state.quality?.[route.id] ?? {};
+  const entry = q[purpose || "*"] ?? (purpose ? q["*"] : undefined);
+  return yieldOf(entry);
 }
 
 function emptyState(): RotationState {
-  return { schema: SCHEMA, cursor: {}, pools: {}, cooldowns: {}, strikes: {}, pin: {} };
+  return { schema: SCHEMA, cursor: {}, pools: {}, cooldowns: {}, strikes: {}, pin: {}, quality: {} };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -670,6 +710,12 @@ export class Rotator {
         continue;
       }
       if (cooling(state, `route:${route.id}`, now)) continue;
+      // Chronically off-purpose for THIS program (see reportQuality): skipped
+      // here, for this purpose only, with the reason visible.
+      if (intent?.purpose && cooling(state, `route:${route.id}@${intent.purpose}`, now)) {
+        reasons[route.pool] ??= `${route.id} cooled down: low yield for '${intent.purpose}'`;
+        continue;
+      }
       // PURPOSE FIT, before pool selection. A route whose capability list is
       // KNOWN and lacks a hard need is not a candidate for this call -- it
       // would be picked first (cheapest) and then do the wrong job. A route
@@ -728,9 +774,12 @@ export class Rotator {
       if (r.capabilities.length === 0) return 2;
       return r.capabilities_source === "measured" ? 0 : 1;
     };
+    const purpose = intent?.purpose ?? "";
     const routes = pools.get(pool)!.sort((a, b) => {
       return (
         fitRank(a) - fitRank(b) ||
+        // higher yield first; ties fall through to LRU as before
+        routeYield(state, b, purpose) - routeYield(state, a, purpose) ||
         this.routeLastUsed(state, a) - this.routeLastUsed(state, b) ||
         (COST_ORDER[a.cost_class] ?? 9) - (COST_ORDER[b.cost_class] ?? 9) ||
         a.id.localeCompare(b.id)
@@ -798,6 +847,48 @@ export class Rotator {
   /**
    * Record what a call did so the next pick is better informed.
    */
+  /**
+   * Record that this route's WORK helped (or did not) for a purpose.
+   *
+   * `report` says a call was served; this says whether what came back
+   * advanced the program -- a fix verified, rejected by the independent
+   * reviewer, a no-op, or a build break. Shared state, so the other app
+   * learns too. Returns the cooldown note when this report tipped the route
+   * into a purpose-scoped cooldown, else null. Twin of Python report_quality.
+   */
+  async reportQuality(
+    route: CatalogRoute,
+    signal: QualitySignal | string,
+    purpose = "",
+    now: number = Date.now() / 1000,
+  ): Promise<string | null> {
+    const sig = (QUALITY_SIGNALS as readonly string[]).includes(signal) ? signal : "other";
+    const key = purpose || "*";
+    let note: string | null = null;
+    await this.store.update((state) => {
+      const q = (state.quality ??= {});
+      const perRoute = (q[route.id] ??= {});
+      const entry = (perRoute[key] ??= {
+        verified: 0, rejected: 0, noop: 0, build_failed: 0, other: 0, last_at: 0,
+      });
+      (entry as unknown as Record<string, number>)[sig] =
+        ((entry as unknown as Record<string, number>)[sig] ?? 0) + 1;
+      entry.last_at = now;
+      const attempts = QUALITY_SIGNALS.reduce((n, s) => n + (entry[s] ?? 0), 0);
+      if (attempts >= QUALITY_MIN_ATTEMPTS && yieldOf(entry) < QUALITY_FLOOR) {
+        state.cooldowns[`route:${route.id}@${key}`] = now + QUALITY_COOLDOWN_S;
+        note =
+          `${route.id} cooled down ${Math.round(QUALITY_COOLDOWN_S / 60)} min for '${key}': ` +
+          `yield ${yieldOf(entry).toFixed(2)} over ${attempts} attempt(s) is below ${QUALITY_FLOOR}`;
+      }
+    });
+    return note;
+  }
+
+  qualityFor(route: CatalogRoute, purpose = ""): Partial<QualityEntry> {
+    return { ...(this.store.read().quality?.[route.id]?.[purpose || "*"] ?? {}) };
+  }
+
   async report(
     route: CatalogRoute,
     outcome: Outcome,

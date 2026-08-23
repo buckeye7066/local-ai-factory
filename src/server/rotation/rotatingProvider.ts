@@ -50,6 +50,7 @@ import {
   type Outcome,
   type Selection,
   type Tier,
+  type QualitySignal,
   describeSelection,
   isFreeRoute,
   pinMatches,
@@ -57,6 +58,20 @@ import {
 } from "./aitimeRotation.js";
 
 export type RotationLogger = (kind: "info" | "warn", message: string) => void;
+
+/**
+ * The RotatingProvider that most recently served an intent-bearing call.
+ * The orchestrator reaches it through several wrappers (Counting -> Themed ->
+ * Failover -> Rotating) and has no handle on the innermost one, so the result
+ * of the work is reported here, the same way freeRoute's snapshotRoute()
+ * exposes the live route. One rotating provider per process in practice.
+ */
+let liveRotating: RotatingProvider | null = null;
+
+export async function reportRouteQuality(role: string, signal: QualitySignal): Promise<string | null> {
+  if (!liveRotating) return null;
+  return liveRotating.reportQuality(role, signal);
+}
 
 /**
  * The default fetch User-Agent is Cloudflare-blocked (error 1010) at Groq and
@@ -687,6 +702,21 @@ export class RotatingProvider implements LLMProvider {
   private purpose = "";
   private purposeNeeds: NonNullable<CallIntent["needs"]> = [];
   private readonly lastFamily = new Map<string, string>();
+  private readonly lastSelection = new Map<string, Selection>();
+
+  /**
+   * Attribute a work result to the route that last served `role`. Callers
+   * know whether a build verified, QA rejected, or nothing changed; they do
+   * not know which route authored it. This provider does. Returns the
+   * cooldown note when one was triggered, else null.
+   */
+  async reportQuality(role: string, signal: QualitySignal): Promise<string | null> {
+    const sel = this.lastSelection.get(role);
+    if (!sel) return null;
+    const note = await this.rotator.reportQuality(sel.route, signal, sel.purpose ?? "");
+    if (note) this.opts.log?.("warn", `[rotate] ${note}`);
+    return note;
+  }
 
   private completeIntent(intent?: CallIntent): CallIntent | undefined {
     if (!intent && !this.purpose) return undefined;
@@ -732,7 +762,11 @@ export class RotatingProvider implements LLMProvider {
       }
       const route = selection.route;
       this.model = route.model;
-      if (intent?.role) this.lastFamily.set(intent.role, modelFamily(route.model));
+      if (intent?.role) {
+        this.lastFamily.set(intent.role, modelFamily(route.model));
+        this.lastSelection.set(intent.role, selection);
+        liveRotating = this;
+      }
       this.opts.onRoute?.(selection);
       if (selection.catalogStale) {
         this.log(

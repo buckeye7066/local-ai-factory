@@ -81,6 +81,7 @@ import {
 } from "./cancellation.js";
 import { runRepairLoop } from "./repairLoop.js";
 import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
+import { reportRouteQuality } from "../rotation/rotatingProvider.js";
 import {
   assessExecutedCoverage,
   assessGeneratedTests,
@@ -1767,6 +1768,17 @@ async function executeRun(
       // EXECUTED commands' real output — never model judgment.
       const envFailure = qa.passed ? null : classifyEnvironmentFailure(verification);
       const incompleteVerification = verification.incomplete?.length ?? 0;
+      // PURPOSE EFFECTIVENESS feeds back into rotation: the route that
+      // authored this build is credited or debited in the shared rotation
+      // state for this run's purpose. An environment failure is not the
+      // model's doing and is not reported; a real QA failure is 'rejected',
+      // or 'build_failed' when the executed suite itself failed.
+      if (!run.demo && !envFailure) {
+        void reportRouteQuality(
+          "author",
+          qa.passed ? "verified" : testExit !== null && testExit !== 0 ? "build_failed" : "rejected",
+        );
+      }
       if (qa.passed) {
         log("success", "No high-severity issues — repair loop skipped.");
         finishStage(run, "repair", "skipped");
