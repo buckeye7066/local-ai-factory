@@ -6,9 +6,9 @@
  * create or consume readiness manifests or review-status files. Product
  * readiness is grounded in executable evidence from the exact revision.
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { resolve, dirname, extname, relative } from "node:path";
+import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -64,24 +64,6 @@ const excludedDirectories = new Set([
   "node_modules",
   "workspaces",
 ]);
-const textExtensions = new Set([
-  ".cmd",
-  ".css",
-  ".js",
-  ".json",
-  ".jsx",
-  ".md",
-  ".mjs",
-  ".ps1",
-  ".py",
-  ".pyw",
-  ".sh",
-  ".ts",
-  ".tsx",
-  ".txt",
-  ".yaml",
-  ".yml",
-]);
 const prohibitedLanguage = [
   ["organizational_gate", "sign" + " off"],
   ["organizational_gate_compact", "sign" + "off"],
@@ -98,9 +80,6 @@ function normalizeLanguage(value) {
   return value.toLowerCase().replace(/[-_\s]+/g, " ");
 }
 
-if (!textExtensions.has(".py") || !textExtensions.has(".pyw")) {
-  errors.push("release_language_policy_self_test:python_sources_not_scanned");
-}
 const wrappedPhraseProbe = normalizeLanguage("manual\napproval");
 if (!prohibitedLanguage.some(([, phrase]) => wrappedPhraseProbe.includes(phrase))) {
   errors.push("release_language_policy_self_test:wrapped_phrase_not_detected");
@@ -121,15 +100,30 @@ function fallbackRepositoryPaths(directory) {
 
 function repositoryPaths() {
   try {
+    const gitRoot = resolve(
+      execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim(),
+    );
+    const comparableRoot = process.platform === "win32" ? ROOT.toLowerCase() : ROOT;
+    const comparableGitRoot =
+      process.platform === "win32" ? gitRoot.toLowerCase() : gitRoot;
+    if (comparableGitRoot !== comparableRoot) {
+      throw new Error("enclosing Git index does not belong to Factory Deck");
+    }
     const output = execFileSync("git", ["ls-files", "-z"], {
       cwd: ROOT,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return output
+    const paths = output
       .split("\0")
       .filter(Boolean)
       .map((path) => resolve(ROOT, path));
+    if (paths.length === 0) throw new Error("Git index contains no files");
+    return paths;
   } catch {
     notes.push("git_index_unavailable:scanned_workspace_fallback");
     return fallbackRepositoryPaths(ROOT);
@@ -138,8 +132,10 @@ function repositoryPaths() {
 
 function scanLanguage() {
   for (const path of repositoryPaths()) {
-    if (!textExtensions.has(extname(path).toLowerCase())) continue;
-    const normalized = normalizeLanguage(readFileSync(path, "utf8"));
+    if (!existsSync(path) || !lstatSync(path).isFile()) continue;
+    const data = readFileSync(path);
+    if (data.includes(0)) continue;
+    const normalized = normalizeLanguage(data.toString("utf8"));
     for (const [label, phrase] of prohibitedLanguage) {
       if (normalized.includes(phrase)) {
         errors.push(`prohibited_release_language:${label}:${relative(ROOT, path)}`);
