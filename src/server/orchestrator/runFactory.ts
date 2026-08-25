@@ -26,6 +26,7 @@ import {
   OFFLINE_PROVIDERS,
   ProviderAbortError,
 } from "../providers/index.js";
+import type { ProviderRegistry } from "../providers/index.js";
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import {
@@ -335,6 +336,58 @@ class StaleCheckpointSpecificationError extends Error {
   }
 }
 
+/**
+ * Resolve the owner's provider-neutral tier into concrete internal providers.
+ *
+ * Free mode is a hard economic boundary: every role stays on the $0 rotator
+ * and no paid rescue is attached. Paid mode selects only configured paid
+ * providers; quota failover may rotate among those paid providers later.
+ */
+export function selectRunRouting(
+  options: RunOptions,
+  registry: ProviderRegistry,
+  config: AppConfig,
+): {
+  routingMode: "free" | "paid";
+  codeProvider: ProviderName;
+  reviewProvider: ProviderName;
+} {
+  const isPaid = (name: ProviderName | undefined): name is "anthropic" | "openai" =>
+    name === "anthropic" || name === "openai";
+  const inferredPaid = isPaid(options.codeProvider) || isPaid(options.reviewProvider);
+  const routingMode = options.routingMode ?? (inferredPaid ? "paid" : "free");
+
+  if (routingMode === "free") {
+    if (!registry.get("free").isConfigured()) {
+      throw new MissingProviderCredentialError([
+        "FACTORY_FREE_ENABLED / FACTORY_FREE_BASE_URL",
+      ]);
+    }
+    return { routingMode, codeProvider: "free", reviewProvider: "free" };
+  }
+
+  const paid = registry.availablePaid().filter(isPaid);
+  if (paid.length === 0) {
+    throw new MissingProviderCredentialError([
+      "ANTHROPIC_API_KEY or OPENAI_API_KEY (paid mode selected)",
+    ]);
+  }
+  const choose = (
+    requested: ProviderName | undefined,
+    fallback: ProviderName,
+  ): "anthropic" | "openai" => {
+    for (const candidate of [requested, fallback, ...paid]) {
+      if (isPaid(candidate) && paid.includes(candidate)) return candidate;
+    }
+    return paid[0]!;
+  };
+  return {
+    routingMode,
+    codeProvider: choose(options.codeProvider, config.defaultCodeProvider),
+    reviewProvider: choose(options.reviewProvider, config.defaultReviewProvider),
+  };
+}
+
 /** Create the initial queued record. Providers are resolved at queue time. */
 function createRecord(args: StartRunArgs): RunRecord {
   const { config, secrets, options } = args;
@@ -360,18 +413,13 @@ function createRecord(args: StartRunArgs): RunRecord {
     }
   }
 
-  const codeProvider: ProviderName = demo
-    ? "mock"
-    : registry.resolveLive(
-        options.codeProvider ?? config.defaultCodeProvider,
-        config.defaultCodeProvider,
-      ).name;
-  const reviewProvider: ProviderName = demo
-    ? "mock"
-    : registry.resolveLive(
-        options.reviewProvider ?? config.defaultReviewProvider,
-        config.defaultReviewProvider,
-      ).name;
+  const routing = demo
+    ? {
+        routingMode: options.routingMode ?? ("free" as const),
+        codeProvider: "mock" as const,
+        reviewProvider: "mock" as const,
+      }
+    : selectRunRouting(options, registry, config);
 
   return {
     id: randomUUID(),
@@ -382,8 +430,9 @@ function createRecord(args: StartRunArgs): RunRecord {
     status: "queued",
     resumable: false,
     demo,
-    codeProvider,
-    reviewProvider,
+    routingMode: routing.routingMode,
+    codeProvider: routing.codeProvider,
+    reviewProvider: routing.reviewProvider,
     currentStage: null,
     stages: freshStages(),
     logs: [],
@@ -558,12 +607,24 @@ async function executeRun(
 
   // Resolve + meter providers (budget enforced inside CountingProvider).
   // Demo journeys use mock; live journeys use resolveLive (never mock/stub).
+  const routingMode: "free" | "paid" =
+    run.routingMode ??
+    (run.codeProvider === "anthropic" ||
+    run.codeProvider === "openai" ||
+    run.reviewProvider === "anthropic" ||
+    run.reviewProvider === "openai"
+      ? "paid"
+      : "free");
   const rawCode = run.demo
     ? registry.get("mock")
-    : registry.resolveLive(run.codeProvider, config.defaultCodeProvider);
+    : routingMode === "free"
+      ? new ThemedProvider(registry.get("free"))
+      : registry.resolveLive(run.codeProvider, config.defaultCodeProvider);
   const rawReview = run.demo
     ? registry.get("mock")
-    : registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);
+    : routingMode === "free"
+      ? new ThemedProvider(registry.get("free"))
+      : registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);
   // The failover chain declares itself as "free" but may serve a call from a
   // paid rescue tier, so it must be attributed by who ACTUALLY served —
   // otherwise a paid call would be booked as free and the spend would hide.
@@ -591,7 +652,7 @@ async function executeRun(
           .filter((n) => n !== "free")
           .map((n) => registry.get(n));
   const withFailover = (p: LLMProvider): LLMProvider =>
-    run.demo
+    run.demo || routingMode === "free"
       ? p
       : new QuotaFailoverProvider(p, alternates(), (from, to, reason) =>
           log(
@@ -641,7 +702,16 @@ async function executeRun(
       : undefined;
   const firstPaid = registry.availablePaid()[0];
   let critical: LLMProvider;
-  if (!run.demo && !runPinnedPaid && firstPaid) {
+  if (!run.demo && routingMode === "free") {
+    const freeRaw = new ThemedProvider(registry.get("free"));
+    critical = new CountingProvider(
+      freeRaw,
+      run,
+      config.maxModelCallsPerRun,
+      attribution(freeRaw),
+    );
+    log("info", "Critical stages: free mode — $0 rotation only; paid rescue disabled.");
+  } else if (!run.demo && !runPinnedPaid && firstPaid) {
     // AUTO MODE (owner decision 2026-08-23: "paid models first followed by
     // free. Only do one round, though."): a critical call gets ONE attempt on
     // the first configured paid provider through the budget gate; if it fails
