@@ -1,3 +1,7 @@
+# Normalize text to LF on every platform so Prettier observes the same bytes
+# locally and on Windows CI. More-specific rules below override this default.
+* text=auto eol=lf
+
 # Shell scripts must reach Android/Termux with LF endings. A CRLF shebang line
 # fails as `bad interpreter: /data/data/.../bash^M`, which reads like a missing
 # interpreter rather than a line-ending problem and wastes an hour every time.
