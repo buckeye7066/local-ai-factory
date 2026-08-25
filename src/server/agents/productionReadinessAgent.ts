@@ -39,6 +39,7 @@ type ReviewInput = {
   identity: ReadinessBrainIdentity;
   model: string;
   evidence: Omit<ProductionReadinessEvidence, "reviews">;
+  phase?: "pre-release" | "final";
 };
 
 /**
@@ -55,6 +56,10 @@ export async function productionReadinessAgent(
       `${input.identity} readiness review requires ${expectedProvider}, not ${input.provider.name}.`,
     );
   }
+  const preReleaseContract =
+    input.phase === "pre-release"
+      ? " This is a PRE-RELEASE CANDIDATE review: delivery fields are truthfully false because no push, trunk, release, or deploy side effect is allowed before you decide. Do not reject solely because delivery has not happened, and never claim it has happened. Judge the exact candidate bytes, purpose, implementation, verification, security, operations, and platform evidence."
+      : " Require truthful completed delivery in addition to the technical and purpose evidence.";
 
   const draft = await input.provider.generateJson<ReviewDraft>({
     system:
@@ -63,7 +68,7 @@ export async function productionReadinessAgent(
       "A pipeline reaching its last stage is not completion. Require working implementation, zero placeholder/TODO/stub paths, direct executed acceptance evidence, grounded QA, exact-byte verification, secure and operational behavior, truthful delivery, and executed compatibility evidence for every applicable Windows, Safari/WebKit, macOS, iOS, and Android target. " +
       "Do not evaluate or invent legal, regulatory, contractual, store-policy, or licensing clearance. Those are owner-managed outside this software gate and must not appear as blockers. " +
       "Technical privacy leaks, authorization defects, insecure storage, unsafe clinical claims implemented in software, destructive financial behavior, and missing security controls remain technical blockers. " +
-      "Return READY only when every supplied technical and purpose criterion is satisfied. Never rely on another model's opinion; none is provided.",
+      `Return READY only when every supplied technical and purpose criterion is satisfied. Never rely on another model's opinion; none is provided.${preReleaseContract}`,
     prompt:
       `Review this exact production-readiness evidence digest: ${input.evidence.evidenceDigest}.\n\n` +
       `${JSON.stringify(input.evidence, null, 2)}\n\n` +
@@ -110,6 +115,7 @@ export async function independentProductionReadinessReviews(input: {
   secondIdentity: "fable" | "opus";
   secondModel: string;
   evidence: Omit<ProductionReadinessEvidence, "reviews">;
+  phase?: "pre-release" | "final";
 }): Promise<[ReadinessBrainReview, ReadinessBrainReview]> {
   return Promise.all([
     productionReadinessAgent({
@@ -117,12 +123,14 @@ export async function independentProductionReadinessReviews(input: {
       identity: "sol",
       model: input.solModel,
       evidence: input.evidence,
+      phase: input.phase,
     }),
     productionReadinessAgent({
       provider: input.secondProvider,
       identity: input.secondIdentity,
       model: input.secondModel,
       evidence: input.evidence,
+      phase: input.phase,
     }),
   ]);
 }

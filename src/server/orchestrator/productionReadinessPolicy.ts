@@ -52,6 +52,8 @@ export type ProductionReadinessEvidence = {
     acceptanceCriteriaExecuted: number;
   };
   technical: {
+    /** Digest of the sorted path -> byte-digest map for the exact candidate tree. */
+    artifactDigest: string;
     qaPassed: boolean;
     testsPassed: boolean;
     verificationComplete: boolean;
@@ -135,6 +137,12 @@ export function isSolReview(review: ReadinessBrainReview): boolean {
 
 export function evaluateProductionReadiness(
   evidence: ProductionReadinessEvidence,
+  options: {
+    /** Candidate review happens before any delivery side effect by design. */
+    requireDelivery?: boolean;
+    /** Final receipts may bind delivery to an exact pre-release review digest. */
+    expectedReviewDigest?: string;
+  } = {},
 ): ProductionReadinessReceipt {
   const blockers: string[] = [];
   const add = (condition: boolean, detail: string) => {
@@ -143,6 +151,10 @@ export function evaluateProductionReadiness(
 
   const digestValid = isReadinessEvidenceDigest(evidence.evidenceDigest);
   add(digestValid, "The production-readiness evidence digest is missing or malformed.");
+  add(
+    isReadinessEvidenceDigest(evidence.technical.artifactDigest),
+    "The exact candidate byte digest is missing or malformed.",
+  );
 
   add(evidence.purpose.stated, "Purpose is not stated.");
   add(
@@ -196,47 +208,49 @@ export function evaluateProductionReadiness(
     );
   }
 
-  add(
-    evidence.delivery.delivered,
-    "The verified work was not delivered to its intended destination.",
-  );
-  if (evidence.delivery.kind === "existing-repo") {
+  const requireDelivery = options.requireDelivery !== false;
+  if (requireDelivery) {
     add(
-      evidence.delivery.releasedToTrunk,
-      "The verified revision is not on the repository trunk.",
+      evidence.delivery.delivered,
+      "The verified work was not delivered to its intended destination.",
     );
-  } else if (evidence.delivery.kind === "new-repo") {
-    add(
-      evidence.delivery.liveVerified,
-      "The hosted new app was not verified live at its production endpoint.",
-    );
-  } else {
-    add(
-      evidence.delivery.localArtifactVerified,
-      "The workspace-only app lacks a verified runnable production artifact.",
-    );
+    if (evidence.delivery.kind === "existing-repo") {
+      add(
+        evidence.delivery.releasedToTrunk,
+        "The verified revision is not on the repository trunk.",
+      );
+    } else if (evidence.delivery.kind === "new-repo") {
+      add(
+        evidence.delivery.liveVerified,
+        "The hosted new app was not verified live at its production endpoint.",
+      );
+    } else {
+      add(
+        evidence.delivery.localArtifactVerified,
+        "The workspace-only app lacks a verified runnable production artifact.",
+      );
+    }
   }
 
+  const expectedReviewDigest = options.expectedReviewDigest ?? evidence.evidenceDigest;
+  const expectedReviewDigestValid = isReadinessEvidenceDigest(expectedReviewDigest);
+  add(expectedReviewDigestValid, "The readiness-review evidence digest is malformed.");
   const solReviews = evidence.reviews.filter(isSolReview);
   const secondReviews = evidence.reviews.filter(isFableOrOpusReview);
   const eligibleReviews = [...solReviews, ...secondReviews];
   const sameEvidence =
-    digestValid &&
+    expectedReviewDigestValid &&
     eligibleReviews.length >= 2 &&
-    eligibleReviews.every(
-      (review) => review.evidenceDigest === evidence.evidenceDigest,
-    );
+    eligibleReviews.every((review) => review.evidenceDigest === expectedReviewDigest);
   const sol =
     solReviews.length > 0 &&
     solReviews.every(
-      (review) =>
-        review.evidenceDigest === evidence.evidenceDigest && reviewReady(review),
+      (review) => review.evidenceDigest === expectedReviewDigest && reviewReady(review),
     );
   const fableOrOpus =
     secondReviews.length > 0 &&
     secondReviews.every(
-      (review) =>
-        review.evidenceDigest === evidence.evidenceDigest && reviewReady(review),
+      (review) => review.evidenceDigest === expectedReviewDigest && reviewReady(review),
     );
   const independentFamilies = solReviews.length > 0 && secondReviews.length > 0;
 
@@ -255,7 +269,7 @@ export function evaluateProductionReadiness(
   );
 
   for (const review of evidence.reviews) {
-    if (review.evidenceDigest !== evidence.evidenceDigest) continue;
+    if (review.evidenceDigest !== expectedReviewDigest) continue;
     for (const blocker of review.blockers) {
       const detail = `${review.identity}/${blocker.category}: ${blocker.detail}`;
       if (!blockers.includes(detail)) blockers.push(detail);
@@ -307,4 +321,38 @@ export function deterministicProductionBlockers(
     },
   ];
   return evaluateProductionReadiness({ ...evidence, reviews: synthetic }).blockers;
+}
+
+/** Deterministic technical/purpose preflight before any push, release, or deploy. */
+export function deterministicPreReleaseBlockers(
+  evidence: Omit<ProductionReadinessEvidence, "reviews">,
+): string[] {
+  const synthetic: ReadinessBrainReview[] = [
+    {
+      identity: "sol",
+      provider: "openai",
+      model: "deterministic-sol-preflight",
+      evidenceDigest: evidence.evidenceDigest,
+      decision: "ready",
+      purposeAligned: true,
+      implementationComplete: true,
+      technicallyReady: true,
+      blockers: [],
+    },
+    {
+      identity: "opus",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      evidenceDigest: evidence.evidenceDigest,
+      decision: "ready",
+      purposeAligned: true,
+      implementationComplete: true,
+      technicallyReady: true,
+      blockers: [],
+    },
+  ];
+  return evaluateProductionReadiness(
+    { ...evidence, reviews: synthetic },
+    { requireDelivery: false },
+  ).blockers;
 }

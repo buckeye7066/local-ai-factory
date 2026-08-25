@@ -28,18 +28,24 @@ import {
 import type { ProviderRegistry } from "../providers/index.js";
 import { createReadinessBrainProviders } from "../providers/readinessBrains.js";
 import {
-  completeProductionReadiness,
+  artifactTreeDigest,
+  candidateReadinessFacts,
+  completePreReleaseReadiness,
+  finalizeProductionReadinessFromApproval,
   productionReadinessDigest,
+  runWithPreReleaseApproval,
   type ProductionReadinessFacts,
+  type PreReleaseReadinessApproval,
 } from "./completeProductionReadiness.js";
 import {
-  deterministicProductionBlockers,
+  deterministicPreReleaseBlockers,
   evaluateProductionReadiness,
 } from "./productionReadinessPolicy.js";
 import { recordReadinessEvaluation } from "../storage/readinessStore.js";
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import {
+  detectLanguage,
   readWorkspaceFile,
   safeResolve,
   writeWorkspaceFile,
@@ -66,6 +72,7 @@ import {
   assessPlatformCompatibility,
   carryForwardPlatformEvidence,
   enforceCompletionQa,
+  loadCompletionRepairContext,
   platformStampForExecutedCommand,
   scanCompletionGaps,
 } from "../workspace/completionEvidence.js";
@@ -869,6 +876,7 @@ async function executeRun(
       repairLoops: 0,
       repairComplete: false,
       finalReport: undefined,
+      preReleaseApproval: undefined,
     });
     log("warning", `${reason}; discarded stale downstream planning state.`);
     await flush();
@@ -2090,14 +2098,65 @@ async function executeRun(
         testExit,
       });
     };
+    const completionRepairPaths = new Set<string>();
     const fullBuild = (): FileBuild => ({
-      files: [...files.values()].map((file) => ({
-        path: file.path,
-        purpose: file.purpose,
-        contents: file.contents,
-        edits: [],
-      })),
+      files: [...files.values()]
+        .sort(
+          (left, right) =>
+            Number(completionRepairPaths.has(right.path)) -
+            Number(completionRepairPaths.has(left.path)),
+        )
+        .map((file) => ({
+          path: file.path,
+          purpose: file.purpose,
+          contents: file.contents,
+          edits: [],
+        })),
     });
+
+    // Existing-app completion repair scope. The deterministic scan used to
+    // name placeholders in untouched host files but the repair agent saw only
+    // files this run had already written, making the gate permanently
+    // unrepairable. Read the exact current bytes of only those gap-bearing
+    // product sources, make them first-class anchored-edit candidates, and
+    // persist their immutable host baselines before test generation or QA.
+    const initialCompletionGaps = scanCompletionGaps(workspacePath);
+    const completionContext = await loadCompletionRepairContext(
+      workspacePath,
+      initialCompletionGaps,
+    );
+    if (completionContext.refusals.length > 0) {
+      throw new Error(
+        `Cannot safely repair deterministic completion gaps: ${completionContext.refusals
+          .map((item) => `${item.path}: ${item.reason}`)
+          .join("; ")}.`,
+      );
+    }
+    for (const source of completionContext.files) {
+      const path = normalizeGeneratedPath(source.path);
+      completionRepairPaths.add(path);
+      if (files.has(path)) continue;
+      hostFileBaselines[path] = source.contents;
+      files.set(path, {
+        path,
+        purpose: source.purpose,
+        contents: source.contents,
+        language: detectLanguage(path),
+        size: Buffer.byteLength(source.contents, "utf8"),
+        status: "modified",
+      });
+    }
+    if (completionContext.files.length > 0) {
+      log(
+        "info",
+        `Loaded ${completionContext.files.length} existing gap-bearing product source file(s) in full for anchored repair and executable test generation.`,
+        "test_writer",
+      );
+      await checkpointNow({
+        files: [...files.values()],
+        hostFileBaselines: { ...hostFileBaselines },
+      });
+    }
 
     if (!checkpoint.testWriterComplete) {
       throwIfTimedOut(deadline, timeoutMs);
@@ -2616,6 +2675,208 @@ async function executeRun(
       return;
     }
 
+    const readinessKind = run.destination?.kind ?? "workspace-only";
+    const privateApp = checkpoint.options.publish === false;
+    const readinessPurposeProfile = spec.purposeProfile;
+    const wiringComplete = !(report.caveats ?? []).some((caveat) =>
+      /UNWIRED|WIRING SCAN/i.test(caveat),
+    );
+    const highOrCriticalIssues = qa.issues.filter((issue) =>
+      ["critical", "high"].includes(String(issue.severity).toLowerCase()),
+    ).length;
+    const candidateArtifactDigest = artifactTreeDigest(verification.fileDigests ?? {});
+    const readinessFactsFor = (
+      delivery: ProductionReadinessFacts["delivery"],
+      currentReceiptValid: boolean,
+    ): ProductionReadinessFacts => ({
+      appName: spec.appName,
+      purpose: {
+        stated: Boolean(args.idea.trim() && spec.appName.trim()),
+        grounded: readinessPurposeProfile
+          ? readinessPurposeProfile.grounding.grounded &&
+            readinessPurposeProfile.evidence.length > 0
+          : Boolean(args.idea.trim() && spec.acceptanceCriteria.length > 0),
+        goalsCovered: verifiedOutcome && (verification.incomplete?.length ?? 0) === 0,
+        acceptanceCriteria: spec.acceptanceCriteria.length,
+        acceptanceCriteriaExecuted: verifiedOutcome
+          ? spec.acceptanceCriteria.length
+          : 0,
+      },
+      technical: {
+        artifactDigest: candidateArtifactDigest,
+        qaPassed: qa.passed,
+        testsPassed: testStatus === "passing",
+        verificationComplete: (verification.incomplete?.length ?? 0) === 0,
+        digestReceiptValid: currentReceiptValid,
+        blockingWriteRefusals: blockingWriteRefusals.length,
+        wiringComplete,
+        highOrCriticalSecurityIssues: highOrCriticalIssues,
+        operationallyRunnable: verifiedOutcome && Boolean(report.howToRun?.trim()),
+        completionGaps: scanCompletionGaps(workspacePath).length,
+        platformCompatibility: assessPlatformCompatibility(
+          workspacePath,
+          verification.executed,
+        ),
+      },
+      delivery,
+      ownerExternalNotes: [
+        "Legal, regulatory, contractual, store-policy, and licensing decisions are owner-managed outside cyberland and were not evaluated.",
+      ],
+    });
+    const currentCandidateFacts = async (): Promise<ProductionReadinessFacts> => {
+      const currentReceipt = await verifyFileDigests(
+        workspacePath,
+        files.keys(),
+        verification.fileDigests,
+      );
+      return candidateReadinessFacts(
+        readinessFactsFor(
+          {
+            kind: readinessKind,
+            delivered: false,
+            releasedToTrunk: false,
+            liveVerified: false,
+            localArtifactVerified: false,
+          },
+          currentReceipt.ok,
+        ),
+      );
+    };
+
+    // TRUE PRE-RELEASE GATE. Both semantic reviewers decide over the exact
+    // candidate-byte digest before deliverRun can push a branch/fast-forward
+    // trunk, releaseRun can merge, or deployRun can publish anything.
+    let preReleaseApproval = checkpoint.preReleaseApproval as
+      | PreReleaseReadinessApproval
+      | undefined;
+    if (!run.demo) {
+      const candidateFacts = await currentCandidateFacts();
+      const candidateDigest = productionReadinessDigest(candidateFacts);
+      const deterministicBlockers = deterministicPreReleaseBlockers({
+        ...candidateFacts,
+        evidenceDigest: candidateDigest,
+      });
+      if (deterministicBlockers.length > 0) {
+        const blockedReceipt = evaluateProductionReadiness(
+          { ...candidateFacts, evidenceDigest: candidateDigest, reviews: [] },
+          { requireDelivery: false },
+        );
+        blockedReceipt.blockers = [
+          ...deterministicBlockers,
+          ...blockedReceipt.blockers,
+        ];
+        await recordReadinessEvaluation({
+          subjectType: "run",
+          subjectId: run.id,
+          evidenceDigest: candidateDigest,
+          reviews: [],
+          receipt: blockedReceipt,
+        });
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Production readiness blocked before release review: ${deterministicBlockers.join("; ")}`,
+        );
+        await appendAuditEvent({
+          type: "run.readiness.blocked",
+          runId: run.id,
+          detail: run.error,
+        });
+        log(
+          "warning",
+          `${run.error} No delivery, trunk, release, or deploy action ran.`,
+        );
+        await checkpointNow();
+        await flush();
+        return;
+      }
+
+      const restoredApproval = await runWithPreReleaseApproval(
+        preReleaseApproval,
+        candidateFacts,
+        async () => true,
+      );
+      if (!restoredApproval.executed) {
+        log(
+          "model_call",
+          "Mandatory pre-release review: launching independent Sol and Fable/Opus judgments on the same exact candidate-byte digest.",
+          "final_review",
+        );
+        const brainProviders = createReadinessBrainProviders(
+          config,
+          secrets,
+          (kind, message) =>
+            log(kind === "warn" ? "warning" : "info", message, "final_review"),
+          callSignal,
+        );
+        preReleaseApproval = await completePreReleaseReadiness({
+          facts: candidateFacts,
+          solProvider: countProvider(brainProviders.sol),
+          solModel: brainProviders.solModel,
+          secondProvider: countProvider(brainProviders.second),
+          secondIdentity: brainProviders.secondIdentity,
+          secondModel: brainProviders.secondModel,
+        });
+        await checkpointNow({ preReleaseApproval });
+      }
+      if (!preReleaseApproval?.approved) {
+        const reviews = preReleaseApproval?.reviews ?? [];
+        const blockedReceipt = evaluateProductionReadiness(
+          { ...candidateFacts, evidenceDigest: candidateDigest, reviews },
+          { requireDelivery: false },
+        );
+        blockedReceipt.blockers = [
+          ...(preReleaseApproval?.blockers ?? ["Pre-release approval is missing."]),
+          ...blockedReceipt.blockers,
+        ];
+        await recordReadinessEvaluation({
+          subjectType: "run",
+          subjectId: run.id,
+          evidenceDigest: candidateDigest,
+          reviews,
+          receipt: blockedReceipt,
+        });
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Production readiness blocked before release: ${blockedReceipt.blockers.join("; ")}`,
+        );
+        const blockedEvent = await appendAuditEvent({
+          type: "run.readiness.blocked",
+          runId: run.id,
+          detail: run.error,
+        });
+        await persistAttribution(testStatus, blockedEvent.seq);
+        log(
+          "warning",
+          `${run.error} No delivery, trunk, release, or deploy action ran.`,
+        );
+        await checkpointNow();
+        await flush();
+        return;
+      }
+      await appendAuditEvent({
+        type: "run.readiness.pre_release_approved",
+        runId: run.id,
+        detail: preReleaseApproval.evidenceDigest,
+      });
+      log(
+        "success",
+        `Mandatory pre-release readiness PASSED for exact candidate ${preReleaseApproval.evidenceDigest}.`,
+        "final_review",
+      );
+    }
+    const runApprovedSideEffect = async <T>(
+      effect: () => Promise<T>,
+    ): Promise<{ executed: boolean; value?: T; blockers: string[] }> =>
+      run.demo
+        ? { executed: true, value: await effect(), blockers: [] }
+        : runWithPreReleaseApproval(
+            preReleaseApproval,
+            await currentCandidateFacts(),
+            effect,
+          );
+
     /* Delivery — save the work where the owner said to save it. */
     // Runs only for a build that actually got here: a cancelled or failed run
     // never pushes. Delivery NEVER throws (see deliverRun), so a rejected push
@@ -2626,21 +2887,35 @@ async function executeRun(
 
     if (run.destination) {
       log("info", `Saving the work to ${describeDestination(run.destination)}…`);
-      const delivered = await deliverRun({
-        destination: run.destination,
-        workspacePath,
-        filePaths: [...files.keys()],
-        runId: run.id,
-        appName: run.appName,
-        options: checkpoint.options,
-        verification: {
-          qaPassed: qa.passed,
-          testStatus,
-          writeRefusals: blockingWriteRefusals.length,
-          incompleteCommands: verification.incomplete?.length ?? 0,
-          fileDigests: verification.fileDigests ?? {},
-        },
-      });
+      const deliveryBoundary = await runApprovedSideEffect(() =>
+        deliverRun({
+          destination: run.destination!,
+          workspacePath,
+          filePaths: [...files.keys()],
+          runId: run.id,
+          appName: run.appName,
+          options: checkpoint.options,
+          verification: {
+            qaPassed: qa.passed,
+            testStatus,
+            writeRefusals: blockingWriteRefusals.length,
+            incompleteCommands: verification.incomplete?.length ?? 0,
+            fileDigests: verification.fileDigests ?? {},
+          },
+        }),
+      );
+      if (!deliveryBoundary.executed || !deliveryBoundary.value) {
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Pre-release authorization became stale before delivery: ${deliveryBoundary.blockers.join("; ")}. No delivery side effect ran.`,
+        );
+        log("warning", run.error);
+        await checkpointNow();
+        await flush();
+        return;
+      }
+      const delivered = deliveryBoundary.value;
       run.destination = {
         ...delivered,
         detail: delivered.detail == null ? null : redactSecrets(delivered.detail),
@@ -2736,17 +3011,31 @@ async function executeRun(
             "Delivery is paper-only (docs/tests/schema, no wired product change) — it will not auto-merge.",
           );
         }
-        const release = await releaseRun({
-          paperOnly,
-          repoUrl: delivered.target,
-          branch: delivered.branch,
-          runId: run.id,
-          appName: run.appName,
-          qaPassed: qa.passed,
-          testStatus,
-          verifiedCommitSha: delivered.commitSha!,
-          caveats: report.caveats ?? [],
-        });
+        const releaseBoundary = await runApprovedSideEffect(() =>
+          releaseRun({
+            paperOnly,
+            repoUrl: delivered.target,
+            branch: delivered.branch!,
+            runId: run.id,
+            appName: run.appName,
+            qaPassed: qa.passed,
+            testStatus,
+            verifiedCommitSha: delivered.commitSha!,
+            caveats: report.caveats ?? [],
+          }),
+        );
+        if (!releaseBoundary.executed || !releaseBoundary.value) {
+          run.status = "failed";
+          run.resumable = false;
+          run.error = redactSecrets(
+            `Pre-release authorization became stale before trunk release: ${releaseBoundary.blockers.join("; ")}. No release side effect ran.`,
+          );
+          log("warning", run.error);
+          await checkpointNow();
+          await flush();
+          return;
+        }
+        const release = releaseBoundary.value;
         /* THREE outcomes, reported as three — the mapping is `planReleaseOutcome`
          * in releasePlan.ts, not a judgement made here. "pending" is neither a
          * success nor a failure: the PR is open with auto-merge armed, so it
@@ -2836,11 +3125,25 @@ async function executeRun(
           );
         } else {
           log("info", "Deploy: putting the new app on a host (Railway/Vercel)…");
-          const dep = await deployRun({
-            workspacePath,
-            appName: run.appName,
-            runId: run.id,
-          });
+          const deployBoundary = await runApprovedSideEffect(() =>
+            deployRun({
+              workspacePath,
+              appName: run.appName,
+              runId: run.id,
+            }),
+          );
+          if (!deployBoundary.executed || !deployBoundary.value) {
+            run.status = "failed";
+            run.resumable = false;
+            run.error = redactSecrets(
+              `Pre-release authorization became stale before deploy: ${deployBoundary.blockers.join("; ")}. No deploy side effect ran.`,
+            );
+            log("warning", run.error);
+            await checkpointNow();
+            await flush();
+            return;
+          }
+          const dep = deployBoundary.value;
           log(
             dep.deployed && dep.verified ? "success" : "warning",
             dep.deployed && dep.verified
@@ -2917,46 +3220,14 @@ async function executeRun(
       }
     }
 
-    const readinessKind = run.destination?.kind ?? "workspace-only";
     const deliveryCompleted = run.destination?.status === "delivered";
-    const privateApp = checkpoint.options.publish === false;
-    const readinessPurposeProfile = spec.purposeProfile;
-    const wiringComplete = !(report.caveats ?? []).some((caveat) =>
-      /UNWIRED|WIRING SCAN/i.test(caveat),
+    const finalReceipt = await verifyFileDigests(
+      workspacePath,
+      files.keys(),
+      verification.fileDigests,
     );
-    const highOrCriticalIssues = qa.issues.filter((issue) =>
-      ["critical", "high"].includes(String(issue.severity).toLowerCase()),
-    ).length;
-    const readinessFacts: ProductionReadinessFacts = {
-      appName: spec.appName,
-      purpose: {
-        stated: Boolean(args.idea.trim() && spec.appName.trim()),
-        grounded: readinessPurposeProfile
-          ? readinessPurposeProfile.grounding.grounded &&
-            readinessPurposeProfile.evidence.length > 0
-          : Boolean(args.idea.trim() && spec.acceptanceCriteria.length > 0),
-        goalsCovered: verifiedOutcome && (verification.incomplete?.length ?? 0) === 0,
-        acceptanceCriteria: spec.acceptanceCriteria.length,
-        acceptanceCriteriaExecuted: verifiedOutcome
-          ? spec.acceptanceCriteria.length
-          : 0,
-      },
-      technical: {
-        qaPassed: qa.passed,
-        testsPassed: testStatus === "passing",
-        verificationComplete: (verification.incomplete?.length ?? 0) === 0,
-        digestReceiptValid: receipt.ok,
-        blockingWriteRefusals: blockingWriteRefusals.length,
-        wiringComplete,
-        highOrCriticalSecurityIssues: highOrCriticalIssues,
-        operationallyRunnable: verifiedOutcome && Boolean(report.howToRun?.trim()),
-        completionGaps: scanCompletionGaps(workspacePath).length,
-        platformCompatibility: assessPlatformCompatibility(
-          workspacePath,
-          verification.executed,
-        ),
-      },
-      delivery: {
+    const readinessFacts = readinessFactsFor(
+      {
         kind: readinessKind,
         delivered: deliveryCompleted,
         releasedToTrunk:
@@ -2965,15 +3236,13 @@ async function executeRun(
             : false,
         liveVerified: liveDeploymentVerified,
         localArtifactVerified:
-          receipt.ok &&
+          finalReceipt.ok &&
           deliveryCompleted &&
           (readinessKind === "workspace-only" ||
             (readinessKind === "new-repo" && privateApp)),
       },
-      ownerExternalNotes: [
-        "Legal, regulatory, contractual, store-policy, and licensing decisions are owner-managed outside cyberland and were not evaluated.",
-      ],
-    };
+      finalReceipt.ok,
+    );
     const readinessDigest = productionReadinessDigest(readinessFacts);
 
     if (run.demo) {
@@ -2998,61 +3267,16 @@ async function executeRun(
         "Simulation pipeline finished, but mandatory production readiness is blocked by design.",
       );
     } else {
-      const deterministicBlockers = deterministicProductionBlockers({
-        ...readinessFacts,
-        evidenceDigest: readinessDigest,
-      });
-      if (deterministicBlockers.length > 0) {
-        const blockedReceipt = evaluateProductionReadiness({
-          ...readinessFacts,
-          evidenceDigest: readinessDigest,
-          reviews: [],
-        });
-        await recordReadinessEvaluation({
-          subjectType: "run",
-          subjectId: run.id,
-          evidenceDigest: readinessDigest,
-          reviews: [],
-          receipt: blockedReceipt,
-        });
-        run.status = "failed";
-        run.resumable = false;
-        run.error = redactSecrets(
-          `Production readiness blocked before paid brain review: ${deterministicBlockers.join("; ")}`,
-        );
-        const blockedEvent = await appendAuditEvent({
-          type: "run.readiness.blocked",
-          runId: run.id,
-          detail: run.error,
-        });
-        await persistAttribution(testStatus, blockedEvent.seq);
-        log("warning", run.error);
-        await checkpointNow();
-        await flush();
-        return;
-      }
-
-      log(
-        "model_call",
-        "Mandatory production review: launching independent Sol and Fable/Opus judgments on the same exact evidence digest.",
-        "final_review",
+      const readiness = finalizeProductionReadinessFromApproval(
+        readinessFacts,
+        preReleaseApproval,
       );
-      const brainProviders = createReadinessBrainProviders(
-        config,
-        secrets,
-        (kind, message) =>
-          log(kind === "warn" ? "warning" : "info", message, "final_review"),
-        callSignal,
-      );
-      const readiness = await completeProductionReadiness({
+      await recordReadinessEvaluation({
         subjectType: "run",
         subjectId: run.id,
-        facts: readinessFacts,
-        solProvider: countProvider(brainProviders.sol),
-        solModel: brainProviders.solModel,
-        secondProvider: countProvider(brainProviders.second),
-        secondIdentity: brainProviders.secondIdentity,
-        secondModel: brainProviders.secondModel,
+        evidenceDigest: readiness.receipt.evidenceDigest,
+        reviews: readiness.reviews,
+        receipt: readiness.receipt,
       });
       if (!readiness.receipt.ready) {
         run.status = "failed";
@@ -3082,7 +3306,7 @@ async function executeRun(
       });
       log(
         "success",
-        `Mandatory production readiness PASSED: Sol and ${brainProviders.secondIdentity} approved ${readiness.receipt.evidenceDigest}.`,
+        `Mandatory production readiness PASSED: exact pre-release candidate ${preReleaseApproval?.evidenceDigest} was independently approved before side effects, and deterministic delivery evidence finalized ${readiness.receipt.evidenceDigest}.`,
         "final_review",
       );
     }

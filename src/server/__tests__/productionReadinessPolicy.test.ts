@@ -48,6 +48,7 @@ const evidence = (
     acceptanceCriteriaExecuted: 4,
   },
   technical: {
+    artifactDigest: `sha256:${"a".repeat(64)}`,
     qaPassed: true,
     testsPassed: true,
     verificationComplete: true,
@@ -223,6 +224,22 @@ describe("mandatory production-readiness policy", () => {
     );
     expect(receipt.ready).toBe(false);
     expect(receipt.blockers.join(" ")).toMatch(/trunk/);
+  });
+
+  it("allows truthful pre-release delivery=false only in candidate-review mode", () => {
+    const candidate = evidence({
+      delivery: {
+        kind: "existing-repo",
+        delivered: false,
+        releasedToTrunk: false,
+        liveVerified: false,
+        localArtifactVerified: false,
+      },
+    });
+    expect(evaluateProductionReadiness(candidate).ready).toBe(false);
+    expect(
+      evaluateProductionReadiness(candidate, { requireDelivery: false }).ready,
+    ).toBe(true);
   });
 
   it("requires a hosted new-repository app to answer live", () => {

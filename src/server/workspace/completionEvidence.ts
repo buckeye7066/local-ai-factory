@@ -1,6 +1,8 @@
 import { lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import type { ProductSpec, QaReport } from "../../shared/schemas.js";
+import type { FileBuild, ProductSpec, QaReport } from "../../shared/schemas.js";
+import { MAX_CONTEXT_FILE_CHARS, MAX_CONTEXT_TOTAL_CHARS } from "./contextLimits.js";
+import { readWorkspaceFile } from "./fileWriter.js";
 
 /**
  * Deterministic completion evidence used by both the repair loop and the final
@@ -58,7 +60,7 @@ const SKIP_DIRS = new Set([
 const SOURCE_EXTENSION =
   /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|kts|swift|dart|scala|sc|lua|r|fs|fsx|vb|c|cc|cpp|h|hpp|cs|php|sh|bash|zsh|ps1|psm1|sql|graphql|gql|vue|svelte|html?)$/i;
 const NON_PRODUCT_PATH =
-  /(^|\/)(?:__tests__|tests?|specs?|fixtures?|mocks?|examples?|docs?|scripts?\/fixtures?)(\/|$)|(?:^|\/)(?:test_[^/]+|[^/]+\.(?:test|spec))\.[^.]+$/i;
+  /(^|\/)(?:__tests__|tests?|specs?|fixtures?|mocks?|examples?|docs?|scripts?\/fixtures?)(\/|$)|^(?:scripts?|tools?)\/|(?:^|\/)(?:test_[^/]+|[^/]+\.(?:test|spec))\.[^.]+$|(?:^|\/)(?:vitest|jest|playwright|vite)(?:\.[\w-]+)?\.config\.[cm]?[jt]s$|(?:^|\/)(?:tsconfig(?:\.[\w-]+)?\.json|eslint\.config\.[cm]?[jt]s)$/i;
 const GENERATED_FILE = /\.(?:min|bundle)\.[^.]+$/i;
 const MAX_SOURCE_FILES = 15_000;
 const MAX_SOURCE_BYTES = 1_000_000;
@@ -240,6 +242,105 @@ export function scanCompletionGaps(workspacePath: string): CompletionGap[] {
     }
   }
   return gaps;
+}
+
+export type CompletionRepairContext = {
+  files: FileBuild["files"];
+  refusals: Array<{ path: string; reason: string }>;
+};
+
+/**
+ * Read only existing product-source files named by the deterministic gap scan,
+ * and only when every byte fits in the repair agent's real context.
+ *
+ * The scan is not write authority. This independently checks the current
+ * product-source inventory, uses the contained no-symlink reader, re-confirms
+ * the unfinished behavior, and fails closed on unsafe or incomplete input.
+ */
+export async function loadCompletionRepairContext(
+  workspacePath: string,
+  gaps: CompletionGap[],
+): Promise<CompletionRepairContext> {
+  const inventory = productSourceFiles(workspacePath);
+  const eligible = new Set(
+    inventory.files.map((absolute) => normalized(relative(workspacePath, absolute))),
+  );
+  const requested = [...new Set(gaps.map((gap) => normalized(gap.path)))].sort();
+  const files: FileBuild["files"] = [];
+  const refusals: Array<{ path: string; reason: string }> = [];
+  let totalChars = 0;
+
+  for (const path of requested) {
+    const pathGaps = gaps.filter((gap) => normalized(gap.path) === path);
+    if (pathGaps.some((gap) => gap.kind === "scan-incomplete")) {
+      refusals.push({
+        path,
+        reason: `completion repair source is unreadable or incomplete: ${pathGaps
+          .map((gap) => gap.excerpt)
+          .join("; ")}`,
+      });
+      continue;
+    }
+    if (!eligible.has(path)) {
+      refusals.push({
+        path,
+        reason:
+          "completion repair source was not an inspected product-source file (tests, config, tooling, generated, unseen, and escaping paths are forbidden)",
+      });
+      continue;
+    }
+
+    let contents: string;
+    try {
+      contents = await readWorkspaceFile(workspacePath, path);
+    } catch (error) {
+      refusals.push({
+        path,
+        reason: `completion repair source could not be read safely: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+      continue;
+    }
+    if (contents.includes("\0")) {
+      refusals.push({ path, reason: "completion repair source is not UTF-8 text" });
+      continue;
+    }
+    if (contents.length > MAX_CONTEXT_FILE_CHARS) {
+      refusals.push({
+        path,
+        reason: `completion repair source exceeds the ${MAX_CONTEXT_FILE_CHARS}-character per-file context limit`,
+      });
+      continue;
+    }
+    if (totalChars + contents.length > MAX_CONTEXT_TOTAL_CHARS) {
+      refusals.push({
+        path,
+        reason: `completion repair sources exceed the ${MAX_CONTEXT_TOTAL_CHARS}-character aggregate context limit`,
+      });
+      continue;
+    }
+    const stillIncomplete = contents
+      .split(/\r?\n/)
+      .some((line, index) => lineGap(path, line, index + 1) !== null);
+    if (!stillIncomplete) {
+      refusals.push({
+        path,
+        reason:
+          "completion repair source changed after scanning and no longer contains the scanned unfinished behavior",
+      });
+      continue;
+    }
+    totalChars += contents.length;
+    files.push({
+      path,
+      purpose:
+        "Implement the deterministic unfinished production behavior in this existing source file without changing unrelated host code.",
+      contents,
+      edits: [],
+    });
+  }
+  return { files, refusals };
 }
 
 export function enforceCompletionQa<T extends QaReport>(

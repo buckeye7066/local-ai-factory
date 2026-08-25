@@ -8,7 +8,12 @@ import {
   independentProductionReadinessReviews,
   productionReadinessAgent,
 } from "../agents/productionReadinessAgent.js";
-import type { ProductionReadinessFacts } from "../orchestrator/completeProductionReadiness.js";
+import {
+  completePreReleaseReadiness,
+  finalizeProductionReadinessFromApproval,
+  runWithPreReleaseApproval,
+  type ProductionReadinessFacts,
+} from "../orchestrator/completeProductionReadiness.js";
 
 class ReviewProvider implements LLMProvider {
   readonly name: "openai" | "anthropic";
@@ -55,6 +60,7 @@ const facts: ProductionReadinessFacts = {
     acceptanceCriteriaExecuted: 2,
   },
   technical: {
+    artifactDigest: `sha256:${"a".repeat(64)}`,
     qaPassed: true,
     testsPassed: true,
     verificationComplete: true,
@@ -170,5 +176,95 @@ describe("production readiness brain agents", () => {
     });
     expect(provider.seen[0].system).toMatch(/Do not evaluate or invent legal/);
     expect(provider.seen[0].system).toMatch(/privacy leaks.*technical blockers/i);
+  });
+
+  it("runs both semantic decisions before side effects and never calls the effect on rejection or call failure", async () => {
+    const rejection = await completePreReleaseReadiness({
+      facts,
+      solProvider: new ReviewProvider("openai", {
+        ...readyResponse,
+        decision: "not_ready",
+        technicallyReady: false,
+        blockers: [{ category: "verification", detail: "One flow is incomplete." }],
+      }),
+      solModel: "gpt-5.6-pro",
+      secondProvider: new ReviewProvider("anthropic", readyResponse),
+      secondIdentity: "opus",
+      secondModel: "claude-opus-4-8",
+    });
+    expect(rejection.approved).toBe(false);
+    const sideEffects = { deliver: 0, release: 0, deploy: 0 };
+    for (const name of ["deliver", "release", "deploy"] as const) {
+      const rejectedBoundary = await runWithPreReleaseApproval(
+        rejection,
+        facts,
+        async () => ++sideEffects[name],
+      );
+      expect(rejectedBoundary.executed, name).toBe(false);
+    }
+    expect(sideEffects).toEqual({ deliver: 0, release: 0, deploy: 0 });
+
+    const failed = await completePreReleaseReadiness({
+      facts,
+      solProvider: new ReviewProvider("openai", { invalid: true }),
+      solModel: "gpt-5.6-pro",
+      secondProvider: new ReviewProvider("anthropic", readyResponse),
+      secondIdentity: "opus",
+      secondModel: "claude-opus-4-8",
+    });
+    expect(failed.approved).toBe(false);
+    for (const name of ["deliver", "release", "deploy"] as const) {
+      const failedBoundary = await runWithPreReleaseApproval(
+        failed,
+        facts,
+        async () => ++sideEffects[name],
+      );
+      expect(failedBoundary.executed, name).toBe(false);
+    }
+    expect(sideEffects).toEqual({ deliver: 0, release: 0, deploy: 0 });
+  });
+
+  it("never reuses approval after candidate bytes change and finalizes actual delivery separately", async () => {
+    const sol = new ReviewProvider("openai", readyResponse);
+    const opus = new ReviewProvider("anthropic", readyResponse);
+    const approval = await completePreReleaseReadiness({
+      facts,
+      solProvider: sol,
+      solModel: "gpt-5.6-pro",
+      secondProvider: opus,
+      secondIdentity: "opus",
+      secondModel: "claude-opus-4-8",
+    });
+    expect(approval.approved).toBe(true);
+    expect(sol.seen[0].system).toMatch(/PRE-RELEASE CANDIDATE/);
+    expect(sol.seen[0].system).toMatch(/delivery fields are truthfully false/);
+
+    const final = finalizeProductionReadinessFromApproval(facts, approval);
+    expect(final.receipt.ready).toBe(true);
+    expect(final.evidence.delivery.delivered).toBe(true);
+    expect(final.reviews[0]!.evidenceDigest).toBe(approval.evidenceDigest);
+    expect(final.receipt.evidenceDigest).not.toBe(approval.evidenceDigest);
+
+    const changed: ProductionReadinessFacts = {
+      ...facts,
+      technical: {
+        ...facts.technical,
+        artifactDigest: `sha256:${"b".repeat(64)}`,
+      },
+    };
+    const sideEffects = { deliver: 0, release: 0, deploy: 0 };
+    for (const name of ["deliver", "release", "deploy"] as const) {
+      const stale = await runWithPreReleaseApproval(
+        approval,
+        changed,
+        async () => ++sideEffects[name],
+      );
+      expect(stale.executed, name).toBe(false);
+      expect(stale.blockers.join(" "), name).toMatch(/stale/);
+    }
+    expect(sideEffects).toEqual({ deliver: 0, release: 0, deploy: 0 });
+    expect(
+      finalizeProductionReadinessFromApproval(changed, approval).receipt.ready,
+    ).toBe(false);
   });
 });

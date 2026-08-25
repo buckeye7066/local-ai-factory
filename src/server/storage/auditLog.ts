@@ -27,6 +27,7 @@ export type AuditEventType =
   | "run.budget_exhausted"
   | "run.verification.held"
   | "run.readiness.blocked"
+  | "run.readiness.pre_release_approved"
   | "run.readiness.ready"
   | "workspace.created"
   | "attribution.written"

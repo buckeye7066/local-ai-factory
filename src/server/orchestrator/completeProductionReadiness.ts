@@ -60,6 +60,162 @@ export function productionReadinessDigest(facts: ProductionReadinessFacts): stri
     .digest("hex")}`;
 }
 
+/** Bind readiness semantics to the exact sorted path -> byte-digest receipt. */
+export function artifactTreeDigest(fileDigests: Record<string, string>): string {
+  const sorted = Object.fromEntries(
+    Object.entries(fileDigests).sort(([left], [right]) => left.localeCompare(right)),
+  );
+  return `sha256:${createHash("sha256")
+    .update(canonicalReadinessJson(sorted), "utf8")
+    .digest("hex")}`;
+}
+
+/** Truthful candidate facts: intended destination kind is known; delivery is not. */
+export function candidateReadinessFacts(
+  facts: ProductionReadinessFacts,
+): ProductionReadinessFacts {
+  return {
+    ...facts,
+    delivery: {
+      kind: facts.delivery.kind,
+      delivered: false,
+      releasedToTrunk: false,
+      liveVerified: false,
+      localArtifactVerified: false,
+    },
+  };
+}
+
+export type PreReleaseReadinessApproval = {
+  schema: "factory.pre-release-readiness.v1";
+  evidenceDigest: string;
+  approved: boolean;
+  reviews: ReadinessBrainReview[];
+  blockers: string[];
+};
+
+/**
+ * Two independent semantic decisions over the exact candidate bytes, before
+ * any branch push, trunk advance, release, or deploy is allowed.
+ */
+export async function completePreReleaseReadiness(input: {
+  facts: ProductionReadinessFacts;
+  solProvider: LLMProvider;
+  solModel: string;
+  secondProvider: LLMProvider;
+  secondIdentity: "fable" | "opus";
+  secondModel: string;
+}): Promise<PreReleaseReadinessApproval> {
+  const facts = candidateReadinessFacts(input.facts);
+  const evidenceDigest = productionReadinessDigest(facts);
+  const evidence = Object.freeze({ ...facts, evidenceDigest });
+  let reviews: ReadinessBrainReview[] = [];
+  try {
+    reviews = await independentProductionReadinessReviews({
+      solProvider: input.solProvider,
+      solModel: input.solModel,
+      secondProvider: input.secondProvider,
+      secondIdentity: input.secondIdentity,
+      secondModel: input.secondModel,
+      evidence,
+      phase: "pre-release",
+    });
+  } catch {
+    return {
+      schema: "factory.pre-release-readiness.v1",
+      evidenceDigest,
+      approved: false,
+      reviews: [],
+      blockers: [
+        "Mandatory Sol and Fable/Opus pre-release review failed before both independent decisions completed.",
+      ],
+    };
+  }
+  const receipt = evaluateProductionReadiness(
+    { ...evidence, reviews },
+    { requireDelivery: false },
+  );
+  return {
+    schema: "factory.pre-release-readiness.v1",
+    evidenceDigest,
+    approved: receipt.ready,
+    reviews,
+    blockers: receipt.blockers,
+  };
+}
+
+export function validatePreReleaseApproval(
+  approval: PreReleaseReadinessApproval | undefined,
+  currentFacts: ProductionReadinessFacts,
+): { ok: boolean; blockers: string[] } {
+  const facts = candidateReadinessFacts(currentFacts);
+  const currentDigest = productionReadinessDigest(facts);
+  if (!approval) {
+    return { ok: false, blockers: ["Pre-release readiness approval is missing."] };
+  }
+  if (approval.evidenceDigest !== currentDigest) {
+    return {
+      ok: false,
+      blockers: [
+        `Pre-release readiness approval is stale: reviewed ${approval.evidenceDigest}, current candidate is ${currentDigest}.`,
+      ],
+    };
+  }
+  const receipt = evaluateProductionReadiness(
+    {
+      ...facts,
+      evidenceDigest: currentDigest,
+      reviews: approval.reviews,
+    },
+    { requireDelivery: false },
+  );
+  return {
+    ok: approval.approved && receipt.ready,
+    blockers: approval.approved ? receipt.blockers : approval.blockers,
+  };
+}
+
+/** Testable side-effect boundary; callback is never invoked on rejection/staleness. */
+export async function runWithPreReleaseApproval<T>(
+  approval: PreReleaseReadinessApproval | undefined,
+  currentFacts: ProductionReadinessFacts,
+  effect: () => Promise<T>,
+): Promise<{ executed: boolean; value?: T; blockers: string[] }> {
+  const validation = validatePreReleaseApproval(approval, currentFacts);
+  if (!validation.ok) return { executed: false, blockers: validation.blockers };
+  return { executed: true, value: await effect(), blockers: [] };
+}
+
+/**
+ * Bind actual post-delivery evidence to the exact already-approved candidate.
+ * Brains are not relabelled as having reviewed delivery: their review digests
+ * remain the candidate digest, while delivery is evaluated deterministically.
+ */
+export function finalizeProductionReadinessFromApproval(
+  facts: ProductionReadinessFacts,
+  approval: PreReleaseReadinessApproval | undefined,
+): Omit<ProductionReadinessCompletion, "state"> {
+  const candidate = candidateReadinessFacts(facts);
+  const candidateDigest = productionReadinessDigest(candidate);
+  const evidenceDigest = productionReadinessDigest(facts);
+  const reviews = approval?.reviews ?? [];
+  const evidence: ProductionReadinessEvidence = {
+    ...facts,
+    evidenceDigest,
+    reviews,
+  };
+  const receipt = evaluateProductionReadiness(evidence, {
+    expectedReviewDigest: candidateDigest,
+  });
+  const validation = validatePreReleaseApproval(approval, candidate);
+  if (!validation.ok) {
+    receipt.ready = false;
+    receipt.brainFloor.sameEvidence = false;
+    receipt.blockers = [...validation.blockers, ...receipt.blockers];
+  }
+  return { evidence, reviews, receipt };
+}
+
 /**
  * The single mandatory readiness transaction used by Factory Deck runs and
  * Purpose Foundry projects. Both brains start from the same immutable facts and

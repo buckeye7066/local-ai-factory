@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProductSpec, QaReport } from "../../shared/schemas.js";
@@ -6,11 +6,14 @@ import {
   assessPlatformCompatibility,
   carryForwardPlatformEvidence,
   enforceCompletionQa,
+  loadCompletionRepairContext,
   platformStampForExecutedCommand,
   scanCompletionGaps,
   withProductionAcceptanceCriteria,
 } from "../workspace/completionEvidence.js";
 import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
+import { resolveGeneratedWrite } from "../workspace/applyEdits.js";
+import { writeWorkspaceFile } from "../workspace/fileWriter.js";
 
 const roots: string[] = [];
 
@@ -92,6 +95,97 @@ describe("deterministic completion evidence", () => {
         "export const isKnown = (error: unknown) => error instanceof NotImplementedError;\n",
     );
     expect(scanCompletionGaps(root)).toEqual([]);
+  });
+
+  it("loads untouched placeholder source in full for anchored repair", async () => {
+    const root = workspace("existing-placeholder-repair");
+    const source =
+      "export function resume(job: Job) {\n" +
+      "  const saved = job.snapshot();\n" +
+      "  // TODO restore the durable cursor before resuming\n" +
+      "  return saved;\n" +
+      "}\n";
+    put(root, "src/recovery.ts", source);
+    const gaps = scanCompletionGaps(root);
+    const context = await loadCompletionRepairContext(root, gaps);
+    expect(context.refusals).toEqual([]);
+    expect(context.files).toEqual([
+      expect.objectContaining({ path: "src/recovery.ts", contents: source }),
+    ]);
+    const repaired = resolveGeneratedWrite(root, "src/recovery.ts", {
+      contents: "",
+      edits: [
+        {
+          find: "  // TODO restore the durable cursor before resuming\n  return saved;",
+          replace:
+            "  job.restoreCursor(saved.cursor);\n  return job.resumeFrom(saved.cursor);",
+        },
+      ],
+    });
+    expect(repaired.contents).not.toBeNull();
+    await writeWorkspaceFile(root, "src/recovery.ts", repaired.contents!);
+    expect(scanCompletionGaps(root)).toEqual([]);
+  });
+
+  it("never admits a symlinked gap source to completion repair", async () => {
+    if (process.platform === "win32") return;
+    const root = workspace("completion-repair-symlink");
+    put(root, "src/real.ts", "// TODO implement real behavior\n");
+    symlinkSync("real.ts", join(root, "src/alias.ts"));
+    const context = await loadCompletionRepairContext(root, [
+      {
+        path: "src/alias.ts",
+        line: 1,
+        kind: "unfinished-marker",
+        excerpt: "TODO",
+      },
+    ]);
+    expect(context.files).toEqual([]);
+    expect(context.refusals[0]).toMatchObject({ path: "src/alias.ts" });
+    expect(context.refusals[0]!.reason).toMatch(/not an inspected product-source/);
+  });
+
+  it("refuses unseen, test, tooling, and oversized completion repair paths", async () => {
+    const root = workspace("completion-repair-refusals");
+    put(root, "src/app.ts", "export const app = 'ready';\n");
+    put(root, "tests/app.test.ts", "// TODO test fixture\n");
+    put(root, "vitest.config.ts", "// TODO test tooling\nexport default {};\n");
+    put(
+      root,
+      "src/oversized.ts",
+      `${"x".repeat(64_001)}\n// TODO implement the real flow\n`,
+    );
+    const context = await loadCompletionRepairContext(root, [
+      {
+        path: "src/missing.ts",
+        line: 1,
+        kind: "unfinished-marker",
+        excerpt: "TODO",
+      },
+      {
+        path: "tests/app.test.ts",
+        line: 1,
+        kind: "unfinished-marker",
+        excerpt: "TODO",
+      },
+      {
+        path: "vitest.config.ts",
+        line: 1,
+        kind: "unfinished-marker",
+        excerpt: "TODO",
+      },
+      ...scanCompletionGaps(root),
+    ]);
+    expect(context.files).toEqual([]);
+    expect(context.refusals.map((item) => item.path)).toEqual([
+      "src/missing.ts",
+      "src/oversized.ts",
+      "tests/app.test.ts",
+      "vitest.config.ts",
+    ]);
+    expect(context.refusals.map((item) => item.reason).join(" ")).toMatch(
+      /not an inspected product-source|per-file context limit/,
+    );
   });
 
   it("requires real browser evidence for Safari, iOS, and Android web targets", () => {

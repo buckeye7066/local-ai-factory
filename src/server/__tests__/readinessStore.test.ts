@@ -53,6 +53,7 @@ function receipt() {
       acceptanceCriteriaExecuted: 1,
     },
     technical: {
+      artifactDigest: `sha256:${"a".repeat(64)}`,
       qaPassed: true,
       testsPassed: true,
       verificationComplete: true,

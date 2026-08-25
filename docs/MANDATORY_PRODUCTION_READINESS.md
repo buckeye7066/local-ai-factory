@@ -23,6 +23,14 @@ The gate must prove all of the following:
 
 A pending PR, held release, failed deployment, partial implementation, unexecuted criterion, unresolved purpose-critical gap, model-only claim, or missing second brain is not production-ready.
 
+For an existing app, deterministic placeholder/TODO/stub findings in untouched
+product source are not merely reported. Factory Deck safely reads each exact
+gap-bearing source file in full and makes it eligible for anchored repair before
+test generation and QA. Tests, manifests, lockfiles, build/test configuration,
+tooling, unseen paths, symlinks, unreadable files, oversized files, and files
+outside the bounded aggregate context remain forbidden. Residual markers still
+block the receipt after the repair and executable verification rerun.
+
 ## Mandatory brain floor
 
 The production-readiness brain floor is:
@@ -33,6 +41,15 @@ The production-readiness brain floor is:
 Both must be configured for every non-demo Factory Deck run and Purpose Foundry project. Lower-cost/free helpers may assist earlier stages, but they cannot issue or substitute for the production-readiness receipt. The reviewers must use different provider families, review the same immutable evidence digest, and independently return purpose alignment, implementation completeness, technical readiness, and zero blockers.
 
 Failure, unavailability, quota exhaustion, disagreement, stale evidence, or a weaker Anthropic model holds the run. It never silently falls back to one brain or self-review.
+
+Both brains decide before any branch push, direct trunk fast-forward, PR merge,
+or deployment. Their approval is bound to the digest of the exact sorted
+path-to-byte-digest candidate tree and is revalidated at every release side-
+effect boundary; changed bytes invalidate it. Delivery fields remain truthfully
+false during this candidate review. After delivery, a deterministic finalizer
+binds the actual trunk/live/local-artifact evidence to that exact pre-release
+approval and issues the final receipt. It never relabels the reviewers as having
+observed delivery they did not observe.
 
 ## Purpose Foundry enforcement
 
