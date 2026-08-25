@@ -7,6 +7,7 @@
  * readiness is grounded in executable evidence from the exact revision.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve, dirname, extname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -105,16 +106,39 @@ if (!prohibitedLanguage.some(([, phrase]) => wrappedPhraseProbe.includes(phrase)
   errors.push("release_language_policy_self_test:wrapped_phrase_not_detected");
 }
 
-function scanLanguage(directory) {
+function fallbackRepositoryPaths(directory) {
+  const paths = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (!excludedDirectories.has(entry.name))
-        scanLanguage(resolve(directory, entry.name));
+        paths.push(...fallbackRepositoryPaths(resolve(directory, entry.name)));
       continue;
     }
-    if (!entry.isFile() || !textExtensions.has(extname(entry.name).toLowerCase()))
-      continue;
-    const path = resolve(directory, entry.name);
+    if (entry.isFile()) paths.push(resolve(directory, entry.name));
+  }
+  return paths;
+}
+
+function repositoryPaths() {
+  try {
+    const output = execFileSync("git", ["ls-files", "-z"], {
+      cwd: ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return output
+      .split("\0")
+      .filter(Boolean)
+      .map((path) => resolve(ROOT, path));
+  } catch {
+    notes.push("git_index_unavailable:scanned_workspace_fallback");
+    return fallbackRepositoryPaths(ROOT);
+  }
+}
+
+function scanLanguage() {
+  for (const path of repositoryPaths()) {
+    if (!textExtensions.has(extname(path).toLowerCase())) continue;
     const normalized = normalizeLanguage(readFileSync(path, "utf8"));
     for (const [label, phrase] of prohibitedLanguage) {
       if (normalized.includes(phrase)) {
@@ -124,7 +148,7 @@ function scanLanguage(directory) {
   }
 }
 
-scanLanguage(ROOT);
+scanLanguage();
 
 console.log(JSON.stringify({ ok: errors.length === 0, errors, notes }, null, 2));
 process.exit(errors.length === 0 ? 0 : 1);
