@@ -3,7 +3,12 @@ import type { Request, Response, NextFunction } from "express";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
-import { getConfig, getSecrets, toHealth, isFactoryHealthPayload } from "./config.js";
+import {
+  getConfig,
+  getSecrets,
+  toHealth,
+  isFactoryHealthPayload,
+} from "./config.js";
 import {
   RunOptionsSchema,
   isValidRunId,
@@ -47,7 +52,11 @@ import {
 } from "./storage/idempotency.js";
 import { appendAuditEvent } from "./storage/auditLog.js";
 import { authorizeApiRequest, resolveBindHost } from "./security/access.js";
-import { snapshotRoute, getThresholds, probeLiveness } from "./providers/freeRoute.js";
+import {
+  snapshotRoute,
+  getThresholds,
+  probeLiveness,
+} from "./providers/freeRoute.js";
 import { paidBudgetStatus } from "./providers/paidBudget.js";
 import { createProviderRegistry } from "./providers/index.js";
 import { QuotaFailoverProvider } from "./providers/quotaFailover.js";
@@ -136,7 +145,9 @@ app.use("/api", (req, res, next) => {
     token: secrets.authToken,
   });
   if (!decision.ok) {
-    res.status(decision.status).json({ error: decision.reason ?? "Unauthorized." });
+    res
+      .status(decision.status)
+      .json({ error: decision.reason ?? "Unauthorized." });
     return;
   }
   next();
@@ -149,7 +160,10 @@ app.use("/api", (req, res, next) => {
  */
 app.get("/api/route", (_req, res) => {
   void (async () => {
-    const liveness = await probeLiveness(config.free.baseUrl, config.free.ollamaUrl);
+    const liveness = await probeLiveness(
+      config.free.baseUrl,
+      config.free.ollamaUrl,
+    );
     res.json({ ...routeStatus(), liveness });
   })();
 });
@@ -317,9 +331,9 @@ app.post(
     // setting) placed beside `idea` instead of inside `options` used to be
     // silently ignored, turning an extend run into a from-scratch app.
     const allowedTopLevel = new Set(["idea", "options"]);
-    const strayKeys = Object.keys((req.body ?? {}) as Record<string, unknown>).filter(
-      (k) => !allowedTopLevel.has(k),
-    );
+    const strayKeys = Object.keys(
+      (req.body ?? {}) as Record<string, unknown>,
+    ).filter((k) => !allowedTopLevel.has(k));
     if (strayKeys.length) {
       res.status(400).json({
         error:
@@ -343,7 +357,8 @@ app.post(
       typeof req.headers["idempotency-key"] === "string"
         ? req.headers["idempotency-key"].trim()
         : "";
-    const idempotencyKey = parsed.data.idempotencyKey?.trim() || headerKey || undefined;
+    const idempotencyKey =
+      parsed.data.idempotencyKey?.trim() || headerKey || undefined;
 
     if (idempotencyKey) {
       if (await isIdempotencyConflict(idempotencyKey, idea)) {
@@ -448,11 +463,15 @@ function epicDeps(): EpicDeps {
   return {
     executeSliceRun: (idea, options, onStarted) =>
       underWorkTheme({ idea, stage: "epic-slice" }, () =>
-        runFactoryTracked({ idea, options, config, secrets }, onStarted ?? (() => {})),
+        runFactoryTracked(
+          { idea, options, config, secrets },
+          onStarted ?? (() => {}),
+        ),
       ),
     resumeSliceRun: async (runId) =>
-      underWorkTheme(resumeWorkTheme(await getRun(runId), runId, "epic-resume"), () =>
-        resumeFactoryFull(runId, config, secrets),
+      underWorkTheme(
+        resumeWorkTheme(await getRun(runId), runId, "epic-resume"),
+        () => resumeFactoryFull(runId, config, secrets),
       ),
     plan: async (idea, options) => {
       // Planning obeys the same owner-selected economic tier as every slice.
@@ -574,7 +593,9 @@ app.post(
     // be retried, a permanent dead end for work the owner still wanted. Only
     // completed and already-running epics are refused.
     if (epic.status === "completed" || epic.status === "running") {
-      res.status(409).json({ error: `Epic is ${epic.status}; nothing to resume.` });
+      res
+        .status(409)
+        .json({ error: `Epic is ${epic.status}; nothing to resume.` });
       return;
     }
     // Retry the slice that paused it: reset to pending and continue.
@@ -588,7 +609,8 @@ app.post(
     const deps = epicDeps();
     // Never planned (or planning failed): plan first, then run.
     void (async () => {
-      const ready = epic.slices.length === 0 ? await planEpic(epic, deps) : epic;
+      const ready =
+        epic.slices.length === 0 ? await planEpic(epic, deps) : epic;
       if (ready.status !== "failed") await runEpic(ready, deps);
     })().catch(() => {});
     res.status(202).json({ ok: true });
@@ -683,7 +705,9 @@ app.post(
 
 /** A run whose work is over — safe to delete without stopping anything. */
 function isFinished(status: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return (
+    status === "completed" || status === "failed" || status === "cancelled"
+  );
 }
 
 /**
@@ -702,14 +726,21 @@ function isFinished(status: string): boolean {
 async function deleteRunAndWorkspace(
   run: { id: string; workspacePath: string | null },
   liveWorkspaces: Set<string>,
-): Promise<{ runId: string; workspaceRemoved: boolean; workspaceNote: string }> {
+): Promise<{
+  runId: string;
+  workspaceRemoved: boolean;
+  workspaceNote: string;
+}> {
   let workspaceRemoved = false;
   let workspaceNote = "No workspace directory recorded.";
   if (run.workspacePath) {
     if (liveWorkspaces.has(resolve(run.workspacePath))) {
       workspaceNote = "Workspace kept: an active run is using it.";
     } else {
-      const res = await rollbackWorkspace(config.workspaceRoot, run.workspacePath);
+      const res = await rollbackWorkspace(
+        config.workspaceRoot,
+        run.workspacePath,
+      );
       workspaceRemoved = res.ok;
       workspaceNote = res.ok
         ? `Workspace deleted: ${run.workspacePath}`
@@ -830,7 +861,10 @@ app.post(
       return;
     }
     const fullName = `${owner}/${name}`;
-    const { existence, detail } = await githubRepoExists(fullName, process.cwd());
+    const { existence, detail } = await githubRepoExists(
+      fullName,
+      process.cwd(),
+    );
     res.json({
       valid: true,
       owner,
@@ -861,7 +895,9 @@ app.get(
     // body is an empty string the UI can render, never a type violation.
     const files = await getRunFiles(runId);
     res.json({
-      files: files.length ? files : run.files.map((f) => ({ ...f, contents: "" })),
+      files: files.length
+        ? files
+        : run.files.map((f) => ({ ...f, contents: "" })),
     });
   }),
 );
@@ -893,7 +929,9 @@ if (servesUi) {
 /** Last-resort JSON error handler — never leak an HTML stack trace. */
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof z.ZodError) {
-    res.status(400).json({ error: err.issues[0]?.message ?? "Invalid request." });
+    res
+      .status(400)
+      .json({ error: err.issues[0]?.message ?? "Invalid request." });
     return;
   }
   const message = safeErrorMessage(err, "Internal error.");
@@ -909,7 +947,10 @@ void pruneOldRuns().then((n) => {
 // Decide the bind interface. Default is loopback (127.0.0.1) so run history and
 // generated file contents are NOT reachable from other LAN devices. LAN binding
 // is an explicit opt-in (FACTORY_BIND_LAN=1) and is refused without a token.
-const bind = resolveBindHost({ bindLan: config.bindLan, token: secrets.authToken });
+const bind = resolveBindHost({
+  bindLan: config.bindLan,
+  token: secrets.authToken,
+});
 if (bind.error) {
   console.error(`[factory] ${bind.error}`);
   process.exit(FATAL_EXIT_CODE);
@@ -929,7 +970,10 @@ if (bind.error) {
  * 2026-08-20 when the launcher printed "backend exited with code -1".
  */
 {
-  const dir = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".factory");
+  const dir = resolve(
+    process.cwd(),
+    process.env.FACTORY_DATA_DIR || ".factory",
+  );
   const logCrash = (kind: string, err: unknown) => {
     const detail = redactSecrets(
       err instanceof Error ? (err.stack ?? err.message) : String(err),
@@ -944,13 +988,17 @@ if (bind.error) {
     console.error(`[factory] ${kind}: ${safeErrorMessage(err)}`);
   };
   process.on("uncaughtException", (err) => logCrash("uncaughtException", err));
-  process.on("unhandledRejection", (err) => logCrash("unhandledRejection", err));
+  process.on("unhandledRejection", (err) =>
+    logCrash("unhandledRejection", err),
+  );
 }
 
 void recoverOrphanedEpics()
   .then((n) => {
     if (n > 0)
-      console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
+      console.log(
+        `[factory] recovered ${n} orphaned epic(s) — paused, resumable.`,
+      );
   })
   .catch((err) => {
     // Boot must stay up even if epic recovery fails — a wedged audit file
@@ -958,7 +1006,9 @@ void recoverOrphanedEpics()
     console.error(`[factory] orphan epic recovery failed (continuing):`, err);
   });
 const server = app.listen(config.port, bind.host, () => {
-  console.log(`[factory] backend listening on http://${bind.host}:${config.port}`);
+  console.log(
+    `[factory] backend listening on http://${bind.host}:${config.port}`,
+  );
   console.log(
     bind.lan
       ? `[factory] LAN access ENABLED (bearer token required for remote requests).`
