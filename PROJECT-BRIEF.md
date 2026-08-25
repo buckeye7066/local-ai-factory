@@ -17,10 +17,10 @@ the deck is what actually happened.
 
 ### Free route (primary — zero cost)
 
-| Variable | Default | Description |
-|---|---|---|
-| `FACTORY_FREE_MODEL` | `claude-sonnet-4-5` | Model alias forwarded to the FCC proxy |
-| `FACTORY_FREE_BASE_URL` | `http://127.0.0.1:8082` | Local FCC proxy endpoint |
+| Variable                | Default                 | Description                            |
+| ----------------------- | ----------------------- | -------------------------------------- |
+| `FACTORY_FREE_MODEL`    | `claude-sonnet-4-5`     | Model alias forwarded to the FCC proxy |
+| `FACTORY_FREE_BASE_URL` | `http://127.0.0.1:8082` | Local FCC proxy endpoint               |
 
 The free route uses the local FCC proxy (the same one "Claude Code - FREE
 (Ollama)" turns on). `claude-sonnet-4-5` maps to the proxy's strong tier
@@ -28,10 +28,10 @@ The free route uses the local FCC proxy (the same one "Claude Code - FREE
 
 ### Paid rescue tier (optional)
 
-| Provider | Variable | Default model |
-|---|---|---|
+| Provider  | Variable            | Default model     |
+| --------- | ------------------- | ----------------- |
 | Anthropic | `ANTHROPIC_API_KEY` | `claude-opus-4-8` |
-| OpenAI | `OPENAI_API_KEY` | `gpt-5.5` |
+| OpenAI    | `OPENAI_API_KEY`    | `gpt-5.5`         |
 
 Paid providers are a rescue tier only. The deck returns to the free route
 automatically as soon as it recovers from a proven stall. A config that
@@ -41,12 +41,12 @@ defaults to a paid provider is a bug, not a preference.
 
 ## System Requirements
 
-| Component | Minimum |
-|---|---|
-| Node.js | 20 LTS or later |
-| pnpm | 10.17.0 (managed by corepack) |
-| OS | macOS, Linux, or Windows |
-| Free route | Local FCC proxy running on port 8082 |
+| Component         | Minimum                                   |
+| ----------------- | ----------------------------------------- |
+| Node.js           | 20 LTS or later                           |
+| pnpm              | 10.17.0 (managed by corepack)             |
+| OS                | macOS, Linux, or Windows                  |
+| Free route        | Local FCC proxy running on port 8082      |
 | Ollama (optional) | Running on port 11434 for liveness probes |
 
 The backend runs on Node 20+. The UI is a Vite/React application served from
@@ -72,7 +72,7 @@ corepack enable
 ```bash
 git clone https://github.com/buckeye7066/local-ai-factory.git
 cd local-ai-factory
-pnpm install
+pnpm install --frozen-lockfile
 ```
 
 ### 3. Configure environment
@@ -135,17 +135,17 @@ JSON, which is validated before it is ever used — no free-form parsing.
 
 ### Agent stages
 
-| Stage | Purpose |
-|---|---|
-| Intake | Parses and sanitizes the raw idea string |
-| Product Spec | Generates a structured product specification |
-| Architecture | Designs file layout, stack, and dependencies |
-| Task Plan | Produces ordered build tasks for the Builder |
-| File Generation | Writes source files to the workspace |
-| Test Generation | Writes test files for the generated code |
-| QA Critique | Reviews the result and returns pass/fail evidence |
-| Repair Loop | Bounded self-repair loop (max `MAX_REPAIR_LOOPS`) |
-| Final Report | Assembles and returns the human-readable result |
+| Stage           | Purpose                                           |
+| --------------- | ------------------------------------------------- |
+| Intake          | Parses and sanitizes the raw idea string          |
+| Product Spec    | Generates a structured product specification      |
+| Architecture    | Designs file layout, stack, and dependencies      |
+| Task Plan       | Produces ordered build tasks for the Builder      |
+| File Generation | Writes source files to the workspace              |
+| Test Generation | Writes test files for the generated code          |
+| QA Critique     | Reviews the result and returns pass/fail evidence |
+| Repair Loop     | Bounded self-repair loop (max `MAX_REPAIR_LOOPS`) |
+| Final Report    | Assembles and returns the human-readable result   |
 
 ### Repair loop
 
@@ -180,11 +180,11 @@ Available provider names: `free`, `anthropic`, `openai`, `stub` (test), `mock` (
 
 The failover chain is: free → paid rescue → error. The paid rescue is rate-limited:
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `FACTORY_PAID_RESCUES_PER_HOUR` | *unlimited* | Max paid rescues per hour |
-| `FACTORY_PAID_RESCUES_PER_DAY` | *unlimited* | Max paid rescues per day |
-| `FACTORY_PAID_MAX_USD_PER_DAY` | *unlimited* | Daily USD spending cap (estimate) |
+| Variable                        | Default     | Meaning                           |
+| ------------------------------- | ----------- | --------------------------------- |
+| `FACTORY_PAID_RESCUES_PER_HOUR` | _unlimited_ | Max paid rescues per hour         |
+| `FACTORY_PAID_RESCUES_PER_DAY`  | _unlimited_ | Max paid rescues per day          |
+| `FACTORY_PAID_MAX_USD_PER_DAY`  | _unlimited_ | Daily USD spending cap (estimate) |
 
 **There is no default spend cap.** The 6 / 24 / $2 figures this table used to
 print as defaults were removed from the code on 2026-08-16 (owner: "I don't know
@@ -198,11 +198,11 @@ starting point; copying it is what turns the ceiling on.
 
 ## Run Limits and Cost Guards
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `MAX_REPAIR_LOOPS` | 3 | Maximum self-repair iterations |
-| `MAX_MODEL_CALLS_PER_RUN` | 30 | Hard cap on model calls per run |
-| `FACTORY_RUN_TIMEOUT_MS` | 14400000 | Overall run timeout (4 hours) |
+| Variable                  | Default  | Meaning                         |
+| ------------------------- | -------- | ------------------------------- |
+| `MAX_REPAIR_LOOPS`        | 3        | Maximum self-repair iterations  |
+| `MAX_MODEL_CALLS_PER_RUN` | 30       | Hard cap on model calls per run |
+| `FACTORY_RUN_TIMEOUT_MS`  | 14400000 | Overall run timeout (4 hours)   |
 
 ---
 
@@ -309,14 +309,14 @@ Returns the contents of a specific workspace file.
 
 ### Scripts
 
-| Command | Purpose |
-|---|---|
-| `pnpm dev` | Start API + Vite in watch mode |
-| `pnpm test` | Run full test suite |
+| Command          | Purpose                                |
+| ---------------- | -------------------------------------- |
+| `pnpm dev`       | Start API + Vite in watch mode         |
+| `pnpm test`      | Run full test suite                    |
 | `pnpm typecheck` | TypeScript type-check (both tsconfigs) |
-| `pnpm lint` | Prettier check |
-| `pnpm format` | Prettier format |
-| `pnpm build` | Type-check + Vite production build |
+| `pnpm lint`      | Prettier check                         |
+| `pnpm format`    | Prettier format                        |
+| `pnpm build`     | Type-check + Vite production build     |
 
 ### Testing
 

@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 import { ProviderAbortError } from "../providers/types.js";
-import { webSearchTool } from "../tools/webSearch.js";
+import { webSearch } from "../tools/webSearch.js";
 import { webFetchTool } from "../tools/webFetch.js";
+import { canonicalEvidenceUrlSet, matchingEvidenceUrls } from "../tools/evidenceUrl.js";
 import {
   buildCompetitiveDossier,
+  MIN_PRODUCT_COMPETITORS,
   type CompetitiveCandidate,
   type CompetitiveDossier,
 } from "../tools/competitiveIntelligence.js";
@@ -23,6 +25,17 @@ const ReuseModeSchema = z.enum([
   "api-integration",
   "reference-only",
 ]);
+const ActionableReuseModeSchema = z.enum([
+  "dependency",
+  "direct-code",
+  "clean-room-pattern",
+  "api-integration",
+]);
+const HttpUrlSchema = z
+  .string()
+  .trim()
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), "expected an http(s) URL");
 
 const RecommendationSchema = z.object({
   name: z.string(),
@@ -35,6 +48,7 @@ const RecommendationSchema = z.object({
   reuseMode: ReuseModeSchema.default("api-integration"),
   evidenceUrls: z.array(z.string()).default([]),
   score: z.number().min(0).max(100).default(0),
+  origin: z.enum(["tool-research", "competitive-selection"]).default("tool-research"),
 });
 export type ResearchRecommendation = z.infer<typeof RecommendationSchema>;
 
@@ -48,15 +62,49 @@ const CandidateComparisonSchema = z.object({
   evidenceUrls: z.array(z.string()).default([]),
   decision: z.enum(["integrate", "adapt", "reference", "reject"]),
   rationale: z.string().default(""),
+  origin: z.enum(["tool-research", "competitive-selection"]).default("tool-research"),
 });
 
 const CompetitiveAuditSchema = z.object({
   queries: z.array(z.string()).default([]),
-  /** Which discovery sources answered (Repo Rewards, web search) — an
-   *  unreachable source is reported by name, never silently dropped. */
+  /** Which discovery sources answered, returned empty, failed, or were skipped. */
   sources: z
-    .array(z.object({ name: z.string(), ok: z.boolean(), detail: z.string() }))
+    .array(
+      z.object({
+        name: z.string(),
+        ok: z.boolean(),
+        status: z.enum(["ok", "partial", "empty", "failed", "skipped"]).default("ok"),
+        detail: z.string(),
+        attempts: z.number().int().nonnegative().default(0),
+        succeeded: z.number().int().nonnegative().default(0),
+        empty: z.number().int().nonnegative().default(0),
+        failed: z.number().int().nonnegative().default(0),
+        skipped: z.number().int().nonnegative().default(0),
+        resultCount: z.number().int().nonnegative().default(0),
+      }),
+    )
     .default([]),
+  coverage: z
+    .object({
+      productTarget: z.number().int().positive(),
+      productDiscoveredCount: z.number().int().nonnegative(),
+      productInspectedCount: z.number().int().nonnegative(),
+      productVerifiedCount: z.number().int().nonnegative(),
+      productCoverageMet: z.boolean(),
+      repositoryDiscoveredCount: z.number().int().nonnegative(),
+      repositoryInspectedCount: z.number().int().nonnegative(),
+      repositoryVerifiedCount: z.number().int().nonnegative(),
+    })
+    .default({
+      productTarget: MIN_PRODUCT_COMPETITORS,
+      productDiscoveredCount: 0,
+      productInspectedCount: 0,
+      productVerifiedCount: 0,
+      productCoverageMet: false,
+      repositoryDiscoveredCount: 0,
+      repositoryInspectedCount: 0,
+      repositoryVerifiedCount: 0,
+    }),
   discoveredCount: z.number().int().nonnegative().default(0),
   inspectedCount: z.number().int().nonnegative().default(0),
   generatedAt: z.string().default(""),
@@ -64,14 +112,13 @@ const CompetitiveAuditSchema = z.object({
     .array(
       z.object({
         candidateId: z.string(),
+        kind: z.enum(["product", "repository"]).default("repository"),
         name: z.string(),
         url: z.string(),
+        /** URLs actually fetched while verifying this candidate. */
+        evidenceUrls: z.array(z.string()).default([]),
         licenseSpdx: z.string(),
-        licensePolicy: z.enum([
-          "direct-use",
-          "conditional-review",
-          "reference-only",
-        ]),
+        licensePolicy: z.enum(["direct-use", "conditional-review", "reference-only"]),
         inspectedFiles: z.number().int().nonnegative(),
         inspectionError: z.string().default(""),
       }),
@@ -87,33 +134,63 @@ export const ResearchFindingsSchema = z.object({
 });
 export type ResearchFindings = z.infer<typeof ResearchFindingsSchema>;
 
+const ToolResearchFindingsSchema = z.object({
+  summary: z.string().default(""),
+  recommendations: z.array(RecommendationSchema.omit({ origin: true })).default([]),
+});
+
 const ACTIONS = ["web_search", "web_fetch", "conclude"] as const;
 const ResearchActionSchema = z.object({
   thought: z.string().default(""),
   action: z.enum(ACTIONS),
   query: z.string().nullable().optional(),
   url: z.string().nullable().optional(),
-  findings: ResearchFindingsSchema.nullable().optional(),
+  findings: ToolResearchFindingsSchema.nullable().optional(),
 });
 type ResearchAction = z.infer<typeof ResearchActionSchema>;
 
-const CompetitiveSelectionSchema = z.object({
-  summary: z.string().default(""),
-  comparisons: z.array(CandidateComparisonSchema).default([]),
-  selected: z
-    .array(
-      z.object({
-        candidateId: z.string(),
-        element: z.string(),
-        why: z.string().default(""),
-        howToIntegrate: z.string().default(""),
-        reuseMode: ReuseModeSchema,
-        evidenceUrls: z.array(z.string()).default([]),
-        score: z.number().min(0).max(100).default(0),
-      }),
-    )
-    .default([]),
-});
+const CompetitiveSelectionSchema = z
+  .object({
+    summary: z.string().default(""),
+    comparisons: z
+      .array(
+        CandidateComparisonSchema.omit({ origin: true }).extend({
+          candidateId: z.string().trim().min(1),
+          strengths: z.array(z.string().trim().min(1)).min(1),
+          gaps: z.array(z.string().trim().min(1)).min(1),
+          evidenceUrls: z.array(HttpUrlSchema).min(1),
+        }),
+      )
+      .default([]),
+    selected: z
+      .array(
+        z.object({
+          candidateId: z.string().trim().min(1),
+          element: z.string().trim().min(1),
+          why: z.string().trim().min(1),
+          howToIntegrate: z.string().trim().min(1),
+          reuseMode: ActionableReuseModeSchema,
+          evidenceUrls: z.array(HttpUrlSchema).min(1),
+          score: z.number().min(0).max(100).default(0),
+        }),
+      )
+      .default([]),
+  })
+  .superRefine((selection, context) => {
+    for (const key of ["comparisons", "selected"] as const) {
+      const seen = new Set<string>();
+      selection[key].forEach((item, index) => {
+        if (seen.has(item.candidateId)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key, index, "candidateId"],
+            message: `duplicate ${key} candidateId`,
+          });
+        }
+        seen.add(item.candidateId);
+      });
+    }
+  });
 type CompetitiveSelection = z.infer<typeof CompetitiveSelectionSchema>;
 
 export interface ResearchOptions {
@@ -145,6 +222,7 @@ async function runToolResearch(
   arch: Architecture,
 ): Promise<ResearchFindings> {
   const toolLog: string[] = [];
+  const observedUrls = new Set<string>();
 
   for (let step = 0; step < MAX_STEPS; step++) {
     const turn = await deps.provider.generateJson<ResearchAction>({
@@ -161,22 +239,59 @@ async function runToolResearch(
     });
 
     if (turn.action === "conclude") {
-      return ResearchFindingsSchema.parse(
-        turn.findings ?? {
-          summary: "No specific external tool identified.",
-          recommendations: [],
-        },
-      );
+      const findings = turn.findings ?? {
+        summary: "No specific external tool identified.",
+        recommendations: [],
+      };
+      const recommendations = findings.recommendations.flatMap((recommendation) => {
+        const matchedSource = matchingEvidenceUrls(
+          [recommendation.sourceUrl],
+          observedUrls,
+        )[0];
+        if (!matchedSource) return [];
+        return [
+          {
+            ...recommendation,
+            sourceUrl: matchedSource,
+            evidenceUrls: matchingEvidenceUrls(
+              [recommendation.sourceUrl, ...recommendation.evidenceUrls],
+              observedUrls,
+            ),
+            origin: "tool-research" as const,
+          },
+        ];
+      });
+      const dropped = findings.recommendations.length - recommendations.length;
+      return ResearchFindingsSchema.parse({
+        summary:
+          findings.summary +
+          (dropped
+            ? ` ${dropped} recommendation(s) were removed because their source URL was not observed in search/fetch evidence.`
+            : ""),
+        recommendations,
+      });
     }
 
     if (turn.action === "web_search") {
       const q = turn.query ?? spec.appName;
-      const results = await webSearchTool(q);
+      const searched = await webSearch(q);
+      for (const result of searched.results) {
+        for (const canonical of canonicalEvidenceUrlSet([result.url])) {
+          observedUrls.add(canonical);
+        }
+      }
       toolLog.push(
-        `web_search("${q}") -> ` +
-          results
-            .map((r) => `${r.title} — ${r.url} — ${r.snippet.slice(0, 200)}`)
-            .join(" | "),
+        `web_search("${q}") -> status=${searched.status} provider=${searched.provider ?? "none"}; ` +
+          (searched.results.length
+            ? searched.results
+                .map((r) => `${r.title} — ${r.url} — ${r.snippet.slice(0, 200)}`)
+                .join(" | ")
+            : `no results; ${searched.attempts
+                .map(
+                  (attempt) =>
+                    `${attempt.provider}:${attempt.status} (${attempt.detail})`,
+                )
+                .join("; ")}`),
       );
       continue;
     }
@@ -187,6 +302,11 @@ async function runToolResearch(
         continue;
       }
       const res = await webFetchTool(turn.url);
+      if (res.ok) {
+        for (const canonical of canonicalEvidenceUrlSet([turn.url, res.finalUrl])) {
+          observedUrls.add(canonical);
+        }
+      }
       toolLog.push(
         `web_fetch(${turn.url}) -> ok=${res.ok} status=${res.status}\n` +
           (res.error ? `error: ${res.error}` : res.textExcerpt.slice(0, 1200)),
@@ -219,16 +339,48 @@ function compactCandidate(candidate: CompetitiveCandidate) {
 }
 
 function auditFrom(dossier: CompetitiveDossier) {
+  const fallbackProducts = dossier.candidates.filter(
+    (candidate) => candidate.kind === "product",
+  );
+  const fallbackRepositories = dossier.candidates.filter(
+    (candidate) => candidate.kind === "repository",
+  );
   return {
     queries: dossier.queries,
     sources: dossier.sources ?? [],
+    coverage: dossier.coverage ?? {
+      productTarget: MIN_PRODUCT_COMPETITORS,
+      productDiscoveredCount: fallbackProducts.length,
+      productInspectedCount: fallbackProducts.length,
+      productVerifiedCount: fallbackProducts.filter(
+        (candidate) => candidate.sourceEvidence.length > 0,
+      ).length,
+      productCoverageMet:
+        fallbackProducts.filter((candidate) => candidate.sourceEvidence.length > 0)
+          .length >= MIN_PRODUCT_COMPETITORS,
+      repositoryDiscoveredCount: fallbackRepositories.length,
+      repositoryInspectedCount: fallbackRepositories.length,
+      repositoryVerifiedCount: fallbackRepositories.filter(
+        (candidate) => candidate.sourceEvidence.length > 0,
+      ).length,
+    },
     discoveredCount: dossier.discoveredCount,
     inspectedCount: dossier.inspectedCount,
     generatedAt: dossier.generatedAt,
     candidates: dossier.candidates.map((candidate) => ({
       candidateId: candidate.id,
+      kind: candidate.kind,
       name: candidate.name,
       url: candidate.url,
+      evidenceUrls:
+        candidate.sourceEvidence.length > 0
+          ? [
+              ...new Set([
+                candidate.url,
+                ...candidate.sourceEvidence.map((item) => item.url),
+              ]),
+            ]
+          : [],
       licenseSpdx: candidate.license.spdxId,
       licensePolicy: candidate.license.policy,
       inspectedFiles: candidate.sourceEvidence.length,
@@ -241,7 +393,12 @@ export function enforceReuseMode(
   requested: z.infer<typeof ReuseModeSchema>,
   candidate: CompetitiveCandidate,
 ): z.infer<typeof ReuseModeSchema> {
-  if (candidate.kind === "web" && requested === "direct-code") return "api-integration";
+  if (candidate.kind === "product" && requested !== "reference-only") {
+    // A product homepage proves neither source-code permission nor a supported
+    // API/contract. Product ideas are therefore clean-room behavior references
+    // unless separate API-specific evidence exists (not represented here).
+    return "clean-room-pattern";
+  }
   if (
     candidate.license.policy !== "direct-use" &&
     (requested === "direct-code" || requested === "dependency")
@@ -262,14 +419,20 @@ async function evaluateCompetitiveDossier(
       `${SYSTEM_PREAMBLE}\nYou are the COMPETITIVE INTELLIGENCE reviewer. Compare only the supplied, ` +
       `evidence-backed candidates. Score feature fit, implementation quality, maintenance, and integration cost. ` +
       `Never invent a candidate, file, feature, or license. License policy is authoritative: direct code reuse is ` +
-      `allowed only when policy=direct-use; otherwise choose clean-room-pattern or reference-only.`,
+      `allowed only when policy=direct-use; otherwise choose clean-room-pattern for an adoptable behavior or design ` +
+      `idea. The selected list is implementation work and therefore cannot be reference-only; use decision=reject ` +
+      `when a candidate has nothing safely adoptable.`,
     prompt: [
       `TARGET SPEC:\n${JSON.stringify(spec)}`,
       `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
+      `COVERAGE:\n${JSON.stringify(dossier.coverage)}`,
       `DISCOVERY DOSSIER:\n${JSON.stringify(dossier.candidates.map(compactCandidate))}`,
       `Return a feature-by-feature comparison for every credible candidate and a selected list of concrete elements ` +
-        `worth integrating. Cover AT LEAST the five strongest competitors in the comparisons (all of them when fewer ` +
-        `than five candidates exist), and for each competitor name the single most valuable idea worth adopting - ` +
+        `worth integrating. Candidate kind=product means a market competitor; kind=repository means an inspectable ` +
+        `open-source implementation. Cover AT LEAST five distinct kind=product competitors in the comparisons when ` +
+        `coverage contains five verified products. Repositories are valuable implementation evidence but NEVER count ` +
+        `toward that five-product floor. When product coverage is below target, compare every supplied product and say ` +
+        `the shortfall plainly. For each product competitor name the single most valuable idea worth adopting - ` +
         `the thing it does better than this app - respecting its license policy. Every selected candidateId must ` +
         `exactly match the dossier. Cite file/page URLs in evidenceUrls. ` +
         `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
@@ -287,14 +450,49 @@ function mergeCompetitiveResults(
   dossier: CompetitiveDossier,
   selection: CompetitiveSelection,
 ): ResearchFindings {
-  const candidates = new Map(dossier.candidates.map((candidate) => [candidate.id, candidate]));
-  const validComparisons = selection.comparisons.filter((item) => candidates.has(item.candidateId));
+  const candidates = new Map(
+    dossier.candidates.map((candidate) => [candidate.id, candidate]),
+  );
+  const inspectedEvidence = (candidate: CompetitiveCandidate): Set<string> =>
+    canonicalEvidenceUrlSet(
+      candidate.sourceEvidence.length > 0
+        ? [candidate.url, ...candidate.sourceEvidence.map((item) => item.url)]
+        : [],
+    );
+  const validComparisons = selection.comparisons.flatMap((item) => {
+    const candidate = candidates.get(item.candidateId);
+    if (!candidate) return [];
+    const allowed = inspectedEvidence(candidate);
+    const evidenceUrls = matchingEvidenceUrls(item.evidenceUrls, allowed);
+    return evidenceUrls.length
+      ? [{ ...item, evidenceUrls, origin: "competitive-selection" as const }]
+      : [];
+  });
+  const comparisonGroups = new Map<string, typeof validComparisons>();
+  for (const comparison of validComparisons) {
+    const group = comparisonGroups.get(comparison.candidateId) ?? [];
+    group.push(comparison);
+    comparisonGroups.set(comparison.candidateId, group);
+  }
+  const actionableComparisonIds = new Set(
+    [...comparisonGroups.entries()].flatMap(([candidateId, group]) =>
+      group.length === 1 && group[0]?.decision !== "reject" ? [candidateId] : [],
+    ),
+  );
   const competitiveRecommendations: ResearchRecommendation[] = [];
 
   for (const selected of selection.selected) {
     const candidate = candidates.get(selected.candidateId);
     if (!candidate) continue;
+    if (!actionableComparisonIds.has(candidate.id)) continue;
+    const allowedEvidence = inspectedEvidence(candidate);
+    const selectedEvidence = matchingEvidenceUrls(
+      selected.evidenceUrls,
+      allowedEvidence,
+    );
+    if (selectedEvidence.length === 0) continue;
     const reuseMode = enforceReuseMode(selected.reuseMode, candidate);
+    if (candidate.kind === "product" && reuseMode === "reference-only") continue;
     const legalPrefix =
       reuseMode !== selected.reuseMode
         ? `License gate changed requested ${selected.reuseMode} to ${reuseMode}. `
@@ -308,14 +506,9 @@ function mergeCompetitiveResults(
       licenseSpdx: candidate.license.spdxId,
       licensePolicy: candidate.license.policy,
       reuseMode,
-      evidenceUrls: [
-        ...new Set([
-          ...selected.evidenceUrls,
-          candidate.license.evidenceUrl,
-          ...candidate.sourceEvidence.slice(0, 4).map((item) => item.url),
-        ].filter(Boolean)),
-      ],
+      evidenceUrls: [...new Set([...selectedEvidence].filter(Boolean))],
       score: selected.score,
+      origin: "competitive-selection",
     });
   }
 
@@ -372,7 +565,9 @@ export async function researchAgent(
     });
   }
   let merged = mergeCompetitiveResults(base, dossier, selection);
-  const deadSources = (dossier.sources ?? []).filter((s) => !s.ok);
+  const deadSources = (dossier.sources ?? []).filter(
+    (source) => !source.ok || source.status === "failed",
+  );
   if (deadSources.length) {
     merged = ResearchFindingsSchema.parse({
       ...merged,
@@ -383,14 +578,28 @@ Discovery source unavailable: ${deadSources
         .join("; ")}.`,
     });
   }
-  if (dossier.candidates.length < 5) {
-    // No silent caps: the owner's floor is the top FIVE competitors. Fewer
-    // discovered is reported, never papered over.
+  const emptySources = (dossier.sources ?? []).filter(
+    (source) => source.status === "empty",
+  );
+  if (emptySources.length) {
+    merged = ResearchFindingsSchema.parse({
+      ...merged,
+      summary: `${merged.summary}
+
+Discovery source returned an honest empty result: ${emptySources
+        .map((source) => `${source.name} (${source.detail})`)
+        .join("; ")}.`,
+    });
+  }
+  const coverage = dossier.coverage ?? auditFrom(dossier).coverage;
+  if (!coverage.productCoverageMet) {
+    // No silent substitution: repositories cannot satisfy the owner's floor
+    // of five distinct, evidence-verified PRODUCT competitors.
     return ResearchFindingsSchema.parse({
       ...merged,
       summary: `${merged.summary}
 
-Competitor coverage below the owner's floor: only ${dossier.candidates.length} candidate(s) were discovered and inspected (target: at least 5).`,
+Product competitor coverage below the owner's floor: ${coverage.productVerifiedCount} verified / ${coverage.productInspectedCount} inspected / ${coverage.productDiscoveredCount} distinct product candidate(s) discovered (target: ${coverage.productTarget}). Repository coverage is reported separately: ${coverage.repositoryVerifiedCount} verified / ${coverage.repositoryInspectedCount} inspected / ${coverage.repositoryDiscoveredCount} discovered, and does not satisfy the product floor.`,
     });
   }
   return merged;

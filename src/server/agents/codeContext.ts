@@ -1,7 +1,8 @@
 import type { FileBuild } from "../../shared/schemas.js";
-
-const MAX_FILE_CHARS = 24_000;
-const MAX_TOTAL_CHARS = 120_000;
+import {
+  MAX_CONTEXT_FILE_CHARS,
+  MAX_CONTEXT_TOTAL_CHARS,
+} from "../workspace/contextLimits.js";
 
 export interface BuildCodeContext {
   text: string;
@@ -15,7 +16,7 @@ export interface BuildCodeContext {
  * Every truncation or omission is explicit and machine-visible to callers.
  */
 export function renderBuildCodeContext(build: FileBuild): BuildCodeContext {
-  let remaining = MAX_TOTAL_CHARS;
+  let remaining = MAX_CONTEXT_TOTAL_CHARS;
   const blocks: string[] = [];
   const fullyShownPaths: string[] = [];
   const omittedPaths: string[] = [];
@@ -30,7 +31,7 @@ export function renderBuildCodeContext(build: FileBuild): BuildCodeContext {
       continue;
     }
 
-    const take = Math.min(raw.length, MAX_FILE_CHARS, remaining);
+    const take = Math.min(raw.length, MAX_CONTEXT_FILE_CHARS, remaining);
     const shown = raw.slice(0, take);
     remaining -= take;
     const truncated = take < raw.length;
@@ -39,9 +40,7 @@ export function renderBuildCodeContext(build: FileBuild): BuildCodeContext {
     blocks.push(
       `----- ${file.path} -----\n` +
         (shown || "(empty file)") +
-        (truncated
-          ? "\n…(truncated; this file is not safe to repair or approve)"
-          : ""),
+        (truncated ? "\n…(truncated; this file is not safe to repair or approve)" : ""),
     );
   }
 

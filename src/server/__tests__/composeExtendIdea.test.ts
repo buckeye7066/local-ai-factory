@@ -6,13 +6,16 @@ import {
 } from "../orchestrator/composeExtendIdea.js";
 
 describe("EXTEND PERSISTENCE CONTRACT", () => {
-  it("names the measured ba870e71 pitfalls", () => {
+  it("protects existing applications without assuming one stack or schema dialect", () => {
     expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/EXTEND PERSISTENCE CONTRACT/);
+    expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/repository-derived/);
     expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/_gh_\*/);
-    expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/createStubEntityClient/);
-    expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/ON CONFLICT/);
-    expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/IF NOT EXISTS/);
+    expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/authoritative durable store/);
+    expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/native mechanism/);
+    expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/detected stores/);
+    expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/instead of guessing/);
     expect(EXTEND_PERSISTENCE_CONTRACT).toMatch(/sibling/);
+    expect(EXTEND_PERSISTENCE_CONTRACT).not.toMatch(/SQLite AND Postgres/);
   });
 
   it("appends the contract once to composed ideas and goal lists", () => {
@@ -30,6 +33,7 @@ describe("EXTEND PERSISTENCE CONTRACT", () => {
         readmeExcerpt: "",
         fileTree: ["src/App.jsx"],
         manifestExcerpts: [],
+        purposeEvidence: [],
       },
       ["Add invoicing"],
     );

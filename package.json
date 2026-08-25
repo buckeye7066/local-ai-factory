@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Factory Deck \u2014 a local-first AI software factory that builds apps through an agent assembly line.",
+  "packageManager": "pnpm@10.17.0",
+  "description": "Factory Deck — a local-first AI software factory that builds apps through an agent assembly line.",
   "engines": {
     "node": ">=20"
   },
@@ -40,6 +41,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.ui.json --noEmit",
     "lint": "prettier --check \"src/**/*.{ts,tsx,css}\"",
+    "lint:changed": "node scripts/lint-changed.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "install:purpose-foundry-icon": "powershell -File scripts/Install-Purpose-Foundry-Icon.ps1"
   },

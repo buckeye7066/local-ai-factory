@@ -1,10 +1,10 @@
 # Factory Deck — `local-ai-factory`
 
-A **local-first AI software factory**. You describe an app; a line of specialist
-agents — Product Spec → Architect → Task Planner → Builder → Test Writer → QA
-Critic → Repair Loop → Final Review — collaborate locally to design, generate,
-test, and self-repair a small working app, then hand you a report and a
-workspace folder you can open and run.
+A **local-first, provider-neutral software factory**. You describe a new app or
+an outcome for an existing repository; Factory Deck links its model-inferred
+purpose to immutable repository excerpts, researches the real competitive field, builds
+the change, executes acceptance checks, repairs failures, and reports exactly
+what the evidence does—and does not—prove.
 
 It ships with a premium control-room UI ("Factory Deck") that visualizes the
 assembly line in real time. There is **no demo, mock, dry-run, or simulate
@@ -16,8 +16,8 @@ the deck is what actually happened.
 ## How the assembly line works
 
 ```
-Idea
-  └─▶ Intake → Product Spec → Architecture → Task Plan
+Idea or existing repository goal
+  └─▶ Intake → Purpose Constitution → Product Spec → Architecture → Task Plan
         → File Generation → Write to Workspace
         → Test Generation → (install / typecheck / test)
         → QA Critique → Repair Loop ⟲ (bounded) → Final Report
@@ -32,26 +32,39 @@ Idea
 
 ### Autonomous competitive intelligence
 
-Live runs now research beyond named dependencies. Before planning is finalized, Factory Deck:
+Live runs research beyond named dependencies. Before planning is finalized,
+Factory Deck:
 
 1. derives multiple discovery queries from the product specification;
-2. finds and deduplicates relevant open-source products, libraries, APIs, and documentation;
-3. inspects repository metadata, maintenance signals, file trees, and the most relevant source files;
-4. records deterministic license evidence and classifies reuse as direct-use, conditional-review, or reference-only;
-5. produces an evidence-linked feature comparison and selects specific elements to integrate; and
-6. passes the selected approach and enforced reuse mode into planning and file generation.
+2. searches Firecrawl v2 first, with an honest DuckDuckGo fallback and explicit
+   source-health reporting;
+3. reserves separate capacity for real product competitors and requires five
+   verified products before a five-competitor claim is considered covered;
+4. inspects open-source repository metadata, maintenance signals, file trees,
+   and relevant source separately from product competitors;
+5. records deterministic license evidence and classifies reuse as direct-use,
+   conditional-review, or reference-only; and
+6. produces an evidence-linked comparison and passes selected, legally allowed
+   advantages into planning and file generation.
 
-Unknown, proprietary, or reciprocal licenses cannot be promoted to direct source reuse by a model response. Those candidates remain reference-only or are implemented as clean-room patterns. The crawl is bounded by query, candidate, file, byte, and timeout budgets so research cannot run indefinitely.
+Unknown, proprietary, or reciprocal licenses cannot be promoted to direct
+source reuse by a model response. Those candidates remain reference-only or
+are implemented as clean-room patterns. The crawl is bounded by query,
+concurrency, candidate, file, byte, and timeout budgets. See the dated
+[competitive benchmark and product strategy](docs/COMPETITIVE_STRATEGY.md).
 
 ---
 
 ## Install
 
 ```bash
-pnpm install
+corepack enable
+pnpm install --frozen-lockfile
 ```
 
-Requires Node ≥ 20 and pnpm.
+Requires Node ≥ 20. Corepack reads the repository's pinned pnpm version from
+`package.json`; do not substitute npm merely because a compatibility
+`package-lock.json` is present.
 
 ## Create your `.env`
 
@@ -59,15 +72,19 @@ Requires Node ≥ 20 and pnpm.
 cp .env.example .env
 ```
 
-Then edit `.env`:
+Then edit `.env`. Paid keys and a Firecrawl key are optional:
 
 ```ini
-ANTHROPIC_API_KEY=your_real_claude_api_key_here
-OPENAI_API_KEY=your_real_openai_api_key_here
+FACTORY_FREE_ENABLED=1
+FACTORY_FREE_BASE_URL=http://127.0.0.1:8082
+FACTORY_FREE_MODEL=claude-sonnet-4-5
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
 ANTHROPIC_MODEL=claude-opus-4-8
 OPENAI_MODEL=gpt-5.5
-DEFAULT_CODE_PROVIDER=anthropic
-DEFAULT_REVIEW_PROVIDER=openai
+FIRECRAWL_API_KEY=optional_firecrawl_key
+DEFAULT_CODE_PROVIDER=free
+DEFAULT_REVIEW_PROVIDER=free
 MAX_REPAIR_LOOPS=3
 MAX_MODEL_CALLS_PER_RUN=30
 WORKSPACE_ROOT=./workspaces
@@ -118,18 +135,19 @@ Streams stage-by-stage progress and prints the final workspace path + report.
 This is designed to be safe to run on your own machine:
 
 - **Keys never reach the browser.** They live only in the backend process. The
-  `/api/health` endpoint returns *booleans* (`configured` / `missing`), never
+  `/api/health` endpoint returns _booleans_ (`configured` / `missing`), never
   values. There is no UI field to type a key — add keys by editing `.env`.
 - **Model calls are server-side only.** The frontend talks to a local API.
 - **`.env` is never sent to a model** and is git-ignored.
 - **Generated files are jailed to `./workspaces`.** Writes go through
   `safeResolve`, which rejects absolute paths and `..` traversal
   (`src/server/workspace/fileWriter.ts`).
-- **Commands are conservative.** Only an allowlist (npm/pnpm `install` / `build`
-  / `test` / `typecheck`) may run, and only *inside* a workspace, with `shell`
-  disabled (no injection surface). Commands really execute — there is no
-  preview/dry-run mode (`src/server/workspace/commandRunner.ts`); the allowlist
-  and the workspace jail are the safety boundary.
+- **Generated commands are blocked by default.** The allowlist and `shell: false`
+  reduce command-injection risk, but a process whose current directory is a
+  workspace is **not** contained there by the operating system. Keep
+  `ALLOW_UNTRUSTED_SCRIPTS=false` unless Factory Deck itself runs in a disposable
+  container/VM with a workspace-only writable mount, no host secrets, and an
+  appropriate network policy (`src/server/workspace/commandRunner.ts`).
 
 ## Cost control
 
@@ -147,17 +165,17 @@ the active values.
 
 ## Scripts
 
-| Script | What it does |
-|---|---|
-| `pnpm dev` | Backend + UI together (dev, hot reload) |
-| `pnpm start` | Production mode: build the UI, then serve everything from the backend on `http://127.0.0.1:5179` (single process, no Vite) |
-| `pnpm server` | Backend only (tsx watch) |
-| `pnpm ui` | Vite UI only |
-| `pnpm factory "<idea>"` | Run the factory from the CLI |
-| `pnpm test` | Vitest suite |
-| `pnpm typecheck` | Type-check server + UI |
-| `pnpm build` | Type-check + production UI build |
-| `pnpm lint` | Prettier formatting check |
+| Script                  | What it does                                                                                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`              | Backend + UI together (dev, hot reload)                                                                                    |
+| `pnpm start`            | Production mode: build the UI, then serve everything from the backend on `http://127.0.0.1:5179` (single process, no Vite) |
+| `pnpm server`           | Backend only (tsx watch)                                                                                                   |
+| `pnpm ui`               | Vite UI only                                                                                                               |
+| `pnpm factory "<idea>"` | Run the factory from the CLI                                                                                               |
+| `pnpm test`             | Vitest suite                                                                                                               |
+| `pnpm typecheck`        | Type-check server + UI                                                                                                     |
+| `pnpm build`            | Type-check + production UI build                                                                                           |
+| `pnpm lint`             | Prettier formatting check                                                                                                  |
 
 ---
 
@@ -191,12 +209,10 @@ pnpm exec tsx scripts/make-icon.ts   # or run scripts\Install-Desktop-Icon.ps1
 
 Double-clicking it launches `pnpm dev` and opens the UI in your browser.
 
-
 ## Purpose Foundry
 
 Purpose Foundry is the optional portfolio assembly-line mode. It coordinates Factory Deck, Scout a Program, Repo Rewards, PromoPilot, FlexFactor, The Crucible, App Store Publisher, and Watchtower through a durable station contract and hash-chained evidence ledger. Every existing application remains independently launchable.
 
 Set `PURPOSE_FOUNDRY_OBSIDIAN_INBOX` to an Obsidian folder to ingest saved Markdown project notes automatically. Run `pnpm install:purpose-foundry-icon` once to create the separate **Purpose Foundry** desktop shortcut; the existing Factory Deck shortcut is unchanged. See [`docs/PURPOSE_FOUNDRY.md`](docs/PURPOSE_FOUNDRY.md).
-
 
 Purpose Foundry launchers do not bypass Windows execution policy. If Windows marks a freshly downloaded checkout as blocked, review the scripts and explicitly run `Get-ChildItem scripts\\*.ps1 | Unblock-File` once before installing the shortcuts.

@@ -1,12 +1,14 @@
 import type { Architecture, ProductSpec } from "../../shared/schemas.js";
-import { webFetchTool } from "./webFetch.js";
-import { webSearchTool } from "./webSearch.js";
+import { webFetchTool, type WebFetchResult } from "./webFetch.js";
+import {
+  webSearch,
+  type SearchAttempt,
+  type SearchResult,
+  type WebSearchProvider,
+} from "./webSearch.js";
 import { repoRewardsSearch } from "./repoRewards.js";
 
-export type LicenseReusePolicy =
-  | "direct-use"
-  | "conditional-review"
-  | "reference-only";
+export type LicenseReusePolicy = "direct-use" | "conditional-review" | "reference-only";
 
 export interface LicenseAssessment {
   spdxId: string;
@@ -24,7 +26,8 @@ export interface SourceEvidence {
 
 export interface CompetitiveCandidate {
   id: string;
-  kind: "repository" | "web";
+  /** Commercial/hosted product competitors stay distinct from OSS repos. */
+  kind: "product" | "repository";
   name: string;
   url: string;
   description: string;
@@ -38,6 +41,32 @@ export interface CompetitiveCandidate {
   inspectionError: string;
 }
 
+export type DiscoverySourceStatus = "ok" | "partial" | "empty" | "failed" | "skipped";
+
+export interface DiscoverySourceHealth {
+  name: string;
+  ok: boolean;
+  status: DiscoverySourceStatus;
+  detail: string;
+  attempts: number;
+  succeeded: number;
+  empty: number;
+  failed: number;
+  skipped: number;
+  resultCount: number;
+}
+
+export interface CompetitiveCoverage {
+  productTarget: number;
+  productDiscoveredCount: number;
+  productInspectedCount: number;
+  productVerifiedCount: number;
+  productCoverageMet: boolean;
+  repositoryDiscoveredCount: number;
+  repositoryInspectedCount: number;
+  repositoryVerifiedCount: number;
+}
+
 export interface CompetitiveDossier {
   queries: string[];
   candidates: CompetitiveCandidate[];
@@ -49,7 +78,9 @@ export interface CompetitiveDossier {
    * owner's own Repo Rewards service runs alongside web search (owner order
    * 2026-08-16); an unreachable source is REPORTED, never silently dropped.
    */
-  sources: { name: string; ok: boolean; detail: string }[];
+  sources: DiscoverySourceHealth[];
+  /** Product-competitor coverage cannot be satisfied by OSS repositories. */
+  coverage: CompetitiveCoverage;
 }
 
 interface GitHubRepoRef {
@@ -81,13 +112,59 @@ interface GitHubTreeResponse {
 }
 
 const GITHUB_API = "https://api.github.com";
-const MAX_DISCOVERED = 24;
-const MAX_INSPECTED = 8;
+const MAX_REPOSITORY_INSPECTED = 8;
+export const MIN_PRODUCT_COMPETITORS = 5;
+/** Headroom lets failed/dead product pages be replaced while pursuing five verified products. */
+export const MAX_PRODUCT_INSPECTION_ATTEMPTS = 10;
+const DISCOVERY_CONCURRENCY = 3;
 const MAX_SOURCE_FILES = 24;
 const MAX_SOURCE_BYTES = 360_000;
 const MAX_FILE_BYTES = 28_000;
 const MAX_EVIDENCE_EXCERPT = 1800;
 const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_JSON_BYTES = 8 * 1024 * 1024;
+const MIN_PRODUCT_EVIDENCE_CHARS = 120;
+
+// A deliberately conservative subset of common multi-label public suffixes.
+// Collapsing unknown hosts to their final two labels may merge a few unrelated
+// sites on exotic suffixes, but it cannot inflate the evidence count. That is
+// the safe direction for a strict five-product gate.
+const COMMON_SECOND_LEVEL_SUFFIXES = new Set([
+  "co.uk",
+  "org.uk",
+  "me.uk",
+  "com.au",
+  "net.au",
+  "org.au",
+  "com.br",
+  "com.cn",
+  "com.hk",
+  "com.mx",
+  "co.in",
+  "co.jp",
+  "co.kr",
+  "co.nz",
+  "com.sg",
+  "com.tr",
+  "co.za",
+]);
+
+const GENERIC_PRODUCT_WORDS = new Set([
+  "about",
+  "application",
+  "best",
+  "business",
+  "company",
+  "features",
+  "home",
+  "platform",
+  "product",
+  "service",
+  "software",
+  "solution",
+  "technology",
+  "tool",
+]);
 
 const TEXT_EXTENSIONS = new Set([
   ".c",
@@ -163,7 +240,7 @@ export function detectLicenseFromText(text: string): string | null {
   if (normalized.includes("gnu general public license")) return "GPL-3.0";
   if (
     normalized.includes("permission is hereby granted, free of charge") &&
-    normalized.includes("the software is provided \"as is\"")
+    normalized.includes('the software is provided "as is"')
   ) {
     return "MIT";
   }
@@ -173,7 +250,10 @@ export function detectLicenseFromText(text: string): string | null {
   ) {
     return "BSD-3-CLAUSE";
   }
-  if (normalized.includes("isc license") && normalized.includes("permission to use, copy")) {
+  if (
+    normalized.includes("isc license") &&
+    normalized.includes("permission to use, copy")
+  ) {
     return "ISC";
   }
   return null;
@@ -246,10 +326,7 @@ export function parseGitHubRepoUrl(raw: string): GitHubRepoRef | null {
   try {
     const url = new URL(raw);
     if (url.hostname.toLowerCase() !== "github.com") return null;
-    const parts = url.pathname
-      .split("/")
-      .filter(Boolean)
-      .slice(0, 2);
+    const parts = url.pathname.split("/").filter(Boolean).slice(0, 2);
     if (parts.length !== 2) return null;
     const owner = parts[0];
     const repo = parts[1].replace(/\.git$/i, "");
@@ -263,6 +340,31 @@ export function parseGitHubRepoUrl(raw: string): GitHubRepoRef | null {
     };
   } catch {
     return null;
+  }
+}
+
+const REPOSITORY_HOSTS = new Set([
+  "bitbucket.org",
+  "codeberg.org",
+  "gitea.com",
+  "github.com",
+  "gitlab.com",
+  "sourceforge.net",
+]);
+
+/** Prevent code-hosting links from being misclassified as market products. */
+export function isRepositoryCandidateUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    return (
+      [...REPOSITORY_HOSTS].some(
+        (candidate) => host === candidate || host.endsWith(`.${candidate}`),
+      ) || url.pathname.toLowerCase().endsWith(".git")
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -286,7 +388,19 @@ function termsFor(spec: ProductSpec, arch: Architecture): string[] {
     .toLowerCase()
     .match(/[a-z][a-z0-9-]{3,}/g);
   return [...new Set(raw ?? [])]
-    .filter((word) => !new Set(["application", "feature", "users", "using", "with", "from", "that", "this"]).has(word))
+    .filter(
+      (word) =>
+        !new Set([
+          "application",
+          "feature",
+          "users",
+          "using",
+          "with",
+          "from",
+          "that",
+          "this",
+        ]).has(word),
+    )
     .slice(0, 32);
 }
 
@@ -312,7 +426,12 @@ export function rankRelevantPaths(paths: string[], terms: string[]): string[] {
       let score = 0;
       if (PRIORITY_FILENAMES.has(lower.split("/").pop() ?? "")) score += 12;
       if (/^(src|app|lib|packages|server|client)\//.test(lower)) score += 5;
-      if (/(service|provider|adapter|route|controller|model|schema|auth|search|integration)/.test(lower)) score += 4;
+      if (
+        /(service|provider|adapter|route|controller|model|schema|auth|search|integration)/.test(
+          lower,
+        )
+      )
+        score += 4;
       for (const term of normalizedTerms) if (lower.includes(term)) score += 3;
       if (/test|spec|example|demo/.test(lower)) score -= 2;
       return { path, score };
@@ -335,17 +454,63 @@ async function fetchJson<T>(url: string): Promise<T> {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
-  return (await response.json()) as T;
+  const body = await readResponseBytes(response, MAX_JSON_BYTES);
+  if (body.truncated) throw new Error(`${url} exceeded the JSON response limit`);
+  return JSON.parse(new TextDecoder("utf-8", { fatal: false }).decode(body.bytes)) as T;
 }
 
-async function fetchText(url: string, maxBytes = MAX_FILE_BYTES): Promise<string> {
+async function readResponseBytes(
+  response: Response,
+  maxBytes: number,
+): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+  if (!response.body) return { bytes: new Uint8Array(), truncated: false };
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let truncated = false;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const remaining = maxBytes - total;
+      if (next.value.byteLength > remaining) {
+        if (remaining > 0) {
+          chunks.push(next.value.subarray(0, remaining));
+          total += remaining;
+        }
+        truncated = true;
+        await reader.cancel("response exceeded byte limit").catch(() => {});
+        break;
+      }
+      chunks.push(next.value);
+      total += next.value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { bytes, truncated };
+}
+
+async function fetchText(
+  url: string,
+  maxBytes = MAX_FILE_BYTES,
+): Promise<{ text: string; bytesRead: number }> {
   const response = await fetch(url, {
     headers: { "User-Agent": "factory-deck-competitive-intelligence/1.0" },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
-  const buffer = await response.arrayBuffer();
-  return new TextDecoder("utf-8", { fatal: false }).decode(buffer.slice(0, maxBytes));
+  const body = await readResponseBytes(response, maxBytes);
+  return {
+    text: new TextDecoder("utf-8", { fatal: false }).decode(body.bytes),
+    bytesRead: body.bytes.byteLength,
+  };
 }
 
 function rawGitHubUrl(ref: GitHubRepoRef, branch: string, path: string): string {
@@ -365,10 +530,21 @@ async function inspectGitHubRepository(
   const tree = await fetchJson<GitHubTreeResponse>(
     `${GITHUB_API}/repos/${ref.owner}/${ref.repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
   );
-  const blobPaths = (tree.tree ?? [])
-    .filter((entry) => entry.type === "blob" && entry.path)
+  const blobEntries = (tree.tree ?? []).filter(
+    (entry) => entry.type === "blob" && entry.path,
+  );
+  const blobPaths = blobEntries.map((entry) => entry.path as string);
+  const inspectableBlobPaths = blobEntries
+    .filter(
+      (entry) =>
+        typeof entry.size !== "number" ||
+        (entry.size >= 0 && entry.size <= MAX_FILE_BYTES),
+    )
     .map((entry) => entry.path as string);
-  const ranked = rankRelevantPaths(blobPaths, terms).slice(0, MAX_SOURCE_FILES);
+  const ranked = rankRelevantPaths(inspectableBlobPaths, terms).slice(
+    0,
+    MAX_SOURCE_FILES,
+  );
   const sourceEvidence: SourceEvidence[] = [];
   let usedBytes = 0;
 
@@ -376,12 +552,15 @@ async function inspectGitHubRepository(
     if (usedBytes >= MAX_SOURCE_BYTES) break;
     const url = rawGitHubUrl(ref, branch, path);
     try {
-      const text = await fetchText(url, Math.min(MAX_FILE_BYTES, MAX_SOURCE_BYTES - usedBytes));
-      usedBytes += text.length;
+      const fetched = await fetchText(
+        url,
+        Math.min(MAX_FILE_BYTES, MAX_SOURCE_BYTES - usedBytes),
+      );
+      usedBytes += fetched.bytesRead;
       sourceEvidence.push({
         path,
         url,
-        excerpt: text.slice(0, MAX_EVIDENCE_EXCERPT),
+        excerpt: fetched.text.slice(0, MAX_EVIDENCE_EXCERPT),
       });
     } catch {
       // One inaccessible/binary-looking file must not discard the repository.
@@ -398,8 +577,11 @@ async function inspectGitHubRepository(
   let detectedSpdx: string | null = null;
   if (licensePath) {
     try {
-      const licenseText = await fetchText(rawGitHubUrl(ref, branch, licensePath), 80_000);
-      detectedSpdx = detectLicenseFromText(licenseText);
+      const licenseText = await fetchText(
+        rawGitHubUrl(ref, branch, licensePath),
+        80_000,
+      );
+      detectedSpdx = detectLicenseFromText(licenseText.text);
       if (!declaredSpdx || normalizedSpdx(declaredSpdx) === "NOASSERTION") {
         declaredSpdx = detectedSpdx ?? declaredSpdx;
       }
@@ -409,7 +591,10 @@ async function inspectGitHubRepository(
   }
   let license = assessLicense(
     declaredSpdx,
-    metadata.license?.name || metadata.license?.key || detectedSpdx || "Unknown license",
+    metadata.license?.name ||
+      metadata.license?.key ||
+      detectedSpdx ||
+      "Unknown license",
     String(licenseUrl),
   );
   if (
@@ -476,6 +661,233 @@ export function isCompetitorQuery(query: string): boolean {
   return /(^|\s)competitors?(\s|$)|^best |^top alternatives/i.test(query);
 }
 
+const NON_PRODUCT_HOSTS = new Set([
+  "alternativeto.net",
+  "capterra.com",
+  "facebook.com",
+  "forbes.com",
+  "g2.com",
+  "getapp.com",
+  "github.com",
+  "gitlab.com",
+  "linkedin.com",
+  "medium.com",
+  "reddit.com",
+  "saasworthy.com",
+  "sourceforge.net",
+  "wikipedia.org",
+  "x.com",
+  "youtube.com",
+]);
+
+function registrableProductHost(hostname: string): string | null {
+  const host = hostname
+    .toLowerCase()
+    .replace(/^www\d*\./, "")
+    .replace(/\.$/, "");
+  if (!host || host.includes(":")) return null;
+  const labels = host.split(".").filter(Boolean);
+  if (labels.length < 2 || labels.some((label) => !/^[a-z0-9-]+$/i.test(label))) {
+    return null;
+  }
+  const finalTwo = labels.slice(-2).join(".");
+  return COMMON_SECOND_LEVEL_SUFFIXES.has(finalTwo) && labels.length >= 3
+    ? labels.slice(-3).join(".")
+    : finalTwo;
+}
+
+function productDomainKeyFromUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const rawHost = url.hostname.toLowerCase().replace(/^www\d*\./, "");
+    if (
+      [...NON_PRODUCT_HOSTS].some(
+        (blocked) => rawHost === blocked || rawHost.endsWith(`.${blocked}`),
+      )
+    ) {
+      return null;
+    }
+    return registrableProductHost(rawHost);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Return one stable identity for an apparent product result. Documentation,
+ * support, and app subdomains collapse to the product's host so five URLs for
+ * one vendor can never satisfy the five-competitor floor.
+ */
+export function productCandidateKey(result: SearchResult): string | null {
+  try {
+    const url = new URL(result.url);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (isRepositoryCandidateUrl(result.url)) return null;
+    const host = productDomainKeyFromUrl(result.url);
+    if (!host) return null;
+    const looksLikeRoundup =
+      /\b(?:top\s+\d+|alternatives?|competitors?|comparisons?|reviews?)\b/i.test(
+        result.title,
+      ) ||
+      /\bbest\b.*\b(?:apps?|platforms?|products?|services?|software|solutions?|tools?)\b/i.test(
+        result.title,
+      ) ||
+      /\/(?:best|blog|compare|comparison|news|resources?|reviews?|top-?\d+)(?:\/|$)/i.test(
+        url.pathname,
+      );
+    if (looksLikeRoundup) return null;
+    return host;
+  } catch {
+    return null;
+  }
+}
+
+export interface ProductEvidenceContext {
+  candidateKey: string;
+  title: string;
+}
+
+/**
+ * A 200 alone is not evidence. Require readable, same-product content and
+ * reject common challenge, login, and domain-parking responses. The optional
+ * context is supplied by competitive discovery; leaving it out preserves the
+ * small content-only helper used by callers that do not claim product identity.
+ */
+export function isMeaningfulProductEvidence(
+  result: WebFetchResult,
+  context?: ProductEvidenceContext,
+): boolean {
+  const text = result.textExcerpt.trim();
+  if (
+    !result.ok ||
+    !/^(?:text\/|application\/(?:json|ld\+json|xml|xhtml\+xml))/i.test(
+      result.contentType.trim(),
+    ) ||
+    text.length < MIN_PRODUCT_EVIDENCE_CHARS
+  ) {
+    return false;
+  }
+  if (!context) return true;
+
+  const finalKey = productDomainKeyFromUrl(result.finalUrl);
+  if (!finalKey || finalKey !== context.candidateKey) return false;
+  try {
+    if (/\/(?:auth|login|sign-?in)(?:\/|$)/i.test(new URL(result.finalUrl).pathname)) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  const lower = text.toLowerCase();
+  if (
+    /\b(?:buy this domain|domain (?:is )?for sale|parked domain|verify you are human|captcha|checking your browser|access denied)\b/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+
+  const brand = context.candidateKey.split(".")[0] ?? "";
+  const relevanceTokens = [brand, ...context.title.split(/[^a-z0-9]+/i)]
+    .map((token) => token.toLowerCase())
+    .filter(
+      (token, index, all) =>
+        token.length >= 2 &&
+        !GENERIC_PRODUCT_WORDS.has(token) &&
+        all.indexOf(token) === index,
+    );
+  return relevanceTokens.some((token) => lower.includes(token));
+}
+
+function sourceHealthFromAttempts(
+  provider: WebSearchProvider,
+  attempts: SearchAttempt[],
+): DiscoverySourceHealth {
+  const relevant = attempts.filter((attempt) => attempt.provider === provider);
+  const actual = relevant.filter((attempt) => attempt.status !== "skipped");
+  const succeeded = actual.filter((attempt) => attempt.status === "ok").length;
+  const empty = actual.filter((attempt) => attempt.status === "empty").length;
+  const failed = actual.filter((attempt) => attempt.status === "failed").length;
+  const skipped = relevant.length - actual.length;
+  const resultCount = relevant.reduce((sum, attempt) => sum + attempt.resultCount, 0);
+  let status: DiscoverySourceStatus;
+  if (!actual.length) status = "skipped";
+  else if (failed && succeeded + empty) status = "partial";
+  else if (failed === actual.length) status = "failed";
+  else if (succeeded) status = "ok";
+  else status = "empty";
+  const details = [...new Set(relevant.map((attempt) => attempt.detail))];
+  return {
+    name: provider === "firecrawl" ? "firecrawl-v2" : "duckduckgo-lite",
+    ok: status !== "failed",
+    status,
+    detail:
+      `${actual.length} attempt(s): ${succeeded} with results, ${empty} empty, ` +
+      `${failed} failed, ${skipped} skipped; ${resultCount} result(s)` +
+      (details.length ? ` — ${details.join("; ").slice(0, 500)}` : ""),
+    attempts: actual.length,
+    succeeded,
+    empty,
+    failed,
+    skipped,
+    resultCount,
+  };
+}
+
+/**
+ * Deterministic coverage assessment used by research and release gates. Only
+ * evidence-verified product pages satisfy the product floor; repositories are
+ * counted independently and can never substitute for market competitors.
+ */
+export function assessCompetitiveCoverage(
+  candidates: CompetitiveCandidate[],
+  productDiscoveredCount: number,
+  repositoryDiscoveredCount: number,
+  productTarget = MIN_PRODUCT_COMPETITORS,
+): CompetitiveCoverage {
+  const products = candidates.filter((candidate) => candidate.kind === "product");
+  const repositories = candidates.filter(
+    (candidate) => candidate.kind === "repository",
+  );
+  const verified = (candidate: CompetitiveCandidate): boolean =>
+    candidate.sourceEvidence.some(
+      (item) => /^https?:\/\//i.test(item.url) && item.excerpt.trim().length > 0,
+    );
+  const productVerifiedCount = products.filter(verified).length;
+  return {
+    productTarget,
+    productDiscoveredCount,
+    productInspectedCount: products.length,
+    productVerifiedCount,
+    productCoverageMet: productVerifiedCount >= productTarget,
+    repositoryDiscoveredCount,
+    repositoryInspectedCount: repositories.length,
+    repositoryVerifiedCount: repositories.filter(verified).length,
+  };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const runners = Array.from(
+    { length: Math.min(Math.max(1, concurrency), items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex++;
+        results[index] = await worker(items[index]);
+      }
+    },
+  );
+  await Promise.all(runners);
+  return results;
+}
+
 /**
  * Discover broadly, then inspect a smaller evidence-rich shortlist. This is
  * intentionally bounded by candidate, byte, and timeout budgets so one run
@@ -489,11 +901,18 @@ export async function buildCompetitiveDossier(
   const terms = termsFor(spec, arch);
   const repositories = new Map<
     string,
-    { ref: GitHubRepoRef; title: string; snippet: string; hits: number; evidence: string[] }
+    {
+      ref: GitHubRepoRef;
+      title: string;
+      snippet: string;
+      hits: number;
+      evidence: string[];
+    }
   >();
-  const webCandidates = new Map<
+  const repositoryDiscoveries = new Set<string>();
+  const productCandidates = new Map<
     string,
-    { title: string; snippet: string; hits: number; evidence: string[] }
+    { url: string; title: string; snippet: string; hits: number; evidence: string[] }
   >();
 
   // Discovery runs BOTH sources per query: the owner's Repo Rewards service
@@ -502,43 +921,79 @@ export async function buildCompetitiveDossier(
   // metadata-screened candidates only — they get the same inspection, license
   // gate, and reuse-mode enforcement as anything found on the web.
   const sources: CompetitiveDossier["sources"] = [];
-  let rrEndpoint: string | null = null;
-  let rrFailure: string | null = null;
+  const rrEndpoints = new Set<string>();
+  const rrFailures = new Set<string>();
+  let rrAnswered = 0;
+  let rrWithResults = 0;
+  let rrEmpty = 0;
   let rrHits = 0;
+  const searchAttempts: SearchAttempt[] = [];
 
-  for (const query of queries) {
-    const rr = await repoRewardsSearch(query, { limit: 10 });
+  // Query sources concurrently for each need, with a small global bound to
+  // avoid both 10x serial latency and an unbounded request burst.
+  const discovered = await mapWithConcurrency(
+    queries,
+    DISCOVERY_CONCURRENCY,
+    async (query) => {
+      const [rr, searched] = await Promise.all([
+        repoRewardsSearch(query, { limit: 10 }),
+        webSearch(query),
+      ]);
+      return { query, rr, searched };
+    },
+  );
+
+  // Process in original query order so evidence ordering and tie-breaking are
+  // deterministic even though requests were concurrent.
+  for (const { query, rr, searched } of discovered) {
     if (rr.endpoint) {
-      rrEndpoint = rr.endpoint;
+      rrAnswered++;
+      rrEndpoints.add(rr.endpoint);
       rrHits += rr.results.length;
-    } else if (!rrFailure) {
-      rrFailure = rr.unreachableReason;
+      if (rr.results.length) rrWithResults++;
+      else rrEmpty++;
+    } else if (rr.unreachableReason) {
+      rrFailures.add(rr.unreachableReason);
     }
-    const results = [...rr.results, ...(await webSearchTool(query))];
+    searchAttempts.push(...searched.attempts);
+    const results = [...rr.results, ...searched.results];
     for (const result of results) {
       const repo = parseGitHubRepoUrl(result.url);
       if (repo) {
+        repositoryDiscoveries.add(repo.canonicalUrl.toLowerCase());
         const existing = repositories.get(repo.canonicalUrl);
         repositories.set(repo.canonicalUrl, {
           ref: repo,
           title: result.title || existing?.title || repo.repo,
           snippet: result.snippet || existing?.snippet || "",
           hits: (existing?.hits ?? 0) + 1,
-          evidence: [...new Set([...(existing?.evidence ?? []), `${query}: ${result.url}`])],
+          evidence: [
+            ...new Set([...(existing?.evidence ?? []), `${query}: ${result.url}`]),
+          ],
         });
-      } else if (
-        /docs|api|library|sdk|framework|tool/i.test(`${result.title} ${result.snippet}`) ||
-        // Competitor-intent queries surface product pages that never say
-        // "library" or "sdk" — dropping them was how a grant-platform run
-        // researched ten repos and zero actual competitors.
-        isCompetitorQuery(query)
-      ) {
-        const existing = webCandidates.get(result.url);
-        webCandidates.set(result.url, {
+      } else if (isRepositoryCandidateUrl(result.url)) {
+        // Only GitHub repositories currently have a source inspector, but all
+        // code-host links remain repository discoveries and can never inflate
+        // the market-product floor.
+        try {
+          const normalized = new URL(result.url);
+          normalized.hash = "";
+          repositoryDiscoveries.add(normalized.href.toLowerCase());
+        } catch {
+          // productCandidateKey performs the same URL validation below.
+        }
+      } else if (isCompetitorQuery(query)) {
+        const key = productCandidateKey(result);
+        if (!key) continue;
+        const existing = productCandidates.get(key);
+        productCandidates.set(key, {
+          url: existing?.url ?? result.url,
           title: result.title,
           snippet: result.snippet,
           hits: (existing?.hits ?? 0) + 1,
-          evidence: [...new Set([...(existing?.evidence ?? []), `${query}: ${result.url}`])],
+          evidence: [
+            ...new Set([...(existing?.evidence ?? []), `${query}: ${result.url}`]),
+          ],
         });
       }
     }
@@ -550,9 +1005,9 @@ export async function buildCompetitiveDossier(
         candidateScore(b, terms) - candidateScore(a, terms) ||
         a.ref.canonicalUrl.localeCompare(b.ref.canonicalUrl),
     )
-    .slice(0, Math.min(MAX_DISCOVERED, MAX_INSPECTED));
+    .slice(0, MAX_REPOSITORY_INSPECTED);
 
-  const inspected = await Promise.all(
+  const inspectedRepositories = await Promise.all(
     rankedRepos.map(async (candidate): Promise<CompetitiveCandidate> => {
       try {
         return await inspectGitHubRepository(candidate.ref, candidate.evidence, terms);
@@ -576,51 +1031,100 @@ export async function buildCompetitiveDossier(
     }),
   );
 
-  const remainingSlots = Math.max(0, MAX_INSPECTED - inspected.length);
-  const pages = [...webCandidates.entries()]
+  // Product competitors have their own reserved capacity. Repositories never
+  // consume these slots and therefore can never make the product floor look
+  // satisfied.
+  const pages = [...productCandidates.entries()]
     .sort(
       ([, a], [, b]) =>
-        candidateScore(b, terms) - candidateScore(a, terms),
+        candidateScore(b, terms) - candidateScore(a, terms) ||
+        a.url.localeCompare(b.url),
     )
-    .slice(0, remainingSlots);
-  for (const [url, candidate] of pages) {
-    const fetched = await webFetchTool(url);
-    inspected.push({
-      id: `web:${url}`,
-      kind: "web",
-      name: candidate.title || url,
-      url,
-      description: candidate.snippet,
-      stars: 0,
-      archived: false,
-      updatedAt: "",
-      discoveryEvidence: candidate.evidence,
-      license: assessLicense(null, "Web documentation; code license unverified", url),
-      fileTree: [],
-      sourceEvidence: fetched.ok
-        ? [{ path: "web-page", url, excerpt: fetched.textExcerpt.slice(0, MAX_EVIDENCE_EXCERPT) }]
-        : [],
-      inspectionError: fetched.ok ? "" : fetched.error || `HTTP ${fetched.status}`,
-    });
-  }
-
-  sources.push(
-    rrEndpoint
-      ? { name: "repo-rewards", ok: true, detail: `${rrEndpoint} — ${rrHits} ranked repo hit(s)` }
-      : { name: "repo-rewards", ok: false, detail: rrFailure ?? "no endpoint answered" },
+    .slice(0, MAX_PRODUCT_INSPECTION_ATTEMPTS);
+  const inspectedProducts = await mapWithConcurrency(
+    pages,
+    DISCOVERY_CONCURRENCY,
+    async ([key, candidate]): Promise<CompetitiveCandidate> => {
+      const fetched = await webFetchTool(candidate.url);
+      const meaningful = isMeaningfulProductEvidence(fetched, {
+        candidateKey: key,
+        title: candidate.title,
+      });
+      return {
+        id: `product:${key}`,
+        kind: "product",
+        name: candidate.title || key,
+        url: candidate.url,
+        description: candidate.snippet,
+        stars: 0,
+        archived: false,
+        updatedAt: "",
+        discoveryEvidence: candidate.evidence,
+        license: assessLicense(
+          null,
+          "Product page; source-code license not applicable or unverified",
+          candidate.url,
+        ),
+        fileTree: [],
+        sourceEvidence: meaningful
+          ? [
+              {
+                path: "product-page",
+                url: fetched.finalUrl || candidate.url,
+                excerpt: fetched.textExcerpt.slice(0, MAX_EVIDENCE_EXCERPT),
+              },
+            ]
+          : [],
+        inspectionError: meaningful
+          ? ""
+          : fetched.error ||
+            (fetched.ok
+              ? "Fetched page did not contain enough readable product evidence."
+              : `HTTP ${fetched.status}`),
+      };
+    },
   );
+
+  const rrFailed = queries.length - rrAnswered;
+  const rrStatus: DiscoverySourceStatus = !rrAnswered
+    ? "failed"
+    : rrFailed
+      ? "partial"
+      : rrHits
+        ? "ok"
+        : "empty";
   sources.push({
-    name: "web-search",
-    ok: true,
-    detail: `${queries.length} quer${queries.length === 1 ? "y" : "ies"} (competitor products + implementations)`,
+    name: "repo-rewards",
+    ok: rrStatus !== "failed",
+    status: rrStatus,
+    detail:
+      `${rrAnswered}/${queries.length} queries answered; ${rrHits} ranked repo hit(s)` +
+      (rrEndpoints.size ? ` — ${[...rrEndpoints].join(", ")}` : "") +
+      (rrFailures.size ? ` — ${[...rrFailures].join("; ").slice(0, 500)}` : ""),
+    attempts: queries.length,
+    succeeded: rrWithResults,
+    empty: rrEmpty,
+    failed: rrFailed,
+    skipped: 0,
+    resultCount: rrHits,
   });
+  sources.push(sourceHealthFromAttempts("firecrawl", searchAttempts));
+  sources.push(sourceHealthFromAttempts("duckduckgo", searchAttempts));
+
+  const candidates = [...inspectedProducts, ...inspectedRepositories];
+  const coverage = assessCompetitiveCoverage(
+    candidates,
+    productCandidates.size,
+    repositoryDiscoveries.size,
+  );
 
   return {
     queries,
     sources,
-    candidates: inspected,
-    discoveredCount: repositories.size + webCandidates.size,
-    inspectedCount: inspected.length,
+    coverage,
+    candidates,
+    discoveredCount: repositoryDiscoveries.size + productCandidates.size,
+    inspectedCount: candidates.length,
     generatedAt: new Date().toISOString(),
   };
 }

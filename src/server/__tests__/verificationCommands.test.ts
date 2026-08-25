@@ -121,6 +121,41 @@ describe("verificationCommandsForWorkspace", () => {
     ]);
   });
 
+  it("honors a declared pnpm manager when compatibility npm and pnpm locks coexist", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({ packageManager: "pnpm@10.17.0" }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+    writeFileSync(join(path, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+
+    expect(verificationCommandsForWorkspace(path)).toEqual([
+      { bin: "pnpm", args: ["install"], isTest: false },
+      { bin: "pnpm", args: ["rebuild"], isTest: false },
+      { bin: "pnpm", args: ["test"], isTest: true },
+    ]);
+  });
+
+  it("fails closed when conflicting locks have no declared package manager", () => {
+    const path = workspace();
+    writeFileSync(join(path, "package.json"), "{}\n");
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+    writeFileSync(join(path, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+
+    expect(verificationCommandsForWorkspace(path)).toEqual([]);
+    const plan = verificationPlanForWorkspace(path);
+    expect(plan.commands).toEqual([]);
+    expect(plan.incomplete).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "package manager",
+          reason: expect.stringMatching(/conflicting lockfiles/i),
+        }),
+      ]),
+    );
+  });
+
   it("returns no commands for an unknown stack", () => {
     const path = workspace();
     writeFileSync(join(path, "README.md"), "# notes\n");
@@ -141,7 +176,8 @@ describe("verificationCommandsForWorkspace", () => {
       generatedTests: [
         {
           path: "src/App.test.tsx",
-          contents: "import { test, expect } from 'vitest'; test('x',()=>expect(1).toBe(1));",
+          contents:
+            "import { test, expect } from 'vitest'; test('x',()=>expect(1).toBe(1));",
         },
       ],
     });
@@ -156,17 +192,13 @@ describe("verificationCommandsForWorkspace", () => {
     expect(directIndex).toBeLessThan(hostIndex);
     expect(plan.commands[directIndex]).toMatchObject({
       bin: "npx",
-      args: [
-        "--no-install",
-        "vitest",
-        "run",
-        "src/App.test.tsx",
-        "--reporter=json",
-      ],
+      args: ["--no-install", "vitest", "run", "src/App.test.tsx", "--reporter=json"],
       isTest: true,
       runner: "vitest",
     });
-    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(true);
+    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
+      true,
+    );
   });
 
   it("holds UI verification without a declared Playwright harness", () => {
@@ -206,10 +238,12 @@ describe("verificationCommandsForWorkspace", () => {
     writeFileSync(join(path, "package-lock.json"), "{}\n");
     writeFileSync(join(path, "playwright.config.ts"), "export default {};\n");
     const plan = verificationPlanForWorkspace(path, {
-      generatedTests: [{
-        path: "tests/profile.spec.ts",
-        contents: "import { test, expect } from '@playwright/test';",
-      }],
+      generatedTests: [
+        {
+          path: "tests/profile.spec.ts",
+          contents: "import { test, expect } from '@playwright/test';",
+        },
+      ],
       uiAcceptanceRequired: true,
       trustedBrowserHarness: false,
     });
@@ -285,21 +319,23 @@ describe("Python command sandbox", () => {
     const root = workspace();
     writeFileSync(join(root, "pyproject.toml"), "[tool.pytest.ini_options]\n");
     const plan = verificationPlanForWorkspace(root, {
-      generatedTests: [{
-        path: "tests/calculator_test.py",
-        contents: "def test_add():\n    assert 1 + 2 == 3\n",
-      }],
+      generatedTests: [
+        {
+          path: "tests/calculator_test.py",
+          contents: "def test_add():\n    assert 1 + 2 == 3\n",
+        },
+      ],
     });
     expect(
-      plan.commands.find(
-        (cmd) => cmd.directTestPath === "tests/calculator_test.py",
-      ),
+      plan.commands.find((cmd) => cmd.directTestPath === "tests/calculator_test.py"),
     ).toMatchObject({
       bin: "python",
       args: ["-m", "pytest", "-vv", "tests/calculator_test.py"],
       runner: "pytest",
     });
-    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(true);
+    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
+      true,
+    );
   });
 
   it("never lets a workflow smoke replace the full pytest suite", () => {
@@ -325,11 +361,8 @@ describe("Python command sandbox", () => {
     });
     expect(
       plan.commands.some(
-        (cmd) =>
-          cmd.bin === "python" &&
-          cmd.args.join(" ") === "-m pytest -q",
+        (cmd) => cmd.bin === "python" && cmd.args.join(" ") === "-m pytest -q",
       ),
     ).toBe(true);
   });
-
 });

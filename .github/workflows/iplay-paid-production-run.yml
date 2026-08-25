@@ -1,8 +1,7 @@
-name: iplay-paid-production-run
+name: iplay-paid-planning-evidence
 
 on:
-  push:
-    branches: ["agent/iplay-paid-run"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,26 +12,30 @@ concurrency:
 
 jobs:
   factory-deck:
-    name: Factory Deck — IPlay paid run
+    name: Factory Deck — IPlay planning (execution safety-held)
+    if: github.ref == 'refs/heads/main'
+    # Configure this environment with required reviewers, a main-only branch
+    # policy, and the two PAID_PRODUCTION_* secrets before enabling the job.
+    environment: paid-production-main
     runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
       - name: Checkout Factory Deck job
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
-          version: "9"
+          version: "10.17.0"
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -42,22 +45,27 @@ jobs:
       - name: Confirm paid provider credentials
         shell: pwsh
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY }}
+          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY }}
         run: |
           if (-not $env:ANTHROPIC_API_KEY) { throw "ANTHROPIC_API_KEY is not available to this workflow." }
           if (-not $env:OPENAI_API_KEY) { throw "OPENAI_API_KEY is not available to this workflow." }
           Write-Host "Both paid provider credentials are available (values not displayed)."
 
-      - name: Run IPlay through Factory Deck
+      - name: Build IPlay plan and artifacts (generated scripts held)
         shell: pwsh
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY }}
+          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY }}
           FACTORY_FREE_ENABLED: "0"
           DEFAULT_CODE_PROVIDER: "anthropic"
           DEFAULT_REVIEW_PROVIDER: "openai"
-          ALLOW_UNTRUSTED_SCRIPTS: "true"
+          # Provider credentials and a network-enabled runner are present in
+          # this step, so generated project code must not execute here. The run
+          # will hold at verification rather than expose CI secrets to code
+          # authored during the same job.
+          ALLOW_UNTRUSTED_SCRIPTS: "false"
+          FACTORY_ACCEPT_SAFETY_HOLD: "true"
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
           FACTORY_RUN_TIMEOUT_MS: "21000000"
           MAX_MODEL_CALLS_PER_RUN: "60"
@@ -70,7 +78,7 @@ jobs:
 
       - name: Preserve Factory Deck evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: iplay-factory-deck-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn

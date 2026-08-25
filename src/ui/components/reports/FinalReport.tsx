@@ -5,10 +5,13 @@ import {
   CheckCircle2,
   Copy,
   Cpu,
+  FileSearch,
   FlaskConical,
   FolderOpen,
+  Globe2,
   ListChecks,
   PlusCircle,
+  ShieldCheck,
   Sparkles,
   Terminal,
   XCircle,
@@ -140,6 +143,28 @@ function buildSummaryText(report: FinalReportType): string {
     report.caveats.length > 0
       ? report.caveats.map((c) => `  - ${c}`).join("\n")
       : "  - None noted";
+  const purpose = report.purposeProfile
+    ? [
+        "",
+        "## Purpose constitution",
+        report.purposeProfile.purpose.text,
+        `Evidence: ${report.purposeProfile.evidence.length} cited observation(s); ` +
+          `${report.purposeProfile.grounding.evidenceCoverage * 100}% used`,
+      ]
+    : [];
+  const competitive = report.competitiveResearch
+    ? [
+        "",
+        "## Competitive evidence",
+        `${report.competitiveResearch.coverageMet ? "Coverage complete" : "Coverage incomplete"}: ` +
+          `${report.competitiveResearch.productVerifiedCount}/${report.competitiveResearch.productTarget} products verified, ` +
+          `${report.competitiveResearch.productComparedCount} compared, ` +
+          `${report.competitiveResearch.productSelectedCount} selected`,
+        ...report.competitiveResearch.competitors.map(
+          (candidate) => `  - ${candidate.name}: ${candidate.url}`,
+        ),
+      ]
+    : [];
   return [
     `# ${report.appName}`,
     "",
@@ -153,6 +178,8 @@ function buildSummaryText(report: FinalReportType): string {
     "",
     `## Test status`,
     `${label} (${report.repairLoops} repair loop${report.repairLoops === 1 ? "" : "s"})`,
+    ...purpose,
+    ...competitive,
     "",
     "## Caveats",
     caveats,
@@ -254,6 +281,212 @@ export function FinalReport({
             <BulletList items={report.whatWasBuilt} empty="Nothing recorded." />
           </Card>
         </motion.div>
+
+        {/* Citation-linked purpose evidence (extend runs). */}
+        {report.purposeProfile && (
+          <motion.div {...sectionProps} className="md:col-span-2">
+            <Card className="h-full">
+              <CardHeader
+                title="Purpose constitution"
+                icon={<FileSearch className="h-4 w-4" />}
+                action={
+                  <Badge
+                    tone={
+                      report.purposeProfile.grounding.grounded ? "emerald" : "amber"
+                    }
+                    icon={<ShieldCheck className="h-3.5 w-3.5" />}
+                  >
+                    {report.purposeProfile.grounding.grounded
+                      ? "Citations validated"
+                      : "Unsupported claims removed"}
+                  </Badge>
+                }
+              />
+              <p className="text-sm leading-relaxed text-slate-200">
+                {report.purposeProfile.purpose.text}
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-slate-400">
+                Citation IDs and repository snapshots were validated. Claim meaning is
+                model-inferred and was not independently verified for semantic
+                entailment.
+              </p>
+              <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <UsageRow
+                  label="Workflows"
+                  value={report.purposeProfile.coreWorkflows.length}
+                />
+                <UsageRow
+                  label="Invariants"
+                  value={report.purposeProfile.invariants.length}
+                />
+                <UsageRow
+                  label="Current gaps"
+                  value={report.purposeProfile.currentGaps.length}
+                />
+                <UsageRow
+                  label="Evidence"
+                  value={report.purposeProfile.evidence.length}
+                />
+              </div>
+              {report.purposeProfile.currentGaps.length > 0 && (
+                <div className="mt-4">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Citation-linked gaps
+                  </p>
+                  <BulletList
+                    items={report.purposeProfile.currentGaps.map((claim) => claim.text)}
+                    empty="No current gap has a validated citation."
+                  />
+                </div>
+              )}
+              <details className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-slate-300">
+                  Inspect cited repository evidence
+                </summary>
+                <ul className="mt-3 space-y-2">
+                  {report.purposeProfile.evidence.map((item) => (
+                    <li
+                      key={item.id}
+                      className="rounded-lg border border-white/5 bg-black/20 p-2 text-xs text-slate-400"
+                    >
+                      <div>
+                        <span className="font-mono text-aurora-cyan">
+                          {item.id} · {item.path}:{item.lineStart}-{item.lineEnd}
+                        </span>
+                        <span className="ml-2">{item.signal}</span>
+                        <span className="ml-2 font-mono text-slate-600">
+                          {item.sourceDigest.slice(0, 15)}…
+                        </span>
+                      </div>
+                      <pre className="mt-2 whitespace-pre-wrap break-words rounded-md bg-black/30 p-2 font-mono text-[11px] leading-relaxed text-slate-300">
+                        {item.excerpt}
+                      </pre>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </Card>
+          </motion.div>
+        )}
+
+        {/* Durable market evidence, retained after the private checkpoint is removed. */}
+        {report.competitiveResearch && (
+          <motion.div {...sectionProps} className="md:col-span-2">
+            <Card className="h-full">
+              <CardHeader
+                title="Competitive evidence"
+                icon={<Globe2 className="h-4 w-4" />}
+                action={
+                  <Badge
+                    tone={report.competitiveResearch.coverageMet ? "emerald" : "amber"}
+                  >
+                    {report.competitiveResearch.coverageMet
+                      ? "Five-product gate passed"
+                      : report.competitiveResearch.required
+                        ? "Required coverage incomplete"
+                        : "Advisory coverage incomplete"}
+                  </Badge>
+                }
+              />
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <UsageRow
+                  label="Products verified"
+                  value={report.competitiveResearch.productVerifiedCount}
+                />
+                <UsageRow
+                  label="Products compared"
+                  value={report.competitiveResearch.productComparedCount}
+                />
+                <UsageRow
+                  label="Advantages selected"
+                  value={report.competitiveResearch.productSelectedCount}
+                />
+                <UsageRow
+                  label="Repositories verified"
+                  value={report.competitiveResearch.repositoryVerifiedCount}
+                />
+              </div>
+              {report.competitiveResearch.competitors.length > 0 && (
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  {report.competitiveResearch.competitors.map((candidate) => (
+                    <div
+                      key={candidate.candidateId}
+                      className="rounded-xl border border-white/10 bg-white/5 p-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <a
+                          href={candidate.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm font-semibold text-slate-200 underline decoration-white/20 underline-offset-2 hover:text-white"
+                        >
+                          {candidate.name}
+                        </a>
+                        <Badge tone="neutral">{candidate.score}/100</Badge>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Decision: {candidate.decision}
+                      </p>
+                      {candidate.strengths.length > 0 && (
+                        <p className="mt-2 text-xs text-slate-300">
+                          Strengths: {candidate.strengths.join("; ")}
+                        </p>
+                      )}
+                      {candidate.gaps.length > 0 && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          Gaps: {candidate.gaps.join("; ")}
+                        </p>
+                      )}
+                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                        {candidate.evidenceUrls.map((url, index) => (
+                          <a
+                            key={url}
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="break-all text-[11px] text-aurora-cyan hover:underline"
+                          >
+                            Evidence {index + 1}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {report.competitiveResearch.recommendations.length > 0 && (
+                <div className="mt-4">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Selected advantages mapped into acceptance
+                  </p>
+                  <BulletList
+                    items={report.competitiveResearch.recommendations.map(
+                      (recommendation) =>
+                        `${recommendation.name} — ${recommendation.howToIntegrate}`,
+                    )}
+                    empty="No competitive advantage was selected."
+                  />
+                </div>
+              )}
+              <div className="mt-4 flex flex-wrap gap-2">
+                {report.competitiveResearch.sources.map((source) => (
+                  <Badge
+                    key={source.name}
+                    tone={
+                      source.status === "ok"
+                        ? "emerald"
+                        : source.status === "failed"
+                          ? "rose"
+                          : "amber"
+                    }
+                  >
+                    {source.name}: {source.status}
+                  </Badge>
+                ))}
+              </div>
+            </Card>
+          </motion.div>
+        )}
 
         {/* How to run */}
         <motion.div {...sectionProps}>

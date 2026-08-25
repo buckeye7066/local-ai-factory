@@ -7,10 +7,9 @@ import { join } from "node:path";
 import { writeFileContained } from "../storage/runsStore.js";
 
 /**
- * Round-11 #6 — the store now writes through a file descriptor, re-checking the
- * opened target (fstat) is a regular file and using O_NOFOLLOW where the platform
- * supports it. This NARROWS the lstat→write TOCTOU window; on Windows (no
- * O_NOFOLLOW) it is documented as not fully closed.
+ * Round-11 #6 — the store writes and fsyncs an exclusive sibling, then atomically
+ * renames it over the live record. O_NOFOLLOW is used for the temporary inode
+ * where available, and an existing final-component symlink is refused.
  */
 
 const HAS_NOFOLLOW = typeof FS.O_NOFOLLOW === "number" && FS.O_NOFOLLOW !== 0;
@@ -22,7 +21,8 @@ function tmp(): string {
   return d;
 }
 afterAll(() => {
-  for (const d of scratch) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const d of scratch)
+    rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 describe("Round-11 #6 writeFileContained", () => {
@@ -30,6 +30,13 @@ describe("Round-11 #6 writeFileContained", () => {
     const p = join(tmp(), "run.json");
     await writeFileContained(p, JSON.stringify({ ok: true }));
     expect(JSON.parse(await readFile(p, "utf8"))).toEqual({ ok: true });
+  });
+
+  it("atomically replaces an existing regular record", async () => {
+    const p = join(tmp(), "run.json");
+    await writeFile(p, JSON.stringify({ generation: 1 }), "utf8");
+    await writeFileContained(p, JSON.stringify({ generation: 2 }));
+    expect(JSON.parse(await readFile(p, "utf8"))).toEqual({ generation: 2 });
   });
 
   it("refuses to write when the target is not a regular file (directory)", async () => {
@@ -41,15 +48,9 @@ describe("Round-11 #6 writeFileContained", () => {
 
   it(
     HAS_NOFOLLOW
-      ? "refuses to follow a symlinked target (O_NOFOLLOW)"
-      : "documents that O_NOFOLLOW is unavailable on this platform (Windows)",
+      ? "refuses a symlinked target while O_NOFOLLOW protects the sibling"
+      : "refuses a symlinked target even without O_NOFOLLOW on Windows",
     async () => {
-      if (!HAS_NOFOLLOW) {
-        // Honest: this platform cannot refuse a symlink at open time; the
-        // residual is documented. Nothing to assert about O_NOFOLLOW here.
-        expect(HAS_NOFOLLOW).toBe(false);
-        return;
-      }
       const base = tmp();
       const target = join(base, "outside.json");
       await writeFile(target, "{}", "utf8");

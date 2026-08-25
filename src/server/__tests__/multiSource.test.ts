@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,10 +10,11 @@ import type { LLMProvider, GenerateJsonInput } from "../../shared/types.js";
 
 const cleanupPaths: string[] = [];
 afterAll(async () => {
-  await Promise.all(cleanupPaths.map((p) => rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })));
-});
-afterEach(() => {
-  vi.unstubAllGlobals();
+  await Promise.all(
+    cleanupPaths.map((p) =>
+      rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }),
+    ),
+  );
 });
 
 class ScriptedProvider implements LLMProvider {
@@ -73,28 +74,22 @@ describe("ingestAdditionalSource", () => {
   });
 
   it("falls back to a plain fetch for a non-repo directory/URL — 'not just repos'", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            url: "https://example.com/some-api-docs",
-            headers: new Headers({ "content-type": "text/html" }),
-            arrayBuffer: async () =>
-              new TextEncoder().encode(
-                "<html><body>Some API docs content here.</body></html>",
-              ).buffer,
-          }) as unknown as Response,
-      ),
-    );
     const config = loadConfig({});
     const ctx = await ingestAdditionalSource(
       config,
-      { type: "git", location: "https://example.com/some-api-docs" },
+      { type: "git", location: "https://93.184.216.34/some-api-docs" },
       "22222222",
       0,
+      {
+        fetchUrl: async (url) => ({
+          ok: true,
+          status: 200,
+          contentType: "text/html",
+          finalUrl: url,
+          textExcerpt: "Some API docs content here.",
+          truncated: false,
+        }),
+      },
     );
     expect(ctx.fileTreeExcerpt).toBe(""); // not a codebase — nothing to list
     expect(ctx.readmeExcerpt).toContain("fetched web page");

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { mkdir, rm, symlink } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { freshStages } from "../../shared/schemas.js";
 import type { RunRecord } from "../../shared/schemas.js";
@@ -13,11 +13,145 @@ const outsideRoot = resolve(process.cwd(), ".test-checkpoint-outside");
 afterAll(async () => {
   delete process.env.FACTORY_DATA_DIR;
   await rm(dataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  await rm(workspaceRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  await rm(outsideRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await rm(workspaceRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
+  await rm(outsideRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
 });
 
 describe("durable checkpoint continuation", () => {
+  it("refuses to reuse built artifacts when a new authoritative purpose profile changes the spec", async () => {
+    vi.resetModules();
+    const store = await import("../storage/runsStore.js");
+    const { resumeFactory } = await import("../orchestrator/runFactory.js");
+    const { loadConfig, loadSecrets } = await import("../config.js");
+
+    const id = crypto.randomUUID();
+    const workspace = resolve(workspaceRoot, `stale-${id}`);
+    await mkdir(workspace, { recursive: true });
+    await writeFile(
+      resolve(workspace, "README.md"),
+      "# Acme Tasks\nAcme helps teams create and track tasks.",
+      "utf8",
+    );
+    await writeFile(
+      resolve(workspace, "package.json"),
+      JSON.stringify({ name: "acme-tasks" }),
+      "utf8",
+    );
+    const stages = freshStages();
+    for (const stage of stages.slice(0, 5)) stage.status = "completed";
+    const run = {
+      id,
+      idea: "Add task reminders",
+      status: "failed" as const,
+      resumable: true,
+      demo: true,
+      codeProvider: "mock" as const,
+      reviewProvider: "mock" as const,
+      currentStage: null,
+      stages,
+      logs: [],
+      files: [],
+      repairLoops: 0,
+      providerUsage: {
+        free: { calls: 0 },
+        anthropic: { calls: 0 },
+        openai: { calls: 0 },
+        stub: { calls: 0 },
+        mock: { calls: 0 },
+        totalCalls: 0,
+      },
+      finalReport: null,
+      appName: "acme-tasks",
+      workspacePath: workspace,
+      destination: null,
+      error: "interrupted",
+      attribution: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } satisfies RunRecord;
+    await store.saveRun(run);
+    await store.saveRunCheckpoint({
+      schemaVersion: 3,
+      runId: id,
+      idea: run.idea,
+      options: {
+        demo: true,
+        mode: "extend",
+        repoSource: { type: "path", location: workspace },
+        goals: ["Add task reminders"],
+      },
+      spec: {
+        appName: "acme-tasks",
+        tagline: "Track tasks",
+        targetUser: "teams",
+        coreFeatures: ["task reminders"],
+        dataModel: [],
+        userFlows: ["create a task"],
+        acceptanceCriteria: ["reminders appear"],
+      },
+      architecture: {
+        overview: "stale",
+        frontend: "stale",
+        backend: "stale",
+        dataModel: "stale",
+        risks: [],
+      },
+      plan: {
+        tasks: [
+          {
+            order: 1,
+            category: "frontend",
+            title: "stale plan",
+            detail: "predates purpose obligations",
+          },
+        ],
+      },
+      build: {
+        files: [
+          {
+            path: "src/stale.ts",
+            purpose: "stale build",
+            contents: "export const stale = true;",
+            edits: [],
+          },
+        ],
+      },
+      files: [],
+      builderExistingPaths: [],
+      hostFileBaselines: {},
+      writeRefusals: [],
+      blockingWriteRefusals: [],
+      testWriterComplete: false,
+      commandOutput: "",
+      testsExecuted: false,
+      testExit: null,
+      repairLoops: 0,
+      repairComplete: false,
+      updatedAt: Date.now(),
+    });
+
+    const result = await resumeFactory(
+      id,
+      { ...loadConfig({}), workspaceRoot, allowUntrustedScripts: false },
+      loadSecrets({}),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/cannot be resumed safely.*fresh run/i);
+    expect(result.resumable).toBe(false);
+    expect(await store.getRunCheckpoint(id)).toBeNull();
+  });
+
   it("continues after product spec without replaying that provider call", async () => {
     vi.resetModules();
     const store = await import("../storage/runsStore.js");

@@ -2,6 +2,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   lstat,
@@ -9,7 +10,8 @@ import {
   open,
 } from "node:fs/promises";
 import { constants as FS } from "node:fs";
-import { resolve, join, relative, isAbsolute, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+import { resolve, join, relative, isAbsolute, sep, dirname } from "node:path";
 import { z } from "zod";
 import type { RunRecord, RunSummary, FileContent } from "../../shared/schemas.js";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
@@ -123,29 +125,62 @@ async function safeStorePath(dir: string, id: string): Promise<string> {
 const HAS_NOFOLLOW = typeof FS.O_NOFOLLOW === "number" && FS.O_NOFOLLOW !== 0;
 
 /**
- * Write `data` to `path` while NARROWING the lstat→write TOCTOU window: open the
- * final component with O_NOFOLLOW where the platform supports it (POSIX), then
- * re-check the opened fd (`fstat`) is a regular file before writing through it.
+ * Durably publish one complete JSON value. The live record is never opened
+ * with O_TRUNC: bytes are written and fsynced to a short, exclusive sibling,
+ * then atomically renamed over the target. A crash can therefore leave either
+ * the previous record or the complete next record, rather than empty/partial
+ * resume state.
  *
- * HONEST RESIDUAL: Windows/Node exposes no O_NOFOLLOW, so if a local same-user
- * attacker swaps the final component to a symlink in the narrow window AFTER
- * `safeStorePath`'s lstat and BEFORE this open, the open follows it. Full
- * containment against adversarial same-user filesystem mutation requires
- * OS-level controls (restrictive permissions on the data dir). The fstat
- * re-check still rejects a swap to a non-regular-file (e.g. a directory).
+ * The sibling is opened O_EXCL + O_NOFOLLOW where available. Renaming replaces
+ * a final-component symlink instead of following it, and we still reject one
+ * explicitly so callers see the same fail-closed contract on every platform.
+ * Parent-directory mutation by a hostile same-user process remains an OS-level
+ * boundary; normal store callers run guardStoreDirs immediately beforehand.
  */
 export async function writeFileContained(path: string, data: string): Promise<void> {
+  const parent = dirname(path);
+  const tempPath = join(parent, `.factory-store-${process.pid}-${randomUUID()}.tmp`);
   const flags =
-    FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | (HAS_NOFOLLOW ? FS.O_NOFOLLOW : 0);
-  const fh = await open(path, flags, 0o600);
+    FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | (HAS_NOFOLLOW ? FS.O_NOFOLLOW : 0);
+  let published = false;
   try {
-    const st = await fh.stat();
-    if (!st.isFile()) {
+    const fh = await open(tempPath, flags, 0o600);
+    try {
+      const st = await fh.stat();
+      if (!st.isFile()) {
+        throw new Error(
+          `Refused: store temp target is not a regular file: ${tempPath}`,
+        );
+      }
+      await fh.writeFile(data, "utf8");
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+
+    const target = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (target?.isSymbolicLink()) {
+      throw new Error(`Refused: run file is a symlink: ${path}`);
+    }
+    if (target && !target.isFile()) {
       throw new Error(`Refused: store target is not a regular file: ${path}`);
     }
-    await fh.writeFile(data, "utf8");
+
+    await rename(tempPath, path);
+    published = true;
+    if (process.platform !== "win32") {
+      const dirHandle = await open(parent, FS.O_RDONLY);
+      try {
+        await dirHandle.sync();
+      } finally {
+        await dirHandle.close();
+      }
+    }
   } finally {
-    await fh.close();
+    if (!published) await rm(tempPath, { force: true }).catch(() => {});
   }
 }
 
@@ -271,9 +306,7 @@ export async function listRuns(): Promise<RunSummary[]> {
             ...r.destination,
             target: redactSecrets(r.destination.target),
             detail:
-              r.destination.detail == null
-                ? null
-                : redactSecrets(r.destination.detail),
+              r.destination.detail == null ? null : redactSecrets(r.destination.detail),
           }
         : r.destination,
       repairLoops: r.repairLoops,
@@ -319,7 +352,9 @@ export async function pruneOldRuns(keep = 200): Promise<number> {
       // Route deletes through the containment/symlink guard too.
       await rm(await safeStorePath(STORE_DIR, id), { force: true }).catch(() => {});
       await rm(await safeStorePath(FILES_DIR, id), { force: true }).catch(() => {});
-      await rm(await safeStorePath(CHECKPOINTS_DIR, id), { force: true }).catch(() => {});
+      await rm(await safeStorePath(CHECKPOINTS_DIR, id), { force: true }).catch(
+        () => {},
+      );
       removed++;
     }
     return removed;
@@ -358,9 +393,7 @@ export async function deleteRun(id: string): Promise<boolean> {
 }
 
 /** Persist private continuation state; never served by an API route. */
-export async function saveRunCheckpoint(
-  checkpoint: FactoryCheckpoint,
-): Promise<void> {
+export async function saveRunCheckpoint(checkpoint: FactoryCheckpoint): Promise<void> {
   if (!isValidRunId(checkpoint.runId)) {
     throw new Error("Refused: invalid checkpoint run id.");
   }
@@ -369,9 +402,7 @@ export async function saveRunCheckpoint(
   await writeFileContained(target, JSON.stringify(checkpoint));
 }
 
-export async function getRunCheckpoint(
-  id: string,
-): Promise<FactoryCheckpoint | null> {
+export async function getRunCheckpoint(id: string): Promise<FactoryCheckpoint | null> {
   if (!isValidRunId(id)) return null;
   try {
     const raw = await readFile(await safeStorePath(CHECKPOINTS_DIR, id), "utf8");

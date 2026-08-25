@@ -3,11 +3,19 @@ import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { normalizeRepoSource, ingestExistingRepo, IngestError } from "../workspace/ingestRepo.js";
+import {
+  normalizeRepoSource,
+  ingestExistingRepo,
+  IngestError,
+} from "../workspace/ingestRepo.js";
 
 const cleanupPaths: string[] = [];
 afterAll(async () => {
-  await Promise.all(cleanupPaths.map((p) => rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })));
+  await Promise.all(
+    cleanupPaths.map((p) =>
+      rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }),
+    ),
+  );
 });
 
 async function makeTmpGitRepo(): Promise<string> {
@@ -82,20 +90,24 @@ describe("ingestExistingRepo", () => {
     expect(branch).toBe("factory-deck/11111111");
   }, 30_000);
 
-  it("clones a git working tree found at a local path when type: path (no inPlace)", { timeout: 30_000 }, async () => {
-    const src = await makeTmpGitRepo();
-    const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-ws-"));
-    cleanupPaths.push(workspaceRoot);
+  it(
+    "clones a git working tree found at a local path when type: path (no inPlace)",
+    { timeout: 30_000 },
+    async () => {
+      const src = await makeTmpGitRepo();
+      const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-ws-"));
+      cleanupPaths.push(workspaceRoot);
 
-    const result = await ingestExistingRepo(
-      workspaceRoot,
-      { type: "path", location: src },
-      "22222222-2222-2222-2222-222222222222",
-    );
-    expect(result.inPlace).toBe(false);
-    expect(result.isGitRepo).toBe(true);
-    expect(resolve(result.path)).not.toBe(resolve(src));
-  });
+      const result = await ingestExistingRepo(
+        workspaceRoot,
+        { type: "path", location: src },
+        "22222222-2222-2222-2222-222222222222",
+      );
+      expect(result.inPlace).toBe(false);
+      expect(result.isGitRepo).toBe(true);
+      expect(resolve(result.path)).not.toBe(resolve(src));
+    },
+  );
 
   it("copies a plain (non-git) directory, excluding node_modules", async () => {
     const src = await makeTmpPlainDir();
@@ -166,6 +178,35 @@ describe("ingestExistingRepo", () => {
     ).rejects.toThrow(IngestError);
   });
 
+  it("inPlace refuses a dirty tree without changing its branch or bytes", async () => {
+    const src = await makeTmpGitRepo();
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-ws-"));
+    cleanupPaths.push(workspaceRoot);
+    const originalBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: src,
+      encoding: "utf8",
+    }).trim();
+    await writeFile(join(src, "README.md"), "# owner's uncommitted work\n");
+
+    await expect(
+      ingestExistingRepo(
+        workspaceRoot,
+        { type: "path", location: src, inPlace: true },
+        "45454545-4545-4545-4545-454545454545",
+      ),
+    ).rejects.toThrow(/uncommitted changes/i);
+
+    expect(
+      execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+        cwd: src,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe(originalBranch);
+    expect(await readFile(join(src, "README.md"), "utf8")).toBe(
+      "# owner's uncommitted work\n",
+    );
+  });
+
   it("refuses a nonexistent local path", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-ws-"));
     cleanupPaths.push(workspaceRoot);
@@ -203,7 +244,8 @@ describe("normalizeRepoSource", () => {
   });
   it("accepts ssh and git@ forms too", () => {
     expect(
-      normalizeRepoSource({ type: "path", location: "git@github.com:a/b.git" }).source.type,
+      normalizeRepoSource({ type: "path", location: "git@github.com:a/b.git" }).source
+        .type,
     ).toBe("git");
     expect(
       normalizeRepoSource({ type: "path", location: "ssh://git@host/a/b" }).source.type,

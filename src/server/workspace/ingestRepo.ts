@@ -118,7 +118,9 @@ export function normalizeRepoSource(source: RepoSource): {
   source: RepoSource;
   note: string | null;
 } {
-  const looksRemote = /^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/i.test(source.location.trim());
+  const looksRemote = /^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/i.test(
+    source.location.trim(),
+  );
   if (source.type === "path" && looksRemote) {
     return {
       source: { ...source, type: "git", inPlace: false },
@@ -162,14 +164,16 @@ export async function ingestExistingRepo(
     const branch = `factory-deck/${runId.slice(0, 8)}`;
     await runGit(["checkout", "-b", branch], dest, 15_000);
     log.push(`Checked out branch ${branch} in the isolated clone.`);
-    log.push(`origin kept as ${source.location} — the run's branch is pushed back there.`);
+    log.push(
+      `origin kept as ${source.location} — the run's branch is pushed back there.`,
+    );
     return {
       path: dest,
       slug: slugify(source.location),
       isGitRepo: true,
       branch,
       inPlace: false,
-    previousBranch: null,
+      previousBranch: null,
       originUrl: source.location,
       log,
     };
@@ -192,20 +196,43 @@ export async function ingestExistingRepo(
   if (source.inPlace) {
     // Narrow, explicit path: operate directly on the real directory. Still a
     // dedicated branch (never commit straight onto the caller's checked-out
-    // branch). A pre-existing dirty working tree is NOT refused here — the
-    // caller is responsible for staging/committing only the files ITS OWN run
-    // touched (never `git add -A`), so any unrelated uncommitted work already
-    // sitting in the tree is carried forward untouched, not swept into a commit.
+    // branch). A dirty source is refused: an anchored edit can overlap an
+    // owner's uncommitted change, and staging a touched file would then commit
+    // both. Isolation is the supported path when local work must be preserved.
     const isRepo = await isGitWorkingTree(src);
     if (!isRepo) {
       throw new IngestError(
         `inPlace requires a git working tree (no .git found at ${src}); refusing to edit a non-git directory in place.`,
       );
     }
+    const dirty = await runGit(
+      ["status", "--porcelain", "--untracked-files=all"],
+      src,
+      15_000,
+    );
+    if (dirty.code !== 0) {
+      throw new IngestError(
+        `Could not verify that the in-place source is clean (exit ${dirty.code}): ${dirty.stderr.slice(0, 500)}`,
+      );
+    }
+    if (dirty.stdout.trim()) {
+      throw new IngestError(
+        "Refused in-place edit: the source working tree has uncommitted changes. " +
+          "Commit/stash them first, or run without inPlace so Factory Deck uses an isolated clone.",
+      );
+    }
     const branch = `factory-deck/${runId.slice(0, 8)}`;
     // Remember where the owner WAS, so the run can put them back.
-    const previousBranch = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], src, 15_000)
-      .then((r) => (r.code === 0 && r.stdout.trim() && r.stdout.trim() !== "HEAD" ? r.stdout.trim() : null))
+    const previousBranch = await runGit(
+      ["rev-parse", "--abbrev-ref", "HEAD"],
+      src,
+      15_000,
+    )
+      .then((r) =>
+        r.code === 0 && r.stdout.trim() && r.stdout.trim() !== "HEAD"
+          ? r.stdout.trim()
+          : null,
+      )
       .catch(() => null);
     log.push(
       `Operating IN PLACE on ${src} (explicit opt-in) — checking out ${branch}` +
@@ -258,7 +285,7 @@ export async function ingestExistingRepo(
       isGitRepo: true,
       branch,
       inPlace: false,
-    previousBranch: null,
+      previousBranch: null,
       originUrl: src,
       log,
     };

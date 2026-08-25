@@ -1,6 +1,15 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { parseDdgLiteHtml, webSearchTool } from "../tools/webSearch.js";
-import { extractAllUrls, looksLikeRepoUrl } from "../tools/webFetch.js";
+import {
+  parseDdgLiteHtml,
+  parseFirecrawlSearchResponse,
+  webSearch,
+} from "../tools/webSearch.js";
+import {
+  extractAllUrls,
+  looksLikeRepoUrl,
+  webFetchTool,
+  type WebFetchDependencies,
+} from "../tools/webFetch.js";
 import { researchAgent, type ResearchFindings } from "../agents/researchAgent.js";
 import type { LLMProvider, GenerateJsonInput } from "../../shared/types.js";
 import type { ProductSpec, Architecture } from "../../shared/schemas.js";
@@ -40,47 +49,154 @@ describe("parseDdgLiteHtml", () => {
   });
 });
 
-describe("webSearchTool (fetch stubbed — no real network)", () => {
-  it("returns parsed results on a successful response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            text: async () => SAMPLE_DDG_HTML,
-          }) as unknown as Response,
-      ),
-    );
-    const results = await webSearchTool("weather api");
-    expect(results).toHaveLength(2);
-    expect(results[0].url).toBe("https://example.com/weatherapi");
-  });
-
-  it("degrades to a manual-search pseudo-result on a network failure — never throws", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("network unreachable");
+describe("webSearch provider health (fetch stubbed — no real network)", () => {
+  it("parses the current Firecrawl v2 data.web response", () => {
+    expect(
+      parseFirecrawlSearchResponse({
+        success: true,
+        data: {
+          web: [
+            {
+              title: "Factory",
+              url: "https://factory.example/product",
+              description: "Evidence-backed delivery",
+              markdown: "# Factory",
+            },
+          ],
+        },
       }),
-    );
-    const results = await webSearchTool("anything");
-    expect(results).toHaveLength(1);
-    expect(results[0].url).toContain("duckduckgo.com/?q=");
-    expect(results[0].snippet).toContain("network unreachable");
+    ).toEqual([
+      {
+        title: "Factory",
+        url: "https://factory.example/product",
+        snippet: "Evidence-backed delivery",
+      },
+    ]);
   });
 
-  it("degrades gracefully on a non-2xx response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          ({ ok: false, status: 503, text: async () => "" }) as unknown as Response,
+  it("uses authenticated Firecrawl v2 first with the documented scrapeOptions shape", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            web: [
+              {
+                title: "Example",
+                url: "https://example.com/product",
+                description: "A product",
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
       ),
     );
-    const results = await webSearchTool("anything");
-    expect(results[0].snippet).toContain("503");
+    const searched = await webSearch("agent product", {
+      fetchImpl,
+      env: { FIRECRAWL_API_KEY: "fc-test" } as NodeJS.ProcessEnv,
+      firecrawlUrl: "https://firecrawl.test/v2/search",
+    });
+
+    expect(searched.provider).toBe("firecrawl");
+    expect(searched.results).toHaveLength(1);
+    expect(searched.attempts.map((attempt) => attempt.status)).toEqual([
+      "ok",
+      "skipped",
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0];
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer fc-test");
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      query: "agent product",
+      sources: ["web"],
+      scrapeOptions: {
+        formats: [{ type: "markdown" }],
+        onlyMainContent: true,
+      },
+    });
+  });
+
+  it("attempts Firecrawl keylessly, then falls back to DuckDuckGo", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("unauthorized", { status: 401 }))
+      .mockResolvedValueOnce(new Response(SAMPLE_DDG_HTML, { status: 200 }));
+    const searched = await webSearch("weather api", {
+      fetchImpl,
+      env: {} as NodeJS.ProcessEnv,
+      firecrawlUrl: "https://firecrawl.test/v2/search",
+    });
+
+    expect(searched.provider).toBe("duckduckgo");
+    expect(searched.results).toHaveLength(2);
+    expect(searched.attempts.map((attempt) => attempt.status)).toEqual([
+      "failed",
+      "ok",
+    ]);
+    expect(new Headers(fetchImpl.mock.calls[0][1]?.headers).has("Authorization")).toBe(
+      false,
+    );
+  });
+
+  it("returns honest failure with no fabricated manual-search result", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error("offline"));
+    const searched = await webSearch("anything", {
+      fetchImpl,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(searched).toMatchObject({ results: [], provider: null, status: "failed" });
+    expect(searched.attempts).toHaveLength(2);
+    expect(searched.attempts.every((attempt) => attempt.status === "failed")).toBe(
+      true,
+    );
+  });
+
+  it("distinguishes an honest empty response from provider failure", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ success: true, data: { web: [] } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response("<html>no results</html>", { status: 200 }));
+    const searched = await webSearch("nothing", {
+      fetchImpl,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(searched).toMatchObject({ results: [], provider: null, status: "empty" });
+    expect(searched.attempts.map((attempt) => attempt.status)).toEqual([
+      "empty",
+      "empty",
+    ]);
+  });
+
+  it("fails an oversized Firecrawl response without buffering it as evidence", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("x".repeat(2_100_000), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(new Response("<html>no results</html>", { status: 200 }));
+
+    const searched = await webSearch("bounded response", {
+      fetchImpl,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(searched.results).toEqual([]);
+    expect(searched.attempts[0]).toMatchObject({
+      provider: "firecrawl",
+      status: "failed",
+    });
+    expect(searched.attempts[0].detail).toMatch(/oversized/i);
   });
 });
 
@@ -111,6 +227,126 @@ describe("looksLikeRepoUrl", () => {
   });
 });
 
+describe("webFetchTool network boundary", () => {
+  const publicLookup: NonNullable<WebFetchDependencies["lookup"]> = async () => [
+    { address: "93.184.216.34", family: 4 },
+  ];
+
+  it.each([
+    "http://127.0.0.1/admin",
+    "http://2130706433/admin",
+    "http://169.254.169.254/latest/meta-data",
+    "http://[::1]/admin",
+    "http://[::ffff:127.0.0.1]/admin",
+  ])("refuses private or local address %s before fetch", async (url) => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const result = await webFetchTool(url, 1_000, { fetch: fetchImpl });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/non-public|private|local/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects a public hostname when DNS returns any private address", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const result = await webFetchTool("https://example.com", 1_000, {
+      fetch: fetchImpl,
+      lookup: async () => [
+        { address: "93.184.216.34", family: 4 },
+        { address: "10.0.0.7", family: 4 },
+      ],
+    });
+    expect(result.error).toContain("10.0.0.7");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("passes the validated address to the pinned transport without a second lookup", async () => {
+    const lookup = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]);
+    const transport: NonNullable<WebFetchDependencies["transport"]> = vi.fn(
+      async (_url, addresses) => {
+        expect(addresses).toEqual([{ address: "93.184.216.34", family: 4 }]);
+        return new Response("Pinned public response", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        });
+      },
+    );
+
+    const result = await webFetchTool("https://example.com/product", 1_000, {
+      lookup,
+      transport,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.textExcerpt).toBe("Pinned public response");
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes DNS resolution inside the caller's timeout budget", async () => {
+    const started = Date.now();
+    const result = await webFetchTool("https://example.com/product", 20, {
+      lookup: async () => new Promise(() => {}),
+      transport: async () => new Response("must not run"),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/abort|timeout/i);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it("revalidates every redirect and refuses a redirect to metadata", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: "http://169.254.169.254/latest/meta-data" },
+      }),
+    );
+    const result = await webFetchTool("https://example.com/start", 1_000, {
+      fetch: fetchImpl,
+      lookup: publicLookup,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/non-public/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+  });
+
+  it("streams only the bounded response prefix", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("x".repeat(210_000), {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      }),
+    );
+    const result = await webFetchTool("https://example.com/large", 1_000, {
+      fetch: fetchImpl,
+      lookup: publicLookup,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.truncated).toBe(true);
+    expect(result.textExcerpt).toHaveLength(4_000);
+  });
+
+  it("fetches a public target and returns readable bounded text", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("<main>Hello <b>world</b></main>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const result = await webFetchTool("https://example.com/docs", 1_000, {
+      fetch: fetchImpl,
+      lookup: publicLookup,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      finalUrl: "https://example.com/docs",
+      textExcerpt: "Hello world",
+      truncated: false,
+    });
+  });
+});
+
 const spec: ProductSpec = {
   appName: "TestApp",
   tagline: "",
@@ -131,6 +367,8 @@ const arch: Architecture = {
 class ScriptedProvider implements LLMProvider {
   readonly name = "mock" as const;
   calls = 0;
+  readonly prompts: string[] = [];
+  readonly systems: string[] = [];
   constructor(private script: unknown[]) {}
   isConfigured() {
     return true;
@@ -139,6 +377,8 @@ class ScriptedProvider implements LLMProvider {
     return { text: "", provider: this.name };
   }
   async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
+    this.prompts.push(input.prompt);
+    this.systems.push(input.system);
     const raw = this.script[this.calls];
     this.calls += 1;
     if (raw === undefined) throw new Error("ScriptedProvider ran out of script.");
@@ -184,6 +424,37 @@ describe("researchAgent", () => {
     const findings: ResearchFindings = await researchAgent({ provider }, spec, arch);
     expect(findings.recommendations).toHaveLength(1);
     expect(findings.recommendations[0].name).toBe("Example Weather API");
+    expect(findings.recommendations[0].evidenceUrls).toEqual([
+      "https://example.com/weatherapi",
+    ]);
+    expect(provider.systems.every((system) => /untrusted data/i.test(system))).toBe(
+      true,
+    );
+  });
+
+  it("drops a model recommendation whose URL was never observed by a tool", async () => {
+    const provider = new ScriptedProvider([
+      {
+        thought: "I already know one",
+        action: "conclude",
+        findings: {
+          summary: "Use a plausible service.",
+          recommendations: [
+            {
+              name: "Invented API",
+              why: "sounds useful",
+              sourceUrl: "https://invented.example/api",
+              howToIntegrate: "send all data",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const findings = await researchAgent({ provider }, spec, arch);
+
+    expect(findings.recommendations).toEqual([]);
+    expect(findings.summary).toMatch(/removed.*not observed/i);
   });
 
   it("concludes honestly with zero recommendations when nothing external is needed", async () => {
@@ -234,7 +505,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     candidates: [
       {
         id: "c1",
-        kind: "repo",
+        kind: "repository",
         name: "Rival",
         url: "https://example.com/rival",
         description: "",
@@ -295,7 +566,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
         name: "mock" as const,
         isConfigured: () => true,
         generateText: async () => ({ text: "", provider: "mock" }),
-        generateJson: async <T,>(input: GenerateJsonInput<T>): Promise<T> => {
+        generateJson: async <T>(input: GenerateJsonInput<T>): Promise<T> => {
           calls++;
           if (calls === 1) {
             return input.schema.parse({

@@ -105,6 +105,131 @@ export const ProviderUsageSchema = z.object({
 export type ProviderUsage = z.infer<typeof ProviderUsageSchema>;
 
 /* ------------------------------------------------------------------ */
+/* Citation-linked purpose constitution                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One bounded, immutable observation collected from an existing repository.
+ * Models may cite these records, but may not mint new evidence identifiers.
+ */
+export const PurposeEvidenceSchema = z.object({
+  id: z.string().regex(/^PE-\d{3}$/),
+  kind: z.enum(["readme", "manifest", "route", "source", "test"]),
+  path: z.string().min(1),
+  lineStart: z.number().int().positive(),
+  lineEnd: z.number().int().positive(),
+  /** SHA-256 of the complete source file at analysis time. */
+  sourceDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  signal: z.string().min(1),
+  excerpt: z.string().min(1),
+});
+export type PurposeEvidence = z.infer<typeof PurposeEvidenceSchema>;
+
+/** A purpose claim is retained only when it cites a repository snapshot. */
+export const EvidenceBackedClaimSchema = z.object({
+  text: z.string().min(1),
+  evidenceIds: z.array(z.string()).min(1),
+});
+export type EvidenceBackedClaim = z.infer<typeof EvidenceBackedClaimSchema>;
+
+export const PurposeWorkflowSchema = z.object({
+  name: z.string().min(1),
+  outcome: z.string().min(1),
+  actors: z.array(z.string()).default([]),
+  evidenceIds: z.array(z.string()).min(1),
+});
+export type PurposeWorkflow = z.infer<typeof PurposeWorkflowSchema>;
+
+/**
+ * The typed constitution carried through every extend-run planning stage.
+ * `grounding` is produced by deterministic code after model generation. It
+ * validates citation identity/linkage, not semantic entailment of model prose.
+ */
+export const PurposeProfileSchema = z.object({
+  profileVersion: z.literal(1),
+  appName: z.string().min(1),
+  purpose: EvidenceBackedClaimSchema,
+  intendedUsers: z.array(EvidenceBackedClaimSchema).default([]),
+  coreWorkflows: z.array(PurposeWorkflowSchema).default([]),
+  invariants: z.array(EvidenceBackedClaimSchema).default([]),
+  currentCapabilities: z.array(EvidenceBackedClaimSchema).default([]),
+  currentGaps: z.array(EvidenceBackedClaimSchema).default([]),
+  integrations: z.array(EvidenceBackedClaimSchema).default([]),
+  dataOwnership: z.array(EvidenceBackedClaimSchema).default([]),
+  uncertainties: z.array(z.string()).default([]),
+  evidence: z.array(PurposeEvidenceSchema),
+  grounding: z.object({
+    /** Legacy name: true means every retained claim has a valid citation. */
+    grounded: z.boolean(),
+    /** Claim↔excerpt meaning remains model-inferred, not independently proven. */
+    semanticVerification: z.literal("not-performed").default("not-performed"),
+    evidenceCoverage: z.number().min(0).max(1),
+    rejectedEvidenceIds: z.array(z.string()).default([]),
+    droppedClaims: z.array(z.string()).default([]),
+  }),
+});
+export type PurposeProfile = z.infer<typeof PurposeProfileSchema>;
+
+/** Durable, operator-visible competitive evidence retained after checkpoints expire. */
+export const CompetitiveResearchSummarySchema = z.object({
+  required: z.boolean(),
+  coverageMet: z.boolean(),
+  productTarget: z.number().int().positive(),
+  productVerifiedCount: z.number().int().nonnegative(),
+  productComparedCount: z.number().int().nonnegative(),
+  productSelectedCount: z.number().int().nonnegative(),
+  repositoryVerifiedCount: z.number().int().nonnegative(),
+  generatedAt: z.string().default(""),
+  queries: z.array(z.string()).default([]),
+  sources: z
+    .array(
+      z.object({
+        name: z.string(),
+        status: z.enum(["ok", "partial", "empty", "failed", "skipped"]),
+        detail: z.string(),
+      }),
+    )
+    .default([]),
+  competitors: z
+    .array(
+      z.object({
+        candidateId: z.string(),
+        name: z.string(),
+        url: z.string(),
+        score: z.number().min(0).max(100),
+        decision: z.enum(["integrate", "adapt", "reference", "reject"]),
+        strengths: z.array(z.string()).default([]),
+        gaps: z.array(z.string()).default([]),
+        evidenceUrls: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
+  recommendations: z
+    .array(
+      z.object({
+        candidateId: z.string(),
+        name: z.string(),
+        sourceUrl: z.string(),
+        why: z.string(),
+        howToIntegrate: z.string(),
+        reuseMode: z.enum([
+          "dependency",
+          "direct-code",
+          "clean-room-pattern",
+          "api-integration",
+          "reference-only",
+        ]),
+        evidenceUrls: z.array(z.string()).default([]),
+        score: z.number().min(0).max(100),
+      }),
+    )
+    .default([]),
+});
+export type CompetitiveResearchSummary = z.infer<
+  typeof CompetitiveResearchSummarySchema
+>;
+
+/* ------------------------------------------------------------------ */
 /* Agent output schemas                                                */
 /* ------------------------------------------------------------------ */
 
@@ -226,6 +351,8 @@ export const ProductSpecSchema = z.object({
   dataModel: DataModelSchema,
   userFlows: StringListSchema.default([]),
   acceptanceCriteria: NonEmptyStringListSchema,
+  /** Present on extend runs so every downstream agent receives the constitution. */
+  purposeProfile: PurposeProfileSchema.optional(),
 });
 export type ProductSpec = z.infer<typeof ProductSpecSchema>;
 
@@ -459,6 +586,10 @@ export const FinalReportSchema = z.object({
   nextImprovements: StringListSchema.default([]),
   workspacePath: z.string(),
   providerUsage: ProviderUsageSchema,
+  /** Durable evidence bundle explaining the standing purpose of an extended app. */
+  purposeProfile: PurposeProfileSchema.optional(),
+  /** Durable evidence for comparative claims; retained after checkpoint cleanup. */
+  competitiveResearch: CompetitiveResearchSummarySchema.optional(),
   /** Rendered error ledger — one readable line per recorded error. */
   errors: StringListSchema.optional(),
 });
@@ -593,75 +724,76 @@ export const RunDestinationSchema = z.object({
 });
 export type RunDestination = z.infer<typeof RunDestinationSchema>;
 
-export const RunOptionsSchema = z.object({
-  codeProvider: ProviderNameSchema.optional(),
-  reviewProvider: ProviderNameSchema.optional(),
-  demo: z.boolean().optional(),
-  /**
-   * Publish the finished app to the owner's app store (axiombiolabs.org
-   * registry, which PromoPilot promotes from). Default true. Owner order
-   * 2026-08-15: "some things I work on are just for me" - unchecked, the app
-   * is still built, saved to GitHub, and hosted, but never listed or promoted.
-   */
-  publish: z.boolean().optional(),
-  /**
-   * Large evolution: plan the request into ordered slices and run them one at
-   * a time, each fully released before the next (client routes to /api/epics).
-   */
-  epic: z.boolean().optional(),
-  maxRepairLoops: z.number().optional(),
-  /** Client-supplied idempotency key (also accepted via Idempotency-Key header). */
-  idempotencyKey: z.string().min(1).max(200).optional(),
-  /** Optional overall run timeout in ms (overrides FACTORY_RUN_TIMEOUT_MS). */
-  timeoutMs: z.number().int().positive().max(3_600_000).optional(),
-  /**
-   * "new" (default) builds a fresh app from `idea`, exactly as before.
-   * "extend" ingests an existing codebase (from `repoSource`, or resolved
-   * automatically from free text in `idea` when `repoSource` is omitted) and
-   * implements `goals` (or, if empty, `idea` itself) against it in
-   * read-modify-write mode through the same pipeline + quality gates.
-   */
-  mode: z.enum(["new", "extend"]).optional(),
-  /** The TARGET repo — where output is written. */
-  repoSource: RepoSourceSchema.optional(),
-  /**
-   * ADDITIONAL, read-only SOURCE repos referenced alongside the target — e.g.
-   * "take the auth system from A and put it into B" (B = repoSource, A = one
-   * of these). Never written to; only read, understood, and ported from.
-   */
-  additionalRepoSources: z.array(RepoSourceSchema).max(5).optional(),
-  /** Finalized goal list (e.g. from the yes/no clarification loop). */
-  goals: z.array(z.string().min(1)).max(50).optional(),
-  /**
-   * For mode "new": the app/repo name the owner chose, and whether to create
-   * it on GitHub. Required by the UI for a from-scratch app.
-   */
-  newRepo: NewRepoSchema.optional(),
-  /**
-   * For mode "extend": publish the run's work back to the attached repo when
-   * the run completes — push the `factory-deck/<id>` branch AND land it on the
-   * repo's default branch. Default TRUE — the whole point of attaching a repo
-   * is that the work lands in it, in production, not on a branch waiting for
-   * someone to remember it (owner order 2026-08-19).
-   *
-   * HOW it lands changed on 2026-08-20 ("protect factory deck's trunk"): the
-   * host repository's own CI gates the trunk through a pull request with
-   * auto-merge armed. The commit is always authored on the run's own branch,
-   * never directly on the trunk. Never a force-push.
-   */
-  pushToOrigin: z.boolean().optional(),
-  /**
-   * ESCAPE HATCH, off by default: let this run fast-forward the trunk itself
-   * instead of going through the host repo's PR gate. Exists for a
-   * local/offline destination that will never have CI or pull requests.
-   *
-   * This is the ONLY way to bypass CI on a repo that HAS CI, and it is a
-   * deliberate, named choice recorded in the run's report
-   * (`destination.trunkAdvancePath === "direct-fast-forward"`). A repo with no
-   * CI at all already takes the fallback without this flag.
-   */
-  directTrunkAdvance: z.boolean().optional(),
-})
+export const RunOptionsSchema = z
+  .object({
+    codeProvider: ProviderNameSchema.optional(),
+    reviewProvider: ProviderNameSchema.optional(),
+    demo: z.boolean().optional(),
+    /**
+     * Publish the finished app to the owner's app store (axiombiolabs.org
+     * registry, which PromoPilot promotes from). Default true. Owner order
+     * 2026-08-15: "some things I work on are just for me" - unchecked, the app
+     * is still built, saved to GitHub, and hosted, but never listed or promoted.
+     */
+    publish: z.boolean().optional(),
+    /**
+     * Large evolution: plan the request into ordered slices and run them one at
+     * a time, each fully released before the next (client routes to /api/epics).
+     */
+    epic: z.boolean().optional(),
+    maxRepairLoops: z.number().optional(),
+    /** Client-supplied idempotency key (also accepted via Idempotency-Key header). */
+    idempotencyKey: z.string().min(1).max(200).optional(),
+    /** Optional overall run timeout in ms (overrides FACTORY_RUN_TIMEOUT_MS). */
+    timeoutMs: z.number().int().positive().max(3_600_000).optional(),
+    /**
+     * "new" (default) builds a fresh app from `idea`, exactly as before.
+     * "extend" ingests an existing codebase (from `repoSource`, or resolved
+     * automatically from free text in `idea` when `repoSource` is omitted) and
+     * implements `goals` (or, if empty, `idea` itself) against it in
+     * read-modify-write mode through the same pipeline + quality gates.
+     */
+    mode: z.enum(["new", "extend"]).optional(),
+    /** The TARGET repo — where output is written. */
+    repoSource: RepoSourceSchema.optional(),
+    /**
+     * ADDITIONAL, read-only SOURCE repos referenced alongside the target — e.g.
+     * "take the auth system from A and put it into B" (B = repoSource, A = one
+     * of these). Never written to; only read, understood, and ported from.
+     */
+    additionalRepoSources: z.array(RepoSourceSchema).max(5).optional(),
+    /** Finalized goal list (e.g. from the yes/no clarification loop). */
+    goals: z.array(z.string().min(1)).max(50).optional(),
+    /**
+     * For mode "new": the app/repo name the owner chose, and whether to create
+     * it on GitHub. Required by the UI for a from-scratch app.
+     */
+    newRepo: NewRepoSchema.optional(),
+    /**
+     * For mode "extend": publish the run's work back to the attached repo when
+     * the run completes — push the `factory-deck/<id>` branch AND land it on the
+     * repo's default branch. Default TRUE — the whole point of attaching a repo
+     * is that the work lands in it, in production, not on a branch waiting for
+     * someone to remember it (owner order 2026-08-19).
+     *
+     * HOW it lands changed on 2026-08-20 ("protect factory deck's trunk"): the
+     * host repository's own CI gates the trunk through a pull request with
+     * auto-merge armed. The commit is always authored on the run's own branch,
+     * never directly on the trunk. Never a force-push.
+     */
+    pushToOrigin: z.boolean().optional(),
+    /**
+     * ESCAPE HATCH, off by default: let this run fast-forward the trunk itself
+     * instead of going through the host repo's PR gate. Exists for a
+     * local/offline destination that will never have CI or pull requests.
+     *
+     * This is the ONLY way to bypass CI on a repo that HAS CI, and it is a
+     * deliberate, named choice recorded in the run's report
+     * (`destination.trunkAdvancePath === "direct-fast-forward"`). A repo with no
+     * CI at all already takes the fallback without this flag.
+     */
+    directTrunkAdvance: z.boolean().optional(),
+  })
   // Unknown option keys FAIL LOUD instead of being silently stripped. A
   // misplaced or misspelled field (the FutureU `destination` class) used to
   // vanish here, silently turning an extend-a-repo run into a from-scratch

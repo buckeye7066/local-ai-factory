@@ -88,6 +88,7 @@ export function sliceIdea(epic: EpicRecord, index: number): string {
   const slice = epic.slices[index]!;
   return [
     `Slice ${index + 1} of ${epic.slices.length} of a larger evolution: ${epic.summary}`,
+    `ORIGINAL EPIC GOAL (authoritative for every slice): ${epic.idea}`,
     ``,
     `THIS SLICE — ${slice.title}:`,
     slice.goals,
@@ -137,7 +138,11 @@ export async function createEpicShell(
     updatedAt: Date.now(),
   };
   await saveEpic(epic);
-  await appendAuditEvent({ type: "epic.created", runId: epic.id, detail: idea.slice(0, 200) });
+  await appendAuditEvent({
+    type: "epic.created",
+    runId: epic.id,
+    detail: idea.slice(0, 200),
+  });
   return epic;
 }
 
@@ -198,7 +203,11 @@ export async function recoverOrphanedEpics(): Promise<number> {
     const slice = epic.slices[epic.currentSlice];
     if (slice && slice.status === "running") slice.status = "pending";
     await saveEpic(epic);
-    await appendAuditEvent({ type: "epic.paused", runId: epic.id, detail: epic.statusReason });
+    await appendAuditEvent({
+      type: "epic.paused",
+      runId: epic.id,
+      detail: epic.statusReason,
+    });
     recovered++;
   }
   return recovered;
@@ -239,7 +248,11 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
       epic.status = "paused";
       epic.statusReason = `Slice ${i + 1} (${slice.title}) failed to run: ${slice.detail}`;
       await saveEpic(epic);
-      await appendAuditEvent({ type: "epic.paused", runId: epic.id, detail: epic.statusReason });
+      await appendAuditEvent({
+        type: "epic.paused",
+        runId: epic.id,
+        detail: epic.statusReason,
+      });
       return epic;
     }
 
@@ -269,7 +282,11 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
     epic.status = "paused";
     epic.statusReason = `Slice ${i + 1} (${slice.title}) ${slice.status}: ${slice.detail}`;
     await saveEpic(epic);
-    await appendAuditEvent({ type: "epic.paused", runId: epic.id, detail: epic.statusReason });
+    await appendAuditEvent({
+      type: "epic.paused",
+      runId: epic.id,
+      detail: epic.statusReason,
+    });
     return epic;
   }
 

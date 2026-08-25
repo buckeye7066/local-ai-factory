@@ -89,8 +89,7 @@ const plan: TaskPlan = {
     },
   ],
 };
-const currentApp =
-  "export default function App(){ return <ExistingRoutes />; }";
+const currentApp = "export default function App(){ return <ExistingRoutes />; }";
 
 describe("agent grounding contracts", () => {
   it("builder has one anchored-edit contract and honors the real host path", async () => {
@@ -109,18 +108,12 @@ describe("agent grounding contracts", () => {
         },
       ],
     });
-    await fileBuilderAgent(
-      { provider },
-      spec,
-      arch,
-      plan,
-      {
-        fileTreeExcerpt: "src/App.jsx",
-        manifestExcerpt: '{"dependencies":{"react":"^18"}}',
-        readmeExcerpt: "",
-        targetFiles: [{ path: "src/App.jsx", contents: currentApp }],
-      },
-    );
+    await fileBuilderAgent({ provider }, spec, arch, plan, {
+      fileTreeExcerpt: "src/App.jsx",
+      manifestExcerpt: '{"dependencies":{"react":"^18"}}',
+      readmeExcerpt: "",
+      targetFiles: [{ path: "src/App.jsx", contents: currentApp }],
+    });
     expect(provider.lastPrompt).toContain("src/App.jsx");
     expect(provider.lastPrompt).toContain(currentApp);
     expect(provider.lastPrompt).not.toContain(
@@ -133,7 +126,16 @@ describe("agent grounding contracts", () => {
   // FutureU run 9b034d37: the refusal reasons were actionable but the model
   // never saw them. A corrective pass hands them back, once, verbatim.
   it("builder corrective pass lists each refusal and asks only for those files", async () => {
-    const provider = new CaptureProvider({ files: [{ path: "src/Card.jsx", purpose: "fixed", contents: "export default 1;", edits: [] }] });
+    const provider = new CaptureProvider({
+      files: [
+        {
+          path: "src/Card.jsx",
+          purpose: "fixed",
+          contents: "export default 1;",
+          edits: [],
+        },
+      ],
+    });
     await fileBuilderAgent(
       { provider },
       spec,
@@ -149,14 +151,21 @@ describe("agent grounding contracts", () => {
       undefined,
       {
         refusals: [
-          { path: "server/routes/index.js", reason: "edits were supplied for a file that does not exist yet" },
+          {
+            path: "server/routes/index.js",
+            reason: "edits were supplied for a file that does not exist yet",
+          },
           { path: "src/Card.jsx", reason: "undeclared dependency — prop-types" },
         ],
       },
     );
     expect(provider.lastPrompt).toContain("PREVIOUS ATTEMPT");
-    expect(provider.lastPrompt).toContain("- server/routes/index.js: edits were supplied for a file that does not exist yet");
-    expect(provider.lastPrompt).toContain("- src/Card.jsx: undeclared dependency — prop-types");
+    expect(provider.lastPrompt).toContain(
+      "- server/routes/index.js: edits were supplied for a file that does not exist yet",
+    );
+    expect(provider.lastPrompt).toContain(
+      "- src/Card.jsx: undeclared dependency — prop-types",
+    );
     expect(provider.lastPrompt).toContain("must NOT be resent");
     expect(provider.lastPrompt).toContain(currentApp);
   });
@@ -227,12 +236,9 @@ describe("agent grounding contracts", () => {
         },
       ],
     });
-    await testWriterAgent(
-      { provider: tests },
-      spec,
-      build,
-      { manifestExcerpt: '{"devDependencies":{"vitest":"^3"}}' },
-    );
+    await testWriterAgent({ provider: tests }, spec, build, {
+      manifestExcerpt: '{"devDependencies":{"vitest":"^3"}}',
+    });
     expect(tests.lastPrompt).toContain(currentApp);
     expect(tests.lastPrompt).toContain("Reloading shows the saved profile");
     expect(tests.lastPrompt).toContain("vitest");
@@ -251,7 +257,7 @@ describe("bounded agent context fails closed", () => {
         {
           path: "src/huge.ts",
           purpose: "huge",
-          contents: "x".repeat(24_001),
+          contents: "x".repeat(64_001),
           edits: [],
         },
       ],
@@ -319,9 +325,7 @@ describe("repair accounting and scope are mechanical", () => {
     );
     expect(partition.refusals).toEqual([]);
     expect(partition.accepted[0]!.path).toBe("src/App.jsx");
-    expect(normalizeGeneratedPath("src/../vitest.config.ts")).toBe(
-      "vitest.config.ts",
-    );
+    expect(normalizeGeneratedPath("src/../vitest.config.ts")).toBe("vitest.config.ts");
   });
 
   it("skips exact checkpointed test bytes and clears only resolved blockers", () => {
@@ -339,9 +343,7 @@ describe("repair accounting and scope are mechanical", () => {
       { path: "src/b.test.ts", reason: "still blocked" },
     ];
     clearResolvedBlockingWriteRefusals(blockers, ["src/a.test.ts"]);
-    expect(blockers).toEqual([
-      { path: "src/b.test.ts", reason: "still blocked" },
-    ]);
+    expect(blockers).toEqual([{ path: "src/b.test.ts", reason: "still blocked" }]);
   });
 
   it("preserves generated-vs-modified origin and cumulative host locality", () => {
@@ -352,11 +354,14 @@ describe("repair accounting and scope are mechanical", () => {
       ]),
     ).toEqual(["src/New.jsx"]);
     const baseline = "a".repeat(500) + "b".repeat(500);
+    expect(withinHostChangeBudget(baseline, "x".repeat(600) + "b".repeat(400))).toBe(
+      false,
+    );
     expect(
-      withinHostChangeBudget(baseline, "x".repeat(600) + "b".repeat(400)),
-    ).toBe(false);
-    expect(
-      withinHostChangeBudget(baseline, "a".repeat(500) + "c".repeat(100) + "b".repeat(400)),
+      withinHostChangeBudget(
+        baseline,
+        "a".repeat(500) + "c".repeat(100) + "b".repeat(400),
+      ),
     ).toBe(true);
   });
 
@@ -397,9 +402,7 @@ describe("checkpoint safety contract", () => {
     expect(parsed.builderExistingPaths).toEqual([]);
     expect(parsed.hostFileBaselines).toEqual({});
     for (const schemaVersion of [1, 2]) {
-      expect(() =>
-        FactoryCheckpointSchema.parse({ ...base, schemaVersion }),
-      ).toThrow();
+      expect(() => FactoryCheckpointSchema.parse({ ...base, schemaVersion })).toThrow();
     }
   });
 });
@@ -476,10 +479,7 @@ describe("verification tree binding", () => {
       ["app.js"],
       intended,
       async () => {
-        writeFileSync(
-          join(repo, "app.js"),
-          "export const value = 'untested';\n",
-        );
+        writeFileSync(join(repo, "app.js"), "export const value = 'untested';\n");
         return 0;
       },
     );
@@ -513,7 +513,9 @@ describe("verification tree binding", () => {
       "generated.log",
       "host.js",
     ]);
-    expect(findUnexpectedWorkspaceChanges(repo, ["generated.log", "host.js"])).toEqual([]);
+    expect(findUnexpectedWorkspaceChanges(repo, ["generated.log", "host.js"])).toEqual(
+      [],
+    );
   });
 });
 
@@ -644,7 +646,6 @@ describe("delivery fails closed without complete verification", () => {
     expect(result.detail).toMatch(/receipt|changed/i);
   });
 
-
   it("rejects a commit blob that differs even when the working tree is restored", async () => {
     const repo = mkdtempSync(join(tmpdir(), "factory-commit-blob-"));
     roots.push(repo);
@@ -661,12 +662,7 @@ describe("delivery fails closed without complete verification", () => {
       encoding: "utf8",
     }).trim();
     writeFileSync(join(repo, "app.js"), "export const value = 1;\n");
-    const verdict = verifyCommitFileDigests(
-      repo,
-      sha,
-      ["app.js"],
-      receipt,
-    );
+    const verdict = verifyCommitFileDigests(repo, sha, ["app.js"], receipt);
     expect(verdict.ok).toBe(false);
     expect(verdict.reason).toMatch(/committed blob|verified bytes/i);
   });
@@ -750,5 +746,4 @@ describe("delivery fails closed without complete verification", () => {
     expect(resumed.commitSha).toBe(first.commitSha);
     expect(resumed.detail).toMatch(/reusing receipt-bound commit/i);
   });
-
 });

@@ -5,6 +5,7 @@ import {
   FileBuildSchema,
   FileContentSchema,
   FinalReportSchema,
+  PurposeProfileSchema,
   ProductSpecSchema,
   QaReportSchema,
   RepairResultSchema,
@@ -24,6 +25,8 @@ export const FactoryCheckpointSchema = z.object({
   runId: RunIdSchema,
   idea: z.string(),
   options: RunOptionsSchema,
+  /** Repository-grounded standing purpose; extend runs carry it through planning. */
+  purposeProfile: PurposeProfileSchema.optional(),
   spec: ProductSpecSchema.optional(),
   architecture: ArchitectureSchema.optional(),
   /** Keyless web research (extend-era feature) — persisted so a resume never replays it. */

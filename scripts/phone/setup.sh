@@ -28,6 +28,7 @@ set -euo pipefail
 REPO_URL="${FACTORY_REPO_URL:-https://github.com/buckeye7066/local-ai-factory.git}"
 ROOT="${PHONE_CONSOLE_ROOT:-$HOME/phone-console}"
 APP_DIR="$ROOT/local-ai-factory"
+PNPM_VERSION="10.17.0"
 
 say()  { printf '\n\033[36m==> %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -55,9 +56,9 @@ say "node $(node -v), git $(git --version | awk '{print $3}')"
 # which names pnpm and not the interpreter, so it reads like a broken install.
 # Measured on an S25 Ultra with Termux node v24.18.0. termux-fix-shebang is the
 # supported repair; the sed is the fallback for a Termux without termux-tools.
-if ! pnpm --version >/dev/null 2>&1; then
-  say "installing pnpm"
-  npm install -g pnpm
+if ! pnpm --version >/dev/null 2>&1 || [ "$(pnpm --version)" != "$PNPM_VERSION" ]; then
+  say "installing pinned pnpm $PNPM_VERSION"
+  npm install -g "pnpm@$PNPM_VERSION"
   target="$(readlink -f "$PREFIX/bin/pnpm" 2>/dev/null || true)"
   if [ -n "$target" ] && head -1 "$target" | grep -q '/usr/bin/env'; then
     say "repairing the pnpm shebang for Android"
@@ -71,7 +72,9 @@ if ! pnpm --version >/dev/null 2>&1; then
   pnpm --version >/dev/null 2>&1 || die "pnpm still will not run after repairing its shebang:
   $( "$PREFIX/bin/pnpm" --version 2>&1 | head -3 )"
 fi
-say "pnpm $(pnpm --version)"
+[ "$(pnpm --version)" = "$PNPM_VERSION" ] || \
+  die "expected pnpm $PNPM_VERSION, got $(pnpm --version)"
+say "pnpm $(pnpm --version) (repository-pinned)"
 
 # --- 2. GitHub auth -------------------------------------------------------
 # Both repos are PRIVATE, so an unauthenticated clone fails with a confusing
@@ -108,14 +111,9 @@ cd "$APP_DIR"
 # The dev deps that DO carry native binaries (esbuild, rollup) publish
 # android-arm64 builds, which is why the UI can be bundled on the phone.
 say "installing dependencies (this is the slow step; several minutes)"
-# strictDepBuilds is pnpm 11's new default, and it turns "I declined to run
-# esbuild's postinstall" into a FAILED install (ERR_PNPM_IGNORED_BUILDS, exit 1)
-# even though every package landed. Measured on an S25 Ultra with pnpm 11.21.0:
-# it aborted setup with a full node_modules on disk, including the
-# @esbuild/android-arm64 and @rollup/rollup-android-arm64 binaries the build
-# actually needs. Those come from the platform packages, not the postinstall,
-# so nothing is missing -- only pnpm's opinion of it. Relaxed here, and the
-# claim is checked below by requiring a real dist/ui/index.html.
+# Keep dependency-build strictness explicit across Termux releases. The
+# repository's exact pnpm version is enforced above, and success is checked
+# below by requiring a real dist/ui/index.html.
 pnpm install --prod=false --config.strictDepBuilds=false
 
 # --- 5. UI bundle ---------------------------------------------------------

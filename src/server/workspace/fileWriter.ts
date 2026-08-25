@@ -1,5 +1,6 @@
-import { mkdir, open, stat } from "node:fs/promises";
+import { mkdir, open, rename, stat, unlink } from "node:fs/promises";
 import { constants, lstatSync, realpathSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname, resolve, relative, isAbsolute, sep, extname } from "node:path";
 
 /**
@@ -66,19 +67,13 @@ export function safeResolveExistingPath(
     cursor = resolve(cursor, part);
     const info = lstatSync(cursor);
     if (info.isSymbolicLink()) {
-      throw new WorkspacePathError(
-        `Symlink traversal is not allowed: ${relativePath}`,
-      );
+      throw new WorkspacePathError(`Symlink traversal is not allowed: ${relativePath}`);
     }
   }
   const rootReal = realpathSync(lexicalRoot);
   const targetReal = realpathSync(target);
   const physical = relative(rootReal, targetReal);
-  if (
-    physical === "" ||
-    physical.startsWith("..") ||
-    isAbsolute(physical)
-  ) {
+  if (physical === "" || physical.startsWith("..") || isAbsolute(physical)) {
     throw new WorkspacePathError(
       `Path resolves outside the workspace boundary: ${relativePath}`,
     );
@@ -87,10 +82,7 @@ export function safeResolveExistingPath(
 }
 
 /** Resolve a writable path, rejecting symlinks among all components that exist. */
-function safeResolveWritablePath(
-  workspaceRoot: string,
-  relativePath: string,
-): string {
+function safeResolveWritablePath(workspaceRoot: string, relativePath: string): string {
   const target = safeResolve(workspaceRoot, relativePath);
   const lexicalRoot = resolve(workspaceRoot);
   const rootStat = lstatSync(lexicalRoot);
@@ -127,6 +119,51 @@ export interface WriteResult {
   existed: boolean;
 }
 
+interface FileIdentity {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}
+
+function identityOf(info: {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}): FileIdentity {
+  return {
+    dev: info.dev,
+    ino: info.ino,
+    size: info.size,
+    mtimeMs: info.mtimeMs,
+    ctimeMs: info.ctimeMs,
+  };
+}
+
+function sameIdentity(a: FileIdentity, b: FileIdentity): boolean {
+  return (
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.size === b.size &&
+    a.mtimeMs === b.mtimeMs &&
+    a.ctimeMs === b.ctimeMs
+  );
+}
+
+async function syncDirectoryBestEffort(path: string): Promise<void> {
+  if (process.platform === "win32") return;
+  const handle = await open(path, constants.O_RDONLY).catch(() => null);
+  if (!handle) return;
+  try {
+    await handle.sync().catch(() => {});
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
 /** Write a single file inside the workspace, creating parent dirs as needed. */
 export async function writeWorkspaceFile(
   workspaceRoot: string,
@@ -135,6 +172,8 @@ export async function writeWorkspaceFile(
 ): Promise<WriteResult> {
   let abs = safeResolveWritablePath(workspaceRoot, relativePath);
   let existed = false;
+  let originalIdentity: FileIdentity | null = null;
+  let originalMode = 0o666;
   try {
     const info = await stat(abs);
     if (!info.isFile()) {
@@ -142,7 +181,14 @@ export async function writeWorkspaceFile(
         `Write target is not a regular file: ${relativePath}`,
       );
     }
+    if (info.nlink > 1) {
+      throw new WorkspacePathError(
+        `Hard-linked write targets are not allowed: ${relativePath}`,
+      );
+    }
     existed = true;
+    originalIdentity = identityOf(info);
+    originalMode = info.mode & 0o777;
   } catch (error) {
     const code =
       error && typeof error === "object" && "code" in error
@@ -154,26 +200,70 @@ export async function writeWorkspaceFile(
   // Re-check after mkdir to close the ordinary create-parent symlink window.
   abs = safeResolveWritablePath(workspaceRoot, relativePath);
   const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  const root = resolve(workspaceRoot);
+  // Keep this independent of the target basename. A valid near-NAME_MAX file
+  // must not become unwritable merely because the atomic sibling adds a long
+  // suffix to that basename.
+  const tempName = `.factory-${process.pid}-${randomUUID()}.tmp`;
+  const tempAbs = resolve(dirname(abs), tempName);
+  // The temporary file is derived from a contained target, but run it through
+  // the same boundary check so future path changes cannot weaken that fact.
+  safeResolveWritablePath(root, relative(root, tempAbs));
   const handle = await open(
-    abs,
-    constants.O_WRONLY | constants.O_CREAT | noFollow,
-    0o666,
+    tempAbs,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow,
+    originalMode,
   );
+  let committed = false;
   try {
-    const opened = await handle.stat();
-    if (opened.nlink > 1) {
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.nlink !== 1) {
+        throw new WorkspacePathError(
+          `Atomic write temporary is not a private regular file: ${relativePath}`,
+        );
+      }
+      await handle.writeFile(contents, "utf8");
+      if (existed) await handle.chmod(originalMode);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+
+    // Refuse a concurrent target replacement instead of overwriting an editor
+    // or another factory process that changed the path while the temp was built.
+    abs = safeResolveWritablePath(workspaceRoot, relativePath);
+    const current = await stat(abs).catch((error: unknown) => {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code ?? "")
+          : "";
+      if (code === "ENOENT") return null;
+      throw error;
+    });
+    if (originalIdentity) {
+      if (
+        !current ||
+        !current.isFile() ||
+        current.nlink > 1 ||
+        !sameIdentity(originalIdentity, identityOf(current))
+      ) {
+        throw new WorkspacePathError(
+          `Write target changed while preparing atomic replacement: ${relativePath}`,
+        );
+      }
+    } else if (current) {
       throw new WorkspacePathError(
-        `Hard-linked write targets are not allowed: ${relativePath}`,
+        `Write target appeared while preparing atomic creation: ${relativePath}`,
       );
     }
-    await handle.truncate(0);
-    await handle.writeFile(contents, "utf8");
+    await rename(tempAbs, abs);
+    committed = true;
+    await syncDirectoryBestEffort(dirname(abs));
   } finally {
-    await handle.close();
+    if (!committed) await unlink(tempAbs).catch(() => {});
   }
-  const canonicalPath = relative(resolve(workspaceRoot), abs)
-    .split(sep)
-    .join("/");
+  const canonicalPath = relative(resolve(workspaceRoot), abs).split(sep).join("/");
   return {
     path: canonicalPath,
     size: Buffer.byteLength(contents, "utf8"),

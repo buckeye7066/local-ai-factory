@@ -1,16 +1,12 @@
 /**
- * webSearch.ts — genuine, keyless web search.
+ * webSearch.ts — bounded, provider-aware web search.
  *
- * "If there is a tool out there that it can use, it can find it and use it to
- * properly build the thing." That needs a real search step, not just fetching
- * a URL the owner already dropped in — and it needs to work TODAY without the
- * owner provisioning a new paid search API key.
- *
- * Technique mirrors a proven, already-working keyless pattern on this machine
- * (Ellie's `orchestrator/src/services/internet.js`): DuckDuckGo Lite's plain
- * HTML endpoint, fetched with a normal browser User-Agent (DDG Lite blocks
- * headless-browser-shaped requests but serves a plain `fetch` fine), parsed
- * with regex rather than a DOM library. No API key, no account, no cost.
+ * Firecrawl v2 is attempted first. FIRECRAWL_API_KEY is optional: when it is
+ * absent the same endpoint is called keylessly, because Firecrawl may permit
+ * anonymous access for the deployment/account in use. DuckDuckGo Lite is the
+ * fallback. Neither provider is ever represented by a fabricated "manual
+ * search" result; callers receive an honest empty/failed status and the
+ * attempt-level source health needed for an audit trail.
  */
 
 export interface SearchResult {
@@ -19,11 +15,100 @@ export interface SearchResult {
   snippet: string;
 }
 
+export type WebSearchProvider = "firecrawl" | "duckduckgo";
+export type SearchAttemptStatus = "ok" | "empty" | "failed" | "skipped";
+
+export interface SearchAttempt {
+  provider: WebSearchProvider;
+  status: SearchAttemptStatus;
+  resultCount: number;
+  detail: string;
+}
+
+export interface WebSearchResponse {
+  results: SearchResult[];
+  provider: WebSearchProvider | null;
+  status: "ok" | "empty" | "failed";
+  attempts: SearchAttempt[];
+}
+
+export interface WebSearchOptions {
+  fetchImpl?: typeof fetch;
+  env?: NodeJS.ProcessEnv;
+  firecrawlUrl?: string;
+  timeoutMs?: number;
+}
+
+const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 const SEARCH_TIMEOUT_MS = 12_000;
 const MAX_RESULTS = 8;
+const MAX_FIRECRAWL_RESPONSE_BYTES = 2_000_000;
+const MAX_DDG_RESPONSE_BYTES = 1_000_000;
+
+async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
+  // Some injected test/self-hosted fetch implementations expose text() but no
+  // Web stream. Real undici responses take the streaming path below.
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
+      throw new Error(`response exceeded ${maxBytes} bytes`);
+    }
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (total + next.value.byteLength > maxBytes) {
+        await reader.cancel("search response exceeded byte limit").catch(() => {});
+        throw new Error(`response exceeded ${maxBytes} bytes`);
+      }
+      chunks.push(next.value);
+      total += next.value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
 
 function stripTags(html: string): string {
   return html.replace(/<[^>]+>/g, "").trim();
+}
+
+function isHttpUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function uniqueResults(results: SearchResult[]): SearchResult[] {
+  const seen = new Set<string>();
+  const out: SearchResult[] = [];
+  for (const result of results) {
+    const url = result.url.trim();
+    if (!isHttpUrl(url) || seen.has(url)) continue;
+    seen.add(url);
+    out.push({
+      title: result.title.trim() || url,
+      url,
+      snippet: result.snippet.trim(),
+    });
+    if (out.length >= MAX_RESULTS) break;
+  }
+  return out;
 }
 
 /** Parse DuckDuckGo Lite's HTML result table into structured results. */
@@ -52,21 +137,165 @@ export function parseDdgLiteHtml(html: string): SearchResult[] {
   for (let i = 0; i < count; i++) {
     results.push({ title: titles[i], url: urls[i], snippet: snippets[i] ?? "" });
   }
-  return results;
+  return uniqueResults(results);
+}
+
+interface FirecrawlSearchItem {
+  title?: unknown;
+  url?: unknown;
+  description?: unknown;
+  snippet?: unknown;
+  markdown?: unknown;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 /**
- * Real, live web search. Degrades to a single pseudo-result pointing at a
- * manual DDG search link on any failure (network error, non-2xx, zero
- * parsed results) rather than throwing — a research step should never abort
- * the whole run just because search had a bad moment.
+ * Parse the Firecrawl v2 search response. The API's current shape is
+ * data.web[], while data[] is accepted for compatibility with self-hosted or
+ * transitional v2 deployments.
  */
-export async function webSearchTool(query: string): Promise<SearchResult[]> {
+export function parseFirecrawlSearchResponse(body: unknown): SearchResult[] {
+  const root = asRecord(body);
+  if (!root || root.success === false) return [];
+  const data = root.data;
+  let items: unknown[] = [];
+  if (Array.isArray(data)) {
+    items = data;
+  } else {
+    const dataRecord = asRecord(data);
+    if (Array.isArray(dataRecord?.web)) items = dataRecord.web;
+  }
+  if (!items.length && Array.isArray(root.web)) items = root.web;
+
+  return uniqueResults(
+    items.flatMap((item) => {
+      const record = asRecord(item) as FirecrawlSearchItem | null;
+      if (!record || typeof record.url !== "string") return [];
+      const description =
+        typeof record.description === "string"
+          ? record.description
+          : typeof record.snippet === "string"
+            ? record.snippet
+            : typeof record.markdown === "string"
+              ? record.markdown.slice(0, 500)
+              : "";
+      return [
+        {
+          title: typeof record.title === "string" ? record.title : record.url,
+          url: record.url,
+          snippet: description,
+        },
+      ];
+    }),
+  );
+}
+
+async function searchFirecrawl(
+  query: string,
+  opts: Required<
+    Pick<WebSearchOptions, "fetchImpl" | "env" | "firecrawlUrl" | "timeoutMs">
+  >,
+): Promise<{ results: SearchResult[]; attempt: SearchAttempt }> {
+  const apiKey = opts.env.FIRECRAWL_API_KEY?.trim() || "";
+  const authMode = apiKey ? "authenticated" : "keyless";
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+  try {
+    const response = await opts.fetchImpl(opts.firecrawlUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        query,
+        limit: MAX_RESULTS,
+        sources: ["web"],
+        safe: true,
+        timeout: opts.timeoutMs,
+        // Firecrawl v2 expects formats under scrapeOptions. Markdown gives
+        // downstream research an evidence-bearing excerpt while the parser
+        // still accepts the lighter title/description-only response.
+        scrapeOptions: {
+          formats: [{ type: "markdown" }],
+          onlyMainContent: true,
+        },
+      }),
+      signal: AbortSignal.timeout(opts.timeoutMs),
+    });
+    if (!response.ok) {
+      return {
+        results: [],
+        attempt: {
+          provider: "firecrawl",
+          status: "failed",
+          resultCount: 0,
+          detail: `${authMode} Firecrawl v2 returned HTTP ${response.status}`,
+        },
+      };
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(await readBoundedText(response, MAX_FIRECRAWL_RESPONSE_BYTES));
+    } catch {
+      return {
+        results: [],
+        attempt: {
+          provider: "firecrawl",
+          status: "failed",
+          resultCount: 0,
+          detail: `${authMode} Firecrawl v2 returned invalid or oversized JSON`,
+        },
+      };
+    }
+    const root = asRecord(body);
+    if (root?.success === false) {
+      return {
+        results: [],
+        attempt: {
+          provider: "firecrawl",
+          status: "failed",
+          resultCount: 0,
+          detail: `${authMode} Firecrawl v2 reported failure`,
+        },
+      };
+    }
+    const results = parseFirecrawlSearchResponse(body);
+    return {
+      results,
+      attempt: {
+        provider: "firecrawl",
+        status: results.length ? "ok" : "empty",
+        resultCount: results.length,
+        detail: `${authMode} Firecrawl v2 returned ${results.length} result(s)`,
+      },
+    };
+  } catch (err) {
+    return {
+      results: [],
+      attempt: {
+        provider: "firecrawl",
+        status: "failed",
+        resultCount: 0,
+        detail: `${authMode} Firecrawl v2 failed (${err instanceof Error ? err.message : String(err)})`,
+      },
+    };
+  }
+}
+
+async function searchDuckDuckGo(
+  query: string,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+): Promise<{ results: SearchResult[]; attempt: SearchAttempt }> {
   const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
   try {
-    const res = await fetch(url, {
+    const response = await fetchImpl(url, {
       method: "GET",
-      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -74,18 +303,96 @@ export async function webSearchTool(query: string): Promise<SearchResult[]> {
         "Accept-Language": "en-US,en;q=0.9",
       },
     });
-    if (!res.ok) throw new Error(`DDG returned ${res.status}`);
-    const html = await res.text();
-    const results = parseDdgLiteHtml(html);
-    if (results.length === 0) throw new Error("no results parsed");
-    return results;
-  } catch (err) {
-    return [
-      {
-        title: query,
-        url: `https://duckduckgo.com/?q=${encodeURIComponent(query)}`,
-        snippet: `Web search failed (${err instanceof Error ? err.message : String(err)}) — manual search link provided instead.`,
+    if (!response.ok) {
+      return {
+        results: [],
+        attempt: {
+          provider: "duckduckgo",
+          status: "failed",
+          resultCount: 0,
+          detail: `DuckDuckGo Lite returned HTTP ${response.status}`,
+        },
+      };
+    }
+    const results = parseDdgLiteHtml(
+      await readBoundedText(response, MAX_DDG_RESPONSE_BYTES),
+    );
+    return {
+      results,
+      attempt: {
+        provider: "duckduckgo",
+        status: results.length ? "ok" : "empty",
+        resultCount: results.length,
+        detail: `DuckDuckGo Lite returned ${results.length} result(s)`,
       },
-    ];
+    };
+  } catch (err) {
+    return {
+      results: [],
+      attempt: {
+        provider: "duckduckgo",
+        status: "failed",
+        resultCount: 0,
+        detail: `DuckDuckGo Lite failed (${err instanceof Error ? err.message : String(err)})`,
+      },
+    };
   }
+}
+
+/** Firecrawl-first search with an honest DuckDuckGo fallback. */
+export async function webSearch(
+  query: string,
+  options: WebSearchOptions = {},
+): Promise<WebSearchResponse> {
+  const opts = {
+    fetchImpl: options.fetchImpl ?? fetch,
+    env: options.env ?? process.env,
+    firecrawlUrl: options.firecrawlUrl ?? FIRECRAWL_SEARCH_URL,
+    timeoutMs: options.timeoutMs ?? SEARCH_TIMEOUT_MS,
+  };
+  const firecrawl = await searchFirecrawl(query, opts);
+  if (firecrawl.results.length) {
+    return {
+      results: firecrawl.results,
+      provider: "firecrawl",
+      status: "ok",
+      attempts: [
+        firecrawl.attempt,
+        {
+          provider: "duckduckgo",
+          status: "skipped",
+          resultCount: 0,
+          detail: "Firecrawl returned results; fallback was not needed",
+        },
+      ],
+    };
+  }
+
+  const duckduckgo = await searchDuckDuckGo(query, opts.fetchImpl, opts.timeoutMs);
+  if (duckduckgo.results.length) {
+    return {
+      results: duckduckgo.results,
+      provider: "duckduckgo",
+      status: "ok",
+      attempts: [firecrawl.attempt, duckduckgo.attempt],
+    };
+  }
+
+  const attempts = [firecrawl.attempt, duckduckgo.attempt];
+  return {
+    results: [],
+    provider: null,
+    status: attempts.every((attempt) => attempt.status === "failed")
+      ? "failed"
+      : "empty",
+    attempts,
+  };
+}
+
+/**
+ * Compatibility wrapper for callers that only need results. It deliberately
+ * returns [] on empty/failure; source health is available through webSearch.
+ */
+export async function webSearchTool(query: string): Promise<SearchResult[]> {
+  return (await webSearch(query)).results;
 }

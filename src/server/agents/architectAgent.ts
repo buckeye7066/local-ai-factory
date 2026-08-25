@@ -2,6 +2,7 @@ import {
   ArchitectureSchema,
   type Architecture,
   type ProductSpec,
+  type PurposeProfile,
 } from "../../shared/schemas.js";
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 
@@ -9,14 +10,22 @@ import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 export async function architectAgent(
   deps: AgentDeps,
   spec: ProductSpec,
+  purposeProfile?: PurposeProfile,
 ): Promise<Architecture> {
+  const purposeContext = purposeProfile
+    ? `\n\nEXISTING APP PURPOSE CONSTITUTION (citation-linked repository snapshot; interpretation is model-inferred):\n${JSON.stringify(
+        purposeProfile,
+        null,
+        2,
+      )}\n\nPreserve the detected application's established architecture, cited invariants, and core workflows. Recommend migration only when the requested change requires it; do not replace the current stack merely because another stack is the default.`
+    : "";
   return deps.provider.generateJson<Architecture>({
     system: `${SYSTEM_PREAMBLE}\nYou are the ARCHITECT agent.`,
     prompt: `Design the architecture for this product spec:\n\n${JSON.stringify(
       spec,
       null,
       2,
-    )}\n\nKeep it as simple as possible. Prefer a local-first single-page app with no backend unless the features truly require one. Return overview, frontend, backend, dataModel, and risks.`,
+    )}${purposeContext}\n\nKeep it as simple as possible. For a new app, prefer a local-first single-page app with no backend unless the features truly require one. Return overview, frontend, backend, dataModel, and risks.`,
     schema: ArchitectureSchema,
     schemaName: "Architecture",
     intent: { role: "judge", needs: ["structured_json"] },

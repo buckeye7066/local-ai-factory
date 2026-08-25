@@ -5,9 +5,43 @@ import {
   startRun,
   MissingProviderCredentialError,
 } from "../../src/server/orchestrator/runFactory.js";
-import { getRun } from "../../src/server/storage/runsStore.js";
+import { getRun, getRunCheckpoint } from "../../src/server/storage/runsStore.js";
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+async function isExpectedSafetyHold(runId: string): Promise<boolean> {
+  if (process.env.FACTORY_ACCEPT_SAFETY_HOLD !== "true") return false;
+  const checkpoint = await getRunCheckpoint(runId);
+  const verification = checkpoint?.verification;
+  const incomplete = verification?.incomplete ?? [];
+  if (
+    !checkpoint ||
+    !verification ||
+    checkpoint.blockingWriteRefusals.length > 0 ||
+    checkpoint.testsExecuted ||
+    checkpoint.testExit !== null ||
+    !incomplete.some((item) => /ALLOW_UNTRUSTED_SCRIPTS=0/i.test(item.reason)) ||
+    verification.executed.some((item) => item.exitCode !== 0)
+  ) {
+    return false;
+  }
+
+  // Direct acceptance evidence is necessarily absent when every generated
+  // test command is held. Any other missing prerequisite remains a real error.
+  const safetyConsequencesOnly = incomplete.every(
+    (item) =>
+      /ALLOW_UNTRUSTED_SCRIPTS=0/i.test(item.reason) ||
+      /mapped test (?:file did not produce valid direct runner evidence|".*" was not reported passed)/i.test(
+        item.reason,
+      ),
+  );
+  const nonSyntheticBlockers = (checkpoint.qa?.issues ?? []).filter(
+    (issue) =>
+      (issue.severity === "critical" || issue.severity === "high") &&
+      !issue.title.startsWith("Required verification did not execute:"),
+  );
+  return safetyConsequencesOnly && nonSyntheticBlockers.length === 0;
+}
 
 async function main() {
   const promptPath = resolve("jobs", "iplay", "prompt.md");
@@ -75,6 +109,17 @@ async function main() {
   console.log(
     `[iplay-job] provider calls: anthropic=${finalRun.providerUsage.anthropic.calls}, openai=${finalRun.providerUsage.openai.calls}, free=${finalRun.providerUsage.free.calls}`,
   );
+  if (
+    finalRun.status === "failed" &&
+    config.allowUntrustedScripts === false &&
+    /^Verification gate failed:.*receipt=valid\./i.test(finalRun.error ?? "") &&
+    (await isExpectedSafetyHold(finalRun.id))
+  ) {
+    console.log(
+      "[iplay-job] expected safety hold: planning artifacts were preserved, but no generated scripts were executed and no production-ready claim was made.",
+    );
+    return;
+  }
   if (finalRun.status !== "completed") {
     throw new Error(finalRun.error ?? `Factory Deck ended with ${finalRun.status}`);
   }

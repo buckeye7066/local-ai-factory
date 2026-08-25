@@ -56,6 +56,23 @@ export class StubProvider implements LLMProvider {
   private dataFor(schemaName: string, prompt: string): unknown {
     const app = this.appName(prompt);
     switch (schemaName) {
+      case "PurposeProfileDraft":
+        return {
+          purpose: {
+            text: "Preserve and extend the application's existing documented behavior.",
+            evidenceIds: ["PE-001"],
+          },
+          intendedUsers: [],
+          coreWorkflows: [],
+          invariants: [],
+          currentCapabilities: [],
+          currentGaps: [],
+          integrations: [],
+          dataOwnership: [],
+          uncertainties: [
+            "Offline mock mode does not infer workflows or invariants from repository evidence.",
+          ],
+        };
       case "ProductSpec":
         return {
           appName: app,

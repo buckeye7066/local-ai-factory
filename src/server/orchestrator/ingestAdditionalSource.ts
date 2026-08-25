@@ -30,6 +30,9 @@ export async function ingestAdditionalSource(
   source: RepoSource,
   runId: string,
   index: number,
+  dependencies: {
+    fetchUrl?: typeof webFetchTool;
+  } = {},
 ): Promise<AdditionalSourceContext> {
   const isCloneableRepo =
     source.type === "path"
@@ -61,7 +64,7 @@ export async function ingestAdditionalSource(
   }
 
   // Plain URL reference: fetch it directly, no clone attempted.
-  const fetched = await webFetchTool(source.location);
+  const fetched = await (dependencies.fetchUrl ?? webFetchTool)(source.location);
   return {
     label: source.location,
     fileTreeExcerpt: "",

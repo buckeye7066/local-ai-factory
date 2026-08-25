@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  assessCompetitiveCoverage,
   assessLicense,
   buildDiscoveryQueries,
   isCompetitorQuery,
+  isMeaningfulProductEvidence,
+  isRepositoryCandidateUrl,
   detectLicenseFromText,
+  MAX_PRODUCT_INSPECTION_ATTEMPTS,
+  MIN_PRODUCT_COMPETITORS,
   parseGitHubRepoUrl,
+  productCandidateKey,
   rankRelevantPaths,
   type CompetitiveCandidate,
 } from "../tools/competitiveIntelligence.js";
@@ -54,9 +60,9 @@ describe("competitive intelligence licensing", () => {
         'MIT License Permission is hereby granted, free of charge. THE SOFTWARE IS PROVIDED "AS IS".',
       ),
     ).toBe("MIT");
-    expect(
-      detectLicenseFromText("GNU AFFERO GENERAL PUBLIC LICENSE Version 3"),
-    ).toBe("AGPL-3.0");
+    expect(detectLicenseFromText("GNU AFFERO GENERAL PUBLIC LICENSE Version 3")).toBe(
+      "AGPL-3.0",
+    );
     expect(detectLicenseFromText("Copyright only. All rights reserved.")).toBeNull();
   });
 
@@ -70,9 +76,12 @@ describe("competitive intelligence licensing", () => {
     expect(enforceReuseMode("dependency", candidate("conditional-review"))).toBe(
       "clean-room-pattern",
     );
-    expect(enforceReuseMode("direct-code", candidate("reference-only", "web"))).toBe(
-      "api-integration",
-    );
+    expect(
+      enforceReuseMode("direct-code", candidate("reference-only", "product")),
+    ).toBe("clean-room-pattern");
+    expect(
+      enforceReuseMode("api-integration", candidate("reference-only", "product")),
+    ).toBe("clean-room-pattern");
   });
 });
 
@@ -82,6 +91,10 @@ describe("competitive discovery", () => {
       parseGitHubRepoUrl("https://github.com/Owner/Repo/tree/main/src")?.canonicalUrl,
     ).toBe("https://github.com/Owner/Repo");
     expect(parseGitHubRepoUrl("https://example.com/Owner/Repo")).toBeNull();
+    expect(isRepositoryCandidateUrl("https://bitbucket.org/Owner/Repo")).toBe(true);
+    expect(isRepositoryCandidateUrl("https://codeberg.org/Owner/Repo")).toBe(true);
+    expect(isRepositoryCandidateUrl("https://gitlab.com/Owner/Repo")).toBe(true);
+    expect(isRepositoryCandidateUrl("https://product.example/features")).toBe(false);
   });
 
   it("ranks relevant source files above generated and unrelated files", () => {
@@ -119,13 +132,198 @@ describe("competitive discovery", () => {
     expect(queries.some((query) => query.includes("open source"))).toBe(true);
     expect(queries.some((query) => !query.includes("open source"))).toBe(true);
   });
+
+  it("deduplicates product subdomains and rejects aggregators as competitors", () => {
+    const docs = productCandidateKey({
+      title: "Acme docs",
+      url: "https://docs.acme.example/features",
+      snippet: "",
+    });
+    const product = productCandidateKey({
+      title: "Acme",
+      url: "https://www.acme.example/product",
+      snippet: "",
+    });
+    expect(docs).toBe("acme.example");
+    expect(product).toBe(docs);
+    for (const subdomain of ["community", "learn", "us", "www2"]) {
+      expect(
+        productCandidateKey({
+          title: "Acme",
+          url: `https://${subdomain}.acme.example/features`,
+          snippet: "",
+        }),
+      ).toBe(docs);
+    }
+    expect(
+      productCandidateKey({
+        title: "Acme UK",
+        url: "https://learn.acme.co.uk/features",
+        snippet: "",
+      }),
+    ).toBe("acme.co.uk");
+    expect(
+      productCandidateKey({
+        title: "Top Acme alternatives",
+        url: "https://www.g2.com/compare/acme",
+        snippet: "",
+      }),
+    ).toBeNull();
+    expect(
+      productCandidateKey({
+        title: "Best CRM software in 2026",
+        url: "https://www.techradar.com/best/best-crm-software",
+        snippet: "ranked products",
+      }),
+    ).toBeNull();
+    expect(
+      productCandidateKey({
+        title: "Top 10 CRM tools",
+        url: "https://vendor-neutral.example/top-10-crm",
+        snippet: "ranked products",
+      }),
+    ).toBeNull();
+    expect(
+      productCandidateKey({
+        title: "Codeberg project",
+        url: "https://codeberg.org/owner/project",
+        snippet: "source",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not verify an empty or non-text 200 response as product evidence", () => {
+    const base = {
+      ok: true,
+      status: 200,
+      finalUrl: "https://product.example/",
+      error: undefined,
+      truncated: false,
+    };
+    expect(
+      isMeaningfulProductEvidence({
+        ...base,
+        contentType: "text/html",
+        textExcerpt: "",
+      }),
+    ).toBe(false);
+    expect(
+      isMeaningfulProductEvidence({
+        ...base,
+        contentType: "application/octet-stream",
+        textExcerpt: "x".repeat(500),
+      }),
+    ).toBe(false);
+    expect(
+      isMeaningfulProductEvidence({
+        ...base,
+        contentType: "text/html; charset=utf-8",
+        textExcerpt: "A real product page with features and workflows. ".repeat(8),
+      }),
+    ).toBe(true);
+  });
+
+  it("requires redirect continuity and product-relevant evidence for the strict gate", () => {
+    const context = { candidateKey: "acme.example", title: "Acme workspace" };
+    const page = {
+      ok: true,
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      finalUrl: "https://www.acme.example/features",
+      textExcerpt:
+        "Acme helps teams plan projects, coordinate work, and measure delivery. ".repeat(
+          4,
+        ),
+      truncated: false,
+    };
+    expect(isMeaningfulProductEvidence(page, context)).toBe(true);
+    expect(
+      isMeaningfulProductEvidence(
+        { ...page, finalUrl: "https://login-provider.example/session" },
+        context,
+      ),
+    ).toBe(false);
+    expect(
+      isMeaningfulProductEvidence(
+        {
+          ...page,
+          finalUrl: "https://acme.example/login",
+          textExcerpt: "Acme sign in to continue. ".repeat(12),
+        },
+        context,
+      ),
+    ).toBe(false);
+    expect(
+      isMeaningfulProductEvidence(
+        {
+          ...page,
+          textExcerpt:
+            "An unrelated news article about weather, sports, and city events. ".repeat(
+              4,
+            ),
+        },
+        context,
+      ),
+    ).toBe(false);
+    expect(
+      isMeaningfulProductEvidence(
+        {
+          ...page,
+          textExcerpt: "Buy this domain. This domain is for sale. ".repeat(6),
+        },
+        context,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the five-product floor separate from repository coverage", () => {
+    const verified = (
+      kind: CompetitiveCandidate["kind"],
+      index: number,
+    ): CompetitiveCandidate => ({
+      ...candidate("direct-use", kind),
+      id: `${kind}-${index}`,
+      sourceEvidence: [
+        {
+          path: kind === "product" ? "product-page" : "README.md",
+          url: `https://evidence.example/${kind}/${index}`,
+          excerpt: "verified",
+        },
+      ],
+    });
+    const repositories = Array.from({ length: 8 }, (_, index) =>
+      verified("repository", index),
+    );
+    const repoOnly = assessCompetitiveCoverage(repositories, 0, 8);
+    expect(repoOnly).toMatchObject({
+      productVerifiedCount: 0,
+      productCoverageMet: false,
+      repositoryVerifiedCount: 8,
+    });
+
+    const products = Array.from({ length: 5 }, (_, index) =>
+      verified("product", index),
+    );
+    const complete = assessCompetitiveCoverage([...products, ...repositories], 7, 8);
+    expect(complete).toMatchObject({
+      productTarget: 5,
+      productVerifiedCount: 5,
+      productCoverageMet: true,
+      repositoryVerifiedCount: 8,
+    });
+    expect(MAX_PRODUCT_INSPECTION_ATTEMPTS).toBeGreaterThan(MIN_PRODUCT_COMPETITORS);
+  });
 });
 
 describe("isCompetitorQuery", () => {
   it("recognizes competitor-product queries and not implementation queries", () => {
     expect(isCompetitorQuery("GrantFlow competitors")).toBe(true);
-    expect(isCompetitorQuery("best grant discovery software for nonprofits")).toBe(true);
+    expect(isCompetitorQuery("best grant discovery software for nonprofits")).toBe(
+      true,
+    );
     expect(isCompetitorQuery("top alternatives to GrantFlow")).toBe(true);
-    expect(isCompetitorQuery("grant matching open source GitHub implementation")).toBe(false);
+    expect(isCompetitorQuery("grant matching open source GitHub implementation")).toBe(
+      false,
+    );
   });
 });

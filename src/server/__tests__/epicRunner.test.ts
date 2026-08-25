@@ -100,8 +100,20 @@ describe("epic slices", () => {
     const epic = await createEpic("big evolution", { mode: "extend" }, d);
     const idea = sliceIdea(epic, 0);
     expect(idea).toContain("Slice 1 of 2");
+    expect(idea).toContain("big evolution");
     expect(idea).toContain("backend/services/savedSearch.js");
     expect(idea).toMatch(/documentation-only or test-only output fails/i);
+  });
+
+  it("retains comparative intent even when the planner paraphrases it away", async () => {
+    const d = deps([]);
+    const epic = await createEpic(
+      "make this better than every competitor",
+      { mode: "extend" },
+      d,
+    );
+
+    expect(sliceIdea(epic, 0)).toContain("better than every competitor");
   });
 
   it("advances only on RELEASED slices and completes when all merge", async () => {

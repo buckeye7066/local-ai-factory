@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import type { TaskPlan } from "../../shared/schemas.js";
 import { safeResolve, safeResolveExistingPath } from "./fileWriter.js";
 import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
+import { MAX_CONTEXT_FILE_CHARS, MAX_CONTEXT_TOTAL_CHARS } from "./contextLimits.js";
 
 /**
  * targetFiles.ts — find the real files a build is about to change, and read
@@ -18,8 +19,6 @@ import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
 // (run 9b034d37, 2026-08-23); it invented server/routes/index.js instead. The
 // integration point of a small app is often its one big file. 64 KB is still
 // well inside the 120 KB total budget below.
-const MAX_BYTES_PER_FILE = 64_000;
-const MAX_TOTAL_BYTES = 120_000;
 const JS_TS_EXT_RX = JS_TS_SOURCE_EXTENSION_RX;
 
 function jsTsStem(path: string): string | null {
@@ -95,9 +94,7 @@ export function inspectTargetFiles(
 
     // A filename-only fallback is safe only when it is unique.
     const base = c.split("/").pop()!;
-    const basenameHits = fileTree.filter(
-      (p) => p.endsWith(`/${base}`) || p === base,
-    );
+    const basenameHits = fileTree.filter((p) => p.endsWith(`/${base}`) || p === base);
     if (basenameHits.length === 1) resolved.add(basenameHits[0]!);
   }
 
@@ -147,17 +144,20 @@ function readResolved(
 ): TargetFileInspection {
   const out: { path: string; contents: string }[] = [];
   const omitted: Array<{ path: string; reason: string }> = [];
-  let budget = MAX_TOTAL_BYTES;
+  let budget = MAX_CONTEXT_TOTAL_CHARS;
   for (const rel of resolved) {
     try {
       const abs = safeResolveExistingPath(workspacePath, rel);
       const size = statSync(abs).size;
-      if (size > MAX_BYTES_PER_FILE) {
+      if (size > MAX_CONTEXT_FILE_CHARS) {
         omitted.push({ path: rel, reason: "file exceeds the per-file context limit" });
         continue;
       }
       if (size > budget) {
-        omitted.push({ path: rel, reason: "total target-file context budget exhausted" });
+        omitted.push({
+          path: rel,
+          reason: "total target-file context budget exhausted",
+        });
         continue;
       }
       const contents = readFileSync(abs, "utf8");

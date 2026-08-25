@@ -1,6 +1,6 @@
 # Purpose & Acceptance Contract — Factory Deck
 
-**Version:** 0.2  
+**Version:** 0.3  
 **Application:** Factory Deck  
 **Repository:** [buckeye7066/local-ai-factory](https://github.com/buckeye7066/local-ai-factory)  
 **Default branch:** `main`  
@@ -8,22 +8,29 @@
 
 ## Intended users
 
-Operators who need a provider-agnostic **local AI software factory** that runs **real** factory jobs end-to-end (Anthropic and/or OpenAI), with durable job state, cancel/resume safety, and honest failure — not mock-only success presented as readiness.
+Operators who need a provider-neutral, local-first software factory that turns an
+idea or existing repository goal into a purpose-aligned, independently
+reviewable change with durable state, executable evidence, bounded cost, and
+honest failure.
 
 ## Primary problem solved
 
 Orchestrate a multi-agent software-factory workflow with:
 
-- real (paid) providers on the live path
+- a real local/free provider by default, with optional paid providers
 - durable, inspectable job state and workspace artifacts
-- sandboxed command execution defaults
+- generated-command execution disabled unless the operator supplies real OS
+  containment
 - cancel during long operations without corrupting authoritative inputs
-- explicit offline **demo** mode that never claims Production Ready
+- a citation-linked, model-inferred Purpose Constitution for existing applications
+- current, cited competitive intelligence when the requested goal makes a
+  comparative claim
 
 ## Core user journey (must remain intact)
 
 1. **Launch** from `scripts/start-factory.cmd` (or `pnpm start` / `pnpm factory`) on a tree whose SHA matches the certified `main` tip.
-2. **Submit a live factory job** (not `--demo`) using Anthropic and/or OpenAI as configured in `.env`.
+2. **Submit a live factory job** using the configured free/local route or an
+   explicitly configured paid provider.
 3. **Observe** stage progress, completion (or honest failure), and inspectable workspace + attribution artifacts.
 4. **Provider / cancel / timeout failures** do not corrupt source inputs; workspaces remain jailed under `WORKSPACE_ROOT`.
 5. **Cancel** a running job and confirm terminal `cancelled` status with durable audit/attribution.
@@ -31,25 +38,42 @@ Orchestrate a multi-agent software-factory workflow with:
 
 ## Scope that must not be narrowed
 
-A **mock/stub provider completing a synthetic/demo job is not purpose fulfillment** and is **not** Production Ready. Offline demo remains a supported *development* path only when `options.demo === true` (or CLI `--demo`) is explicit.
+Mock/stub providers are hermetic test fixtures only. They are not exposed as an
+owner-facing run mode, are never delivery evidence, and can never satisfy
+readiness. Silent coercion of a live run into mock success is forbidden.
 
-Silent coercion of live runs into mock success when credentials are missing is **forbidden**.
+For an existing application, a plausible model-written description is not a
+substitute for purpose evidence. Purpose, core workflows, invariants, and
+current gaps must cite inspected repository files. A request to outperform or
+compare competitors must retain current source health and at least five
+inspected product competitors, separate from open-source implementation
+candidates; incomplete coverage must block the superiority claim.
+
+Purpose citation validation proves that every retained claim points to an
+immutable excerpt collected from the repository snapshot. It does **not**
+independently prove that the excerpt semantically entails the model's wording;
+the report surfaces that limitation explicitly.
 
 ## Production acceptance tests
 
-| Gate | Requirement |
-|------|-------------|
-| Real-provider journey | Live job (`demo: false`) completes (or fails honestly) using Anthropic and/or OpenAI — **or** status is `BLOCKED` with the exact missing credential env var name(s) |
-| No fake-success | Live path never falls back to mock/stub; missing keys return a clear credential error |
-| Controls | Executable `release:check`, `.github/workflows/production-readiness.yml`, typechecking, and the complete automated test suite |
-| Evidence | This contract, final-SHA GitHub Actions results, and real-provider journey evidence |
-| Reviews | Independent functional, security, and release review is an owner-controlled external gate; implementation code must not self-attest it |
-| Identity | Exact default-branch SHA equals local launcher/runtime tree before Production Ready |
+| Gate                  | Requirement                                                                                                                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Real-provider journey | A live job completes (or fails honestly) through the configured free/local or paid route; unavailable providers are named exactly                                                                    |
+| Purpose evidence      | Existing-app purpose, workflows, invariants, gaps, and uncertainty cite immutable inspected excerpts, survive through planning/QA/reporting, and disclose that semantic entailment is model-inferred |
+| Competitive evidence  | Comparative goals include at least five inspected products, source URLs/health collected within seven days, a feature-gap decision, and mapped acceptance criteria—or the claim is held              |
+| No fake-success       | Live paths never fall back to mock/stub; unavailable routes produce an explicit error                                                                                                                |
+| Controls              | Executable `release:check`, `.github/workflows/production-readiness.yml`, typechecking, and the complete automated test suite                                                                        |
+| Evidence              | This contract, exact-revision CI results, changed-file digests, executed commands/exit statuses, and journey evidence                                                                                |
+| Reviews               | Author and verifier contexts are recorded separately; implementation output cannot self-attest readiness                                                                                             |
+| Command safety        | Generated install/build/test scripts remain disabled on the host unless execution occurs in a disposable container/VM with workspace-only write access and no host secrets                           |
+| Identity              | Exact default-branch SHA equals local launcher/runtime tree before Production Ready                                                                                                                  |
 
 ## Explicit blockers (honest)
 
-- Missing `ANTHROPIC_API_KEY` and/or `OPENAI_API_KEY` for the live path → **BLOCKED** (list exact missing names). Still finish all unblocked software + permanent gates.
-- Independent reviews are owner-controlled and external to repository bookkeeping; implementation code must not create a readiness attestation.
+- No usable live provider route → **BLOCKED** with the exact unavailable route or
+  credential name. Paid credentials are optional when the free route is healthy.
+- Missing purpose, competitive, command, or independent-review evidence required
+  by the requested goal → **BLOCKED** for the corresponding readiness claim.
 - Launcher/runtime SHA ≠ `main` tip → **BLOCKED** for Production Ready (sync required).
 
 ## Forbidden claims
@@ -57,7 +81,9 @@ Silent coercion of live runs into mock success when credentials are missing is *
 - Prior “PRODUCTION READY” / mock-first control-plane proofs as full readiness
 - Self-certified Production Ready by the implementer
 - `proof:mock-e2e` alone as purpose fulfillment
-- Mock/stub/offline alone for the real-provider requirement
+- Mock/stub output as evidence for any live-provider requirement
+- “Better than competitors” without five-product evidence and executed
+  acceptance criteria
 
 ## Deployment target
 

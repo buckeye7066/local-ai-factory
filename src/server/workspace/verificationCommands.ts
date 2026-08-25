@@ -50,15 +50,45 @@ function readPackage(workspacePath: string): Record<string, unknown> | null {
 
 type PackageManager = "npm" | "pnpm" | "yarn";
 
-function packageManager(workspacePath: string): PackageManager {
-  if (exists(workspacePath, "yarn.lock")) return "yarn";
+interface PackageManagerResolution {
+  manager: PackageManager | null;
+  reason?: string;
+}
+
+/**
+ * `packageManager` is authoritative when present. A compatibility lockfile
+ * must not silently switch verification to another dependency graph. Without
+ * a declaration, one lockfile is unambiguous; conflicting locks fail closed.
+ */
+function packageManagerResolution(workspacePath: string): PackageManagerResolution {
+  const declared = readPackage(workspacePath)?.packageManager;
+  if (typeof declared === "string" && declared.trim()) {
+    const match = /^(npm|pnpm|yarn)@/i.exec(declared.trim());
+    if (!match) {
+      return {
+        manager: null,
+        reason: `unsupported declared packageManager: ${declared.trim()}`,
+      };
+    }
+    return { manager: match[1]!.toLowerCase() as PackageManager };
+  }
+
+  const detected = new Set<PackageManager>();
+  if (exists(workspacePath, "yarn.lock")) detected.add("yarn");
+  if (exists(workspacePath, "pnpm-lock.yaml")) detected.add("pnpm");
   if (
     exists(workspacePath, "package-lock.json") ||
     exists(workspacePath, "npm-shrinkwrap.json")
   ) {
-    return "npm";
+    detected.add("npm");
   }
-  return "pnpm";
+  if (detected.size > 1) {
+    return {
+      manager: null,
+      reason: `conflicting lockfiles (${[...detected].sort().join(", ")}) and no declared packageManager`,
+    };
+  }
+  return { manager: [...detected][0] ?? "pnpm" };
 }
 
 function packageScriptCommand(
@@ -72,19 +102,20 @@ function packageScriptCommand(
   };
 }
 
-function javascriptCommands(workspacePath: string): VerificationCommand[] {
+function javascriptCommands(
+  workspacePath: string,
+  resolution = packageManagerResolution(workspacePath),
+): VerificationCommand[] {
   if (!exists(workspacePath, "package.json")) return [];
-  if (exists(workspacePath, "yarn.lock")) {
+  if (!resolution.manager) return [];
+  if (resolution.manager === "yarn") {
     return [
       { bin: "yarn", args: ["install"], isTest: false },
       { bin: "yarn", args: ["test"], isTest: true },
     ];
   }
   const prismaStep = hasPrismaSchema(workspacePath);
-  if (
-    exists(workspacePath, "package-lock.json") ||
-    exists(workspacePath, "npm-shrinkwrap.json")
-  ) {
+  if (resolution.manager === "npm") {
     return [
       { bin: "npm", args: ["ci"], isTest: false },
       { bin: "npm", args: ["rebuild"], isTest: false },
@@ -128,8 +159,7 @@ function hasPrismaSchema(workspacePath: string): boolean {
   ].some((rel) => exists(workspacePath, rel));
 }
 
-const DIRECT_TEST_PATH =
-  /^(?:[A-Za-z0-9_.-]+\/)*test_[A-Za-z0-9_.-]+\.py$/;
+const DIRECT_TEST_PATH = /^(?:[A-Za-z0-9_.-]+\/)*test_[A-Za-z0-9_.-]+\.py$/;
 
 function workflowPythonTests(workspacePath: string): VerificationCommand[] {
   const workflowDir = join(workspacePath, ".github", "workflows");
@@ -208,7 +238,6 @@ function pythonCommands(workspacePath: string): VerificationCommand[] {
   return commands;
 }
 
-
 function dependencies(pkg: Record<string, unknown> | null): Set<string> {
   const out = new Set<string>();
   if (!pkg) return out;
@@ -258,8 +287,9 @@ export function verificationPlanForWorkspace(
     trustedBrowserHarness?: boolean;
   } = {},
 ): VerificationPlan {
+  const managerResolution = packageManagerResolution(workspacePath);
   const base = [
-    ...javascriptCommands(workspacePath),
+    ...javascriptCommands(workspacePath, managerResolution),
     ...pythonCommands(workspacePath),
   ];
   const incomplete: VerificationPlan["incomplete"] = [];
@@ -269,10 +299,19 @@ export function verificationPlanForWorkspace(
     packageJson?.scripts && typeof packageJson.scripts === "object"
       ? (packageJson.scripts as Record<string, unknown>)
       : {};
-  const manager = packageManager(workspacePath);
+  if (exists(workspacePath, "package.json") && !managerResolution.manager) {
+    incomplete.push({
+      command: "package manager",
+      reason: managerResolution.reason ?? "package manager could not be resolved",
+    });
+  }
   const quality = ["lint", "typecheck", "build"]
     .filter((name) => typeof scripts[name] === "string")
-    .map((name) => packageScriptCommand(manager, name));
+    .flatMap((name) =>
+      managerResolution.manager
+        ? [packageScriptCommand(managerResolution.manager, name)]
+        : [],
+    );
   const direct: VerificationCommand[] = [];
   const browserHarness =
     input.trustedBrowserHarness ?? hasPlaywrightHarness(workspacePath);
@@ -338,7 +377,8 @@ export function verificationPlanForWorkspace(
     } else {
       incomplete.push({
         command: path,
-        reason: "no declared local Vitest/Jest/Pytest runner can execute this generated test directly",
+        reason:
+          "no declared local Vitest/Jest/Pytest runner can execute this generated test directly",
       });
     }
   }
@@ -375,8 +415,5 @@ export function verificationPlanForWorkspace(
 export function verificationCommandsForWorkspace(
   workspacePath: string,
 ): VerificationCommand[] {
-  return [
-    ...javascriptCommands(workspacePath),
-    ...pythonCommands(workspacePath),
-  ];
+  return [...javascriptCommands(workspacePath), ...pythonCommands(workspacePath)];
 }
