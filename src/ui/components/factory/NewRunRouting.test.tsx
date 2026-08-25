@@ -55,10 +55,10 @@ describe("provider tier UI wiring", () => {
         fireEvent.click(screen.getByRole("button", { name: /Paid rotation/i }));
       }
       fireEvent.click(
-        screen.getByRole("button", { name: /Extend an Existing Program/i }),
+        screen.getByRole("tab", { name: /Extend an Existing Program/i }),
       );
       fireEvent.click(
-        screen.getByRole("button", { name: /Ask Me Yes\/No Questions/i }),
+        screen.getByRole("tab", { name: /Ask Me Yes\/No Questions/i }),
       );
       fireEvent.change(
         screen.getByLabelText(/Describe what you want at a high level/i),
