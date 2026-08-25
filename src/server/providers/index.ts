@@ -1,4 +1,5 @@
 import type { AppConfig, AppSecrets } from "../config.js";
+import { readinessBrainFloor } from "../config.js";
 import type { LLMProvider } from "../../shared/types.js";
 import type { ProviderName } from "../../shared/schemas.js";
 import { AnthropicProvider } from "./anthropicProvider.js";
@@ -40,7 +41,7 @@ export const OFFLINE_PROVIDERS = new Set<ProviderName>(["mock", "stub"]);
 
 /**
  * Raised when a live (non-demo) run is requested with no usable live provider
- * at all — no free route AND no paid credentials.
+ * at all, or when the mandatory Sol plus Fable/Opus readiness floor is absent.
  */
 export class MissingProviderCredentialError extends Error {
   readonly missing: string[];
@@ -49,10 +50,11 @@ export class MissingProviderCredentialError extends Error {
       ? missing.join(", ")
       : "FACTORY_FREE_ENABLED, ANTHROPIC_API_KEY, OPENAI_API_KEY";
     super(
-      `Live factory run blocked: no usable provider. Missing: ${list}. ` +
-        `Start the free route ("Claude Code - FREE (Ollama)") or set a paid key. ` +
-        `There is no offline/mock fallback — a run with no real provider must ` +
-        `fail loudly rather than fabricate a result.`,
+      `Live factory run blocked: no usable production-capable provider set. Missing: ${list}. ` +
+        `A Free or Paid build route may do implementation work, but every non-demo ` +
+        `run also requires the OpenAI Sol lead and an independent Anthropic ` +
+        `Fable/Opus-class readiness brain. There is no one-brain, mock, or ` +
+        `cross-family fallback.`,
     );
     this.name = "MissingProviderCredentialError";
     this.missing = missing;
@@ -73,9 +75,9 @@ export interface ProviderRegistry {
    */
   resolveLive(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
   available(): ProviderName[];
-  /** Every configured LIVE provider, free included. */
+  /** Every configured LIVE provider, free included. Empty when the brain floor is absent. */
   availableLive(): ProviderName[];
-  /** Configured PAID providers only. */
+  /** Configured PAID providers only, available only with the mandatory floor. */
   availablePaid(): ProviderName[];
   missingCredentialNames(): string[];
 }
@@ -104,6 +106,7 @@ export function createProviderRegistry(
 ): ProviderRegistry {
   const mock = new MockProvider();
   const stub = new StubProvider("stub");
+  const mandatoryFloor = readinessBrainFloor(config, secrets);
 
   // Every paid SDK call reserves admission before I/O. Its returned token
   // usage then replaces the in-flight estimate in the local ledger; provider
@@ -218,20 +221,31 @@ export function createProviderRegistry(
 
   function missingCredentialNames(): string[] {
     const missing: string[] = [];
-    if (!free.isConfigured())
+    if (!free.isConfigured()) {
       missing.push("FACTORY_FREE_ENABLED / FACTORY_FREE_BASE_URL");
+    }
     if (!anthropic.isConfigured()) missing.push("ANTHROPIC_API_KEY");
     if (!openai.isConfigured()) missing.push("OPENAI_API_KEY");
-    return missing;
+    if (!mandatoryFloor.solConfigured) {
+      missing.push("OPENAI_API_KEY and FACTORY_SOL_MODEL");
+    }
+    if (!mandatoryFloor.fableOrOpusConfigured) {
+      missing.push(
+        "ANTHROPIC_API_KEY and FACTORY_FABLE_OR_OPUS_MODEL containing Fable or Opus",
+      );
+    }
+    return [...new Set(missing)];
   }
 
   function availablePaid(): ProviderName[] {
+    if (!mandatoryFloor.configured) return [];
     return (["anthropic", "openai"] as ProviderName[]).filter((n) =>
       byName[n].isConfigured(),
     );
   }
 
   function availableLive(): ProviderName[] {
+    if (!mandatoryFloor.configured) return [];
     return (["free", "anthropic", "openai"] as ProviderName[]).filter((n) =>
       byName[n].isConfigured(),
     );
@@ -255,6 +269,9 @@ export function createProviderRegistry(
     requested: ProviderName | undefined,
     fallback: ProviderName,
   ): LLMProvider {
+    if (!mandatoryFloor.configured) {
+      throw new MissingProviderCredentialError(missingCredentialNames());
+    }
     // The free route is primary whenever it is usable, regardless of what was
     // requested, EXCEPT when the caller explicitly pinned a paid provider.
     const explicitPaid =
