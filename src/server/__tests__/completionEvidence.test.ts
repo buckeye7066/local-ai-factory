@@ -205,6 +205,13 @@ describe("deterministic completion evidence", () => {
     );
     expect(aggregated.windows.verified).toBe(true);
     expect(aggregated.macos.verified).toBe(true);
+
+    const installOnly = assessPlatformCompatibility(
+      root,
+      [{ command: "npm ci", exitCode: 0, hostPlatform: "win32" }],
+      "linux",
+    );
+    expect(installOnly.windows.verified).toBe(false);
   });
 
   it("stamps production command evidence and preserves it through exact-tree resume", () => {
@@ -272,6 +279,23 @@ describe("deterministic completion evidence", () => {
     ]);
     expect(debugOnly.android.verified).toBe(false);
     expect(debugOnly.ios.verified).toBe(false);
+
+    const outputMentionsOnly = assessPlatformCompatibility(root, [
+      {
+        command: "./gradlew tasks",
+        exitCode: 0,
+        hostPlatform: "linux",
+        outputTail: "assembleRelease bundleRelease",
+      },
+      {
+        command: "pnpm test",
+        exitCode: 0,
+        hostPlatform: "darwin",
+        outputTail: "documentation mentions xcodebuild archive",
+      },
+    ]);
+    expect(outputMentionsOnly.android.verified).toBe(false);
+    expect(outputMentionsOnly.ios.verified).toBe(false);
 
     const production = assessPlatformCompatibility(root, [
       { command: "./gradlew assembleRelease", exitCode: 0, hostPlatform: "linux" },

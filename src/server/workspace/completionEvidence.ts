@@ -285,6 +285,7 @@ export type ExecutedPlatformCommand = {
   exitCode: number | null;
   /** Stamp imported CI evidence with the OS that actually executed it. */
   hostPlatform?: NodeJS.Platform;
+  isTest?: boolean;
   isBrowser?: boolean;
   /** Targets this successful invocation directly exercised. */
   verifiedTargets?: PlatformTarget[];
@@ -302,13 +303,15 @@ const ANDROID_PRODUCTION_EVIDENCE =
   /(?:gradlew?|capacitor|cordova|expo)[^\n]*(?:assembleRelease|bundleRelease|testRelease|connectedAndroidTest|lintRelease|android[^\n]*(?:release|test))|android[^\n]*(?:assembleRelease|bundleRelease|testRelease|connectedAndroidTest|lintRelease)/i;
 const IOS_PRODUCTION_EVIDENCE =
   /xcodebuild[^\n]*(?:archive|test|build-for-testing|test-without-building|-configuration\s+Release)|(?:capacitor|cordova|expo)[^\n]*ios[^\n]*(?:release|archive|test)/i;
+const EXECUTABLE_VERIFICATION_COMMAND =
+  /(?:^|\s|:)(?:test|build|lint|typecheck|check|verify)(?:\s|$|:)|\b(?:pytest|vitest|jest|playwright|xcodebuild)\b|\b(?:cargo|dotnet|swift)\s+(?:test|build)\b|\bgradlew?\b[^\n]*(?:assemble|bundle|test|lint)/i;
 
 /** Stamp target evidence at the command-runner boundary, never from config. */
 export function platformStampForExecutedCommand(
   entry: Omit<ExecutedPlatformCommand, "hostPlatform" | "verifiedTargets">,
   hostPlatform: NodeJS.Platform = process.platform,
 ): Pick<ExecutedPlatformCommand, "hostPlatform" | "verifiedTargets"> {
-  const text = `${entry.command}\n${entry.outputTail ?? ""}`;
+  const browserText = `${entry.command}\n${entry.outputTail ?? ""}`;
   const verifiedTargets: PlatformTarget[] = [];
   if (
     entry.exitCode === 0 &&
@@ -316,13 +319,14 @@ export function platformStampForExecutedCommand(
     entry.directEvidenceValid !== false
   ) {
     for (const targetName of ["webkit", "ios", "android"] as const) {
-      if (BROWSER_TARGET_PATTERNS[targetName].test(text))
+      if (BROWSER_TARGET_PATTERNS[targetName].test(browserText))
         verifiedTargets.push(targetName);
     }
   }
   if (entry.exitCode === 0 && entry.isBrowser !== true) {
-    if (ANDROID_PRODUCTION_EVIDENCE.test(text)) verifiedTargets.push("android");
-    if (hostPlatform === "darwin" && IOS_PRODUCTION_EVIDENCE.test(text)) {
+    if (ANDROID_PRODUCTION_EVIDENCE.test(entry.command))
+      verifiedTargets.push("android");
+    if (hostPlatform === "darwin" && IOS_PRODUCTION_EVIDENCE.test(entry.command)) {
       verifiedTargets.push("ios");
     }
   }
@@ -443,7 +447,11 @@ export function assessPlatformCompatibility(
     (entry.hostPlatform ?? hostPlatform) === platform;
   const platformPassed = (platform: NodeJS.Platform) => {
     const commands = executed.filter((entry) => ranOn(entry, platform));
-    return commands.length > 0 && commands.every((entry) => entry.exitCode === 0);
+    const verificationRan = commands.some(
+      (entry) =>
+        entry.isTest === true || EXECUTABLE_VERIFICATION_COMMAND.test(entry.command),
+    );
+    return verificationRan && commands.every((entry) => entry.exitCode === 0);
   };
   const platformEvidence = (platform: NodeJS.Platform) =>
     successful
@@ -474,9 +482,7 @@ export function assessPlatformCompatibility(
     (entry) =>
       entry.isBrowser !== true &&
       (entry.verifiedTargets?.includes("android") === true ||
-        ANDROID_PRODUCTION_EVIDENCE.test(
-          `${entry.command}\n${entry.outputTail ?? ""}`,
-        )),
+        ANDROID_PRODUCTION_EVIDENCE.test(entry.command)),
   );
   const androidNativePass = androidNativeEvidence.length > 0;
   const iosNativeEvidence = successful.filter(
@@ -484,7 +490,7 @@ export function assessPlatformCompatibility(
       ranOn(entry, "darwin") &&
       entry.isBrowser !== true &&
       (entry.verifiedTargets?.includes("ios") === true ||
-        IOS_PRODUCTION_EVIDENCE.test(`${entry.command}\n${entry.outputTail ?? ""}`)),
+        IOS_PRODUCTION_EVIDENCE.test(entry.command)),
   );
   const iosNativePass = iosNativeEvidence.length > 0;
 
