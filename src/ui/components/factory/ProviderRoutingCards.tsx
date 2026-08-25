@@ -100,7 +100,6 @@ export function ProviderRoutingCards({
                 className={cn(
                   "grid h-9 w-9 place-items-center rounded-lg",
                   c.accent === "violet" && "bg-aurora-violet/15 text-aurora-violet",
-                  c.accent === "cyan" && "bg-aurora-cyan/15 text-aurora-cyan",
                   c.accent === "emerald" && "bg-aurora-emerald/15 text-aurora-emerald",
                 )}
               >
