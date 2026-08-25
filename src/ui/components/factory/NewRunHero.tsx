@@ -16,10 +16,7 @@ import { Input } from "../ui/Input.js";
 import { Badge } from "../ui/Badge.js";
 import { Tabs } from "../ui/Tabs.js";
 import { slideUp, staggerContainer, staggerItem } from "../../lib/motion.js";
-import {
-  ProviderRoutingCards,
-  type ProviderTier,
-} from "./ProviderRoutingCards.js";
+import { ProviderRoutingCards, type ProviderTier } from "./ProviderRoutingCards.js";
 import { SafetySettingsPreview } from "./SafetySettingsPreview.js";
 import { ExtendExistingPanel } from "./ExtendExistingPanel.js";
 import { api } from "../../lib/api.js";
@@ -47,8 +44,7 @@ export function NewRunHero({
   onStart: (idea: string, options: RunOptions) => void;
 }) {
   const hasAnyKey =
-    (health?.anthropicConfigured ?? false) ||
-    (health?.openaiConfigured ?? false);
+    (health?.anthropicConfigured ?? false) || (health?.openaiConfigured ?? false);
   const [idea, setIdea] = useState("");
   // Demo/simulate mode is not an owner surface — a run without a provider
   // fails loudly with the real missing-credential error instead of silently
@@ -101,12 +97,11 @@ export function NewRunHero({
           Local AI Software Factory
         </Badge>
         <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
-          Build apps through an{" "}
-          <span className="text-aurora">AI assembly line</span>
+          Build apps through an <span className="text-aurora">AI assembly line</span>
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-pretty text-sm leading-relaxed text-slate-400 sm:text-base">
-          Planner, architect, builder, tester, critic, and repair agents work
-          together locally through your selected free or paid provider tier.
+          Planner, architect, builder, tester, critic, and repair agents work together
+          locally through your selected free or paid provider tier.
         </p>
       </motion.div>
 
@@ -133,9 +128,7 @@ export function NewRunHero({
           new-app panel only, so extend-mode runs (the common case for real
           repos) had no provider control at all. */}
       <motion.div variants={slideUp} className="mx-auto mt-6 max-w-3xl">
-        <p className="mb-2 text-xs font-medium text-slate-400">
-          Provider routing
-        </p>
+        <p className="mb-2 text-xs font-medium text-slate-400">Provider routing</p>
         <ProviderRoutingCards
           health={health}
           routing={routing}
@@ -155,10 +148,9 @@ export function NewRunHero({
             <span>
               <span className="font-medium text-white">Publish this app</span>
               <span className="block text-xs text-slate-400">
-                List the finished app in your Axiom BioLabs app store and let
-                PromoPilot promote it. Uncheck for something that is just for
-                you - it still gets built, saved to GitHub, and hosted, but
-                never listed or promoted.
+                List the finished app in your Axiom BioLabs app store and let PromoPilot
+                promote it. Uncheck for something that is just for you - it still gets
+                built, saved to GitHub, and hosted, but never listed or promoted.
               </span>
             </span>
           </label>
@@ -312,8 +304,8 @@ function NewAppPanel({
           ) : nameCheck.availability === "free" ? (
             <span className="inline-flex items-center gap-1.5 text-emerald-300">
               <GitBranch className="h-3 w-3" />
-              Will create {nameCheck.fullName} (private) and push the finished
-              work there.
+              Will create {nameCheck.fullName} (private) and push the finished work
+              there.
             </span>
           ) : nameCheck.availability === "unknown" && nameCheck.reason ? (
             <span className="text-amber-300">{nameCheck.reason}</span>
@@ -357,12 +349,9 @@ function NewAppPanel({
             extend mode) */}
         <div className="mt-5 space-y-2">
           {!hasAnyKey && (
-            <Helper
-              tone="amber"
-              icon={<TriangleAlert className="h-3.5 w-3.5" />}
-            >
-              No API keys detected — add keys in <code>.env</code> to build.
-              Every run does real work; there is no demo or test mode.
+            <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
+              No API keys detected — add keys in <code>.env</code> to build. Every run
+              does real work; there is no demo or test mode.
             </Helper>
           )}
         </div>
@@ -408,12 +397,10 @@ function Helper({
     <div
       className={cn(
         "flex items-start gap-2 rounded-xl border px-3 py-2 text-xs leading-relaxed",
-        tone === "amber" &&
-          "border-amber-400/25 bg-amber-400/[0.06] text-amber-200",
+        tone === "amber" && "border-amber-400/25 bg-amber-400/[0.06] text-amber-200",
         tone === "violet" &&
           "border-aurora-violet/25 bg-aurora-violet/[0.06] text-violet-200",
-        tone === "cyan" &&
-          "border-aurora-cyan/25 bg-aurora-cyan/[0.06] text-cyan-100",
+        tone === "cyan" && "border-aurora-cyan/25 bg-aurora-cyan/[0.06] text-cyan-100",
       )}
     >
       <span className="mt-0.5 shrink-0">{icon}</span>

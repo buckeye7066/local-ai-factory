@@ -58,11 +58,7 @@ describe("provider-neutral run routing", () => {
 
   it("paid mode chooses only configured paid routes", () => {
     expect(
-      selectRunRouting(
-        { routingMode: "paid" },
-        registry(true, ["openai"]),
-        config,
-      ),
+      selectRunRouting({ routingMode: "paid" }, registry(true, ["openai"]), config),
     ).toEqual({
       routingMode: "paid",
       codeProvider: "openai",
@@ -116,11 +112,7 @@ describe("provider-neutral run routing", () => {
 
   it("free mode fails closed when the free route is unavailable", () => {
     expect(() =>
-      selectRunRouting(
-        { routingMode: "free" },
-        registry(false, ["openai"]),
-        config,
-      ),
+      selectRunRouting({ routingMode: "free" }, registry(false, ["openai"]), config),
     ).toThrow(MissingProviderCredentialError);
   });
 });
