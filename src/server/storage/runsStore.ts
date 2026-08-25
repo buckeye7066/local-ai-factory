@@ -293,6 +293,7 @@ export async function listRuns(): Promise<RunSummary[]> {
       status: r.status,
       resumable: r.resumable,
       demo: r.demo,
+      routingMode: r.routingMode,
       codeProvider: r.codeProvider,
       reviewProvider: r.reviewProvider,
       appName: r.appName == null ? r.appName : redactSecrets(r.appName),
