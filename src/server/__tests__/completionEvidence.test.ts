@@ -61,24 +61,32 @@ describe("deterministic completion evidence", () => {
       "export function save() { throw new Error('Not implemented'); }\n",
     );
     put(root, "src/page.tsx", "export const Page = () => <p>Coming soon</p>;\n");
+    put(root, "src/mobile.dart", "void save() { throw UnimplementedError(); }\n");
     put(root, "src/store.py", "# TODO persist this\ndef save():\n    return True\n");
     put(root, "tests/api.test.ts", "// TODO test fixture marker\n");
     put(root, "docs/roadmap.md", "TODO later\n");
     const gaps = scanCompletionGaps(root);
-    expect(gaps.map((gap) => gap.path)).toEqual([
+    expect(gaps.map((gap) => gap.path).sort()).toEqual([
       "src/api.ts",
+      "src/mobile.dart",
       "src/page.tsx",
       "src/store.py",
     ]);
     expect(enforceCompletionQa(qa, gaps)).toMatchObject({ passed: false });
   });
 
-  it("does not convert ordinary input placeholder attributes into missing code", () => {
+  it("does not convert ordinary input placeholders or handled error types into missing code", () => {
     const root = workspace("input-placeholder");
     put(
       root,
       "src/Search.tsx",
       'export const Search = () => <input placeholder="Search grants" />;\n',
+    );
+    put(
+      root,
+      "src/errors.ts",
+      "export class NotImplementedError extends Error {}\n" +
+        "export const isKnown = (error: unknown) => error instanceof NotImplementedError;\n",
     );
     expect(scanCompletionGaps(root)).toEqual([]);
   });
@@ -124,5 +132,16 @@ describe("deterministic completion evidence", () => {
     const mac = assessPlatformCompatibility(root, command, "darwin");
     expect(mac.windows.verified).toBe(false);
     expect(mac.macos.verified).toBe(true);
+
+    const aggregated = assessPlatformCompatibility(
+      root,
+      [
+        { command: "pnpm test (windows)", exitCode: 0, hostPlatform: "win32" },
+        { command: "pnpm test (macos)", exitCode: 0, hostPlatform: "darwin" },
+      ],
+      "linux",
+    );
+    expect(aggregated.windows.verified).toBe(true);
+    expect(aggregated.macos.verified).toBe(true);
   });
 });

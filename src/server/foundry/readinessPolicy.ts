@@ -11,19 +11,41 @@ export const REQUIRED_PRODUCTION_STATIONS = Object.freeze([
 
 export type RequiredProductionStation = (typeof REQUIRED_PRODUCTION_STATIONS)[number];
 
+export const UNMETERED_CHILD_STATIONS = Object.freeze([
+  "scout",
+  "flexfactor",
+] as const satisfies readonly StationId[]);
+
 /**
- * User selection may add stations, never remove the four stations that prove a
- * Foundry project was built, purpose-aligned, adversarially challenged, and
- * operationally observed. Paid routing does not make FlexFactor optional merely
- * because FlexFactor itself is unmetered.
+ * Paid Purpose Foundry may not dispatch external, unmetered children outside
+ * its per-call reservation ledger. Free projects still require FlexFactor;
+ * Paid projects retain Factory Deck, Crucible, and Watchtower as the binding
+ * internal production evidence line.
  */
+export function requiredProductionStations(
+  routingMode?: RoutingMode,
+): RequiredProductionStation[] {
+  return REQUIRED_PRODUCTION_STATIONS.filter(
+    (station) => routingMode !== "paid" || station !== "flexfactor",
+  );
+}
+
 export function normalizeFoundryStations(
   selected: StationId[],
-  _routingMode?: RoutingMode,
+  routingMode?: RoutingMode,
 ): StationId[] {
   const out: StationId[] = [];
   const seen = new Set<StationId>();
-  for (const station of [...REQUIRED_PRODUCTION_STATIONS, ...selected]) {
+  const allowed =
+    routingMode === "paid"
+      ? selected.filter(
+          (station) =>
+            !UNMETERED_CHILD_STATIONS.includes(
+              station as (typeof UNMETERED_CHILD_STATIONS)[number],
+            ),
+        )
+      : selected;
+  for (const station of [...requiredProductionStations(routingMode), ...allowed]) {
     if (!seen.has(station)) {
       seen.add(station);
       out.push(station);
@@ -53,6 +75,7 @@ export type FoundryCompletionDecision = {
 export function evaluateFoundryCompletion(input: {
   factoryReceipt: ProductionReadinessReceipt | null;
   stations: FoundryStationReadinessEvidence[];
+  routingMode?: RoutingMode;
 }): FoundryCompletionDecision {
   const blockers: string[] = [];
   const receipt = input.factoryReceipt;
@@ -62,7 +85,8 @@ export function evaluateFoundryCompletion(input: {
   const required = new Map(
     input.stations.map((evidence) => [evidence.stationId, evidence]),
   );
-  for (const stationId of REQUIRED_PRODUCTION_STATIONS) {
+  const requiredStations = requiredProductionStations(input.routingMode);
+  for (const stationId of requiredStations) {
     const evidence = required.get(stationId);
     if (!evidence) {
       blockers.push(`${stationId} has no completion evidence.`);
@@ -86,7 +110,7 @@ export function evaluateFoundryCompletion(input: {
 
   const revisions = new Set(
     input.stations
-      .filter((station) => REQUIRED_PRODUCTION_STATIONS.includes(station.stationId))
+      .filter((station) => requiredStations.includes(station.stationId))
       .map((station) => station.revision)
       .filter((revision): revision is string => Boolean(revision)),
   );

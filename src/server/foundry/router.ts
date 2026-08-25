@@ -7,7 +7,8 @@ import { getConfig, getSecrets, readinessBrainFloor } from "../config.js";
 import { loadReadinessState } from "../storage/readinessStore.js";
 import {
   evaluateFoundryCompletion,
-  REQUIRED_PRODUCTION_STATIONS,
+  requiredProductionStations,
+  type RequiredProductionStation,
 } from "./readinessPolicy.js";
 import { FoundryAdapters } from "./adapters.js";
 import {
@@ -50,9 +51,11 @@ async function deriveProjectStatus(
   }
   if (selected.length && selected.every((station) => station.status === "completed")) {
     const readiness = await loadReadinessState(project.id);
+    const requiredStations = requiredProductionStations(project.routingMode);
     return evaluateFoundryCompletion({
       factoryReceipt: readiness?.receipt ?? null,
-      stations: REQUIRED_PRODUCTION_STATIONS.map((stationId) => {
+      routingMode: project.routingMode,
+      stations: requiredStations.map((stationId) => {
         const station = project.stations.find((item) => item.stationId === stationId);
         return {
           stationId,
@@ -152,8 +155,8 @@ export function createFoundryRouter(
     const factoryStation = project.stations.find(
       (item) => item.stationId === "factory-deck",
     );
-    const requiredStation = REQUIRED_PRODUCTION_STATIONS.includes(
-      stationId as (typeof REQUIRED_PRODUCTION_STATIONS)[number],
+    const requiredStation = requiredProductionStations(project.routingMode).includes(
+      stationId as RequiredProductionStation,
     );
     station.evidenceDigest =
       typeof event.evidence.evidenceDigest === "string"

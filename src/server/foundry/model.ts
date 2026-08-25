@@ -15,7 +15,8 @@ import { z } from "zod";
 import { RoutingModeSchema } from "../../shared/schemas.js";
 import {
   normalizeFoundryStations,
-  REQUIRED_PRODUCTION_STATIONS,
+  requiredProductionStations,
+  UNMETERED_CHILD_STATIONS,
 } from "./readinessPolicy.js";
 
 export const StationIdSchema = z.enum([
@@ -119,24 +120,42 @@ export const STATIONS: StationDefinition[] = [
 ];
 
 const StringListSchema = z.array(z.string().trim().min(1)).max(50).default([]);
-export const FoundryIntakeSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-  purpose: z.string().trim().min(1).max(20_000),
-  targetUsers: StringListSchema,
-  successCriteria: StringListSchema,
-  constraints: StringListSchema,
-  nonGoals: StringListSchema,
-  targets: StringListSchema,
-  source: z.enum(["manual", "obsidian", "api"]).default("manual"),
-  sourcePath: z.string().trim().max(2_000).nullable().default(null),
-  sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
-  /** Explicit owner-selected economic tier; absent preserves legacy defaults. */
-  routingMode: RoutingModeSchema.optional(),
-  selectedStations: z
-    .array(StationIdSchema)
-    .min(1)
-    .default(STATIONS.map((station) => station.id)),
-});
+export const FoundryIntakeSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    purpose: z.string().trim().min(1).max(20_000),
+    targetUsers: StringListSchema,
+    successCriteria: StringListSchema,
+    constraints: StringListSchema,
+    nonGoals: StringListSchema,
+    targets: StringListSchema,
+    source: z.enum(["manual", "obsidian", "api"]).default("manual"),
+    sourcePath: z.string().trim().max(2_000).nullable().default(null),
+    sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
+    /** Explicit owner-selected economic tier; absent preserves legacy defaults. */
+    routingMode: RoutingModeSchema.optional(),
+    selectedStations: z
+      .array(StationIdSchema)
+      .min(1)
+      .default(STATIONS.map((station) => station.id)),
+  })
+  .superRefine((intake, context) => {
+    if (
+      intake.routingMode === "paid" &&
+      intake.selectedStations.every((station) =>
+        UNMETERED_CHILD_STATIONS.includes(
+          station as (typeof UNMETERED_CHILD_STATIONS)[number],
+        ),
+      )
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["selectedStations"],
+        message:
+          "Paid Purpose Foundry requires at least one metered internal station; Scout and FlexFactor cannot join the paid-call ledger.",
+      });
+    }
+  });
 export type FoundryIntake = z.infer<typeof FoundryIntakeSchema>;
 
 export const StationRunStatusSchema = z.enum([
@@ -423,7 +442,15 @@ export class FoundryStore {
       source: project.source,
       constitution: project.constitution,
       routingMode: project.routingMode ?? "legacy-default",
-      requiredProductionStations: [...REQUIRED_PRODUCTION_STATIONS],
+      requiredProductionStations: requiredProductionStations(project.routingMode),
+      blockedUnmeteredStations:
+        project.routingMode === "paid"
+          ? input.selectedStations.filter((station) =>
+              UNMETERED_CHILD_STATIONS.includes(
+                station as (typeof UNMETERED_CHILD_STATIONS)[number],
+              ),
+            )
+          : [],
     });
     return project;
   }

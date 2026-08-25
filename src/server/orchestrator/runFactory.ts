@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, posix, relative, resolve } from "node:path";
-import type { AppConfig, AppSecrets } from "../config.js";
+import { readinessBrainFloor, type AppConfig, type AppSecrets } from "../config.js";
 import type {
   RunRecord,
   RunOptions,
@@ -355,6 +355,21 @@ function isPaidProvider(
   return name === "anthropic" || name === "openai";
 }
 
+function assertReadinessBrainFloor(config: AppConfig, secrets: AppSecrets): void {
+  const floor = readinessBrainFloor(config, secrets);
+  if (floor.configured) return;
+  const missing: string[] = [];
+  if (!floor.solConfigured) {
+    missing.push("OPENAI_API_KEY and FACTORY_SOL_MODEL");
+  }
+  if (!floor.fableOrOpusConfigured) {
+    missing.push(
+      "ANTHROPIC_API_KEY and FACTORY_FABLE_OR_OPUS_MODEL containing Fable or Opus",
+    );
+  }
+  throw new MissingProviderCredentialError(missing);
+}
+
 class StaleCheckpointSpecificationError extends Error {
   constructor(message: string) {
     super(message);
@@ -477,6 +492,7 @@ function createRecord(args: StartRunArgs): RunRecord {
   if (!demo && registry.availableLive().length === 0) {
     throw new MissingProviderCredentialError(registry.missingCredentialNames());
   }
+  if (!demo) assertReadinessBrainFloor(config, secrets);
 
   // Reject live requests that explicitly ask for offline providers.
   if (!demo) {
@@ -3340,6 +3356,7 @@ async function prepareResume(
       if (registry.availableLive().length === 0) {
         throw new MissingProviderCredentialError(registry.missingCredentialNames());
       }
+      assertReadinessBrainFloor(config, secrets);
       const requested = [providers?.codeProvider, providers?.reviewProvider].filter(
         (name): name is ProviderName => Boolean(name),
       );

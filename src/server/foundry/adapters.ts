@@ -791,8 +791,17 @@ export class FoundryAdapters {
     }
     const script = flexfactorDirectedScript();
     const python = process.env.PURPOSE_FOUNDRY_PYTHON?.trim() || "python";
-    // Scout/FlexFactor is an unmetered verification station. Paid build mode
-    // does not remove it or turn the child into an untracked paid process.
+    const config = this.dependencies.config();
+    const routing = selectRunRouting(
+      { routingMode: project.routingMode },
+      this.dependencies.providerRegistry(),
+      config,
+    );
+    if (routing.routingMode === "paid") {
+      throw new Error(
+        "Paid Purpose Foundry Scout/FlexFactor is blocked: the external child process cannot participate in Factory Deck's per-call paid reservation ledger. Select Free for these stations or run a metered internal station; no untracked paid process was started.",
+      );
+    }
     // Free is a hard boundary. The child process is always pinned to Ollama;
     // environment defaults must never promote it to a paid API.
     const provider = "ollama";

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { LLMProvider } from "../../shared/types.js";
+import { SYSTEM_PREAMBLE } from "./types.js";
 import type {
   ProductionReadinessEvidence,
   ReadinessBlockerCategory,
@@ -57,7 +58,7 @@ export async function productionReadinessAgent(
 
   const draft = await input.provider.generateJson<ReviewDraft>({
     system:
-      "You are an independent production-readiness reviewer. Decide from the supplied immutable technical evidence only. " +
+      `${SYSTEM_PREAMBLE}\nYou are an independent production-readiness reviewer. Decide from the supplied immutable technical evidence only. ` +
       "The app's stated purpose, intended users, essential workflows, goals, and executable acceptance criteria are authoritative. " +
       "A pipeline reaching its last stage is not completion. Require working implementation, zero placeholder/TODO/stub paths, direct executed acceptance evidence, grounded QA, exact-byte verification, secure and operational behavior, truthful delivery, and executed compatibility evidence for every applicable Windows, Safari/WebKit, macOS, iOS, and Android target. " +
       "Do not evaluate or invent legal, regulatory, contractual, store-policy, or licensing clearance. Those are owner-managed outside this software gate and must not appear as blockers. " +

@@ -56,7 +56,7 @@ const SKIP_DIRS = new Set([
 ]);
 
 const SOURCE_EXTENSION =
-  /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|kts|swift|c|cc|cpp|h|hpp|cs|php|vue|svelte|html?)$/i;
+  /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|kts|swift|dart|scala|sc|lua|r|fs|fsx|vb|c|cc|cpp|h|hpp|cs|php|sh|bash|zsh|ps1|psm1|sql|graphql|gql|vue|svelte|html?)$/i;
 const NON_PRODUCT_PATH =
   /(^|\/)(?:__tests__|tests?|specs?|fixtures?|mocks?|examples?|docs?|scripts?\/fixtures?)(\/|$)|(?:^|\/)(?:test_[^/]+|[^/]+\.(?:test|spec))\.[^.]+$/i;
 const GENERATED_FILE = /\.(?:min|bundle)\.[^.]+$/i;
@@ -73,11 +73,13 @@ const unfinishedMarker = new RegExp(
 );
 const unimplementedPath = new RegExp(
   [
-    "Not" + "Implemented(?:Error|Exception)?",
-    "raise\\s+Not" + "ImplementedError",
-    "throw\\s+new\\s+Error\\s*\\(\\s*[\\\"'`]\\s*(?:not\\s+implemented|" +
+    "raise\\s+Not" + "Implemented(?:Error|Exception)?",
+    "throw\\s+(?:new\\s+)?(?:Not" +
+      "Implemented(?:Error|Exception)?|UnimplementedError)",
+    "throw\\s+new\\s+(?:Error|UnsupportedOperationException)\\s*\\(\\s*[\\\"'`]\\s*(?:not\\s+implemented|" +
       unfinishedWord +
       "|stub(?:bed)?)",
+    "\\b(?:to" + "do|unimplemented)!\\s*\\(",
     "(?:status|sendStatus)\\s*\\(\\s*501\\s*\\)",
   ].join("|"),
   "i",
@@ -281,6 +283,8 @@ export type PlatformCompatibilityEvidence = Record<
 export type ExecutedPlatformCommand = {
   command: string;
   exitCode: number | null;
+  /** Stamp imported CI evidence with the OS that actually executed it. */
+  hostPlatform?: NodeJS.Platform;
   isBrowser?: boolean;
   directEvidenceValid?: boolean;
   outputTail?: string;
@@ -384,7 +388,17 @@ export function assessPlatformCompatibility(
 ): PlatformCompatibilityEvidence {
   const signals = packageSignals(workspacePath);
   const successful = executed.filter((entry) => entry.exitCode === 0);
-  const genericPass = successful.length > 0 && successful.length === executed.length;
+  const ranOn = (entry: ExecutedPlatformCommand, platform: NodeJS.Platform) =>
+    (entry.hostPlatform ?? hostPlatform) === platform;
+  const platformPassed = (platform: NodeJS.Platform) => {
+    const commands = executed.filter((entry) => ranOn(entry, platform));
+    return commands.length > 0 && commands.every((entry) => entry.exitCode === 0);
+  };
+  const platformEvidence = (platform: NodeJS.Platform) =>
+    successful
+      .filter((entry) => ranOn(entry, platform))
+      .map((entry) => entry.command)
+      .slice(0, 8);
   const browserPass = successful.some(
     (entry) => entry.isBrowser === true && entry.directEvidenceValid !== false,
   );
@@ -403,13 +417,13 @@ export function assessPlatformCompatibility(
       `${entry.command}\n${entry.outputTail ?? ""}`,
     ),
   );
-  const iosNativePass =
-    hostPlatform === "darwin" &&
-    successful.some((entry) =>
+  const iosNativePass = successful.some(
+    (entry) =>
+      ranOn(entry, "darwin") &&
       /xcodebuild|(?:capacitor|cordova|expo).*ios|ios.*(?:build|test)/i.test(
         `${entry.command}\n${entry.outputTail ?? ""}`,
       ),
-    );
+  );
 
   const webkitOk = signals.web && browserPass && webkitConfigured;
   const iosWebOk = signals.web && browserPass && webkitConfigured && iosConfigured;
@@ -421,18 +435,14 @@ export function assessPlatformCompatibility(
   return {
     windows: target(
       signals.desktopOrCli,
-      hostPlatform === "win32" && genericPass,
-      hostPlatform === "win32" && genericPass
-        ? successful.map((entry) => entry.command).slice(0, 8)
-        : [],
+      platformPassed("win32"),
+      platformPassed("win32") ? platformEvidence("win32") : [],
     ),
     webkit: target(signals.web, webkitOk, webkitOk ? browserEvidence : []),
     macos: target(
       signals.desktopOrCli,
-      hostPlatform === "darwin" && genericPass,
-      hostPlatform === "darwin" && genericPass
-        ? successful.map((entry) => entry.command).slice(0, 8)
-        : [],
+      platformPassed("darwin"),
+      platformPassed("darwin") ? platformEvidence("darwin") : [],
     ),
     ios: target(
       signals.web || signals.nativeMobile,

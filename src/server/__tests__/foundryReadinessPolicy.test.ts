@@ -40,8 +40,16 @@ describe("Purpose Foundry mandatory production path", () => {
     ]);
   });
 
-  it("keeps FlexFactor mandatory even in Paid mode", () => {
-    expect(normalizeFoundryStations(["factory-deck"], "paid")).toContain("flexfactor");
+  it("keeps Paid mode inside the metered internal station line", () => {
+    const selected = normalizeFoundryStations(
+      ["factory-deck", "scout", "flexfactor"],
+      "paid",
+    );
+    expect(selected).not.toContain("scout");
+    expect(selected).not.toContain("flexfactor");
+    expect(selected).toEqual(
+      expect.arrayContaining(["factory-deck", "crucible", "watchtower"]),
+    );
   });
 
   it("does not confuse all station badges with a production-ready project", () => {

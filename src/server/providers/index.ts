@@ -1,5 +1,4 @@
 import type { AppConfig, AppSecrets } from "../config.js";
-import { readinessBrainFloor } from "../config.js";
 import type { LLMProvider } from "../../shared/types.js";
 import type { ProviderName } from "../../shared/schemas.js";
 import { AnthropicProvider } from "./anthropicProvider.js";
@@ -40,8 +39,9 @@ export { ProviderAbortError } from "./types.js";
 export const OFFLINE_PROVIDERS = new Set<ProviderName>(["mock", "stub"]);
 
 /**
- * Raised when a live (non-demo) run is requested with no usable live provider
- * at all, or when the mandatory Sol plus Fable/Opus readiness floor is absent.
+ * Raised when a provider-routing operation has no usable live build provider.
+ * The mandatory Sol plus Fable/Opus floor is enforced separately at non-demo
+ * run admission and receipt issuance; it must never erase the Free build route.
  */
 export class MissingProviderCredentialError extends Error {
   readonly missing: string[];
@@ -50,11 +50,10 @@ export class MissingProviderCredentialError extends Error {
       ? missing.join(", ")
       : "FACTORY_FREE_ENABLED, ANTHROPIC_API_KEY, OPENAI_API_KEY";
     super(
-      `Live factory run blocked: no usable production-capable provider set. Missing: ${list}. ` +
-        `A Free or Paid build route may do implementation work, but every non-demo ` +
-        `run also requires the OpenAI Sol lead and an independent Anthropic ` +
-        `Fable/Opus-class readiness brain. There is no one-brain, mock, or ` +
-        `cross-family fallback.`,
+      `Live factory operation blocked: required provider capability missing: ${list}. ` +
+        `Free and Paid build routing remain separate; mock/stub are never a live fallback. ` +
+        `Non-demo admission and production-readiness receipts additionally require ` +
+        `the independent Sol plus Fable/Opus brain floor.`,
     );
     this.name = "MissingProviderCredentialError";
     this.missing = missing;
@@ -75,9 +74,9 @@ export interface ProviderRegistry {
    */
   resolveLive(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
   available(): ProviderName[];
-  /** Every configured LIVE provider, free included. Empty when the brain floor is absent. */
+  /** Every configured LIVE build provider, including the independent Free route. */
   availableLive(): ProviderName[];
-  /** Configured PAID providers only, available only with the mandatory floor. */
+  /** Configured PAID build providers only. */
   availablePaid(): ProviderName[];
   missingCredentialNames(): string[];
 }
@@ -106,8 +105,6 @@ export function createProviderRegistry(
 ): ProviderRegistry {
   const mock = new MockProvider();
   const stub = new StubProvider("stub");
-  const mandatoryFloor = readinessBrainFloor(config, secrets);
-
   // Every paid SDK call reserves admission before I/O. Its returned token
   // usage then replaces the in-flight estimate in the local ledger; provider
   // billing can include charges this estimate does not model.
@@ -226,26 +223,16 @@ export function createProviderRegistry(
     }
     if (!anthropic.isConfigured()) missing.push("ANTHROPIC_API_KEY");
     if (!openai.isConfigured()) missing.push("OPENAI_API_KEY");
-    if (!mandatoryFloor.solConfigured) {
-      missing.push("OPENAI_API_KEY and FACTORY_SOL_MODEL");
-    }
-    if (!mandatoryFloor.fableOrOpusConfigured) {
-      missing.push(
-        "ANTHROPIC_API_KEY and FACTORY_FABLE_OR_OPUS_MODEL containing Fable or Opus",
-      );
-    }
-    return [...new Set(missing)];
+    return missing;
   }
 
   function availablePaid(): ProviderName[] {
-    if (!mandatoryFloor.configured) return [];
     return (["anthropic", "openai"] as ProviderName[]).filter((n) =>
       byName[n].isConfigured(),
     );
   }
 
   function availableLive(): ProviderName[] {
-    if (!mandatoryFloor.configured) return [];
     return (["free", "anthropic", "openai"] as ProviderName[]).filter((n) =>
       byName[n].isConfigured(),
     );
@@ -269,9 +256,6 @@ export function createProviderRegistry(
     requested: ProviderName | undefined,
     fallback: ProviderName,
   ): LLMProvider {
-    if (!mandatoryFloor.configured) {
-      throw new MissingProviderCredentialError(missingCredentialNames());
-    }
     // The free route is primary whenever it is usable, regardless of what was
     // requested, EXCEPT when the caller explicitly pinned a paid provider.
     const explicitPaid =
