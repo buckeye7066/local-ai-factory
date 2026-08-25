@@ -132,8 +132,14 @@ export function evaluateProductionReadiness(
   };
 
   add(evidence.purpose.stated, "Purpose is not stated.");
-  add(evidence.purpose.grounded, "Purpose is not grounded in product or repository evidence.");
-  add(evidence.purpose.goalsCovered, "The requested goals are not fully covered.");
+  add(
+    evidence.purpose.grounded,
+    "Purpose is not grounded in product or repository evidence.",
+  );
+  add(
+    evidence.purpose.goalsCovered,
+    "The requested goals are not fully covered.",
+  );
   add(
     evidence.purpose.acceptanceCriteria > 0,
     "No executable acceptance criteria define completion.",
@@ -146,22 +152,40 @@ export function evaluateProductionReadiness(
 
   add(evidence.technical.qaPassed, "Grounded QA did not pass.");
   add(evidence.technical.testsPassed, "Executable tests did not pass.");
-  add(evidence.technical.verificationComplete, "Verification is incomplete.");
-  add(evidence.technical.digestReceiptValid, "The exact delivered bytes lack a valid receipt.");
+  add(
+    evidence.technical.verificationComplete,
+    "Verification is incomplete.",
+  );
+  add(
+    evidence.technical.digestReceiptValid,
+    "The exact delivered bytes lack a valid receipt.",
+  );
   add(
     evidence.technical.blockingWriteRefusals === 0,
     "One or more required writes were refused.",
   );
-  add(evidence.technical.wiringComplete, "The implementation is not fully wired into the product.");
+  add(
+    evidence.technical.wiringComplete,
+    "The implementation is not fully wired into the product.",
+  );
   add(
     evidence.technical.criticalSecurityIssues === 0,
     "Critical or high-severity technical security blockers remain.",
   );
-  add(evidence.technical.operationallyRunnable, "The app is not operationally runnable.");
+  add(
+    evidence.technical.operationallyRunnable,
+    "The app is not operationally runnable.",
+  );
 
-  add(evidence.delivery.delivered, "The verified work was not delivered to its intended destination.");
+  add(
+    evidence.delivery.delivered,
+    "The verified work was not delivered to its intended destination.",
+  );
   if (evidence.delivery.kind === "existing-repo") {
-    add(evidence.delivery.releasedToTrunk, "The verified revision is not on the repository trunk.");
+    add(
+      evidence.delivery.releasedToTrunk,
+      "The verified revision is not on the repository trunk.",
+    );
   } else if (evidence.delivery.kind === "new-repo") {
     add(
       evidence.delivery.liveVerified || evidence.delivery.localArtifactVerified,
@@ -184,9 +208,18 @@ export function evaluateProductionReadiness(
     .every((review) => review.evidenceDigest === evidence.evidenceDigest);
 
   add(sol, "Sol did not approve the exact readiness evidence.");
-  add(fableOrOpus, "Neither Fable nor Opus approved the exact readiness evidence.");
-  add(independentFamilies, "The readiness review did not use independent OpenAI and Anthropic families.");
-  add(sameEvidence, "The required brains did not review the same exact evidence digest.");
+  add(
+    fableOrOpus,
+    "Neither Fable nor Opus approved the exact readiness evidence.",
+  );
+  add(
+    independentFamilies,
+    "The readiness review did not use independent OpenAI and Anthropic families.",
+  );
+  add(
+    sameEvidence,
+    "The required brains did not review the same exact evidence digest.",
+  );
 
   for (const review of evidence.reviews) {
     if (review.evidenceDigest !== evidence.evidenceDigest) continue;
