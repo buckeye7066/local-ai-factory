@@ -66,8 +66,18 @@ async function freshStore() {
 
 describe("Round-10 #2 guardStoreDirs re-checks every call (no cached-success TOCTOU)", () => {
   it("passes on normal dirs, then REFUSES the next write after runs is swapped to a symlink", async () => {
-    await rm(toctouPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    await rm(outsidePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await rm(toctouPath, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
+    await rm(outsidePath, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
     await mkdir(join(toctouPath, "runs"), { recursive: true });
     await mkdir(join(toctouPath, "files"), { recursive: true });
     await mkdir(outsidePath, { recursive: true });
@@ -81,7 +91,12 @@ describe("Round-10 #2 guardStoreDirs re-checks every call (no cached-success TOC
     expect(existsSync(join(toctouPath, "runs", `${run1.id}.json`))).toBe(true);
 
     // 2) Swap runs -> junction/symlink to an outside dir (the TOCTOU move).
-    await rm(join(toctouPath, "runs"), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await rm(join(toctouPath, "runs"), {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
     let swapped = false;
     try {
       await symlink(
@@ -107,8 +122,18 @@ describe("Round-10 #2 guardStoreDirs re-checks every call (no cached-success TOC
 
 describe("Round-10 #3 pruneOldRuns does not follow a symlinked <id>.json", () => {
   it("skips a symlinked run file and prunes only real files", async () => {
-    await rm(prunePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    await rm(pruneOutside, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await rm(prunePath, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
+    await rm(pruneOutside, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
     const runsDir = join(prunePath, "runs");
     await mkdir(runsDir, { recursive: true });
     await mkdir(join(prunePath, "files"), { recursive: true });

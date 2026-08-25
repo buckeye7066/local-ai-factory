@@ -28,6 +28,8 @@ describe("RunOptionsSchema is strict", () => {
       maxRepairLoops: 2,
       pushToOrigin: true,
     });
-    expect(parsed.success, JSON.stringify(!parsed.success && parsed.error.issues)).toBe(true);
+    expect(parsed.success, JSON.stringify(!parsed.success && parsed.error.issues)).toBe(
+      true,
+    );
   });
 });

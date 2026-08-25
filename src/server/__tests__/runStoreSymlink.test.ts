@@ -40,7 +40,12 @@ beforeAll(async () => {
 afterAll(async () => {
   delete process.env.FACTORY_DATA_DIR;
   await rm(dataPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  await rm(outsidePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  await rm(outsidePath, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
 });
 
 function makeRun(id: string): RunRecord {

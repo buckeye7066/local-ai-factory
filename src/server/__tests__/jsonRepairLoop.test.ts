@@ -39,7 +39,10 @@ const PROSE = "I'll research the existing architecture before proposing a design
 
 describe("extractJson", () => {
   it("parses plain JSON", () => {
-    expect(extractJson(GOOD)).toEqual({ overview: "A local-first SPA.", risks: ["none"] });
+    expect(extractJson(GOOD)).toEqual({
+      overview: "A local-first SPA.",
+      risks: ["none"],
+    });
   });
 
   it("still unwraps a properly fenced ```json block", () => {
@@ -69,7 +72,8 @@ describe("salvageTruncatedJson", () => {
   });
 
   it("recovers a nested object cut off mid-value", () => {
-    const cut = '{"tasks":[{"order":1,"title":"a"},{"order":2,"title":"b"},{"order":3,"ti';
+    const cut =
+      '{"tasks":[{"order":1,"title":"a"},{"order":2,"title":"b"},{"order":3,"ti';
     expect(salvageTruncatedJson(cut)).toEqual({
       tasks: [
         { order: 1, title: "a" },
@@ -172,7 +176,9 @@ describe("generateJsonWithRepair", () => {
     const { call, calls } = scripted([PROSE]);
     await expect(
       generateJsonWithRepair<Shape>({ input, call, attempts: 3, baseMaxTokens: 8192 }),
-    ).rejects.toThrow(/Architecture: the model returned no usable JSON after 3 attempt/);
+    ).rejects.toThrow(
+      /Architecture: the model returned no usable JSON after 3 attempt/,
+    );
     expect(calls).toHaveLength(3);
   });
 
@@ -256,7 +262,7 @@ describe("the model is shown the actual field names", () => {
     const shape = describeZodShape(Selection);
     expect(shape).toContain('"element": string');
     expect(shape).toContain('"candidateId": string');
-    expect(shape).toContain('"summary"?');       // defaulted => optional
+    expect(shape).toContain('"summary"?'); // defaulted => optional
     expect(shape).toContain('"selected"?');
     expect(shape).toContain('"dependency" | "reference-only"');
   });
@@ -293,7 +299,7 @@ describe("the model is shown the actual field names", () => {
     });
     expect(out.selected[0].element).toBe("profile form");
     expect(calls).toHaveLength(2);
-    expect(calls[1].prompt).toContain('"element"');            // the shape
+    expect(calls[1].prompt).toContain('"element"'); // the shape
     expect(calls[1].prompt).toContain("failed schema validation"); // the issues
   });
 

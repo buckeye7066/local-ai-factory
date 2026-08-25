@@ -82,8 +82,12 @@ describe("assessGeneratedTests", () => {
       const result = assessGeneratedTests(
         spec,
         uiBuild,
-        plan(source, "tests/profile.spec.ts", "reload",
-          coverage("tests/profile.spec.ts", "reload")),
+        plan(
+          source,
+          "tests/profile.spec.ts",
+          "reload",
+          coverage("tests/profile.spec.ts", "reload"),
+        ),
       );
       expect(result.ok, source).toBe(false);
     }
@@ -186,26 +190,32 @@ describe("assessGeneratedTests", () => {
       acceptanceCriteria: ["Calculator adds two values"],
     };
     const pythonBuild: FileBuild = {
-      files: [{
-        path: "calculator.py",
-        purpose: "calculator",
-        contents: "def add(a,b): return a+b\n",
-        edits: [],
-      }],
+      files: [
+        {
+          path: "calculator.py",
+          purpose: "calculator",
+          contents: "def add(a,b): return a+b\n",
+          edits: [],
+        },
+      ],
     };
     const good: TestPlan = {
       testPlan: "calculator",
-      coverage: [{
-        requirementId: "AC-1",
-        testPath: "tests/calculator_test.py",
-        testName: "test_add",
-        kind: "unit",
-      }],
-      files: [{
-        path: "tests/calculator_test.py",
-        purpose: "unit",
-        contents: "def test_add():\n    result = add(1, 2)\n    assert result == 3\n",
-      }],
+      coverage: [
+        {
+          requirementId: "AC-1",
+          testPath: "tests/calculator_test.py",
+          testName: "test_add",
+          kind: "unit",
+        },
+      ],
+      files: [
+        {
+          path: "tests/calculator_test.py",
+          purpose: "unit",
+          contents: "def test_add():\n    result = add(1, 2)\n    assert result == 3\n",
+        },
+      ],
     };
     expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(true);
     good.files[0]!.contents = "def test_add():\n    assert True\n";

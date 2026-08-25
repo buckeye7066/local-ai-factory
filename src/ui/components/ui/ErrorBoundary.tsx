@@ -45,7 +45,11 @@ export class ErrorBoundary extends Component<Props, State> {
   static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
     // Navigating away from a broken view clears the error automatically, so a
     // crash in one tab does not strand the owner there.
-    if (state.error && state.erroredFor !== undefined && state.erroredFor !== props.resetKey) {
+    if (
+      state.error &&
+      state.erroredFor !== undefined &&
+      state.erroredFor !== props.resetKey
+    ) {
       return { error: null, erroredFor: undefined };
     }
     if (state.error && state.erroredFor === undefined) {
@@ -87,8 +91,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </p>
             <p className="mt-1 text-xs leading-relaxed text-slate-400">
               The rest of Factory Deck is still working — your run is unaffected and
-              keeps going on the server. Switch to another tab, or try this panel
-              again.
+              keeps going on the server. Switch to another tab, or try this panel again.
             </p>
             <button
               type="button"

@@ -22,7 +22,8 @@ function tmp(): string {
   return d;
 }
 afterAll(() => {
-  for (const d of scratch) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const d of scratch)
+    rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 /** Plant a hostile `.pnpmfile.cjs` that writes a sentinel if it is ever loaded. */

@@ -90,7 +90,9 @@ async function main(): Promise<void> {
   if (!verb || verb === "status") {
     console.log(`rotation state : ${rotationStatePath()}`);
     const why = unavailableReason();
-    console.log(why ? `rotation       : UNAVAILABLE — ${why}` : "rotation       : available");
+    console.log(
+      why ? `rotation       : UNAVAILABLE — ${why}` : "rotation       : available",
+    );
     if (tags === null) {
       console.log(`ollama         : UNREACHABLE at ${OLLAMA}`);
     } else if (tags.length === 0) {
@@ -100,7 +102,9 @@ async function main(): Promise<void> {
     }
     const pins = Object.entries(store.read().pin ?? {}).filter(([, v]) => v);
     if (pins.length === 0) console.log("pins           : none");
-    else for (const [k, v] of pins) console.log(`pin[${k}]${" ".repeat(Math.max(0, 9 - k.length))}= ${v}`);
+    else
+      for (const [k, v] of pins)
+        console.log(`pin[${k}]${" ".repeat(Math.max(0, 9 - k.length))}= ${v}`);
     console.log("");
     console.log("  pnpm glimmer on    # route this app's work to Glimmer");
     console.log("  pnpm glimmer off   # give it back to rotation");
@@ -147,10 +151,16 @@ async function main(): Promise<void> {
   await store.setPin(target, app);
   console.log(`Glimmer pinned for "${app}": ${target}`);
   console.log("");
-  console.log("  Measured on this machine: ~1.6 tokens/second, 100% CPU, ~17 GB resident.");
-  console.log("  A 2,000-token step takes roughly 20 minutes. That is expected, not a hang.");
+  console.log(
+    "  Measured on this machine: ~1.6 tokens/second, 100% CPU, ~17 GB resident.",
+  );
+  console.log(
+    "  A 2,000-token step takes roughly 20 minutes. That is expected, not a hang.",
+  );
   console.log("");
-  console.log(`  Release with: pnpm glimmer off${app === "factory-deck" ? "" : ` --app ${app}`}`);
+  console.log(
+    `  Release with: pnpm glimmer off${app === "factory-deck" ? "" : ` --app ${app}`}`,
+  );
 }
 
 void main();

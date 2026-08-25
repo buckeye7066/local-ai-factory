@@ -27,7 +27,7 @@ does not prove the capability is absent.
 | Parallel orchestration              | Missions and subagents                        | Parallel subagents                                         | Resumable dynamic workflows                                  | Parallel cloud agents                                            | Parallel agents/worktrees                                       | Durable role separation plus portfolio orchestration                             |
 | Provider independence               | Broad BYOK/open/local support                 | Cross-vendor catalog                                       | Not established in reviewed cloud workflow docs              | Broad model catalog                                              | OpenAI ecosystem                                                | Provider-neutral and local-first, routed by role/risk/cost                       |
 | Verification                        | QA and scripted checks                        | Testable requirements and checkpoints                      | Tests, browser, CI, security swarm                           | Tests plus screenshots/video/logs and Agent Review               | Tests, review, and security review                              | Clause-level evidence, real-system journeys, receipts, and mutation/fault checks |
-| Independent anti-self-certification | Not established                               | Not established                                            | Human review documented; provider separation not established | Dedicated review surface; independence guarantee not established | Separate review surface; independence guarantee not established | Structurally separate author and verifier with recorded provenance               |
+| Independent evidence separation      | Not established                               | Not established                                            | Review surface documented; provider separation not established | Dedicated review surface; independence guarantee not established | Separate review surface; independence guarantee not established | Structurally separate author and verifier with recorded provenance               |
 | Crash-safe resumption               | Not established                               | Checkpoint/rewind                                          | Documented resumable workflows                               | Not established                                                  | Long-running/background tasks                                   | Durable stage checkpoints and idempotent resume                                  |
 
 Official evidence reviewed:
@@ -59,8 +59,8 @@ should compete on **trustworthy fulfillment of intent**:
    evidence from the real repository and owner instructions.
 2. **Traceable execution** — map every plan item, edit, test, and release claim
    to a purpose clause and its acceptance evidence.
-3. **Independent verification** — never let an implementation context certify
-   its own work; record author/reviewer provider and model provenance.
+3. **Independent verification** — an implementation context cannot use its own
+   output as proof; record author/verifier provider and model provenance.
 4. **Evidence-backed Definition of Done** — bind claims to the exact revision,
    changed-file digests, executed commands, raw exit statuses, browser/runtime
    artifacts, unresolved limitations, and acceptance results.
@@ -103,7 +103,7 @@ should compete on **trustworthy fulfillment of intent**:
 ### P2 — durable scale
 
 - Risk-, privacy-, cost-, and empirical-quality-based model adjudication.
-- Cross-repository dependency maps and immutable candidate attestations.
+- Cross-repository dependency maps and immutable candidate evidence bundles.
 - Post-release purpose drift and production-outcome monitoring.
 
 ## Decision rule

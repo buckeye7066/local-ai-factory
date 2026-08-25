@@ -55,8 +55,7 @@ Set passed=true only when there are no high or critical code, integration, accep
       {
         severity: "high",
         title: "Changed code omitted from QA context",
-        detail:
-          `QA could not inspect these files in full: ${codeContext.omittedPaths.join(", ")}.`,
+        detail: `QA could not inspect these files in full: ${codeContext.omittedPaths.join(", ")}.`,
         file: codeContext.omittedPaths[0] ?? null,
         repairInstruction:
           "Reduce or split the change so every changed file can be reviewed in full.",

@@ -54,7 +54,10 @@ export function toSearchResults(results: RepoRewardsResult[]): SearchResult[] {
     out.push({
       title: r.repo?.fullName || url,
       url,
-      snippet: [r.repo?.description, r.reason].filter(Boolean).join(" — ").slice(0, 500),
+      snippet: [r.repo?.description, r.reason]
+        .filter(Boolean)
+        .join(" — ")
+        .slice(0, 500),
     });
   }
   return out;
@@ -103,7 +106,9 @@ export async function repoRewardsSearch(
         unreachableReason: null,
       };
     } catch (err) {
-      failures.push(`${base} → ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+      failures.push(
+        `${base} → ${String((err as Error)?.message ?? err).slice(0, 120)}`,
+      );
     }
   }
 

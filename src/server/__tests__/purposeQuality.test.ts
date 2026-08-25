@@ -24,11 +24,25 @@ let dir: string;
 function route(id: string, pool: string): CatalogRoute {
   const model = id.split("/").slice(1).join("/");
   return {
-    id, backend: id.split("/")[0], backend_label: "", model, wire_model: model,
-    api: "openai", base_url: `https://${id.split("/")[0]}.example.invalid/v1`, pool,
-    auth_env: "", auth_kind: "none", cost_class: "free-tier", tier: "strong",
-    enabled: true, disabled_reason: "", quota_status: "unknown", resets_at: null, note: "",
-    capabilities: ["code_author"], capabilities_source: "measured",
+    id,
+    backend: id.split("/")[0],
+    backend_label: "",
+    model,
+    wire_model: model,
+    api: "openai",
+    base_url: `https://${id.split("/")[0]}.example.invalid/v1`,
+    pool,
+    auth_env: "",
+    auth_kind: "none",
+    cost_class: "free-tier",
+    tier: "strong",
+    enabled: true,
+    disabled_reason: "",
+    quota_status: "unknown",
+    resets_at: null,
+    note: "",
+    capabilities: ["code_author"],
+    capabilities_source: "measured",
   };
 }
 
@@ -56,7 +70,10 @@ describe("yield inside the pool", () => {
       await r.reportQuality(bad, "rejected", "prog");
     }
     for (let i = 0; i < 4; i++) {
-      const s = await r.nextRoute({ tier: "strong", intent: { role: "author", purpose: "prog" } });
+      const s = await r.nextRoute({
+        tier: "strong",
+        intent: { role: "author", purpose: "prog" },
+      });
       expect(s.route.id).toBe("a/good");
     }
   });
@@ -69,8 +86,20 @@ describe("yield inside the pool", () => {
       await r.reportQuality(b, "verified", "prog");
       await r.reportQuality(a, "noop", "prog");
     }
-    const first = (await r.nextRoute({ tier: "strong", intent: { role: "author", purpose: "prog" }, now: 100 })).pool;
-    const second = (await r.nextRoute({ tier: "strong", intent: { role: "author", purpose: "prog" }, now: 101 })).pool;
+    const first = (
+      await r.nextRoute({
+        tier: "strong",
+        intent: { role: "author", purpose: "prog" },
+        now: 100,
+      })
+    ).pool;
+    const second = (
+      await r.nextRoute({
+        tier: "strong",
+        intent: { role: "author", purpose: "prog" },
+        now: 101,
+      })
+    ).pool;
     expect(new Set([first, second])).toEqual(new Set(["pool-a", "pool-b"]));
   });
 
@@ -87,10 +116,15 @@ describe("chronic offender cooldown", () => {
     const ok = route("b/ok", "pool-b");
     const r = rot([bad, ok]);
     let note: string | null = null;
-    for (let i = 0; i < QUALITY_MIN_ATTEMPTS; i++) note = await r.reportQuality(bad, "rejected", "prog", 1000);
+    for (let i = 0; i < QUALITY_MIN_ATTEMPTS; i++)
+      note = await r.reportQuality(bad, "rejected", "prog", 1000);
     expect(note).toContain("cooled down");
     for (let i = 0; i < 4; i++) {
-      const s = await r.nextRoute({ tier: "strong", intent: { role: "author", purpose: "prog" }, now: 1001 });
+      const s = await r.nextRoute({
+        tier: "strong",
+        intent: { role: "author", purpose: "prog" },
+        now: 1001,
+      });
       expect(s.route.id).toBe("b/ok");
     }
   });
@@ -98,20 +132,42 @@ describe("chronic offender cooldown", () => {
   it("the cooldown is scoped to the purpose", async () => {
     const bad = route("a/bad", "pool-a");
     const r = rot([bad]);
-    for (let i = 0; i < QUALITY_MIN_ATTEMPTS; i++) await r.reportQuality(bad, "rejected", "prog-one", 1000);
-    expect((await r.nextRoute({ tier: "strong", intent: { role: "author", purpose: "prog-two" }, now: 1001 })).route.id).toBe("a/bad");
+    for (let i = 0; i < QUALITY_MIN_ATTEMPTS; i++)
+      await r.reportQuality(bad, "rejected", "prog-one", 1000);
+    expect(
+      (
+        await r.nextRoute({
+          tier: "strong",
+          intent: { role: "author", purpose: "prog-two" },
+          now: 1001,
+        })
+      ).route.id,
+    ).toBe("a/bad");
     expect((await r.nextRoute({ tier: "strong", now: 1002 })).route.id).toBe("a/bad");
   });
 
   it("the cooldown expires", async () => {
     const bad = route("a/bad", "pool-a");
     const r = rot([bad]);
-    for (let i = 0; i < QUALITY_MIN_ATTEMPTS; i++) await r.reportQuality(bad, "rejected", "prog", 1000);
+    for (let i = 0; i < QUALITY_MIN_ATTEMPTS; i++)
+      await r.reportQuality(bad, "rejected", "prog", 1000);
     await expect(
-      r.nextRoute({ tier: "strong", intent: { role: "author", purpose: "prog" }, now: 1001 }),
+      r.nextRoute({
+        tier: "strong",
+        intent: { role: "author", purpose: "prog" },
+        now: 1001,
+      }),
     ).rejects.toThrow(RotationError);
     const later = 1000 + QUALITY_COOLDOWN_S + 1;
-    expect((await r.nextRoute({ tier: "strong", intent: { role: "author", purpose: "prog" }, now: later })).route.id).toBe("a/bad");
+    expect(
+      (
+        await r.nextRoute({
+          tier: "strong",
+          intent: { role: "author", purpose: "prog" },
+          now: later,
+        })
+      ).route.id,
+    ).toBe("a/bad");
   });
 
   it("an unknown signal is recorded, not thrown", async () => {
@@ -129,7 +185,9 @@ describe("the provider attributes results to the authoring route", () => {
       vi.fn(async (_i: string | URL | Request, init?: RequestInit) => {
         const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
         return new Response(
-          JSON.stringify({ choices: [{ message: { role: "assistant", content: `by ${body.model}` } }] }),
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: `by ${body.model}` } }],
+          }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }),
@@ -143,7 +201,9 @@ describe("the provider attributes results to the authoring route", () => {
     const r = rot([a, b]);
     const seen: CatalogRoute[] = [];
     const prov = new RotatingProvider(r, {
-      fccDelegate: null, fccBaseUrl: "http://127.0.0.1:8082", tier: "strong",
+      fccDelegate: null,
+      fccBaseUrl: "http://127.0.0.1:8082",
+      tier: "strong",
       onRoute: (s) => seen.push(s.route),
     });
     prov.setPurpose("prog");
@@ -157,7 +217,11 @@ describe("the provider attributes results to the authoring route", () => {
 
   it("a report before any call is a no-op", async () => {
     const r = rot([route("a/one", "pool-a")]);
-    const prov = new RotatingProvider(r, { fccDelegate: null, fccBaseUrl: "http://127.0.0.1:8082", tier: "strong" });
+    const prov = new RotatingProvider(r, {
+      fccDelegate: null,
+      fccBaseUrl: "http://127.0.0.1:8082",
+      tier: "strong",
+    });
     expect(await prov.reportQuality("author", "verified")).toBeNull();
   });
 });

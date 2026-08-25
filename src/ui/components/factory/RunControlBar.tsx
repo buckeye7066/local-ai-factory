@@ -85,17 +85,17 @@ export function RunControlBar({
           {(run.status === "failed" || run.status === "cancelled") &&
             run.resumable &&
             onResume && (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<RotateCcw className="h-3.5 w-3.5" />}
-              onClick={onResume}
-              disabled={resuming}
-              className="text-aurora-cyan hover:text-white"
-            >
-              {resuming ? "Resuming…" : "Resume"}
-            </Button>
-          )}
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<RotateCcw className="h-3.5 w-3.5" />}
+                onClick={onResume}
+                disabled={resuming}
+                className="text-aurora-cyan hover:text-white"
+              >
+                {resuming ? "Resuming…" : "Resume"}
+              </Button>
+            )}
           {running && onCancel && (
             <Button
               size="sm"

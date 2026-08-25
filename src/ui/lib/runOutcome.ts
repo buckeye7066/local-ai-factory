@@ -2,10 +2,7 @@ import type { RunRecord } from "../../shared/schemas.js";
 
 /** One fail-closed definition of "ready" for toast and celebration surfaces. */
 export function runIsReady(
-  run: Pick<
-    RunRecord,
-    "status" | "demo" | "finalReport" | "destination" | "release"
-  >,
+  run: Pick<RunRecord, "status" | "demo" | "finalReport" | "destination" | "release">,
 ): boolean {
   if (run.status !== "completed" || run.demo) return false;
   if (run.finalReport?.testStatus !== "passing") return false;

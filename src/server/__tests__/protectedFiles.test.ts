@@ -127,17 +127,30 @@ describe("assessProtectedHostWrite", () => {
       "vitest.config.js": "export default {}\n",
     });
     expect(
-      assessProtectedHostWrite(ws, "vitest.config.js", "export default { hijacked: true }").refused,
+      assessProtectedHostWrite(
+        ws,
+        "vitest.config.js",
+        "export default { hijacked: true }",
+      ).refused,
     ).toBe(true);
-    const hijack = assessProtectedHostWrite(ws, "vitest.config.ts", "export default {}");
+    const hijack = assessProtectedHostWrite(
+      ws,
+      "vitest.config.ts",
+      "export default {}",
+    );
     expect(hijack.refused).toBe(true);
     expect(hijack.reason).toMatch(/take precedence/);
   });
 
   it("allows a root tool config for a tool the host does NOT use, and non-root configs", () => {
     const ws = gitWorkspace({ "package.json": HOST_MANIFEST });
-    expect(assessProtectedHostWrite(ws, "playwright.config.ts", "export default {}").refused).toBe(false);
-    expect(assessProtectedHostWrite(ws, "packages/sub/vitest.config.ts", "export default {}").refused).toBe(false);
+    expect(
+      assessProtectedHostWrite(ws, "playwright.config.ts", "export default {}").refused,
+    ).toBe(false);
+    expect(
+      assessProtectedHostWrite(ws, "packages/sub/vitest.config.ts", "export default {}")
+        .refused,
+    ).toBe(false);
   });
 
   it("refuses edits to tracked package-level test configuration", () => {
@@ -176,7 +189,10 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     const verdict = assessProtectedHostWrite(
       repo,
       "auth.js",
-      ["const jwt = require('jsonwebtoken');", "module.exports = { authenticate };"].join(BR),
+      [
+        "const jwt = require('jsonwebtoken');",
+        "module.exports = { authenticate };",
+      ].join(BR),
     );
     expect(verdict.refused).toBe(true);
     expect(verdict.reason).toMatch(/drops 3 export/i);
@@ -203,18 +219,18 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     const verdict = assessProtectedHostWrite(
       repo,
       "util.js",
-      ["exports.alpha = alpha;", "exports.beta = beta;", "exports.gamma = gamma;"].join(BR),
+      ["exports.alpha = alpha;", "exports.beta = beta;", "exports.gamma = gamma;"].join(
+        BR,
+      ),
     );
     expect(verdict.refused).toBe(false);
   });
 
   it("recognizes default exports but ignores exports hidden in comments", () => {
-    expect(exportedSymbols("export default function App(){}")).toContain(
+    expect(exportedSymbols("export default function App(){}")).toContain("default");
+    expect(exportedSymbols("/* export default function App(){} */")).not.toContain(
       "default",
     );
-    expect(
-      exportedSymbols("/* export default function App(){} */"),
-    ).not.toContain("default");
   });
 
   it("refuses a new shadow extension variant beside tracked source", () => {
@@ -268,42 +284,38 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
     ]) {
       expect(exportedSymbols(decoy)).not.toContain("auth");
     }
-    expect(exportedSymbols("export type Auth = { id: string };")).toContain(
-      "Auth",
-    );
+    expect(exportedSymbols("export type Auth = { id: string };")).toContain("Auth");
   });
 
   it("keeps protection active when the tracked-path index exceeds one MiB", () => {
     const ws = gitWorkspace({ "vitest.config.js": "export default {};\n" });
-    const blob = execFileSync(
-      "git",
-      ["-C", ws, "hash-object", "-w", "--stdin"],
-      { input: "x", encoding: "utf8" },
-    ).trim();
+    const blob = execFileSync("git", ["-C", ws, "hash-object", "-w", "--stdin"], {
+      input: "x",
+      encoding: "utf8",
+    }).trim();
     const entries = Array.from({ length: 10_000 }, (_, index) => {
-      const path =
-        `bulk/${String(index).padStart(5, "0")}-${"x".repeat(110)}.ts`;
+      const path = `bulk/${String(index).padStart(5, "0")}-${"x".repeat(110)}.ts`;
       return `100644 blob ${blob}\t${path}\0`;
     }).join("");
-    execFileSync(
-      "git",
-      ["-C", ws, "update-index", "-z", "--index-info"],
-      { input: entries, maxBuffer: 4 * 1024 * 1024 },
-    );
+    execFileSync("git", ["-C", ws, "update-index", "-z", "--index-info"], {
+      input: entries,
+      maxBuffer: 4 * 1024 * 1024,
+    });
     const listing = execFileSync("git", ["-C", ws, "ls-files", "-z"], {
       maxBuffer: 4 * 1024 * 1024,
     });
     expect(listing.byteLength).toBeGreaterThan(1024 * 1024);
     _resetProtectedFilesCache();
     expect(
-      assessProtectedHostWrite(ws, "vitest.config.ts", "export default {};")
-        .refused,
+      assessProtectedHostWrite(ws, "vitest.config.ts", "export default {};").refused,
     ).toBe(true);
   });
 
   it("leaves brand-new source files alone", () => {
     const repo = gitWorkspace({ "auth.js": "export const A = 1;" });
-    expect(assessProtectedHostWrite(repo, "brandNew.js", "// anything").refused).toBe(false);
+    expect(assessProtectedHostWrite(repo, "brandNew.js", "// anything").refused).toBe(
+      false,
+    );
   });
   it("preserves each export-star source independently", () => {
     const ws = gitWorkspace({
@@ -321,9 +333,9 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
   it.each(["cts", "mts"])("protects tracked eslint.config.%s", (ext) => {
     const path = `eslint.config.${ext}`;
     const ws = gitWorkspace({ [path]: "export default [{ rules: {} }];\n" });
-    expect(
-      assessProtectedHostWrite(ws, path, "export default [];\n").refused,
-    ).toBe(true);
+    expect(assessProtectedHostWrite(ws, path, "export default [];\n").refused).toBe(
+      true,
+    );
   });
 
   it("refuses a Python test-config precedence shadow", () => {
@@ -341,14 +353,13 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
 
   it("refuses a new lockfile that would switch package managers", () => {
     const ws = gitWorkspace({
-      "package-lock.json": "{\"lockfileVersion\":3}\n",
-      "package.json": "{\"name\":\"host\"}\n",
+      "package-lock.json": '{"lockfileVersion":3}\n',
+      "package.json": '{"name":"host"}\n',
     });
     const verdict = assessProtectedHostWrite(ws, "yarn.lock", "# shadow\n");
     expect(verdict.refused).toBe(true);
     expect(verdict.reason).toMatch(/lockfile|derived artifact/i);
   });
-
 
   it("refreshes its tracked-file baseline when an in-place repo HEAD advances", () => {
     const ws = gitWorkspace({ "src/old.ts": "export const old = 1;\n" });
@@ -360,36 +371,25 @@ describe("tracked source files keep their exports (slice 40c4c51d class)", () =>
       ).refused,
     ).toBe(false);
 
-    writeFileSync(
-      join(ws, "src", "new.ts"),
-      "export const keep = 1;\n",
-    );
+    writeFileSync(join(ws, "src", "new.ts"), "export const keep = 1;\n");
     execFileSync("git", ["-C", ws, "add", "src/new.ts"]);
-    execFileSync(
-      "git",
-      [
-        "-C",
-        ws,
-        "-c",
-        "user.email=t@t",
-        "-c",
-        "user.name=t",
-        "commit",
-        "-q",
-        "-m",
-        "advance",
-      ],
-    );
-
-    const verdict = assessProtectedHostWrite(
+    execFileSync("git", [
+      "-C",
       ws,
-      "src/new.ts",
-      "const removed = 1;\n",
-    );
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "user.name=t",
+      "commit",
+      "-q",
+      "-m",
+      "advance",
+    ]);
+
+    const verdict = assessProtectedHostWrite(ws, "src/new.ts", "const removed = 1;\n");
     expect(verdict.refused).toBe(true);
     expect(verdict.reason).toMatch(/drops.*export/i);
   });
-
 });
 
 describe("factory overlay names (GrantFlow extend ba870e71)", () => {
@@ -405,7 +405,11 @@ describe("factory overlay names (GrantFlow extend ba870e71)", () => {
   it("refuses overlay writes even in a non-git (new-app) workspace", () => {
     const path = mkdtempSync(join(tmpdir(), "factory-protected-nogit-"));
     workspaces.push(path);
-    const verdict = assessProtectedHostWrite(path, "_gh_main_client.js", "export default 1\n");
+    const verdict = assessProtectedHostWrite(
+      path,
+      "_gh_main_client.js",
+      "export default 1\n",
+    );
     expect(verdict.refused).toBe(true);
     expect(verdict.reason).toMatch(/overlay/);
   });
@@ -417,7 +421,11 @@ describe("factory overlay names (GrantFlow extend ba870e71)", () => {
       "src/api/client.js": fatClient,
       "src/App.jsx": fatApp,
     });
-    const clientStub = assessProtectedHostWrite(ws, "src/api/client.js", "export const api = {};\n");
+    const clientStub = assessProtectedHostWrite(
+      ws,
+      "src/api/client.js",
+      "export const api = {};\n",
+    );
     expect(clientStub.refused).toBe(true);
     expect(clientStub.reason).toMatch(/collapse the host spine/);
     const appStub = assessProtectedHostWrite(
@@ -426,7 +434,11 @@ describe("factory overlay names (GrantFlow extend ba870e71)", () => {
       "export default function App() { return <div/> }\n",
     );
     expect(appStub.refused).toBe(true);
-    const grown = assessProtectedHostWrite(ws, "src/api/client.js", `${fatClient}\nexport const extra = 1;\n`);
+    const grown = assessProtectedHostWrite(
+      ws,
+      "src/api/client.js",
+      `${fatClient}\nexport const extra = 1;\n`,
+    );
     expect(grown.refused).toBe(false);
   });
 });

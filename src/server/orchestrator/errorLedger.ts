@@ -19,7 +19,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import type { LLMProvider } from "../../shared/types.js";
-import type { ErrorLedgerEntry, ErrorClassification, StageId } from "../../shared/schemas.js";
+import type {
+  ErrorLedgerEntry,
+  ErrorClassification,
+  StageId,
+} from "../../shared/schemas.js";
 import { matchEnvironmentSignature } from "./envFailure.js";
 
 export type { ErrorLedgerEntry, ErrorClassification };
@@ -53,7 +57,8 @@ export function programFileFrom(message: string): string | null {
 const SIGNATURES: readonly Signature[] = [
   {
     id: "reasoning_only_reply",
-    pattern: /reasoning[- ]only|reasoning budget|finish=length.*empty|empty completion/i,
+    pattern:
+      /reasoning[- ]only|reasoning budget|finish=length.*empty|empty completion/i,
     classification: "provider",
     suggestion: () =>
       "The model spent its output budget on reasoning (or returned nothing) — raise maxTokens for this call, or keep the reasoning channel off for local routes (FACTORY_OLLAMA_THINK unset). Rotation already moved to the next pool.",
@@ -74,14 +79,16 @@ const SIGNATURES: readonly Signature[] = [
   },
   {
     id: "transport_timeout",
-    pattern: /ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|TLS|certificate|socket hang up|fetch failed|timed out/i,
+    pattern:
+      /ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|TLS|certificate|socket hang up|fetch failed|timed out/i,
     classification: "provider",
     suggestion: () =>
       "Transient transport failure — retry. If it repeats on one route only, check that provider's status page; if it repeats everywhere, check this machine's network/VPN.",
   },
   {
     id: "model_not_found",
-    pattern: /model not found|no longer available|is not found|\b404\b.*model|model .* does not exist/i,
+    pattern:
+      /model not found|no longer available|is not found|\b404\b.*model|model .* does not exist/i,
     classification: "provider",
     suggestion: (_m, message) => {
       const route = routeIdFrom(message);
@@ -92,7 +99,8 @@ const SIGNATURES: readonly Signature[] = [
   },
   {
     id: "missing_credential",
-    pattern: /credential env not set|not set in this environment|needs [A-Z_]+ which is not set|credentials? (is|are) missing|Missing.*API_KEY/i,
+    pattern:
+      /credential env not set|not set in this environment|needs [A-Z_]+ which is not set|credentials? (is|are) missing|Missing.*API_KEY/i,
     classification: "environment",
     suggestion: (_m, message) => {
       const env = /\b([A-Z][A-Z0-9_]*_(?:API_KEY|TOKEN|KEY))\b/.exec(message)?.[1];
@@ -115,7 +123,8 @@ const SIGNATURES: readonly Signature[] = [
   },
   {
     id: "json_schema_rejected",
-    pattern: /invalid_enum_value|invalid_type|Expected .* received|did not match the schema|schema validation/i,
+    pattern:
+      /invalid_enum_value|invalid_type|Expected .* received|did not match the schema|schema validation/i,
     classification: "provider",
     suggestion: () =>
       "The model's JSON did not match the agent schema. Rotation retries on another pool; if one route does this repeatedly its yield drops and it cools down for this purpose.",
@@ -123,7 +132,8 @@ const SIGNATURES: readonly Signature[] = [
   {
     id: "executed_test_failure",
     // Case-sensitive on purpose: "Run failed: ..." is not a test failure.
-    pattern: /\bFAILED\b|AssertionError|Error: expect|\b\d+ failed\b|\bexited [1-9]\d*|exit code [1-9]\d*|Test failed/,
+    pattern:
+      /\bFAILED\b|AssertionError|Error: expect|\b\d+ failed\b|\bexited [1-9]\d*|exit code [1-9]\d*|Test failed/,
     classification: "program-defect",
     suggestion: (_m, message) => {
       const file = programFileFrom(message);
@@ -141,21 +151,24 @@ const SIGNATURES: readonly Signature[] = [
   },
   {
     id: "unseen_anchored_edit_on_resume",
-    pattern: /existing file was not supplied in full to this stage|refusing an unseen anchored edit/i,
+    pattern:
+      /existing file was not supplied in full to this stage|refusing an unseen anchored edit/i,
     classification: "deck-defect",
     suggestion: (_m, message) =>
       `Deck defect (known 2026-08-23, run 751546a5): a resume replays checkpointed builder files against a workspace that already holds them, so every file reads as an unseen edit and is refused${programFileFrom(message) ? ` (${programFileFrom(message)})` : ""}. Start a fresh run, or fix runFactory's resume path to re-read existing targets in full before replaying writes.`,
   },
   {
     id: "builder_write_incomplete",
-    pattern: /Builder write incomplete|NO BUILDER REACHED DISK|Wrote \d+ of \d+ builder file\(s\); \d+ refused/i,
+    pattern:
+      /Builder write incomplete|NO BUILDER REACHED DISK|Wrote \d+ of \d+ builder file\(s\); \d+ refused/i,
     classification: "deck-defect",
     suggestion: () =>
       "Consequence line: the run stopped because one or more builder files were refused — see the WRITE REFUSED entries in this ledger for the file and the reason; fix those and resume/re-run.",
   },
   {
     id: "git_push_or_pr",
-    pattern: /\bgit\b.*(rejected|denied|non-fast-forward)|pull request.*(failed|refused)|auto-merge/i,
+    pattern:
+      /\bgit\b.*(rejected|denied|non-fast-forward)|pull request.*(failed|refused)|auto-merge/i,
     classification: "environment",
     suggestion: () =>
       "The host repository refused the push/PR. Check the remote's protection rules and the gh/git credentials this deck runs with, then resume the run.",
@@ -193,7 +206,12 @@ export function classifyErrorMessage(message: string): ClassifiedError {
       signature: env.signature,
     };
   }
-  return { classification: "deck-defect", suggestion: "", suggestionSource: "none", signature: null };
+  return {
+    classification: "deck-defect",
+    suggestion: "",
+    suggestionSource: "none",
+    signature: null,
+  };
 }
 
 /** The first stack frame inside this deck's own source, with its source line. */
@@ -202,7 +220,10 @@ export function deckFrameFrom(
 ): { file: string; line: number; sourceLine: string } | null {
   if (!stack) return null;
   for (const raw of stack.split("\n")) {
-    const m = /((?:[A-Za-z]:)?[^()\s]*[\\/]src[\\/]server[\\/][^()\s:]+):(\d+)(?::\d+)?/.exec(raw);
+    const m =
+      /((?:[A-Za-z]:)?[^()\s]*[\\/]src[\\/]server[\\/][^()\s:]+):(\d+)(?::\d+)?/.exec(
+        raw,
+      );
     if (!m) continue;
     const file = m[1]!.replace(/^file:\/\/\/?/, "");
     if (/[\\/]__tests__[\\/]/.test(file) && !/errorLedger/.test(file)) {
@@ -258,8 +279,12 @@ export class ErrorLedger {
 
   /** Record one error. Repeats of the same stage+message bump `occurrences`. */
   record(input: RecordInput): ErrorLedgerEntry {
-    const message = String(input.message || "").trim().slice(0, 4000);
-    const dup = this.entries.find((e) => e.stage === input.stage && e.message === message);
+    const message = String(input.message || "")
+      .trim()
+      .slice(0, 4000);
+    const dup = this.entries.find(
+      (e) => e.stage === input.stage && e.message === message,
+    );
     if (dup) {
       dup.occurrences += 1;
       dup.ts = Date.now();
@@ -276,7 +301,8 @@ export class ErrorLedger {
     let codeKind: ErrorLedgerEntry["code"]["kind"] = "unknown";
     let classification = classified.classification;
     let suggestion = classified.suggestion;
-    let suggestionSource: ErrorLedgerEntry["suggestionSource"] = classified.suggestionSource;
+    let suggestionSource: ErrorLedgerEntry["suggestionSource"] =
+      classified.suggestionSource;
     if (route) {
       // A failure that carries a route id is the PROVIDER's by default, even
       // when a deck frame is on the stack: the HTTP client frame is where it
@@ -290,13 +316,21 @@ export class ErrorLedger {
         suggestionSource = "signature";
       }
     } else if (frame && classified.suggestionSource === "none") codeKind = "deck";
-    else if (programFile && (classification === "program-defect" || input.exitCode !== undefined)) {
+    else if (
+      programFile &&
+      (classification === "program-defect" || input.exitCode !== undefined)
+    ) {
       codeKind = "program";
       if (classified.suggestionSource === "none") classification = "program-defect";
     } else if (frame) codeKind = "deck";
     // A command that ran and failed without a known signature is the
     // program's failure, not the deck's.
-    if (input.exitCode !== undefined && input.exitCode !== 0 && classified.suggestionSource === "none" && !route) {
+    if (
+      input.exitCode !== undefined &&
+      input.exitCode !== 0 &&
+      classified.suggestionSource === "none" &&
+      !route
+    ) {
       classification = "program-defect";
     }
 
@@ -312,9 +346,14 @@ export class ErrorLedger {
       message,
       code: {
         kind: codeKind,
-        file: codeKind === "deck" ? frame?.file ?? null : codeKind === "program" ? programFile : null,
-        line: codeKind === "deck" ? frame?.line ?? null : null,
-        sourceLine: codeKind === "deck" ? frame?.sourceLine ?? null : null,
+        file:
+          codeKind === "deck"
+            ? (frame?.file ?? null)
+            : codeKind === "program"
+              ? programFile
+              : null,
+        line: codeKind === "deck" ? (frame?.line ?? null) : null,
+        sourceLine: codeKind === "deck" ? (frame?.sourceLine ?? null) : null,
         route: route ?? null,
         command: input.command ?? null,
         exitCode: input.exitCode ?? null,
@@ -322,7 +361,11 @@ export class ErrorLedger {
       classification,
       signature: classified.signature,
       suggestion,
-      suggestionSource: suggestion ? (suggestionSource === "none" ? "signature" : suggestionSource) : "none",
+      suggestionSource: suggestion
+        ? suggestionSource === "none"
+          ? "signature"
+          : suggestionSource
+        : "none",
       occurrences: 1,
     };
     if (this.entries.length >= MAX_ENTRIES) this.entries.shift();
@@ -333,13 +376,20 @@ export class ErrorLedger {
   /** Log lines that ARE errors even when their kind is "info" (route journal). */
   static isErrorLogLine(kind: string, message: string): boolean {
     if (kind === "error") return true;
-    if (kind === "warning") return /fail|refused|could not|cannot|unable|error|exhausted|timed out|NOT achieved|rejected/i.test(message);
-    return /\] \w+: \S+ failed \(|attempt \d+\/\d+ failed|^Run failed:|held-out|HTTP [45]\d\d/.test(message);
+    if (kind === "warning")
+      return /fail|refused|could not|cannot|unable|error|exhausted|timed out|NOT achieved|rejected/i.test(
+        message,
+      );
+    return /\] \w+: \S+ failed \(|attempt \d+\/\d+ failed|^Run failed:|held-out|HTTP [45]\d\d/.test(
+      message,
+    );
   }
 
   /** Entries still without a suggestion. Route failures are never in here. */
   unresolved(): ErrorLedgerEntry[] {
-    return this.entries.filter((e) => e.suggestionSource === "none" && e.code.kind !== "route" && !e.code.route);
+    return this.entries.filter(
+      (e) => e.suggestionSource === "none" && e.code.kind !== "route" && !e.code.route,
+    );
   }
 
   /**
@@ -351,13 +401,15 @@ export class ErrorLedger {
     const pending = this.unresolved().slice(0, max);
     if (pending.length === 0) return 0;
     const schema = z.object({
-      suggestions: z.array(z.object({ id: z.string(), fix: z.string().min(1).max(600) })),
+      suggestions: z.array(
+        z.object({ id: z.string(), fix: z.string().min(1).max(600) }),
+      ),
     });
     try {
       const out = await provider.generateJson({
         system:
           "You are a build-system triage assistant. For each error, propose ONE concrete fix in one sentence. " +
-          "Never claim the fix is verified. Answer JSON only: {\"suggestions\":[{\"id\":...,\"fix\":...}]}.",
+          'Never claim the fix is verified. Answer JSON only: {"suggestions":[{"id":...,"fix":...}]}.',
         prompt: JSON.stringify(
           pending.map((e) => ({
             id: e.id,
@@ -370,7 +422,11 @@ export class ErrorLedger {
         schemaName: "ErrorFixSuggestions",
         temperature: 0,
         maxTokens: 1500,
-        intent: { role: "judge", needs: ["structured_json"], purpose: "error ledger triage" },
+        intent: {
+          role: "judge",
+          needs: ["structured_json"],
+          purpose: "error ledger triage",
+        },
       });
       const parsed = schema.safeParse(out);
       if (!parsed.success) return 0;
@@ -394,7 +450,15 @@ export class ErrorLedger {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(
       file,
-      JSON.stringify({ runId: this.runId, writtenAt: new Date().toISOString(), errors: this.entries }, null, 2),
+      JSON.stringify(
+        {
+          runId: this.runId,
+          writtenAt: new Date().toISOString(),
+          errors: this.entries,
+        },
+        null,
+        2,
+      ),
       "utf-8",
     );
     return file;

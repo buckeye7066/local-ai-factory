@@ -349,30 +349,38 @@ describe("detectHostCi — read from the delivered tree, never guessed", () => {
     expect(detectHostCi(tree({ ".gitlab-ci.yml": "stages: [test]\n" })).presence).toBe(
       "present",
     );
-    expect(detectHostCi(tree({ "Jenkinsfile": "pipeline {}\n" })).presence).toBe("present");
+    expect(detectHostCi(tree({ Jenkinsfile: "pipeline {}\n" })).presence).toBe(
+      "present",
+    );
     expect(
       detectHostCi(tree({ ".circleci/config.yml": "version: 2.1\n" })).presence,
     ).toBe("present");
   });
 
   it("reports absent for a tree with no CI at all", () => {
-    const d = detectHostCi(tree({ "README.md": "# hi\n", "src/app.ts": "export {};\n" }));
+    const d = detectHostCi(
+      tree({ "README.md": "# hi\n", "src/app.ts": "export {};\n" }),
+    );
     expect(d.presence).toBe("absent");
     expect(d.evidence).toBeNull();
   });
 
   it("does not count an EMPTY workflow file as a gate", () => {
-    expect(detectHostCi(tree({ ".github/workflows/ci.yml": "" })).presence).toBe("absent");
-  });
-
-  it("does not count a non-YAML file in the workflows directory", () => {
-    expect(detectHostCi(tree({ ".github/workflows/README.md": "notes\n" })).presence).toBe(
+    expect(detectHostCi(tree({ ".github/workflows/ci.yml": "" })).presence).toBe(
       "absent",
     );
   });
 
+  it("does not count a non-YAML file in the workflows directory", () => {
+    expect(
+      detectHostCi(tree({ ".github/workflows/README.md": "notes\n" })).presence,
+    ).toBe("absent");
+  });
+
   it("reports UNKNOWN — never absent — for a tree it cannot read", () => {
-    const d = detectHostCi(join(tmpdir(), `definitely-not-here-${crypto.randomUUID()}`));
+    const d = detectHostCi(
+      join(tmpdir(), `definitely-not-here-${crypto.randomUUID()}`),
+    );
     expect(d.presence).toBe("unknown");
     // ...and unknown must route to the gate.
     expect(planTrunkAdvance({ hostCi: d.presence }).path).toBe("pr-gate");

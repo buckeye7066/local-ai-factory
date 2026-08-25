@@ -56,7 +56,8 @@ const LOCKFILE_NAMES = new Set([
 /** Root tool-config shapes; capture group 1 is the tool identity. */
 const ROOT_CONFIG_RX =
   /^(vitest|jest|playwright|vite)(?:\.[A-Za-z0-9_-]+)?\.config\.(?:js|cjs|mjs|ts|cts|mts)$/i;
-const OTHER_ROOT_CONFIGS_RX = /^(?:tsconfig(?:\.[A-Za-z0-9_-]+)?\.json|\.eslintrc(?:\.[A-Za-z0-9.]+)?|eslint\.config\.[cm]?[jt]s)$/i;
+const OTHER_ROOT_CONFIGS_RX =
+  /^(?:tsconfig(?:\.[A-Za-z0-9_-]+)?\.json|\.eslintrc(?:\.[A-Za-z0-9.]+)?|eslint\.config\.[cm]?[jt]s)$/i;
 
 const DEPENDENCY_MAP_KEYS = new Set([
   "dependencies",
@@ -180,11 +181,10 @@ function trackedFiles(
   try {
     head =
       head ??
-      execFileSync(
-        "git",
-        ["-C", workspacePath, "rev-parse", "--verify", "HEAD"],
-        { encoding: "utf8", timeout: 30_000 },
-      ).trim();
+      execFileSync("git", ["-C", workspacePath, "rev-parse", "--verify", "HEAD"], {
+        encoding: "utf8",
+        timeout: 30_000,
+      }).trim();
   } catch {
     return null; // genuinely not a git repo/new-app workspace
   }
@@ -216,11 +216,10 @@ const baselineCache = new Map<string, TrackedBaseline | null>();
 function baseline(workspacePath: string): Set<string> | null {
   let head: string;
   try {
-    head = execFileSync(
-      "git",
-      ["-C", workspacePath, "rev-parse", "--verify", "HEAD"],
-      { encoding: "utf8", timeout: 30_000 },
-    ).trim();
+    head = execFileSync("git", ["-C", workspacePath, "rev-parse", "--verify", "HEAD"], {
+      encoding: "utf8",
+      timeout: 30_000,
+    }).trim();
   } catch {
     baselineCache.set(workspacePath, null);
     return null;
@@ -239,13 +238,10 @@ export function _resetProtectedFilesCache(): void {
 
 const SOURCE_RX = JS_TS_SOURCE_EXTENSION_RX;
 
-function hasModifier(
-  node: ts.Node,
-  kind: ts.SyntaxKind,
-): boolean {
+function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
   return Boolean(
     ts.canHaveModifiers(node) &&
-      ts.getModifiers(node)?.some((modifier) => modifier.kind === kind),
+    ts.getModifiers(node)?.some((modifier) => modifier.kind === kind),
   );
 }
 
@@ -417,7 +413,12 @@ export function assessProtectedHostWrite(
   // 2a. Host spine files: same 80% shrink bar (GrantFlow extend rewrote
   //     App.jsx / client.js / server.js / schema.sql / migrate.js to fit uploads).
   if (isTracked && HOST_SPINE_PATHS.has(norm)) {
-    const shrink = refuseDestructiveShrink(workspacePath, norm, newContents, "spine file");
+    const shrink = refuseDestructiveShrink(
+      workspacePath,
+      norm,
+      newContents,
+      "spine file",
+    );
     if (shrink) return shrink;
   }
 
@@ -455,16 +456,12 @@ export function assessProtectedHostWrite(
   // always an accidental shadow entrypoint (for example App.tsx beside the
   // host's real App.jsx). Imports keep resolving the tracked file while the
   // generated feature remains unreachable.
-  const isRootToolConfig =
-    !norm.includes("/") &&
-    ROOT_CONFIG_RX.test(base);
+  const isRootToolConfig = !norm.includes("/") && ROOT_CONFIG_RX.test(base);
   if (!isTracked && SOURCE_RX.test(norm) && !isRootToolConfig) {
     const stem = norm.replace(SOURCE_RX, "");
     const sibling = [...tracked].find(
       (path) =>
-        path !== norm &&
-        SOURCE_RX.test(path) &&
-        path.replace(SOURCE_RX, "") === stem,
+        path !== norm && SOURCE_RX.test(path) && path.replace(SOURCE_RX, "") === stem,
     );
     if (sibling) {
       return {
@@ -491,9 +488,7 @@ export function assessProtectedHostWrite(
   // can override a tracked pyproject.toml/setup.cfg without editing it.
   if (!isTracked && PYTHON_TEST_CONFIGS.has(base.toLowerCase())) {
     const hostHasPythonConfig = [...tracked].some(
-      (path) =>
-        !path.includes("/") &&
-        PYTHON_TEST_CONFIGS.has(path.toLowerCase()),
+      (path) => !path.includes("/") && PYTHON_TEST_CONFIGS.has(path.toLowerCase()),
     );
     if (hostHasPythonConfig) {
       return {

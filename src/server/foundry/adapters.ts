@@ -933,7 +933,7 @@ export class FoundryAdapters {
         );
         return provider.generateJson({
           system:
-            "You are The Crucible, an independent adversarial release reviewer. Assume the project is not ready. Try to disprove every success claim using only supplied evidence. Never reward effort, optimism, or self-attestation. A claim without evidence is a finding.",
+            "You are The Crucible, an independent adversarial release verifier. Assume the project is not ready. Try to disprove every success claim using only supplied evidence. Never reward effort, optimism, or unsupported claims. A claim without evidence is a finding.",
           prompt: `Review this Purpose Foundry project.\n\nPROJECT:\n${JSON.stringify({
             name: project.name,
             constitution: project.constitution,

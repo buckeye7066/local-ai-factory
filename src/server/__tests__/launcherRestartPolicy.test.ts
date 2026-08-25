@@ -120,8 +120,7 @@ describe("launcher supervisor — the respawn-loop guard", () => {
   it.skipIf(!hasPowershell)("backs off exponentially, and caps the delay", () => {
     const delays = [1, 2, 3, 4].map(
       (attempt) =>
-        decide({ exitCode: 1, attempt, maxAttempts: 99, ranForSeconds: 600 })
-          .DelayMs,
+        decide({ exitCode: 1, attempt, maxAttempts: 99, ranForSeconds: 600 }).DelayMs,
     );
     // Strictly increasing — never a flat timer that can spin.
     for (let i = 1; i < delays.length; i++) {
@@ -158,7 +157,9 @@ describe("launcher wiring — the guard is actually used", () => {
     expect(launcher).toContain("Get-RestartDecision");
     // The old unconditional flat-timer retry must be gone: a bare
     // `Start-Sleep -Seconds 5` in the supervisor is the thing being replaced.
-    expect(launcher).not.toMatch(/if \(\$attempt -lt \$maxAttempts\) \{ Start-Sleep -Seconds 5 \}/);
+    expect(launcher).not.toMatch(
+      /if \(\$attempt -lt \$maxAttempts\) \{ Start-Sleep -Seconds 5 \}/,
+    );
   });
 
   it("the PowerShell fatal code matches the server's FATAL_EXIT_CODE", () => {

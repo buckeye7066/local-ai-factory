@@ -14,10 +14,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function numberField(
-  value: Record<string, unknown>,
-  ...keys: string[]
-): number {
+function numberField(value: Record<string, unknown>, ...keys: string[]): number {
   for (const key of keys) {
     const found = value[key];
     if (typeof found === "number" && Number.isFinite(found)) return found;
@@ -43,11 +40,7 @@ function parseJson(text: string): unknown | null {
 }
 
 function jsonFrom(stdout: string, stderr: string): unknown | null {
-  return (
-    parseJson(stdout) ??
-    parseJson(stderr) ??
-    parseJson(`${stdout}\n${stderr}`)
-  );
+  return parseJson(stdout) ?? parseJson(stderr) ?? parseJson(`${stdout}\n${stderr}`);
 }
 
 function finish(
@@ -99,8 +92,7 @@ function finish(
 function parseJestLike(root: Record<string, unknown>): DirectTestEvidence {
   const passedCount = numberField(root, "numPassedTests", "numPassedTestSuites");
   const skippedCount =
-    numberField(root, "numPendingTests") +
-    numberField(root, "numTodoTests");
+    numberField(root, "numPendingTests") + numberField(root, "numTodoTests");
   const names = new Set<string>();
 
   const visit = (value: unknown): void => {
@@ -110,9 +102,7 @@ function parseJestLike(root: Record<string, unknown>): DirectTestEvidence {
     }
     const object = asRecord(value);
     if (!object) return;
-    const status = typeof object.status === "string"
-      ? object.status.toLowerCase()
-      : "";
+    const status = typeof object.status === "string" ? object.status.toLowerCase() : "";
     if (status === "passed" || status === "pass") {
       for (const key of ["title", "fullName", "name"]) {
         const name = object[key];
@@ -154,9 +144,7 @@ function parsePlaywright(root: Record<string, unknown>): DirectTestEvidence {
         for (const rawResult of results) {
           const result = asRecord(rawResult);
           const status =
-            typeof result?.status === "string"
-              ? result.status.toLowerCase()
-              : "";
+            typeof result?.status === "string" ? result.status.toLowerCase() : "";
           if (status === "passed") {
             passedCount += 1;
             specPassed = true;
@@ -216,7 +204,5 @@ export function parseDirectTestEvidence(
   if (!root) {
     return finish(0, 0, [], `${runner} reporter output was not valid JSON`);
   }
-  return runner === "playwright"
-    ? parsePlaywright(root)
-    : parseJestLike(root);
+  return runner === "playwright" ? parsePlaywright(root) : parseJestLike(root);
 }

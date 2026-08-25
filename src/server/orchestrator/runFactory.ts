@@ -1886,7 +1886,7 @@ async function executeRun(
         generatedTests: checkpoint.testPlan?.files ?? [],
         uiAcceptanceRequired: acceptance.uiAcceptanceRequired,
         // Extend runs may use only the harness observed before generated writes.
-        // Greenfield code cannot certify itself with a model-authored harness.
+        // Greenfield code cannot prove itself with a model-authored harness.
         trustedBrowserHarness: extendMode && checkpoint.baselineBrowserHarness === true,
       });
       verification.incomplete = [

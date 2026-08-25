@@ -22,7 +22,8 @@ import {
 
 const dirs: string[] = [];
 afterAll(() => {
-  for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const d of dirs)
+    rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 const BR = String.fromCharCode(10);
@@ -54,7 +55,12 @@ describe("applyEdits", () => {
     expect(out.ok).toBe(true);
     expect(out.contents).toContain("sameSite: 'none', secure: true");
     // every original export survives — the whole point
-    for (const name of ["AUTH_COOKIE", "cookieOptions", "signToken", "requirePremium"]) {
+    for (const name of [
+      "AUTH_COOKIE",
+      "cookieOptions",
+      "signToken",
+      "requirePremium",
+    ]) {
       expect(out.contents).toContain(name);
     }
   });
@@ -93,7 +99,9 @@ describe("applyEdits", () => {
 
   it("allows balanced block-comment delimiters in the correct order", () => {
     const src = "const a = 1;\nconst b = 2;\n";
-    const out = applyEdits(src, [{ find: "const b = 2;", replace: "/* note */ const b = 3;" }]);
+    const out = applyEdits(src, [
+      { find: "const b = 2;", replace: "/* note */ const b = 3;" },
+    ]);
     expect(out.ok).toBe(true);
     expect(out.contents).toContain("const b = 3;");
   });
@@ -102,23 +110,56 @@ describe("applyEdits", () => {
   // checkout is CRLF, the model quotes LF, and the exact match refused all.
   it("matches an LF-quoted anchor inside a CRLF file and keeps CRLF on write", () => {
     const CR = String.fromCharCode(13);
-    const src = ["const a = 1;", "const b = 2;", "const c = 3;", "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;", ""].join(CR + BR);
+    const src = [
+      "const a = 1;",
+      "const b = 2;",
+      "const c = 3;",
+      "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;",
+      "",
+    ].join(CR + BR);
     const out = applyEdits(src, [
-      { find: "const b = 2;" + BR + "const c = 3;", replace: "const b = 20;" + BR + "const c = 3;" },
+      {
+        find: "const b = 2;" + BR + "const c = 3;",
+        replace: "const b = 20;" + BR + "const c = 3;",
+      },
     ]);
     expect(out.ok).toBe(true);
-    expect(out.contents).toBe(["const a = 1;", "const b = 20;", "const c = 3;", "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;", ""].join(CR + BR));
+    expect(out.contents).toBe(
+      [
+        "const a = 1;",
+        "const b = 20;",
+        "const c = 3;",
+        "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;",
+        "",
+      ].join(CR + BR),
+    );
     expect(out.contents).not.toMatch(/[^\r]\n/);
   });
 
   it("matches a CRLF-quoted anchor inside an LF file and keeps LF on write", () => {
     const CR = String.fromCharCode(13);
-    const src = "const a = 1;" + BR + "const b = 2;" + BR + "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;" + BR;
+    const src =
+      "const a = 1;" +
+      BR +
+      "const b = 2;" +
+      BR +
+      "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;" +
+      BR;
     const out = applyEdits(src, [
-      { find: "const a = 1;" + CR + BR + "const b = 2;", replace: "const a = 1;" + CR + BR + "const b = 3;" },
+      {
+        find: "const a = 1;" + CR + BR + "const b = 2;",
+        replace: "const a = 1;" + CR + BR + "const b = 3;",
+      },
     ]);
     expect(out.ok).toBe(true);
-    expect(out.contents).toBe("const a = 1;" + BR + "const b = 3;" + BR + "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;" + BR);
+    expect(out.contents).toBe(
+      "const a = 1;" +
+        BR +
+        "const b = 3;" +
+        BR +
+        "const pad1 = 1; const pad2 = 2; const pad3 = 3; const pad4 = 4; const pad5 = 5;" +
+        BR,
+    );
     expect(out.contents).not.toContain(CR);
   });
 
@@ -156,8 +197,7 @@ describe("resolveGeneratedWrite — the blind-rewrite engine is gone", () => {
   });
 
   it("refuses a whole-file rewrite disguised as one giant anchored edit", () => {
-    const current =
-      "export default function App(){ return <ExistingRoutes />; }";
+    const current = "export default function App(){ return <ExistingRoutes />; }";
     const root = workspace({ "src/App.jsx": current });
     const res = resolveGeneratedWrite(root, "src/App.jsx", {
       contents: "",
@@ -301,9 +341,9 @@ describe("file writer physical containment", () => {
       dirs.push(outside);
       writeFileSync(outside, "sentinel");
       symlinkSync(outside, join(root, "alias.ts"), "file");
-      await expect(
-        writeWorkspaceFile(root, "alias.ts", "overwritten"),
-      ).rejects.toThrow(/symlink|workspace|contain/i);
+      await expect(writeWorkspaceFile(root, "alias.ts", "overwritten")).rejects.toThrow(
+        /symlink|workspace|contain/i,
+      );
       expect(readFileSync(outside, "utf8")).toBe("sentinel");
     },
   );
@@ -346,12 +386,7 @@ describe("targetFiles — the builder is given real code to quote", () => {
         },
       ],
     };
-    const found = readTargetFiles(
-      root,
-      plan,
-      "",
-      ["src/App.jsx", "src/main.jsx"],
-    );
+    const found = readTargetFiles(root, plan, "", ["src/App.jsx", "src/main.jsx"]);
     expect(found.map((f) => f.path)).toEqual(["src/App.jsx"]);
     expect(found[0]!.contents).toContain("function App");
   });
@@ -368,9 +403,7 @@ describe("targetFiles — the builder is given real code to quote", () => {
         },
       ],
     };
-    expect(() =>
-      readTargetFiles(root, plan, "", ["src/App.jsx"]),
-    ).not.toThrow();
+    expect(() => readTargetFiles(root, plan, "", ["src/App.jsx"])).not.toThrow();
     expect(readTargetFiles(root, plan, "", ["src/App.jsx"])).toEqual([]);
   });
 
@@ -400,7 +433,12 @@ describe("targetFiles — the builder is given real code to quote", () => {
     const root = workspace({ "src/a.js": "export const a = 1;" });
     const plan = {
       tasks: [
-        { order: 1, category: "frontend" as const, title: "t", detail: "create src/brand/New.jsx" },
+        {
+          order: 1,
+          category: "frontend" as const,
+          title: "t",
+          detail: "create src/brand/New.jsx",
+        },
       ],
     };
     expect(readTargetFiles(root, plan, "", [])).toEqual([]);
@@ -430,7 +468,8 @@ describe("targetFiles — the builder is given real code to quote", () => {
           order: 1,
           category: "backend" as const,
           title: "Fix login",
-          detail: "touch services/api/src/middleware/auth.js but not the words api or src",
+          detail:
+            "touch services/api/src/middleware/auth.js but not the words api or src",
         },
       ],
     };
@@ -469,7 +508,11 @@ describe("targetFiles — the builder can ask for real files it was not shown", 
       "server/api.js": "const a = 1;",
       "big.js": "x".repeat(70_000),
     });
-    const result = inspectExplicitFiles(root, ["server/api.js", "big.js", "missing.js"]);
+    const result = inspectExplicitFiles(root, [
+      "server/api.js",
+      "big.js",
+      "missing.js",
+    ]);
     expect(result.files).toEqual([{ path: "server/api.js", contents: "const a = 1;" }]);
     expect(result.omitted.map((item) => item.path)).toEqual(["big.js", "missing.js"]);
   });

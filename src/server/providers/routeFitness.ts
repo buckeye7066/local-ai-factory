@@ -192,7 +192,8 @@ export function rotationExcludedReason(modelOrRouteId: string): string {
       // think:false to /api/chat) unless FACTORY_OLLAMA_THINK=1, so the
       // no-think battery verdict is the one that matches the call mode.
       const thinkOn = process.env.FACTORY_OLLAMA_THINK === "1";
-      const useNoThink = !thinkOn && typeof entry.rotation_eligible_nothink === "boolean";
+      const useNoThink =
+        !thinkOn && typeof entry.rotation_eligible_nothink === "boolean";
       if (useNoThink) {
         if (entry.rotation_eligible_nothink) return "";
         return `excluded from rotation (battery no-think: ${entry.exclusion_reason_nothink || "failed"})`;
@@ -219,8 +220,7 @@ export function rotationExcludedReason(modelOrRouteId: string): string {
     }
   }
 
-  const raw =
-    process.env.FACTORY_ROTATION_EXCLUDE ?? ROTATION_EXCLUDE_DEFAULT;
+  const raw = process.env.FACTORY_ROTATION_EXCLUDE ?? ROTATION_EXCLUDE_DEFAULT;
   for (const frag of raw.split(",").map((s) => s.trim().toLowerCase())) {
     if (frag && id.includes(frag)) {
       return `excluded from rotation (${frag}: too slow for a rotated job on this CPU)`;

@@ -53,9 +53,7 @@ describe("the Command mode claim tracks the real script gate", () => {
 
   it("claims Live only when execution is actually enabled", () => {
     render(
-      <SafetySettingsPreview
-        health={{ ...baseHealth, allowUntrustedScripts: true }}
-      />,
+      <SafetySettingsPreview health={{ ...baseHealth, allowUntrustedScripts: true }} />,
     );
     expect(screen.getByText("Live")).toBeTruthy();
     expect(screen.queryByText("Blocked")).toBeNull();

@@ -190,7 +190,12 @@ describe("planRelease — the decision itself", () => {
   it("never opens a PR for a branch already merged into the trunk", () => {
     expect(
       planRelease({
-        destination: { ...base, status: "delivered", branchPushed: true, releasedToTrunk: true },
+        destination: {
+          ...base,
+          status: "delivered",
+          branchPushed: true,
+          releasedToTrunk: true,
+        },
         demo: false,
         releaseToMainEnabled: true,
       }),

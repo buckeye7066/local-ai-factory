@@ -63,9 +63,7 @@ function walkSourceFiles(root: string): string[] {
     }
   }
   if (stack.length > 0) {
-    throw new Error(
-      `Wiring scan exceeded the ${MAX_SCAN_FILES}-file safety limit.`,
-    );
+    throw new Error(`Wiring scan exceeded the ${MAX_SCAN_FILES}-file safety limit.`);
   }
   return out;
 }
@@ -77,11 +75,20 @@ function withoutSourceExtension(path: string): string {
 function scriptKindForPath(sourcePath: string): ts.ScriptKind {
   const ext = sourcePath.replace(/^.*\.([^.]+)$/i, "$1").toLowerCase();
   switch (ext) {
-    case "tsx": return ts.ScriptKind.TSX;
-    case "ts": case "mts": case "cts": return ts.ScriptKind.TS;
-    case "jsx": return ts.ScriptKind.JSX;
-    case "js": case "mjs": case "cjs": return ts.ScriptKind.JS;
-    default: return ts.ScriptKind.TSX;
+    case "tsx":
+      return ts.ScriptKind.TSX;
+    case "ts":
+    case "mts":
+    case "cts":
+      return ts.ScriptKind.TS;
+    case "jsx":
+      return ts.ScriptKind.JSX;
+    case "js":
+    case "mjs":
+    case "cjs":
+      return ts.ScriptKind.JS;
+    default:
+      return ts.ScriptKind.TSX;
   }
 }
 
@@ -168,7 +175,9 @@ function persistenceViolationPaths(
     const n = raw.replace(/\\/g, "/");
     if (!STUB_CLIENT_PATH_RX.test(n)) continue;
     try {
-      if (readFileSync(join(workspacePath, n), "utf8").includes("createStubEntityClient")) {
+      if (
+        readFileSync(join(workspacePath, n), "utf8").includes("createStubEntityClient")
+      ) {
         extra.push(n);
       }
     } catch {
@@ -182,14 +191,9 @@ export function findUnwiredNewFiles(
   workspacePath: string,
   generatedPaths: string[],
 ): string[] {
-  const generated = new Set(
-    generatedPaths.map((path) => path.replace(/\\/g, "/")),
-  );
+  const generated = new Set(generatedPaths.map((path) => path.replace(/\\/g, "/")));
   const candidates = [...generated].filter(
-    (path) =>
-      SOURCE_EXT.test(path) &&
-      !TEST_LIKE.test(path) &&
-      !CONFIG_LIKE.test(path),
+    (path) => SOURCE_EXT.test(path) && !TEST_LIKE.test(path) && !CONFIG_LIKE.test(path),
   );
   // The _gh_* overlay check is independent of wiring: an overlay is a
   // persistence-contract violation even when nothing imports anything, so it
@@ -207,9 +211,7 @@ export function findUnwiredNewFiles(
   const readBounded = (absolute: string): string => {
     const size = statSync(absolute).size;
     if (size > MAX_FILE_BYTES) {
-      throw new Error(
-        `Wiring scan cannot inspect oversized source file: ${absolute}`,
-      );
+      throw new Error(`Wiring scan cannot inspect oversized source file: ${absolute}`);
     }
     return readFileSync(absolute, "utf8");
   };
@@ -220,10 +222,7 @@ export function findUnwiredNewFiles(
   const generatedTexts = new Map<string, string>();
   for (const candidate of candidates) {
     try {
-      generatedTexts.set(
-        candidate,
-        readBounded(join(workspacePath, candidate)),
-      );
+      generatedTexts.set(candidate, readBounded(join(workspacePath, candidate)));
     } catch {
       // A missing/unreadable generated module cannot be proven reachable.
     }
@@ -239,7 +238,7 @@ export function findUnwiredNewFiles(
   // Seed reachability from real pre-existing code (including host files this
   // run modified), then traverse imports among generated product modules.
   // Only actual module specifiers count: comments, strings, and longer path
-  // prefixes cannot certify reachability.
+  // prefixes cannot prove reachability.
   const generatedSpecifiers = new Map<string, string[]>();
   for (const [path, source] of generatedTexts) {
     generatedSpecifiers.set(path, moduleSpecifiers(path, source));
@@ -331,9 +330,7 @@ export function enforceWiredIntegration<T extends QaLikeReport>(
   const stubClients = unwired.filter(
     (p) => STUB_CLIENT_PATH_RX.test(p.replace(/\\/g, "/")) && !isFactoryOverlayPath(p),
   );
-  const rest = unwired.filter(
-    (p) => !overlays.includes(p) && !stubClients.includes(p),
-  );
+  const rest = unwired.filter((p) => !overlays.includes(p) && !stubClients.includes(p));
   const withPersist = enforceExtendPersistenceQa(
     qa,
     overlays,

@@ -136,7 +136,8 @@ export function releaseEligible(input: {
   if (!input.qaPassed) {
     return {
       eligible: false,
-      reason: "grounded QA did not pass — the branch and an open PR are the honest deliverable",
+      reason:
+        "grounded QA did not pass — the branch and an open PR are the honest deliverable",
     };
   }
   if (input.testStatus !== "passing") {
@@ -213,9 +214,16 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
   let prUrl: string | null = null;
   const create: ExecResult = await run(
     [
-      "pr", "create", "-R", slug,
-      "--head", input.branch,
-      "--title", title, "--body", body,
+      "pr",
+      "create",
+      "-R",
+      slug,
+      "--head",
+      input.branch,
+      "--title",
+      title,
+      "--body",
+      body,
     ],
     process.cwd(),
     120_000,
@@ -267,10 +275,7 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
       absentObservations++;
       // Believe "this repo has no CI" only after the grace window has elapsed
       // AND the absence has held across several polls.
-      if (
-        absentObservations >= neededAbsent &&
-        Date.now() >= graceUntil
-      ) {
+      if (absentObservations >= neededAbsent && Date.now() >= graceUntil) {
         return {
           released: false,
           state: "held",
@@ -302,8 +307,8 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
     } catch {
       /* non-JSON output while checks initialize — poll again */
     }
-    const failed = states.filter(
-      (s) => /FAILURE|ERROR|CANCELLED|TIMED_OUT|ACTION_REQUIRED/i.test(s.state),
+    const failed = states.filter((s) =>
+      /FAILURE|ERROR|CANCELLED|TIMED_OUT|ACTION_REQUIRED/i.test(s.state),
     );
     if (failed.length) {
       return {
@@ -311,7 +316,10 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
         state: "held",
         prUrl,
         mergedSha: null,
-        reason: `host repo checks failed: ${failed.map((f) => f.name).slice(0, 4).join(", ")}`,
+        reason: `host repo checks failed: ${failed
+          .map((f) => f.name)
+          .slice(0, 4)
+          .join(", ")}`,
       };
     }
     const pending = states.filter((s) =>
@@ -337,11 +345,7 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
             .join(", "),
       };
     }
-    if (
-      states.length > 0 &&
-      !pending.length &&
-      successful.length === states.length
-    ) {
+    if (states.length > 0 && !pending.length && successful.length === states.length) {
       break;
     }
     if (Date.now() > deadline) {
@@ -353,9 +357,15 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
       // honest state: open and pending, NOT released, NOT in production.
       const armed = await run(
         [
-          "pr", "merge", prUrl, "-R", slug,
-          "--squash", "--auto",
-          "--match-head-commit", input.verifiedCommitSha,
+          "pr",
+          "merge",
+          prUrl,
+          "-R",
+          slug,
+          "--squash",
+          "--auto",
+          "--match-head-commit",
+          input.verifiedCommitSha,
         ],
         process.cwd(),
         120_000,
@@ -387,17 +397,7 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
   // Bind the merge to the exact commit whose bytes passed Factory Deck's
   // receipt. A branch update after verification must never inherit its green.
   const head = await run(
-    [
-      "pr",
-      "view",
-      prUrl,
-      "-R",
-      slug,
-      "--json",
-      "headRefOid",
-      "--jq",
-      ".headRefOid",
-    ],
+    ["pr", "view", prUrl, "-R", slug, "--json", "headRefOid", "--jq", ".headRefOid"],
     process.cwd(),
     60_000,
   );
@@ -437,11 +437,23 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
     };
   }
   const view = await run(
-    ["pr", "view", prUrl, "-R", slug, "--json", "state,mergeCommit", "--jq", ".state + \" \" + (.mergeCommit.oid // \"\")"],
+    [
+      "pr",
+      "view",
+      prUrl,
+      "-R",
+      slug,
+      "--json",
+      "state,mergeCommit",
+      "--jq",
+      '.state + " " + (.mergeCommit.oid // "")',
+    ],
     process.cwd(),
     60_000,
   );
-  const [prState, sha] = succeeded(view) ? view.stdout.trim().split(/\s+/) : ["UNKNOWN", ""];
+  const [prState, sha] = succeeded(view)
+    ? view.stdout.trim().split(/\s+/)
+    : ["UNKNOWN", ""];
   if (prState !== "MERGED") {
     return {
       released: false,

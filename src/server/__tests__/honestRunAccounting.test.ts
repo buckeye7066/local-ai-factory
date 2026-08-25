@@ -281,18 +281,14 @@ describe("relevantTestStatus — only exact direct-runner evidence counts", () =
   });
 
   it("requires a direct result for every generated test", () => {
-    const v = relevantTestStatus(true, 0, written, [
-      "src/lib/storage.test.ts",
-    ]);
+    const v = relevantTestStatus(true, 0, written, ["src/lib/storage.test.ts"]);
     expect(v.status).toBe("unknown");
     expect(v.uncoveredTestFiles).toEqual(["src/App.test.tsx"]);
   });
 
   it("normalizes Windows separators while requiring the full relative path", () => {
     expect(
-      relevantTestStatus(true, 0, ["src\\App.test.tsx"], [
-        "src/App.test.tsx",
-      ]).status,
+      relevantTestStatus(true, 0, ["src\\App.test.tsx"], ["src/App.test.tsx"]).status,
     ).toBe("passing");
   });
 
@@ -309,20 +305,14 @@ describe("relevantTestStatus — only exact direct-runner evidence counts", () =
 
   it("recognizes Python tests and exact direct paths", () => {
     expect(
-      relevantTestStatus(
-        true,
-        0,
-        ["tests/test_profile.py"],
-        ["tests/test_profile.py"],
-      ).status,
+      relevantTestStatus(true, 0, ["tests/test_profile.py"], ["tests/test_profile.py"])
+        .status,
     ).toBe("passing");
   });
 
   it("never upgrades failure or no-execution states", () => {
     expect(relevantTestStatus(true, 1, written, written).status).toBe("failing");
-    expect(relevantTestStatus(false, null, written, written).status).toBe(
-      "unknown",
-    );
+    expect(relevantTestStatus(false, null, written, written).status).toBe("unknown");
     const noTests = relevantTestStatus(true, 0, ["src/App.tsx"], []);
     expect(noTests.status).toBe("unknown");
     expect(noTests.degraded).toBe(true);
@@ -368,7 +358,9 @@ describe("groundFinalReport — mechanical facts fill the gaps the model leaves"
   it("names this run's unexecuted test files as a caveat", () => {
     const out = groundFinalReport({
       report: baseReport({ testStatus: "unknown" }),
-      evidence: { executed: [{ command: "npm test", exitCode: 0, outputTail: "other suite" }] },
+      evidence: {
+        executed: [{ command: "npm test", exitCode: 0, outputTail: "other suite" }],
+      },
       testStatus: "unknown",
       writtenFiles: ["src/App.test.tsx"],
       uncoveredTestFiles: ["src/App.test.tsx"],
@@ -483,7 +475,12 @@ describe("enforceExtendPersistenceQa — overlays and stub clients fail extend Q
       enforceExtendPersistenceQa(
         passingQa(),
         ["src/api/client.js"],
-        [{ path: "src/api/client.js", contents: "export const Invoice = api.entities.Invoice;\n" }],
+        [
+          {
+            path: "src/api/client.js",
+            contents: "export const Invoice = api.entities.Invoice;\n",
+          },
+        ],
         true,
       ).passed,
     ).toBe(true);

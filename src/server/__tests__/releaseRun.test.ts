@@ -7,15 +7,22 @@ import {
 } from "../orchestrator/releaseRun.js";
 import type { ExecResult } from "../workspace/gitOps.js";
 
-const ok = (stdout: string): ExecResult => ({ code: 0, stdout, stderr: "", spawnError: null });
-const fail = (stderr: string): ExecResult => ({ code: 1, stdout: "", stderr, spawnError: null });
+const ok = (stdout: string): ExecResult => ({
+  code: 0,
+  stdout,
+  stderr: "",
+  spawnError: null,
+});
+const fail = (stderr: string): ExecResult => ({
+  code: 1,
+  stdout: "",
+  stderr,
+  spawnError: null,
+});
 
 const VERIFIED_SHA = "abc123verified";
 
-function fakeGh(
-  script: Array<(args: string[]) => ExecResult>,
-  headSha = VERIFIED_SHA,
-) {
+function fakeGh(script: Array<(args: string[]) => ExecResult>, headSha = VERIFIED_SHA) {
   const calls: string[][] = [];
   let i = 0;
   const impl = async (args: string[]): Promise<ExecResult> => {
@@ -49,20 +56,30 @@ describe("repoSlug", () => {
 
 describe("releaseEligible — the evidence gate", () => {
   it("refuses when grounded QA failed", () => {
-    expect(releaseEligible({ qaPassed: false, testStatus: "passing" }).eligible).toBe(false);
+    expect(releaseEligible({ qaPassed: false, testStatus: "passing" }).eligible).toBe(
+      false,
+    );
   });
   it("refuses when tests failed or never executed", () => {
-    expect(releaseEligible({ qaPassed: true, testStatus: "failing" }).eligible).toBe(false);
+    expect(releaseEligible({ qaPassed: true, testStatus: "failing" }).eligible).toBe(
+      false,
+    );
     const unknown = releaseEligible({ qaPassed: true, testStatus: "unknown" });
     expect(unknown.eligible).toBe(false);
     expect(unknown.reason).toMatch(/no test command executed/i);
   });
   it("passes only with QA green AND tests executed green", () => {
-    expect(releaseEligible({ qaPassed: true, testStatus: "passing" }).eligible).toBe(true);
+    expect(releaseEligible({ qaPassed: true, testStatus: "passing" }).eligible).toBe(
+      true,
+    );
   });
 
   it("refuses a paper-only delivery even with QA and tests green (run a1d8866f class)", () => {
-    const gate = releaseEligible({ qaPassed: true, testStatus: "passing", paperOnly: true });
+    const gate = releaseEligible({
+      qaPassed: true,
+      testStatus: "passing",
+      paperOnly: true,
+    });
     expect(gate.eligible).toBe(false);
     expect(gate.reason).toMatch(/no wired product change/i);
   });
@@ -113,12 +130,23 @@ describe("isPaperOnlyDelivery", () => {
 describe("releaseRun", () => {
   it("merges to main when the gate and the host repo's checks are green", async () => {
     const { impl, calls } = fakeGh([
-      (a) => (a[1] === "create" ? ok("https://github.com/buckeye7066/GrantFlow/pull/99") : ok("")),
-      (a) => (a[1] === "checks" ? ok(JSON.stringify([{ state: "SUCCESS", name: "test" }])) : ok("")),
+      (a) =>
+        a[1] === "create"
+          ? ok("https://github.com/buckeye7066/GrantFlow/pull/99")
+          : ok(""),
+      (a) =>
+        a[1] === "checks"
+          ? ok(JSON.stringify([{ state: "SUCCESS", name: "test" }]))
+          : ok(""),
       (a) => (a[1] === "merge" ? ok("merged") : ok("")),
       (a) => (a[1] === "view" ? ok("MERGED abc123def") : ok("")),
     ]);
-    const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "passing", ghImpl: impl });
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      ghImpl: impl,
+    });
     expect(res.released).toBe(true);
     expect(res.mergedSha).toBe("abc123def");
     expect(res.prUrl).toMatch(/pull\/99/);
@@ -140,12 +168,23 @@ describe("releaseRun", () => {
     // `master` would have had its PR opened against a branch that may not
     // exist. Omitting --base makes `gh` resolve the base repo's own default.
     const { impl, calls } = fakeGh([
-      (a) => (a[1] === "create" ? ok("https://github.com/buckeye7066/GrantFlow/pull/140") : ok("")),
-      (a) => (a[1] === "checks" ? ok(JSON.stringify([{ state: "SUCCESS", name: "test" }])) : ok("")),
+      (a) =>
+        a[1] === "create"
+          ? ok("https://github.com/buckeye7066/GrantFlow/pull/140")
+          : ok(""),
+      (a) =>
+        a[1] === "checks"
+          ? ok(JSON.stringify([{ state: "SUCCESS", name: "test" }]))
+          : ok(""),
       (a) => (a[1] === "merge" ? ok("merged") : ok("")),
       (a) => (a[1] === "view" ? ok("MERGED beef0001") : ok("")),
     ]);
-    const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "passing", ghImpl: impl });
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      ghImpl: impl,
+    });
     expect(res.released).toBe(true);
     const create = calls.find((c) => c[1] === "create");
     expect(create).toBeDefined();
@@ -157,10 +196,13 @@ describe("releaseRun", () => {
   });
 
   it("creates no PR or other GitHub state when tests did not run", async () => {
-    const { impl, calls } = fakeGh([
-      () => ok("this must never be called"),
-    ]);
-    const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "unknown", ghImpl: impl });
+    const { impl, calls } = fakeGh([() => ok("this must never be called")]);
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "unknown",
+      ghImpl: impl,
+    });
     expect(res.released).toBe(false);
     expect(res.prUrl).toBeNull();
     expect(res.reason).toMatch(/no test command executed/i);
@@ -302,7 +344,12 @@ describe("releaseRun", () => {
           ]),
         ),
     ]);
-    const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "passing", ghImpl: impl });
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      ghImpl: impl,
+    });
     expect(res.released).toBe(false);
     expect(res.reason).toMatch(/browser-smoke/);
     expect(calls.some((c) => c[1] === "merge")).toBe(false);
@@ -324,7 +371,8 @@ describe("releaseRun", () => {
     const { impl, calls } = fakeGh([
       () => ok("https://github.com/buckeye7066/GrantFlow/pull/102"),
       () => ok(JSON.stringify([{ state: "PENDING", name: "test" }])),
-      (a) => (a[1] === "merge" ? ok("automatically merge when requirements met") : ok("")),
+      (a) =>
+        a[1] === "merge" ? ok("automatically merge when requirements met") : ok(""),
     ]);
     const res = await releaseRun({
       ...BASE,
@@ -377,7 +425,12 @@ describe("releaseRun", () => {
       () => ok(JSON.stringify([{ state: "SUCCESS", name: "test" }])),
       () => fail("Pull request is not mergeable"),
     ]);
-    const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "passing", ghImpl: impl });
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      ghImpl: impl,
+    });
     expect(res.released).toBe(false);
     expect(res.reason).toMatch(/merge refused/i);
   });
@@ -389,19 +442,33 @@ describe("releaseRun", () => {
       () => ok("merge queued"),
       () => ok("OPEN "),
     ]);
-    const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "passing", ghImpl: impl });
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      ghImpl: impl,
+    });
     expect(res.released).toBe(false);
     expect(res.reason).toMatch(/state reads OPEN/i);
   });
 
   it("reuses an existing PR instead of failing on 'already exists'", async () => {
     const { impl } = fakeGh([
-      () => fail("a pull request for branch already exists: https://github.com/x/y/pull/7"),
-      (a) => (a[1] === "view" ? ok("https://github.com/buckeye7066/GrantFlow/pull/7") : ok("")),
+      () =>
+        fail("a pull request for branch already exists: https://github.com/x/y/pull/7"),
+      (a) =>
+        a[1] === "view"
+          ? ok("https://github.com/buckeye7066/GrantFlow/pull/7")
+          : ok(""),
       () => ok(JSON.stringify([{ state: "SUCCESS", name: "test" }])),
       (a) => (a[1] === "merge" ? ok("merged") : ok("MERGED def456")),
     ]);
-    const res = await releaseRun({ ...BASE, qaPassed: true, testStatus: "passing", ghImpl: impl });
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      ghImpl: impl,
+    });
     expect(res.prUrl).toMatch(/pull\/7/);
   });
 

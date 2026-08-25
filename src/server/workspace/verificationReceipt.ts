@@ -6,9 +6,7 @@ import { readWorkspaceFile } from "./fileWriter.js";
 
 function canonical(path: string): string {
   if (!path) return "";
-  const normalized = posix
-    .normalize(path.replace(/\\/g, "/"))
-    .replace(/^\.\/+/, "");
+  const normalized = posix.normalize(path.replace(/\\/g, "/")).replace(/^\.\/+/, "");
   return normalized === "." ? "" : normalized;
 }
 
@@ -38,7 +36,8 @@ export async function verifyFileDigests(
   if (!expected || Object.keys(expected).length !== canonicalPaths.length) {
     return {
       ok: false,
-      reason: "verification receipt is missing paths or belongs to another deliverable set",
+      reason:
+        "verification receipt is missing paths or belongs to another deliverable set",
     };
   }
   for (const path of canonicalPaths) {
@@ -70,9 +69,7 @@ export async function verifyFileDigests(
 export function verificationReceiptHash(
   expected: Record<string, string> | undefined,
 ): string {
-  const entries = Object.entries(expected ?? {}).sort(([a], [b]) =>
-    a.localeCompare(b),
-  );
+  const entries = Object.entries(expected ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return sha256Text(JSON.stringify(entries));
 }
 
@@ -178,18 +175,10 @@ export async function withVerificationReceipt<T>(
   action: () => Promise<T>,
 ): Promise<VerificationWindowResult<T>> {
   const stablePaths = [...paths];
-  const before = await verifyFileDigests(
-    workspacePath,
-    stablePaths,
-    intendedDigests,
-  );
+  const before = await verifyFileDigests(workspacePath, stablePaths, intendedDigests);
   if (!before.ok) return { ...before, phase: "before" };
   const value = await action();
-  const after = await verifyFileDigests(
-    workspacePath,
-    stablePaths,
-    intendedDigests,
-  );
+  const after = await verifyFileDigests(workspacePath, stablePaths, intendedDigests);
   return after.ok
     ? { ok: true, phase: "after", value }
     : { ...after, phase: "after", value };
@@ -238,11 +227,10 @@ export function findUnexpectedWorkspaceChanges(
   const allowed = new Set([...allowedPaths].map(canonical));
   let hasHead = true;
   try {
-    execFileSync(
-      "git",
-      ["-C", workspacePath, "rev-parse", "--verify", "HEAD"],
-      { encoding: "utf8", timeout: 30_000 },
-    );
+    execFileSync("git", ["-C", workspacePath, "rev-parse", "--verify", "HEAD"], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
   } catch {
     hasHead = false;
   }

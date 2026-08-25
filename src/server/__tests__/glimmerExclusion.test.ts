@@ -137,8 +137,10 @@ describe("local Glimmer is held out of rotation", () => {
     const rotator = buildRotator("factory-deck")!;
     filterRoutableCatalog(rotator, FCC_URL, (_k, m) => messages.push(m));
     const line = messages.find((m) => m.includes("held out of rotation"));
-    expect(line, "a silently vanished route is indistinguishable from an absent one")
-      .toBeTruthy();
+    expect(
+      line,
+      "a silently vanished route is indistinguishable from an absent one",
+    ).toBeTruthy();
     expect(line).toContain("muse-glimmer");
   });
 
@@ -187,31 +189,49 @@ describe("the local gate is a measurement when local-bench.json exists", () => {
   }
 
   it("a slow measurement holds the route out", () => {
-    writeBench([{ tag: "qwen3-coder:30b", ok: true, gen_tok_per_s: 1.6, answered: true }]);
+    writeBench([
+      { tag: "qwen3-coder:30b", ok: true, gen_tok_per_s: 1.6, answered: true },
+    ]);
     expect(keptIds()).not.toContain("ollama/qwen3-coder:30b");
   });
 
   it("a fast measurement admits even a name-listed route", () => {
-    writeBench([{ tag: "muse-glimmer:30b", ok: true, gen_tok_per_s: 40, answered: true }]);
+    writeBench([
+      { tag: "muse-glimmer:30b", ok: true, gen_tok_per_s: 40, answered: true },
+    ]);
     expect(keptIds()).toContain("ollama/muse-glimmer:30b");
   });
 
   it("a reasoning-only speed prompt is NOT a no-answer; the battery decides that", () => {
     writeBench([
-      { tag: "qwen3-coder:30b", ok: true, gen_tok_per_s: 30, answered: false, reasoning_only: true },
+      {
+        tag: "qwen3-coder:30b",
+        ok: true,
+        gen_tok_per_s: 30,
+        answered: false,
+        reasoning_only: true,
+      },
     ]);
     expect(keptIds()).toContain("ollama/qwen3-coder:30b");
   });
 
   it("a truly empty reply is held out regardless of rate", () => {
     writeBench([
-      { tag: "qwen3-coder:30b", ok: true, gen_tok_per_s: 30, answered: false, reasoning_only: false },
+      {
+        tag: "qwen3-coder:30b",
+        ok: true,
+        gen_tok_per_s: 30,
+        answered: false,
+        reasoning_only: false,
+      },
     ]);
     expect(keptIds()).not.toContain("ollama/qwen3-coder:30b");
   });
 
   it("cloud rows never consult the bench file", () => {
-    writeBench([{ tag: "meta/muse-glimmer-30b", ok: true, gen_tok_per_s: 0.1, answered: true }]);
+    writeBench([
+      { tag: "meta/muse-glimmer-30b", ok: true, gen_tok_per_s: 0.1, answered: true },
+    ]);
     expect(keptIds()).toContain("nvidia_nim/meta/muse-glimmer-30b");
   });
 
@@ -242,15 +262,25 @@ describe("the functional battery verdict outranks raw speed", () => {
       },
     ]);
     const rotator = buildRotator("factory-deck")!;
-    const filtered = filterRoutableCatalog(rotator, FCC_URL, (_k, m) => messages.push(m));
-    expect(filtered!.catalog.routes.map((r) => r.id)).not.toContain("ollama/qwen3-coder:30b");
+    const filtered = filterRoutableCatalog(rotator, FCC_URL, (_k, m) =>
+      messages.push(m),
+    );
+    expect(filtered!.catalog.routes.map((r) => r.id)).not.toContain(
+      "ollama/qwen3-coder:30b",
+    );
     expect(messages.join("\n")).toContain("structured JSON");
   });
 
   it("a battery pass admits the route", () => {
     writeBench([
-      { tag: "muse-glimmer:30b", ok: true, gen_tok_per_s: 9, answered: true,
-        rotation_eligible: true, exclusion_reason: "" },
+      {
+        tag: "muse-glimmer:30b",
+        ok: true,
+        gen_tok_per_s: 9,
+        answered: true,
+        rotation_eligible: true,
+        exclusion_reason: "",
+      },
     ]);
     expect(keptIds()).toContain("ollama/muse-glimmer:30b");
   });
@@ -259,10 +289,25 @@ describe("the functional battery verdict outranks raw speed", () => {
 describe("vision models never enter code rotation (parity with flexfactor)", () => {
   it("drops llava and its relatives", () => {
     writeCatalog([
-      row("ollama/llava:7b", { api: "ollama", base_url: "http://127.0.0.1:11434", pool: "local:ollama", cost_class: "local-unlimited" }),
-      row("ollama/bakllava:latest", { api: "ollama", base_url: "http://127.0.0.1:11434", pool: "local:ollama", cost_class: "local-unlimited" }),
+      row("ollama/llava:7b", {
+        api: "ollama",
+        base_url: "http://127.0.0.1:11434",
+        pool: "local:ollama",
+        cost_class: "local-unlimited",
+      }),
+      row("ollama/bakllava:latest", {
+        api: "ollama",
+        base_url: "http://127.0.0.1:11434",
+        pool: "local:ollama",
+        cost_class: "local-unlimited",
+      }),
       row("openrouter/qwen/qwen2.5-vl-72b:free", { pool: "openrouter:free" }),
-      row("ollama/qwen3-coder:30b", { api: "ollama", base_url: "http://127.0.0.1:11434", pool: "local:ollama", cost_class: "local-unlimited" }),
+      row("ollama/qwen3-coder:30b", {
+        api: "ollama",
+        base_url: "http://127.0.0.1:11434",
+        pool: "local:ollama",
+        cost_class: "local-unlimited",
+      }),
     ]);
     expect(keptIds()).toEqual(["ollama/qwen3-coder:30b"]);
   });
@@ -271,8 +316,14 @@ describe("vision models never enter code rotation (parity with flexfactor)", () 
     // Live 2026-08-23 (IPlay run 751546a5): gemini/deep-research-* answered
     // every call with HTTP 400 "This model only supports Interactions API."
     writeCatalog([
-      row("gemini/deep-research-preview-04-2026", { api: "gemini", pool: "gemini:free" }),
-      row("gemini/deep-research-pro-preview-12-2025", { api: "gemini", pool: "gemini:free" }),
+      row("gemini/deep-research-preview-04-2026", {
+        api: "gemini",
+        pool: "gemini:free",
+      }),
+      row("gemini/deep-research-pro-preview-12-2025", {
+        api: "gemini",
+        pool: "gemini:free",
+      }),
       row("openrouter/perplexity/sonar-deep-research", { pool: "openrouter:free" }),
       // Realtime endpoints are speech/WebRTC, not chat: 404 "This is not a chat model".
       row("openai_api/gpt-realtime-1.5", { pool: "openai:api" }),

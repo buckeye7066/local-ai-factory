@@ -26,7 +26,10 @@ const git = (args: string[], cwd: string) =>
 
 /** Run git against a bare repository, using --git-dir to satisfy safe.bareRepository=explicit. */
 const gitBare = (args: string[], bareDir: string) =>
-  execFileSync("git", ["--git-dir=.", ...args], { cwd: bareDir, encoding: "utf8" }).trim();
+  execFileSync("git", ["--git-dir=.", ...args], {
+    cwd: bareDir,
+    encoding: "utf8",
+  }).trim();
 
 /** A bare "remote" plus a working clone with an initial commit on main. */
 async function makeRemoteAndClone() {
@@ -90,9 +93,9 @@ describe("pushBranch — what may reach the owner's repo", () => {
       expect(res.pushed).toBe(true);
       expect(remoteBranches(remote)).toContain("factory-deck/abcd1234");
       // The delivered file is really on the delivered branch...
-      expect(
-        gitBare(["show", "factory-deck/abcd1234:feature.txt"], remote),
-      ).toContain("generated");
+      expect(gitBare(["show", "factory-deck/abcd1234:feature.txt"], remote)).toContain(
+        "generated",
+      );
       // ...and main was not touched.
       expect(gitBare(["rev-parse", "main"], remote)).toBe(mainBefore);
     } finally {
@@ -124,9 +127,9 @@ describe("releaseToMain — the work actually reaches production", () => {
 
       git(["checkout", "-q", "-b", "factory-deck/abcd1234"], clone);
       await writeFile(join(clone, "feature.txt"), "generated\n");
-      expect((await commitRunFiles(clone, ["feature.txt"], "run output")).committed).toBe(
-        true,
-      );
+      expect(
+        (await commitRunFiles(clone, ["feature.txt"], "run output")).committed,
+      ).toBe(true);
       expect((await pushBranch(clone, "factory-deck/abcd1234")).pushed).toBe(true);
 
       const res = await releaseToMain(clone, "factory-deck/abcd1234");
@@ -160,9 +163,9 @@ describe("releaseToMain — the work actually reaches production", () => {
       // Our run touches the same file on its own branch.
       git(["checkout", "-q", "-b", "factory-deck/conflict1"], clone);
       await writeFile(join(clone, "feature.txt"), "ours\n");
-      expect((await commitRunFiles(clone, ["feature.txt"], "run output")).committed).toBe(
-        true,
-      );
+      expect(
+        (await commitRunFiles(clone, ["feature.txt"], "run output")).committed,
+      ).toBe(true);
       expect((await pushBranch(clone, "factory-deck/conflict1")).pushed).toBe(true);
 
       const res = await releaseToMain(clone, "factory-deck/conflict1");

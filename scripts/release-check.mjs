@@ -3,11 +3,11 @@
  * Executable repository gate for Factory Deck.
  *
  * This check validates concrete source controls only. It deliberately does not
- * create or consume readiness manifests, attestations, or review-status files.
- * Product readiness is not self-certified by an implementation script.
+ * create or consume readiness manifests or review-status files. Product
+ * readiness is grounded in executable evidence from the exact revision.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { resolve, dirname, extname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -52,6 +52,66 @@ for (const forbidden of [
     errors.push(`forbidden_readiness_bookkeeping:${forbidden}`);
   }
 }
+
+const excludedDirectories = new Set([
+  ".factory",
+  ".git",
+  "coverage",
+  "dist",
+  "node_modules",
+  "workspaces",
+]);
+const textExtensions = new Set([
+  ".cmd",
+  ".css",
+  ".js",
+  ".json",
+  ".jsx",
+  ".md",
+  ".mjs",
+  ".ps1",
+  ".sh",
+  ".ts",
+  ".tsx",
+  ".txt",
+  ".yaml",
+  ".yml",
+]);
+const prohibitedLanguage = [
+  ["organizational_gate", "sign" + " off"],
+  ["organizational_gate_compact", "sign" + "off"],
+  ["completed_organizational_gate", "signed" + " off"],
+  ["identity_gate", "authenticated " + "reviewer"],
+  ["mandatory_reviewer_gate", "required " + "reviewer"],
+  ["person_gate", "human " + "review"],
+  ["manual_gate", "manual " + "approval"],
+  ["implementation_readiness_claim", "self " + "certif"],
+  ["main_revision_label", "certified " + "main"],
+];
+
+function scanLanguage(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (!excludedDirectories.has(entry.name)) scanLanguage(resolve(directory, entry.name));
+      continue;
+    }
+    if (!entry.isFile() || !textExtensions.has(extname(entry.name).toLowerCase())) continue;
+    const path = resolve(directory, entry.name);
+    const lines = readFileSync(path, "utf8").split(/\r?\n/);
+    for (const [index, line] of lines.entries()) {
+      const normalized = line.toLowerCase().replace(/[-_]+/g, " ");
+      for (const [label, phrase] of prohibitedLanguage) {
+        if (normalized.includes(phrase)) {
+          errors.push(
+            `prohibited_release_language:${label}:${relative(ROOT, path)}:${index + 1}`,
+          );
+        }
+      }
+    }
+  }
+}
+
+scanLanguage(ROOT);
 
 console.log(JSON.stringify({ ok: errors.length === 0, errors, notes }, null, 2));
 process.exit(errors.length === 0 ? 0 : 1);

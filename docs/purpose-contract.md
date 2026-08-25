@@ -28,7 +28,7 @@ Orchestrate a multi-agent software-factory workflow with:
 
 ## Core user journey (must remain intact)
 
-1. **Launch** from `scripts/start-factory.cmd` (or `pnpm start` / `pnpm factory`) on a tree whose SHA matches the certified `main` tip.
+1. **Launch** from `scripts/start-factory.cmd` (or `pnpm start` / `pnpm factory`) on a tree whose SHA matches the exact `main` tip.
 2. **Submit a live factory job** using the configured free/local route or an
    explicitly configured paid provider.
 3. **Observe** stage progress, completion (or honest failure), and inspectable workspace + attribution artifacts.
@@ -64,7 +64,7 @@ the report surfaces that limitation explicitly.
 | No fake-success       | Live paths never fall back to mock/stub; unavailable routes produce an explicit error                                                                                                                |
 | Controls              | Executable `release:check`, `.github/workflows/production-readiness.yml`, typechecking, and the complete automated test suite                                                                        |
 | Evidence              | This contract, exact-revision CI results, changed-file digests, executed commands/exit statuses, and journey evidence                                                                                |
-| Reviews               | Author and verifier contexts are recorded separately; implementation output cannot self-attest readiness                                                                                             |
+| Verification          | Author and verifier contexts are recorded separately; implementation output alone is not readiness evidence                                                                                           |
 | Command safety        | Generated install/build/test scripts remain disabled on the host unless execution occurs in a disposable container/VM with workspace-only write access and no host secrets                           |
 | Identity              | Exact default-branch SHA equals local launcher/runtime tree before Production Ready                                                                                                                  |
 
@@ -72,14 +72,14 @@ the report surfaces that limitation explicitly.
 
 - No usable live provider route → **BLOCKED** with the exact unavailable route or
   credential name. Paid credentials are optional when the free route is healthy.
-- Missing purpose, competitive, command, or independent-review evidence required
+- Missing purpose, competitive, command, or independent-verification evidence required
   by the requested goal → **BLOCKED** for the corresponding readiness claim.
 - Launcher/runtime SHA ≠ `main` tip → **BLOCKED** for Production Ready (sync required).
 
 ## Forbidden claims
 
 - Prior “PRODUCTION READY” / mock-first control-plane proofs as full readiness
-- Self-certified Production Ready by the implementer
+- Production Ready based only on implementation-generated evidence
 - `proof:mock-e2e` alone as purpose fulfillment
 - Mock/stub output as evidence for any live-provider requirement
 - “Better than competitors” without five-product evidence and executed
@@ -87,4 +87,4 @@ the report surfaces that limitation explicitly.
 
 ## Deployment target
 
-Local Windows factory. GitHub `main` is source of truth. Runtime under `C:\Users\firer\local-ai-factory` must match the certified `main` SHA before Production Ready.
+Local Windows factory. GitHub `main` is source of truth. Runtime under `C:\Users\firer\local-ai-factory` must match the exact `main` SHA before Production Ready.

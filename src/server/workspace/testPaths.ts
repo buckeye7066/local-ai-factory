@@ -1,7 +1,6 @@
 const JS_TEST =
   /(?:\.(?:test|spec)\.[cm]?[jt]sx?$)|(?:^|\/)__tests__\/[^/]+\.[cm]?[jt]sx?$/i;
-const PYTHON_TEST =
-  /(?:^|\/)test_[^/]+\.py$|(?:^|\/)[^/]+_test\.py$/i;
+const PYTHON_TEST = /(?:^|\/)test_[^/]+\.py$|(?:^|\/)[^/]+_test\.py$/i;
 
 export function normalizeSafeRelativePath(raw: string): string | null {
   const path = raw.replace(/\\/g, "/").replace(/^\.\/+/, "");

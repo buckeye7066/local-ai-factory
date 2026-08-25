@@ -55,10 +55,7 @@ export interface VerificationEvidence {
 /** Cap the per-command evidence carried inside a QA issue. Errors print last. */
 const ISSUE_TAIL_CHARS = 6000;
 
-export function groundQaReport(
-  qa: QaReport,
-  evidence: VerificationEvidence,
-): QaReport {
+export function groundQaReport(qa: QaReport, evidence: VerificationEvidence): QaReport {
   const executed = evidence.executed;
   const incomplete = evidence.incomplete ?? [];
   if (!executed.length && !incomplete.length) {
@@ -72,8 +69,7 @@ export function groundQaReport(
   // Command failures and missing required commands are authoritative, but
   // green commands only prove what they exercised. They must never erase a
   // code/acceptance blocker found by the critic.
-  const groundedPassed =
-    failures.length === 0 && incomplete.length === 0 && qa.passed;
+  const groundedPassed = failures.length === 0 && incomplete.length === 0 && qa.passed;
 
   const syntheticIssues = [
     ...failures.map((f) => ({

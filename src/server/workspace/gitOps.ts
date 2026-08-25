@@ -192,7 +192,8 @@ export async function commitRunFiles(
     return {
       committed: false,
       unchanged: true,
-      detail: "Nothing to commit — the generated files match what is already in the repo.",
+      detail:
+        "Nothing to commit — the generated files match what is already in the repo.",
       sha: null,
     };
   }
@@ -294,7 +295,8 @@ export async function releaseToMain(
     return {
       released: false,
       trunk: null,
-      detail: "No 'origin' remote on this workspace — there is no trunk to release onto.",
+      detail:
+        "No 'origin' remote on this workspace — there is no trunk to release onto.",
     };
   }
   const trunk = await defaultRemoteBranch(dir);
@@ -398,7 +400,8 @@ export async function githubRepoExists(
   if (res.spawnError) {
     return { existence: "unknown", detail: `gh not available: ${res.spawnError}` };
   }
-  if (res.code === 0) return { existence: "exists", detail: `${fullName} already exists.` };
+  if (res.code === 0)
+    return { existence: "exists", detail: `${fullName} already exists.` };
   const err = `${res.stderr}\n${res.stdout}`.toLowerCase();
   if (err.includes("could not resolve") || err.includes("not found")) {
     return { existence: "free", detail: `${fullName} is available.` };
@@ -437,13 +440,19 @@ export async function githubCreateRepo(args: {
     600_000,
   );
   if (res.code !== 0) {
-    return { created: false, detail: `gh repo create failed — ${failureText(res)}`, url: null };
+    return {
+      created: false,
+      detail: `gh repo create failed — ${failureText(res)}`,
+      url: null,
+    };
   }
   const printed = `${res.stdout}\n${res.stderr}`.match(/https:\/\/github\.com\/\S+/);
   return {
     created: true,
     detail: `Created ${args.fullName} and pushed the work.`,
-    url: printed ? printed[0].replace(/[.,)]+$/, "") : `https://github.com/${args.fullName}`,
+    url: printed
+      ? printed[0].replace(/[.,)]+$/, "")
+      : `https://github.com/${args.fullName}`,
   };
 }
 

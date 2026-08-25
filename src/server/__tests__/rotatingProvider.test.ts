@@ -213,9 +213,10 @@ describe("RotatingProvider", () => {
     const out = await prov.generateText({ system: "s", prompt: "p" });
     expect(out.text).toBe("completed by chat-latest");
     expect(fetchFn).toHaveBeenCalledTimes(2);
-    const second = JSON.parse(
-      String(fetchFn.mock.calls[1][1]?.body ?? "{}"),
-    ) as Record<string, unknown>;
+    const second = JSON.parse(String(fetchFn.mock.calls[1][1]?.body ?? "{}")) as Record<
+      string,
+      unknown
+    >;
     expect(second["max_completion_tokens"]).toBeDefined();
     expect(second["max_tokens"]).toBeUndefined();
   });
@@ -329,7 +330,10 @@ describe("RotatingProvider", () => {
     const fetchFn = stubFetch((url) =>
       url.endsWith("/api/chat")
         ? new Response(
-            JSON.stringify({ message: { role: "assistant", content: "native ok" }, done_reason: "stop" }),
+            JSON.stringify({
+              message: { role: "assistant", content: "native ok" },
+              done_reason: "stop",
+            }),
             { status: 200, headers: { "content-type": "application/json" } },
           )
         : undefined,
@@ -354,7 +358,10 @@ describe("RotatingProvider", () => {
     stubFetch((url) =>
       url.endsWith("/api/chat")
         ? new Response(
-            JSON.stringify({ message: { role: "assistant", content: "", thinking: "hmm..." }, done_reason: "length" }),
+            JSON.stringify({
+              message: { role: "assistant", content: "", thinking: "hmm..." },
+              done_reason: "length",
+            }),
             { status: 200, headers: { "content-type": "application/json" } },
           )
         : undefined,
@@ -482,28 +489,42 @@ describe("cloud reasoning knobs — thinking models keep their output budget", (
     }) as unknown as Parameters<typeof cloudReasoningKnobs>[0];
 
   it("adds the verified per-backend field and nothing elsewhere", () => {
-    expect(cloudReasoningKnobs(mk("openrouter/x", "https://openrouter.ai/api/v1"))).toEqual({
+    expect(
+      cloudReasoningKnobs(mk("openrouter/x", "https://openrouter.ai/api/v1")),
+    ).toEqual({
       reasoning: { effort: "low" },
     });
-    expect(cloudReasoningKnobs(mk("nvidia_nim/x", "https://integrate.api.nvidia.com/v1"))).toEqual({
+    expect(
+      cloudReasoningKnobs(mk("nvidia_nim/x", "https://integrate.api.nvidia.com/v1")),
+    ).toEqual({
       chat_template_kwargs: { thinking: false },
     });
-    expect(cloudReasoningKnobs(mk("groq/x", "https://api.groq.com/openai/v1"))).toEqual({});
+    expect(cloudReasoningKnobs(mk("groq/x", "https://api.groq.com/openai/v1"))).toEqual(
+      {},
+    );
     expect(cloudReasoningKnobs(mk("ollama/x", "http://127.0.0.1:11434"))).toEqual({});
   });
 
   it("FACTORY_CLOUD_REASONING=full disables the knobs", () => {
     vi.stubEnv("FACTORY_CLOUD_REASONING", "full");
-    expect(cloudReasoningKnobs(mk("openrouter/x", "https://openrouter.ai/api/v1"))).toEqual({});
+    expect(
+      cloudReasoningKnobs(mk("openrouter/x", "https://openrouter.ai/api/v1")),
+    ).toEqual({});
   });
 
   it("reaches the wire body of an OpenRouter call", async () => {
     writeCatalog([
-      row("openrouter/only", { pool: "openrouter:free", base_url: "https://openrouter.ai/api/v1" }),
+      row("openrouter/only", {
+        pool: "openrouter:free",
+        base_url: "https://openrouter.ai/api/v1",
+      }),
     ]);
     const fetchFn = stubFetch();
     await provider().generateText({ system: "s", prompt: "p" });
-    const sent = JSON.parse(String(fetchFn.mock.calls[0]![1]?.body)) as Record<string, unknown>;
+    const sent = JSON.parse(String(fetchFn.mock.calls[0]![1]?.body)) as Record<
+      string,
+      unknown
+    >;
     expect(sent.reasoning).toEqual({ effort: "low" });
   });
 });
@@ -556,7 +577,7 @@ describe("filterRoutableCatalog — process-local credential filtering", () => {
       path.join(fccHome, ".env"),
       [
         "# provisioned for the proxy",
-        "TEST_FCC_ONLY_KEY=\"from-fcc-file\"",
+        'TEST_FCC_ONLY_KEY="from-fcc-file"',
         "TEST_ALREADY_SET_KEY=should-not-win",
         "TEST_BLANK_IN_FILE=",
         "",
@@ -730,13 +751,16 @@ describe("a reasoning-only reply is a budget problem, not an empty completion", 
 
   it("a genuinely empty completion is still reported as one", async () => {
     writeCatalog([row("nim/empty", { pool: "pool-nim" })]);
-    stubFetch(() =>
-      new Response(
-        JSON.stringify({
-          choices: [{ message: { role: "assistant", content: "" }, finish_reason: "stop" }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+    stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              { message: { role: "assistant", content: "" }, finish_reason: "stop" },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
     );
     const prov = provider();
     await expect(prov.generateText({ system: "s", prompt: "p" })).rejects.toThrow(

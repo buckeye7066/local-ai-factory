@@ -71,7 +71,10 @@ export type RotationLogger = (kind: "info" | "warn", message: string) => void;
  */
 let liveRotating: RotatingProvider | null = null;
 
-export async function reportRouteQuality(role: string, signal: QualitySignal): Promise<string | null> {
+export async function reportRouteQuality(
+  role: string,
+  signal: QualitySignal,
+): Promise<string | null> {
   if (!liveRotating) return null;
   return liveRotating.reportQuality(role, signal);
 }
@@ -144,11 +147,13 @@ function authHeaders(route: CatalogRoute): Record<string, string> {
  * a fatal 400 elsewhere. FACTORY_CLOUD_REASONING=full restores full reasoning.
  */
 export function cloudReasoningKnobs(route: CatalogRoute): Record<string, unknown> {
-  if ((process.env.FACTORY_CLOUD_REASONING || "").trim().toLowerCase() === "full") return {};
+  if ((process.env.FACTORY_CLOUD_REASONING || "").trim().toLowerCase() === "full")
+    return {};
   const base = String(route.base_url || "").toLowerCase();
   if (base.includes("openrouter.ai")) return { reasoning: { effort: "low" } };
   // Verified live on NIM deepseek-v4-flash: accepted.
-  if (base.includes("integrate.api.nvidia.com")) return { chat_template_kwargs: { thinking: false } };
+  if (base.includes("integrate.api.nvidia.com"))
+    return { chat_template_kwargs: { thinking: false } };
   return {};
 }
 
@@ -238,7 +243,9 @@ async function callRoute(
         ],
         options: {
           num_predict: maxTokens,
-          ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+          ...(input.temperature !== undefined
+            ? { temperature: input.temperature }
+            : {}),
         },
       };
       break;
@@ -351,7 +358,8 @@ async function callRoute(
   } else if (route.api === "ollama") {
     // Native /api/chat shape: { message: { content, thinking? }, done_reason }.
     const message = doc["message"] as Record<string, unknown> | undefined;
-    text = typeof message?.["content"] === "string" ? (message["content"] as string) : "";
+    text =
+      typeof message?.["content"] === "string" ? (message["content"] as string) : "";
     const thinking =
       typeof message?.["thinking"] === "string" ? (message["thinking"] as string) : "";
     if (!text.trim() && thinking.trim()) {
@@ -378,7 +386,8 @@ async function callRoute(
       const reasoning =
         (typeof message?.["reasoning_content"] === "string" &&
           (message["reasoning_content"] as string)) ||
-        (typeof message?.["reasoning"] === "string" && (message["reasoning"] as string)) ||
+        (typeof message?.["reasoning"] === "string" &&
+          (message["reasoning"] as string)) ||
         "";
       const finish = choices[0]?.["finish_reason"];
       if (reasoning.trim()) {
@@ -605,8 +614,7 @@ export function filterRoutableCatalog(
     // Real, free and code-capable, but too slow to be ROTATED into on this
     // machine (see rotationExcludedReason). Standalone use is unaffected:
     // pinning or an explicit model never comes through this filter.
-    const excluded =
-      rotationExcludedReason(r.id) || rotationExcludedReason(r.model);
+    const excluded = rotationExcludedReason(r.id) || rotationExcludedReason(r.model);
     if (excluded && !(activePin && pinMatches(r, activePin))) {
       excludedReasons[excluded] = (excludedReasons[excluded] ?? 0) + 1;
       excludedSkipped += 1;
@@ -970,21 +978,23 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
     // The whole repair loop runs on ONE selected route per rotation attempt:
     // repair feedback only makes sense against the model that produced the
     // malformed output. If the route fails hard, run() rotates pools.
-    return this.run("generateJson", (serve) =>
-      generateJsonWithRepair({
-        input,
-        attempts: 3,
-        baseMaxTokens: input.maxTokens ?? 8192,
-        call: async (prompt, maxTokens) => {
-          const text = await serve({
-            system,
-            prompt,
-            maxTokens,
-            temperature: input.temperature,
-          });
-          return extractJson(text);
-        },
-      }),
+    return this.run(
+      "generateJson",
+      (serve) =>
+        generateJsonWithRepair({
+          input,
+          attempts: 3,
+          baseMaxTokens: input.maxTokens ?? 8192,
+          call: async (prompt, maxTokens) => {
+            const text = await serve({
+              system,
+              prompt,
+              maxTokens,
+              temperature: input.temperature,
+            });
+            return extractJson(text);
+          },
+        }),
       input.intent,
     );
   }

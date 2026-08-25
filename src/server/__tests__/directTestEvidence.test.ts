@@ -7,13 +7,17 @@ describe("parseDirectTestEvidence", () => {
       numPassedTests: 1,
       numPendingTests: 0,
       numTodoTests: 0,
-      testResults: [{
-        assertionResults: [{
-          status: "passed",
-          title: "profile persists after reload",
-          fullName: "profile profile persists after reload",
-        }],
-      }],
+      testResults: [
+        {
+          assertionResults: [
+            {
+              status: "passed",
+              title: "profile persists after reload",
+              fullName: "profile profile persists after reload",
+            },
+          ],
+        },
+      ],
     });
     expect(parseDirectTestEvidence("vitest", output, "")).toMatchObject({
       valid: true,
@@ -39,9 +43,11 @@ describe("parseDirectTestEvidence", () => {
         JSON.stringify({
           numPassedTests: 1,
           numPendingTests: 1,
-          testResults: [{
-            assertionResults: [{ status: "passed", title: "one" }],
-          }],
+          testResults: [
+            {
+              assertionResults: [{ status: "passed", title: "one" }],
+            },
+          ],
         }),
         "",
       ).reason,
@@ -50,12 +56,16 @@ describe("parseDirectTestEvidence", () => {
 
   it("parses Playwright JSON and refuses skipped-only journeys", () => {
     const passed = JSON.stringify({
-      suites: [{
-        specs: [{
-          title: "profile persists after reload",
-          tests: [{ results: [{ status: "passed" }] }],
-        }],
-      }],
+      suites: [
+        {
+          specs: [
+            {
+              title: "profile persists after reload",
+              tests: [{ results: [{ status: "passed" }] }],
+            },
+          ],
+        },
+      ],
     });
     expect(parseDirectTestEvidence("playwright", passed, "")).toEqual({
       valid: true,
@@ -65,12 +75,16 @@ describe("parseDirectTestEvidence", () => {
     });
 
     const skipped = JSON.stringify({
-      suites: [{
-        specs: [{
-          title: "profile persists after reload",
-          tests: [{ results: [{ status: "skipped" }] }],
-        }],
-      }],
+      suites: [
+        {
+          specs: [
+            {
+              title: "profile persists after reload",
+              tests: [{ results: [{ status: "skipped" }] }],
+            },
+          ],
+        },
+      ],
     });
     expect(parseDirectTestEvidence("playwright", skipped, "").valid).toBe(false);
   });

@@ -114,9 +114,7 @@ export function relevantTestStatus(
       degraded: base === "passing",
     };
   }
-  const directlyExecuted = new Set(
-    directlyExecutedTestPaths.map(canonical),
-  );
+  const directlyExecuted = new Set(directlyExecutedTestPaths.map(canonical));
   const uncovered = ownTests.filter((path) => !directlyExecuted.has(path));
   if (base !== "passing") {
     return { status: base, uncoveredTestFiles: uncovered, degraded: false };
