@@ -36,7 +36,7 @@ Failure, unavailability, quota exhaustion, disagreement, stale evidence, or a we
 
 ## Purpose Foundry enforcement
 
-Purpose Foundry must always include the implementation and proof stations necessary to reach the same receipt. At minimum, its normalized selected-station plan includes Factory Deck, FlexFactor, The Crucible, and Watchtower. A station's `completed` callback is evidence only. The Foundry project itself reaches `completed` only when its Factory Deck run exposes a ready production receipt and the later verification/adversarial/operations evidence agrees with that exact revision.
+Purpose Foundry must always include the implementation and proof stations necessary to reach the same receipt. In **Free** build mode, its normalized selected-station plan includes Factory Deck, FlexFactor, The Crucible, and Watchtower. In **Paid** build mode, FlexFactor and Scout are unmetered external children and are therefore omitted and blocked from dispatch; Factory Deck, The Crucible, and Watchtower remain mandatory internal paid-ledger stations. A station's `completed` callback is evidence only. The Foundry project itself reaches `completed` only when its Factory Deck run exposes a ready production receipt and the later verification/adversarial/operations evidence agrees with that exact revision.
 
 The Factory Deck station must pass the project's full constitution, targets, success criteria, constraints, and non-goals into the run as authoritative obligations. The adapter may not request a draft-only run or downgrade the brain floor.
 

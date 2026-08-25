@@ -122,6 +122,65 @@ describe("deterministic completion evidence", () => {
     expect(verified.android.verified).toBe(true);
   });
 
+  it("never promotes Chromium execution through target names found only in static config", () => {
+    const root = workspace("chromium-is-not-all-platforms");
+    put(
+      root,
+      "package.json",
+      JSON.stringify({ dependencies: { react: "18", vite: "6" } }),
+    );
+    put(
+      root,
+      "playwright.config.ts",
+      "projects: [{ name: 'webkit' }, { name: 'Mobile Safari', use: devices['iPhone 15'] }, { name: 'Mobile Chrome', use: devices['Pixel 7'] }]",
+    );
+    const chromiumOnly = assessPlatformCompatibility(root, [
+      {
+        command: "npx playwright test --project=chromium",
+        exitCode: 0,
+        isBrowser: true,
+        directEvidenceValid: true,
+        outputTail: "chromium passed",
+      },
+    ]);
+    expect(chromiumOnly.webkit.verified).toBe(false);
+    expect(chromiumOnly.ios.verified).toBe(false);
+    expect(chromiumOnly.android.verified).toBe(false);
+  });
+
+  it("keeps successful browser targets distinct and accepts explicit runner stamps", () => {
+    const root = workspace("target-specific-browser-evidence");
+    put(
+      root,
+      "package.json",
+      JSON.stringify({ dependencies: { react: "18", vite: "6" } }),
+    );
+    const webkitOnly = assessPlatformCompatibility(root, [
+      {
+        command: "npx playwright test --project=webkit",
+        exitCode: 0,
+        isBrowser: true,
+        directEvidenceValid: true,
+      },
+    ]);
+    expect(webkitOnly.webkit.verified).toBe(true);
+    expect(webkitOnly.ios.verified).toBe(false);
+    expect(webkitOnly.android.verified).toBe(false);
+
+    const stamped = assessPlatformCompatibility(root, [
+      {
+        command: "browser-matrix shard 3",
+        exitCode: 0,
+        isBrowser: true,
+        directEvidenceValid: true,
+        verifiedTargets: ["ios", "android"],
+      },
+    ]);
+    expect(stamped.webkit.verified).toBe(false);
+    expect(stamped.ios.verified).toBe(true);
+    expect(stamped.android.verified).toBe(true);
+  });
+
   it("keeps desktop operating systems distinct and never infers the unexecuted host", () => {
     const root = workspace("desktop-platforms");
     put(root, "package.json", JSON.stringify({ bin: { app: "./cli.js" } }));

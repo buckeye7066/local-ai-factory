@@ -286,6 +286,8 @@ export type ExecutedPlatformCommand = {
   /** Stamp imported CI evidence with the OS that actually executed it. */
   hostPlatform?: NodeJS.Platform;
   isBrowser?: boolean;
+  /** Targets this successful browser invocation directly exercised. */
+  verifiedTargets?: PlatformTarget[];
   directEvidenceValid?: boolean;
   outputTail?: string;
 };
@@ -294,7 +296,6 @@ function packageSignals(workspacePath: string): {
   web: boolean;
   nativeMobile: boolean;
   desktopOrCli: boolean;
-  proofText: string;
 } {
   const files: string[] = [];
   const pending = [workspacePath];
@@ -350,23 +351,7 @@ function packageSignals(workspacePath: string): {
         /(^|\/)pyproject\.toml$/i.test(path) && /(^|\/)(?:cli|bin)\//i.test(path),
     );
 
-  const proofFiles = files.filter((path) =>
-    /playwright|(?:^|\/)(?:e2e|tests?)\/|\.github\/workflows|capacitor|gradle|xcodeproj/i.test(
-      path,
-    ),
-  );
-  const proofParts: string[] = [];
-  for (const path of proofFiles.slice(0, 200)) {
-    try {
-      const absolute = join(workspacePath, path);
-      const size = statSync(absolute).size;
-      if (size <= 250_000)
-        proofParts.push(`${path}\n${readFileSync(absolute, "utf8")}`);
-    } catch {
-      // Missing proof is not positive evidence.
-    }
-  }
-  return { web, nativeMobile, desktopOrCli, proofText: proofParts.join("\n") };
+  return { web, nativeMobile, desktopOrCli };
 }
 
 function target(
@@ -399,19 +384,29 @@ export function assessPlatformCompatibility(
       .filter((entry) => ranOn(entry, platform))
       .map((entry) => entry.command)
       .slice(0, 8);
-  const browserPass = successful.some(
+  const successfulBrowsers = successful.filter(
     (entry) => entry.isBrowser === true && entry.directEvidenceValid !== false,
   );
-  const browserEvidence = successful
-    .filter((entry) => entry.isBrowser)
-    .map((entry) => entry.command)
-    .slice(0, 8);
-  const browserText = `${signals.proofText}\n${successful
-    .map((entry) => `${entry.command}\n${entry.outputTail ?? ""}`)
-    .join("\n")}`;
-  const webkitConfigured = /\bwebkit\b|Desktop Safari/i.test(browserText);
-  const iosConfigured = /\b(?:iPhone|iPad|Mobile Safari|iOS)\b/i.test(browserText);
-  const androidConfigured = /\b(?:Pixel|Android|Mobile Chrome)\b/i.test(browserText);
+  const browserTargetEvidence = (platformTarget: PlatformTarget, pattern: RegExp) =>
+    successfulBrowsers.filter((entry) => {
+      if (entry.verifiedTargets?.includes(platformTarget)) return true;
+      return pattern.test(`${entry.command}\n${entry.outputTail ?? ""}`);
+    });
+  // Static Playwright/project configuration establishes what ought to run, but
+  // never proves that target ran. Only successful target-specific executions
+  // (or an explicit verifiedTargets stamp from an imported runner) count.
+  const webkitBrowserEvidence = browserTargetEvidence(
+    "webkit",
+    /\bwebkit\b|Desktop Safari/i,
+  );
+  const iosBrowserEvidence = browserTargetEvidence(
+    "ios",
+    /\b(?:iPhone|iPad|Mobile Safari|iOS)\b/i,
+  );
+  const androidBrowserEvidence = browserTargetEvidence(
+    "android",
+    /\b(?:Pixel|Android|Mobile Chrome)\b/i,
+  );
   const androidNativePass = successful.some((entry) =>
     /(?:gradlew?|capacitor|cordova|expo).*android|android.*(?:assemble|test|build)/i.test(
       `${entry.command}\n${entry.outputTail ?? ""}`,
@@ -425,9 +420,9 @@ export function assessPlatformCompatibility(
       ),
   );
 
-  const webkitOk = signals.web && browserPass && webkitConfigured;
-  const iosWebOk = signals.web && browserPass && webkitConfigured && iosConfigured;
-  const androidWebOk = signals.web && browserPass && androidConfigured;
+  const webkitOk = signals.web && webkitBrowserEvidence.length > 0;
+  const iosWebOk = signals.web && iosBrowserEvidence.length > 0;
+  const androidWebOk = signals.web && androidBrowserEvidence.length > 0;
   const iosOk = (!signals.web || iosWebOk) && (!signals.nativeMobile || iosNativePass);
   const androidOk =
     (!signals.web || androidWebOk) && (!signals.nativeMobile || androidNativePass);
@@ -438,7 +433,11 @@ export function assessPlatformCompatibility(
       platformPassed("win32"),
       platformPassed("win32") ? platformEvidence("win32") : [],
     ),
-    webkit: target(signals.web, webkitOk, webkitOk ? browserEvidence : []),
+    webkit: target(
+      signals.web,
+      webkitOk,
+      webkitOk ? webkitBrowserEvidence.map((entry) => entry.command).slice(0, 8) : [],
+    ),
     macos: target(
       signals.desktopOrCli,
       platformPassed("darwin"),
@@ -447,12 +446,36 @@ export function assessPlatformCompatibility(
     ios: target(
       signals.web || signals.nativeMobile,
       iosOk,
-      iosOk ? browserEvidence : [],
+      iosOk
+        ? [
+            ...iosBrowserEvidence.map((entry) => entry.command),
+            ...successful
+              .filter(
+                (entry) =>
+                  ranOn(entry, "darwin") &&
+                  /xcodebuild|(?:capacitor|cordova|expo).*ios|ios.*(?:build|test)/i.test(
+                    `${entry.command}\n${entry.outputTail ?? ""}`,
+                  ),
+              )
+              .map((entry) => entry.command),
+          ].slice(0, 8)
+        : [],
     ),
     android: target(
       signals.web || signals.nativeMobile,
       androidOk,
-      androidOk ? browserEvidence : [],
+      androidOk
+        ? [
+            ...androidBrowserEvidence.map((entry) => entry.command),
+            ...successful
+              .filter((entry) =>
+                /(?:gradlew?|capacitor|cordova|expo).*android|android.*(?:assemble|test|build)/i.test(
+                  `${entry.command}\n${entry.outputTail ?? ""}`,
+                ),
+              )
+              .map((entry) => entry.command),
+          ].slice(0, 8)
+        : [],
     ),
   };
 }
