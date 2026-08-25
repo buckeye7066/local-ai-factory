@@ -30,7 +30,8 @@ afterAll(async () => {
 
 const review = (identity: "sol" | "opus") => ({
   identity,
-  provider: identity === "sol" ? ("openai" as const) : ("anthropic" as const),
+  provider:
+    identity === "sol" ? ("openai" as const) : ("anthropic" as const),
   model: identity === "sol" ? "gpt-5.6-pro" : "claude-opus-4-8",
   evidenceDigest: "sha256:one",
   decision: "ready" as const,
@@ -123,9 +124,9 @@ describe("durable readiness state", () => {
     ).rejects.toThrow(/ready receipt/);
   });
 
-  it("refuses unsafe subject identifiers", async () => {
-    await expect(
-      saveReadinessState(initialReadinessState("foundry-project", "../escape")),
-    ).rejects.toThrow(/invalid readiness subject id/);
+  it("refuses unsafe subject identifiers", () => {
+    expect(() =>
+      initialReadinessState("foundry-project", "../escape"),
+    ).toThrow(/invalid readiness subject id/);
   });
 });
