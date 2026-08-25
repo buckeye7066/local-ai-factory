@@ -173,7 +173,10 @@ const prohibitedLanguage = [
 ];
 
 function normalizeLanguage(value) {
-  return value.toLowerCase().replace(/[-_\s]+/g, " ");
+  return value
+    .toLowerCase()
+    .replace(/\p{Cf}+/gu, "")
+    .replace(/[-_\s]+/g, " ");
 }
 
 function isWordCharacter(value) {
@@ -282,6 +285,61 @@ const renderedSourceExtensions = new Set([
   ".vue",
 ]);
 
+const namedHtmlCharacterReferences = new Map([
+  ["Tab", "\t"],
+  ["NewLine", "\n"],
+  ["nbsp", "\u00a0"],
+  ["NonBreakingSpace", "\u00a0"],
+  ["ensp", "\u2002"],
+  ["emsp", "\u2003"],
+  ["emsp13", "\u2004"],
+  ["emsp14", "\u2005"],
+  ["numsp", "\u2007"],
+  ["puncsp", "\u2008"],
+  ["thinsp", "\u2009"],
+  ["ThinSpace", "\u2009"],
+  ["hairsp", "\u200a"],
+  ["VeryThinSpace", "\u200a"],
+  ["MediumSpace", "\u205f"],
+  ["ThickSpace", "\u205f\u200a"],
+  ["NegativeVeryThinSpace", "\u200b"],
+  ["NegativeThinSpace", "\u200b"],
+  ["NegativeMediumSpace", "\u200b"],
+  ["NegativeThickSpace", "\u200b"],
+  ["ZeroWidthSpace", "\u200b"],
+  ["NoBreak", "\u2060"],
+  ["zwnj", "\u200c"],
+  ["zwj", "\u200d"],
+  ["lrm", "\u200e"],
+  ["rlm", "\u200f"],
+  ["amp", "&"],
+  ["apos", "'"],
+  ["gt", ">"],
+  ["lt", "<"],
+  ["quot", '"'],
+]);
+
+function decodeHtmlCharacterReferences(value) {
+  return value.replace(
+    /&#(?:[xX]([0-9A-Fa-f]+)|(\d+));?|&([A-Za-z][A-Za-z0-9]+);/g,
+    (match, hexadecimal, decimal, named) => {
+      if (named) return namedHtmlCharacterReferences.get(named) ?? match;
+      const codePoint = Number.parseInt(
+        hexadecimal ?? decimal,
+        hexadecimal === undefined ? 10 : 16,
+      );
+      if (
+        !Number.isInteger(codePoint) ||
+        codePoint <= 0 ||
+        codePoint > 0x10ffff ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      )
+        return "\ufffd";
+      return String.fromCodePoint(codePoint);
+    },
+  );
+}
+
 function sourceExtension(relativePath) {
   const match = /(?:^|\/)(?:[^/]+)(\.[^./]+)$/.exec(relativePath.toLowerCase());
   return match?.[1] ?? "";
@@ -300,7 +358,9 @@ function unquoteStaticLiteral(literal) {
 
 function renderedSourceCandidates(value, relativePath) {
   if (!renderedSourceExtensions.has(sourceExtension(relativePath))) return [];
-  const candidates = [value.replace(/<\s*\/?\s*[A-Za-z][^>]*>/g, " ")];
+  const candidates = [
+    decodeHtmlCharacterReferences(value.replace(/<\s*\/?\s*[A-Za-z][^>]*>/g, " ")),
+  ];
   const literalPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gs;
   let previous = null;
   let chain = null;
@@ -402,6 +462,11 @@ const probeSecondWord = phrase(97, 112, 112, 114, 111, 118, 97, 108);
 for (const [label, source] of [
   ["jsx_boundary", `<span>${probeFirstWord}</span><span>${probeSecondWord}</span>`],
   ["string_concatenation", `"${probeFirstWord}" + " " + "${probeSecondWord}"`],
+  ["html_numeric_entity", `${probeFirstWord}&#32;${probeSecondWord}`],
+  [
+    "html_named_entity",
+    `<span>${probeFirstWord}</span>&nbsp;<span>${probeSecondWord}</span>`,
+  ],
 ]) {
   if (
     !renderedSourceCandidates(source, "probe.jsx").some((candidate) =>
