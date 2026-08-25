@@ -13,6 +13,10 @@ import {
 import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 import { RoutingModeSchema } from "../../shared/schemas.js";
+import {
+  normalizeFoundryStations,
+  REQUIRED_PRODUCTION_STATIONS,
+} from "./readinessPolicy.js";
 
 export const StationIdSchema = z.enum([
   "factory-deck",
@@ -115,40 +119,24 @@ export const STATIONS: StationDefinition[] = [
 ];
 
 const StringListSchema = z.array(z.string().trim().min(1)).max(50).default([]);
-export const FoundryIntakeSchema = z
-  .object({
-    name: z.string().trim().min(1).max(120),
-    purpose: z.string().trim().min(1).max(20_000),
-    targetUsers: StringListSchema,
-    successCriteria: StringListSchema,
-    constraints: StringListSchema,
-    nonGoals: StringListSchema,
-    targets: StringListSchema,
-    source: z.enum(["manual", "obsidian", "api"]).default("manual"),
-    sourcePath: z.string().trim().max(2_000).nullable().default(null),
-    sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
-    /** Explicit owner-selected economic tier; absent preserves legacy defaults. */
-    routingMode: RoutingModeSchema.optional(),
-    selectedStations: z
-      .array(StationIdSchema)
-      .min(1)
-      .default(STATIONS.map((station) => station.id)),
-  })
-  .superRefine((intake, context) => {
-    if (
-      intake.routingMode === "paid" &&
-      intake.selectedStations.every(
-        (station) => station === "scout" || station === "flexfactor",
-      )
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["selectedStations"],
-        message:
-          "Paid Purpose Foundry requires at least one metered internal station; Scout and FlexFactor cannot join the paid-call ledger.",
-      });
-    }
-  });
+export const FoundryIntakeSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  purpose: z.string().trim().min(1).max(20_000),
+  targetUsers: StringListSchema,
+  successCriteria: StringListSchema,
+  constraints: StringListSchema,
+  nonGoals: StringListSchema,
+  targets: StringListSchema,
+  source: z.enum(["manual", "obsidian", "api"]).default("manual"),
+  sourcePath: z.string().trim().max(2_000).nullable().default(null),
+  sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
+  /** Explicit owner-selected economic tier; absent preserves legacy defaults. */
+  routingMode: RoutingModeSchema.optional(),
+  selectedStations: z
+    .array(StationIdSchema)
+    .min(1)
+    .default(STATIONS.map((station) => station.id)),
+});
 export type FoundryIntake = z.infer<typeof FoundryIntakeSchema>;
 
 export const StationRunStatusSchema = z.enum([
@@ -167,6 +155,8 @@ export const StationRunSchema = z.object({
   attempt: z.number().int().nonnegative(),
   summary: z.string(),
   artifacts: z.array(z.string()),
+  evidenceDigest: z.string().nullable().default(null),
+  revision: z.string().nullable().default(null),
   startedAt: z.number().nullable(),
   endedAt: z.number().nullable(),
 });
@@ -393,17 +383,8 @@ export class FoundryStore {
         return existing;
     }
     const now = Date.now();
-    const blockedUnmeteredStations = new Set<StationId>(
-      input.routingMode === "paid"
-        ? input.selectedStations.filter(
-            (station) => station === "scout" || station === "flexfactor",
-          )
-        : [],
-    );
     const selected = new Set(
-      input.selectedStations.filter(
-        (station) => !blockedUnmeteredStations.has(station),
-      ),
+      normalizeFoundryStations(input.selectedStations, input.routingMode),
     );
     const project: FoundryProject = {
       id: randomUUID(),
@@ -429,6 +410,8 @@ export class FoundryStore {
         attempt: 0,
         summary: "",
         artifacts: [],
+        evidenceDigest: null,
+        revision: null,
         startedAt: null,
         endedAt: null,
       })),
@@ -440,7 +423,7 @@ export class FoundryStore {
       source: project.source,
       constitution: project.constitution,
       routingMode: project.routingMode ?? "legacy-default",
-      blockedUnmeteredStations: [...blockedUnmeteredStations],
+      requiredProductionStations: [...REQUIRED_PRODUCTION_STATIONS],
     });
     return project;
   }

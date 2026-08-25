@@ -26,6 +26,8 @@ export type AuditEventType =
   | "run.timeout"
   | "run.budget_exhausted"
   | "run.verification.held"
+  | "run.readiness.blocked"
+  | "run.readiness.ready"
   | "workspace.created"
   | "attribution.written"
   | "idempotency.hit"

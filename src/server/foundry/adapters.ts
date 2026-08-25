@@ -23,6 +23,10 @@ import {
   type ResolvedRunRouting,
 } from "../orchestrator/runFactory.js";
 import { getRun } from "../storage/runsStore.js";
+import {
+  loadReadinessState,
+  recordReadinessEvaluation,
+} from "../storage/readinessStore.js";
 import { withExtendPersistenceGoals } from "../orchestrator/composeExtendIdea.js";
 import {
   repoNameProblem,
@@ -674,6 +678,9 @@ export class FoundryAdapters {
       `Target users: ${project.constitution.targetUsers.join(", ") || "not specified"}`,
       `Success criteria: ${project.constitution.successCriteria.join("; ") || "not specified"}`,
       `Constraints: ${project.constitution.constraints.join("; ") || "none specified"}`,
+      `Non-goals: ${project.constitution.nonGoals.join("; ") || "none specified"}`,
+      `Targets: ${project.constitution.targets.join("; ") || "none specified"}`,
+      "Mandatory completion: the run is not complete until the purpose-bound factory.production-readiness.v1 receipt is ready and approved independently by Sol plus Fable/Opus. Owner-managed legal/external matters remain outside cyberland.",
       `Upstream specialist handoffs: ${upstreamEvidence.length ? JSON.stringify(upstreamEvidence) : "none"}`,
       ...(target
         ? [
@@ -724,6 +731,31 @@ export class FoundryAdapters {
         evidence: { runId: run.id, status: run.status, errorLedger },
       };
     }
+    const readiness = await loadReadinessState(run.id);
+    if (readiness?.status !== "ready" || readiness.receipt?.ready !== true) {
+      return {
+        status: "needs_attention",
+        summary: `Factory Deck pipeline ended, but mandatory production readiness is blocked: ${(readiness?.blockers ?? ["receipt missing"]).join("; ")}`,
+        artifacts: [artifact],
+        evidence: {
+          runId: run.id,
+          status: run.status,
+          readiness: readiness ?? null,
+          errorLedger,
+        },
+      };
+    }
+    await recordReadinessEvaluation({
+      subjectType: "foundry-project",
+      subjectId: project.id,
+      evidenceDigest: readiness.receipt.evidenceDigest,
+      reviews: readiness.reviews,
+      receipt: readiness.receipt,
+    });
+    const revision =
+      run.release?.mergedSha ??
+      run.destination?.commitSha ??
+      readiness.receipt.evidenceDigest;
     return {
       status: "completed",
       summary: run.finalReport?.summary || `Factory Deck completed run ${run.id}.`,
@@ -736,6 +768,9 @@ export class FoundryAdapters {
         runId: run.id,
         status: run.status,
         destination: run.destination ?? null,
+        evidenceDigest: readiness.receipt.evidenceDigest,
+        revision,
+        readinessReceipt: readiness.receipt,
         errorLedger,
       },
     };
@@ -756,17 +791,8 @@ export class FoundryAdapters {
     }
     const script = flexfactorDirectedScript();
     const python = process.env.PURPOSE_FOUNDRY_PYTHON?.trim() || "python";
-    const config = this.dependencies.config();
-    const routing = selectRunRouting(
-      { routingMode: project.routingMode },
-      this.dependencies.providerRegistry(),
-      config,
-    );
-    if (routing.routingMode === "paid") {
-      throw new Error(
-        "Paid Purpose Foundry Scout/FlexFactor is blocked: the external child process cannot participate in Factory Deck's per-call paid reservation ledger. Select Free for these stations or run a metered internal station; no untracked paid process was started.",
-      );
-    }
+    // Scout/FlexFactor is an unmetered verification station. Paid build mode
+    // does not remove it or turn the child into an untracked paid process.
     // Free is a hard boundary. The child process is always pinned to Ollama;
     // environment defaults must never promote it to a paid API.
     const provider = "ollama";
@@ -1298,12 +1324,46 @@ export class FoundryAdapters {
       .map((item) => item.trim())
       .filter(Boolean);
     if (!configured.length) {
+      const readiness = await loadReadinessState(project.id);
+      const factoryStation = project.stations.find(
+        (station) => station.stationId === "factory-deck",
+      );
+      if (
+        readiness?.status === "ready" &&
+        readiness.receipt?.ready === true &&
+        factoryStation?.evidenceDigest &&
+        factoryStation.revision
+      ) {
+        const artifact = await this.store.writeArtifact(
+          project.id,
+          "watchtower",
+          "local-production-health.json",
+          {
+            checkedAt: Date.now(),
+            mode: "private-local-artifact",
+            evidenceDigest: factoryStation.evidenceDigest,
+            revision: factoryStation.revision,
+            receipt: readiness.receipt,
+          },
+        );
+        return {
+          status: "completed",
+          summary:
+            "Watchtower verified the private/local production artifact and its exact readiness receipt; no public endpoint was required.",
+          artifacts: [artifact],
+          evidence: {
+            mode: "private-local-artifact",
+            evidenceDigest: factoryStation.evidenceDigest,
+            revision: factoryStation.revision,
+          },
+        };
+      }
       return {
         status: "needs_attention",
         summary:
-          "Watchtower needs at least one explicit PURPOSE_FOUNDRY_WATCH_URLS endpoint.",
+          "Watchtower needs explicit watch URLs or a verified private/local production artifact receipt.",
         artifacts: [],
-        evidence: { missing: "PURPOSE_FOUNDRY_WATCH_URLS" },
+        evidence: { missing: "PURPOSE_FOUNDRY_WATCH_URLS_OR_LOCAL_RECEIPT" },
       };
     }
     const checks = await Promise.all(

@@ -235,3 +235,33 @@ export function evaluateProductionReadiness(
     ownerExternalMatters: PRODUCTION_READINESS_POLICY.ownerExternalMatters,
   };
 }
+
+export function deterministicProductionBlockers(
+  evidence: Omit<ProductionReadinessEvidence, "reviews">,
+): string[] {
+  const synthetic: ReadinessBrainReview[] = [
+    {
+      identity: "sol",
+      provider: "openai",
+      model: "deterministic-preflight-only",
+      evidenceDigest: evidence.evidenceDigest,
+      decision: "ready",
+      purposeAligned: true,
+      implementationComplete: true,
+      technicallyReady: true,
+      blockers: [],
+    },
+    {
+      identity: "opus",
+      provider: "anthropic",
+      model: "opus-deterministic-preflight-only",
+      evidenceDigest: evidence.evidenceDigest,
+      decision: "ready",
+      purposeAligned: true,
+      implementationComplete: true,
+      technicallyReady: true,
+      blockers: [],
+    },
+  ];
+  return evaluateProductionReadiness({ ...evidence, reviews: synthetic }).blockers;
+}

@@ -97,19 +97,9 @@ export function evaluateFoundryCompletion(input: {
   }
 
   const failed = input.stations.some((station) => station.status === "failed");
-  const needsAttention = input.stations.some(
-    (station) => station.status === "needs_attention",
-  );
   return {
     completed: blockers.length === 0,
-    status:
-      blockers.length === 0
-        ? "completed"
-        : failed
-          ? "failed"
-          : needsAttention
-            ? "needs_attention"
-            : "running",
+    status: blockers.length === 0 ? "completed" : failed ? "failed" : "needs_attention",
     blockers,
   };
 }

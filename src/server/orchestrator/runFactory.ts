@@ -26,6 +26,17 @@ import {
   ProviderAbortError,
 } from "../providers/index.js";
 import type { ProviderRegistry } from "../providers/index.js";
+import { createReadinessBrainProviders } from "../providers/readinessBrains.js";
+import {
+  completeProductionReadiness,
+  productionReadinessDigest,
+  type ProductionReadinessFacts,
+} from "./completeProductionReadiness.js";
+import {
+  deterministicProductionBlockers,
+  evaluateProductionReadiness,
+} from "./productionReadinessPolicy.js";
+import { recordReadinessEvaluation } from "../storage/readinessStore.js";
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import {
@@ -2546,6 +2557,8 @@ async function executeRun(
     // downgrades the destination to "failed" with the exact git/gh error and
     // leaves the completed run completed — the code is built either way, and
     // claiming otherwise would be a lie in both directions.
+    let liveDeploymentVerified = false;
+
     if (run.destination) {
       log("info", `Saving the work to ${describeDestination(run.destination)}…`);
       const delivered = await deliverRun({
@@ -2791,6 +2804,8 @@ async function executeRun(
             return;
           }
 
+          liveDeploymentVerified = true;
+
           /* Store publish — owner order 2026-08-15: a production-ready app is
            * posted to the owner's app store on www.axiombiolabs.org too, and
            * PromoPilot picks it up from the same registry. Only a deploy this
@@ -2835,6 +2850,171 @@ async function executeRun(
           }
         }
       }
+    }
+
+    const readinessKind = run.destination?.kind ?? "workspace-only";
+    const deliveryCompleted = run.destination?.status === "delivered";
+    const privateApp = checkpoint.options.publish === false;
+    const readinessPurposeProfile = spec.purposeProfile;
+    const wiringComplete = !(report.caveats ?? []).some((caveat) =>
+      /UNWIRED|WIRING SCAN/i.test(caveat),
+    );
+    const highOrCriticalIssues = qa.issues.filter((issue) =>
+      ["critical", "high"].includes(String(issue.severity).toLowerCase()),
+    ).length;
+    const readinessFacts: ProductionReadinessFacts = {
+      appName: spec.appName,
+      purpose: {
+        stated: Boolean(args.idea.trim() && spec.appName.trim()),
+        grounded: readinessPurposeProfile
+          ? readinessPurposeProfile.grounding.grounded &&
+            readinessPurposeProfile.evidence.length > 0
+          : Boolean(args.idea.trim() && spec.acceptanceCriteria.length > 0),
+        goalsCovered: verifiedOutcome && (verification.incomplete?.length ?? 0) === 0,
+        acceptanceCriteria: spec.acceptanceCriteria.length,
+        acceptanceCriteriaExecuted: verifiedOutcome
+          ? spec.acceptanceCriteria.length
+          : 0,
+      },
+      technical: {
+        qaPassed: qa.passed,
+        testsPassed: testStatus === "passing",
+        verificationComplete: (verification.incomplete?.length ?? 0) === 0,
+        digestReceiptValid: receipt.ok,
+        blockingWriteRefusals: blockingWriteRefusals.length,
+        wiringComplete,
+        criticalSecurityIssues: highOrCriticalIssues,
+        operationallyRunnable: verifiedOutcome && Boolean(report.howToRun?.trim()),
+      },
+      delivery: {
+        kind: readinessKind,
+        delivered: deliveryCompleted,
+        releasedToTrunk:
+          readinessKind === "existing-repo"
+            ? Boolean(run.release?.released || run.destination?.releasedToTrunk)
+            : false,
+        liveVerified: liveDeploymentVerified,
+        localArtifactVerified:
+          receipt.ok &&
+          deliveryCompleted &&
+          (readinessKind === "workspace-only" ||
+            (readinessKind === "new-repo" && privateApp)),
+      },
+      ownerExternalNotes: [
+        "Legal, regulatory, contractual, store-policy, and licensing decisions are owner-managed outside cyberland and were not evaluated.",
+      ],
+    };
+    const readinessDigest = productionReadinessDigest(readinessFacts);
+
+    if (run.demo) {
+      const demoReceipt = evaluateProductionReadiness({
+        ...readinessFacts,
+        evidenceDigest: readinessDigest,
+        reviews: [],
+      });
+      demoReceipt.blockers = [
+        "Demo/mock output cannot be production-ready.",
+        ...demoReceipt.blockers,
+      ];
+      await recordReadinessEvaluation({
+        subjectType: "run",
+        subjectId: run.id,
+        evidenceDigest: readinessDigest,
+        reviews: [],
+        receipt: demoReceipt,
+      });
+      log(
+        "warning",
+        "Simulation pipeline finished, but mandatory production readiness is blocked by design.",
+      );
+    } else {
+      const deterministicBlockers = deterministicProductionBlockers({
+        ...readinessFacts,
+        evidenceDigest: readinessDigest,
+      });
+      if (deterministicBlockers.length > 0) {
+        const blockedReceipt = evaluateProductionReadiness({
+          ...readinessFacts,
+          evidenceDigest: readinessDigest,
+          reviews: [],
+        });
+        await recordReadinessEvaluation({
+          subjectType: "run",
+          subjectId: run.id,
+          evidenceDigest: readinessDigest,
+          reviews: [],
+          receipt: blockedReceipt,
+        });
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Production readiness blocked before paid brain review: ${deterministicBlockers.join("; ")}`,
+        );
+        const blockedEvent = await appendAuditEvent({
+          type: "run.readiness.blocked",
+          runId: run.id,
+          detail: run.error,
+        });
+        await persistAttribution(testStatus, blockedEvent.seq);
+        log("warning", run.error);
+        await checkpointNow();
+        await flush();
+        return;
+      }
+
+      log(
+        "model_call",
+        "Mandatory production review: launching independent Sol and Fable/Opus judgments on the same exact evidence digest.",
+        "final_review",
+      );
+      const brainProviders = createReadinessBrainProviders(
+        config,
+        secrets,
+        (kind, message) =>
+          log(kind === "warn" ? "warning" : "info", message, "final_review"),
+        callSignal,
+      );
+      const readiness = await completeProductionReadiness({
+        subjectType: "run",
+        subjectId: run.id,
+        facts: readinessFacts,
+        solProvider: countProvider(brainProviders.sol),
+        solModel: brainProviders.solModel,
+        secondProvider: countProvider(brainProviders.second),
+        secondIdentity: brainProviders.secondIdentity,
+        secondModel: brainProviders.secondModel,
+      });
+      if (!readiness.receipt.ready) {
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Production readiness blocked: ${readiness.receipt.blockers.join("; ")}`,
+        );
+        const blockedEvent = await appendAuditEvent({
+          type: "run.readiness.blocked",
+          runId: run.id,
+          detail: run.error,
+        });
+        await persistAttribution(testStatus, blockedEvent.seq);
+        log("warning", run.error);
+        await checkpointNow();
+        await flush();
+        return;
+      }
+      run.finalReport = redactDeep({
+        ...report,
+        providerUsage: run.providerUsage,
+      });
+      await appendAuditEvent({
+        type: "run.readiness.ready",
+        runId: run.id,
+        detail: readiness.receipt.evidenceDigest,
+      });
+      log(
+        "success",
+        `Mandatory production readiness PASSED: Sol and ${brainProviders.secondIdentity} approved ${readiness.receipt.evidenceDigest}.`,
+        "final_review",
+      );
     }
 
     run.status = "completed";

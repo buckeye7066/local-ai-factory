@@ -20,7 +20,7 @@ export type ProductionReadinessFacts = Omit<
 
 export type ProductionReadinessCompletion = {
   evidence: ProductionReadinessEvidence;
-  reviews: [ReadinessBrainReview, ReadinessBrainReview];
+  reviews: ReadinessBrainReview[];
   receipt: ProductionReadinessReceipt;
   state: ReadinessState;
 };
@@ -87,14 +87,35 @@ export async function completeProductionReadiness(input: {
     ...input.facts,
     evidenceDigest,
   });
-  const reviews = await independentProductionReadinessReviews({
-    solProvider: input.solProvider,
-    solModel: input.solModel,
-    secondProvider: input.secondProvider,
-    secondIdentity: input.secondIdentity,
-    secondModel: input.secondModel,
-    evidence: immutableEvidence,
-  });
+  let reviews: ReadinessBrainReview[] = [];
+  try {
+    reviews = await independentProductionReadinessReviews({
+      solProvider: input.solProvider,
+      solModel: input.solModel,
+      secondProvider: input.secondProvider,
+      secondIdentity: input.secondIdentity,
+      secondModel: input.secondModel,
+      evidence: immutableEvidence,
+    });
+  } catch {
+    const evidence: ProductionReadinessEvidence = {
+      ...immutableEvidence,
+      reviews: [],
+    };
+    const receipt = evaluateProductionReadiness(evidence);
+    receipt.blockers = [
+      "Mandatory Sol and Fable/Opus review failed before both independent decisions completed.",
+      ...receipt.blockers,
+    ];
+    const state = await recordReadinessEvaluation({
+      subjectType: input.subjectType,
+      subjectId: input.subjectId,
+      evidenceDigest,
+      reviews: [],
+      receipt,
+    });
+    return { evidence, reviews: [], receipt, state };
+  }
   const evidence: ProductionReadinessEvidence = {
     ...immutableEvidence,
     reviews,
