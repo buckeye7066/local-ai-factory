@@ -1,3 +1,8 @@
+import {
+  isReadinessEvidenceDigest,
+  isSupportedFableOrOpusModel,
+} from "./readinessModels.js";
+
 export const PRODUCTION_READINESS_POLICY = Object.freeze({
   version: "factory.production-readiness.v1",
   mandatory: true,
@@ -53,7 +58,7 @@ export type ProductionReadinessEvidence = {
     digestReceiptValid: boolean;
     blockingWriteRefusals: number;
     wiringComplete: boolean;
-    criticalSecurityIssues: number;
+    highOrCriticalSecurityIssues: number;
     operationallyRunnable: boolean;
   };
   delivery: {
@@ -99,15 +104,15 @@ function reviewReady(review: ReadinessBrainReview): boolean {
 }
 
 /**
- * A Fable-or-Opus reviewer is identified both by its declared role and by the
- * configured Anthropic model name. A cheap or unknown model cannot gain the
- * stronger label merely by returning JSON that says "opus".
+ * A Fable-or-Opus reviewer is identified both by its declared role and by an
+ * explicitly supported Anthropic model identifier. A cheap or unknown model
+ * cannot gain the stronger label merely by embedding "opus" in an alias.
  */
 export function isFableOrOpusReview(review: ReadinessBrainReview): boolean {
   return (
     review.provider === "anthropic" &&
     (review.identity === "fable" || review.identity === "opus") &&
-    /(fable|opus)/i.test(review.model)
+    isSupportedFableOrOpusModel(review.model)
   );
 }
 
@@ -131,6 +136,12 @@ export function evaluateProductionReadiness(
     if (!condition) blockers.push(detail);
   };
 
+  const digestValid = isReadinessEvidenceDigest(evidence.evidenceDigest);
+  add(
+    digestValid,
+    "The production-readiness evidence digest is missing or malformed.",
+  );
+
   add(evidence.purpose.stated, "Purpose is not stated.");
   add(
     evidence.purpose.grounded,
@@ -142,7 +153,8 @@ export function evaluateProductionReadiness(
     "No executable acceptance criteria define completion.",
   );
   add(
-    evidence.purpose.acceptanceCriteriaExecuted === evidence.purpose.acceptanceCriteria,
+    evidence.purpose.acceptanceCriteriaExecuted ===
+      evidence.purpose.acceptanceCriteria,
     "Not every acceptance criterion executed successfully.",
   );
 
@@ -162,8 +174,8 @@ export function evaluateProductionReadiness(
     "The implementation is not fully wired into the product.",
   );
   add(
-    evidence.technical.criticalSecurityIssues === 0,
-    "Critical or high-severity technical security blockers remain.",
+    evidence.technical.highOrCriticalSecurityIssues === 0,
+    "High or critical technical security blockers remain.",
   );
   add(
     evidence.technical.operationallyRunnable,
@@ -181,8 +193,8 @@ export function evaluateProductionReadiness(
     );
   } else if (evidence.delivery.kind === "new-repo") {
     add(
-      evidence.delivery.liveVerified || evidence.delivery.localArtifactVerified,
-      "The new app has neither a live verified deployment nor a verified local production artifact.",
+      evidence.delivery.liveVerified,
+      "The hosted new app was not verified live at its production endpoint.",
     );
   } else {
     add(
@@ -193,15 +205,32 @@ export function evaluateProductionReadiness(
 
   const solReviews = evidence.reviews.filter(isSolReview);
   const secondReviews = evidence.reviews.filter(isFableOrOpusReview);
-  const sol = solReviews.some(reviewReady);
-  const fableOrOpus = secondReviews.some(reviewReady);
+  const eligibleReviews = [...solReviews, ...secondReviews];
+  const sameEvidence =
+    digestValid &&
+    eligibleReviews.length >= 2 &&
+    eligibleReviews.every(
+      (review) => review.evidenceDigest === evidence.evidenceDigest,
+    );
+  const sol =
+    solReviews.length > 0 &&
+    solReviews.every(
+      (review) =>
+        review.evidenceDigest === evidence.evidenceDigest && reviewReady(review),
+    );
+  const fableOrOpus =
+    secondReviews.length > 0 &&
+    secondReviews.every(
+      (review) =>
+        review.evidenceDigest === evidence.evidenceDigest && reviewReady(review),
+    );
   const independentFamilies = solReviews.length > 0 && secondReviews.length > 0;
-  const sameEvidence = [...solReviews, ...secondReviews]
-    .filter(reviewReady)
-    .every((review) => review.evidenceDigest === evidence.evidenceDigest);
 
-  add(sol, "Sol did not approve the exact readiness evidence.");
-  add(fableOrOpus, "Neither Fable nor Opus approved the exact readiness evidence.");
+  add(sol, "Sol did not unanimously approve the exact readiness evidence.");
+  add(
+    fableOrOpus,
+    "Fable/Opus did not unanimously approve the exact readiness evidence.",
+  );
   add(
     independentFamilies,
     "The readiness review did not use independent OpenAI and Anthropic families.",
@@ -243,7 +272,7 @@ export function deterministicProductionBlockers(
     {
       identity: "sol",
       provider: "openai",
-      model: "deterministic-preflight-only",
+      model: "deterministic-sol-preflight",
       evidenceDigest: evidence.evidenceDigest,
       decision: "ready",
       purposeAligned: true,
@@ -254,7 +283,7 @@ export function deterministicProductionBlockers(
     {
       identity: "opus",
       provider: "anthropic",
-      model: "opus-deterministic-preflight-only",
+      model: "claude-opus-4-8",
       evidenceDigest: evidence.evidenceDigest,
       decision: "ready",
       purposeAligned: true,
