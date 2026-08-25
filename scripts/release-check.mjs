@@ -72,6 +72,8 @@ const textExtensions = new Set([
   ".md",
   ".mjs",
   ".ps1",
+  ".py",
+  ".pyw",
   ".sh",
   ".ts",
   ".tsx",
@@ -91,6 +93,18 @@ const prohibitedLanguage = [
   ["main_revision_label", "certified " + "main"],
 ];
 
+function normalizeLanguage(value) {
+  return value.toLowerCase().replace(/[-_\s]+/g, " ");
+}
+
+if (!textExtensions.has(".py") || !textExtensions.has(".pyw")) {
+  errors.push("release_language_policy_self_test:python_sources_not_scanned");
+}
+const wrappedPhraseProbe = normalizeLanguage("manual\napproval");
+if (!prohibitedLanguage.some(([, phrase]) => wrappedPhraseProbe.includes(phrase))) {
+  errors.push("release_language_policy_self_test:wrapped_phrase_not_detected");
+}
+
 function scanLanguage(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.isDirectory()) {
@@ -101,15 +115,10 @@ function scanLanguage(directory) {
     if (!entry.isFile() || !textExtensions.has(extname(entry.name).toLowerCase()))
       continue;
     const path = resolve(directory, entry.name);
-    const lines = readFileSync(path, "utf8").split(/\r?\n/);
-    for (const [index, line] of lines.entries()) {
-      const normalized = line.toLowerCase().replace(/[-_]+/g, " ");
-      for (const [label, phrase] of prohibitedLanguage) {
-        if (normalized.includes(phrase)) {
-          errors.push(
-            `prohibited_release_language:${label}:${relative(ROOT, path)}:${index + 1}`,
-          );
-        }
+    const normalized = normalizeLanguage(readFileSync(path, "utf8"));
+    for (const [label, phrase] of prohibitedLanguage) {
+      if (normalized.includes(phrase)) {
+        errors.push(`prohibited_release_language:${label}:${relative(ROOT, path)}`);
       }
     }
   }
