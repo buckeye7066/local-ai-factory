@@ -35,6 +35,12 @@ const config = loadConfig({
   DEFAULT_REVIEW_PROVIDER: "free",
 });
 
+const paidDefaultConfig = loadConfig({
+  FACTORY_FREE_ENABLED: "false",
+  DEFAULT_CODE_PROVIDER: "anthropic",
+  DEFAULT_REVIEW_PROVIDER: "anthropic",
+});
+
 describe("provider-neutral run routing", () => {
   it("free mode remains free even when paid keys are available", () => {
     expect(
@@ -72,6 +78,34 @@ describe("provider-neutral run routing", () => {
         config,
       ).routingMode,
     ).toBe("paid");
+  });
+
+  it("legacy callers with paid defaults still infer paid mode", () => {
+    expect(
+      selectRunRouting({}, registry(false, ["anthropic"]), paidDefaultConfig),
+    ).toEqual({
+      routingMode: "paid",
+      codeProvider: "anthropic",
+      reviewProvider: "anthropic",
+    });
+  });
+
+  it("paid routing rotates to another paid provider, never free", () => {
+    expect(
+      selectRunRouting(
+        {
+          routingMode: "paid",
+          codeProvider: "anthropic",
+          reviewProvider: "anthropic",
+        },
+        registry(true, ["openai"]),
+        config,
+      ),
+    ).toEqual({
+      routingMode: "paid",
+      codeProvider: "openai",
+      reviewProvider: "openai",
+    });
   });
 
   it("paid mode fails closed when no paid route is configured", () => {
