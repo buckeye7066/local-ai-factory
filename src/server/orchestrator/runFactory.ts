@@ -417,8 +417,15 @@ export function createTierProvider(
 ): LLMProvider {
   const decorate = options.decorate ?? ((provider: LLMProvider) => provider);
   const buildConcrete = (name: ProviderName): LLMProvider => {
-    const decorated = decorate(new ThemedProvider(registry.get(name)));
-    return isPaidProvider(name) ? new BudgetGatedProvider(decorated, name) : decorated;
+    const concrete = registry.get(name);
+    const themed = new ThemedProvider(concrete);
+    const budgeted =
+      isPaidProvider(name) && concrete.paidBudgetManaged !== true
+        ? new BudgetGatedProvider(themed, name)
+        : themed;
+    // Run call-count rejection stays outside the paid gate, so a call refused
+    // before provider I/O never creates a phantom paid reservation.
+    return decorate(budgeted);
   };
 
   if (routing.routingMode === "free") {
@@ -660,8 +667,8 @@ async function executeRun(
     callSignal,
   );
 
-  // Resolve + meter providers (budget enforced inside CountingProvider).
-  // Demo journeys use mock; live journeys use resolveLive (never mock/stub).
+  // Resolve strict-tier providers. The outer CountingProvider enforces the
+  // run call cap before inner paid providers reserve each SDK attempt.
   const routingMode: "free" | "paid" =
     run.routingMode ??
     (run.codeProvider === "anthropic" ||

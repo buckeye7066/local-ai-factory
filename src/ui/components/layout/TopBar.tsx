@@ -42,8 +42,9 @@ function LiveRouteBadge({ health }: { health: Health | null }) {
   const tip = onPaid
     ? `A paid provider is serving this call. Strict Free runs never attach a paid fallback. ` +
       `${route.lastFailoverReason ? `Recorded failover reason: ${route.lastFailoverReason}. ` : ""}` +
-      `Est. paid spend in the last 24h: $${spend.toFixed(4)} of ` +
-      `$${route.paidBudget.limits.usdPerDay.toFixed(2)}.`
+      `Local estimated paid usage in the last 24h: $${spend.toFixed(4)} of ` +
+      `$${route.paidBudget.limits.usdPerDay.toFixed(2)} admission guard. ` +
+      `Use provider-native account caps for a hard actual-spend limit.`
     : `Running on the FREE local route at zero cost. ` +
       `Free calls: ${route.counts.free}, paid rescues: ` +
       `${route.counts.anthropic + route.counts.openai}. ` +

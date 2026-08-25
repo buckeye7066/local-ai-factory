@@ -64,6 +64,7 @@ type FoundryProject = {
   id: string;
   name: string;
   status: "draft" | "queued" | "running" | "needs_attention" | "completed" | "failed";
+  routingMode?: "free" | "paid";
   constitution: {
     purpose: string;
     targetUsers: string[];
@@ -159,6 +160,7 @@ export function FoundryFloor() {
   const [purpose, setPurpose] = useState("");
   const [targets, setTargets] = useState("");
   const [success, setSuccess] = useState("");
+  const [routingMode, setRoutingMode] = useState<"free" | "paid">("free");
   const [obsidianNote, setObsidianNote] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -224,6 +226,7 @@ export function FoundryFloor() {
           constraints: [],
           nonGoals: [],
           targets: split(targets),
+          routingMode,
           source: "manual",
           ...(stations.length
             ? { selectedStations: stations.map((station) => station.id) }
@@ -255,6 +258,7 @@ export function FoundryFloor() {
         body: JSON.stringify({
           markdown: obsidianNote,
           sourcePath: "Obsidian/Purpose Foundry.md",
+          routingMode,
         }),
       });
       setObsidianNote("");
@@ -415,6 +419,26 @@ export function FoundryFloor() {
                   className={cn(FIELD_CLASS, "resize-none")}
                 />
               </Field>
+              <Field
+                label="Provider routing"
+                hint={
+                  routingMode === "free"
+                    ? "Free is a hard $0 boundary, including Scout and FlexFactor."
+                    : "Paid internal calls use single-process call limits and an estimated-USD admission guard. Unmeterable Scout/FlexFactor child stations are omitted."
+                }
+              >
+                <select
+                  value={routingMode}
+                  onChange={(event) =>
+                    setRoutingMode(event.target.value as "free" | "paid")
+                  }
+                  aria-label="Purpose Foundry provider routing"
+                  className={FIELD_CLASS}
+                >
+                  <option value="free">Free — $0 routes only</option>
+                  <option value="paid">Paid — budget-gated routes only</option>
+                </select>
+              </Field>
               <Field label="Repos or programs" hint="Separate with commas">
                 <input
                   value={targets}
@@ -514,7 +538,8 @@ export function FoundryFloor() {
                       {project.name}
                     </span>
                     <Stencil className="mt-0.5 block text-[8px] text-plant-paint/45">
-                      {project.status.replace("_", " ")}
+                      {project.status.replace("_", " ")} ·{" "}
+                      {project.routingMode ?? "legacy default"}
                     </Stencil>
                   </span>
                 </button>

@@ -49,7 +49,7 @@ export function ProviderRoutingCards({
       title: "Paid rotation",
       role:
         routing === "paid"
-          ? "Paid tier — budget gated"
+          ? "Paid tier — call-gated; USD estimated"
           : "Click to use configured paid routes",
       icon: Sparkles,
       ready: paidReady,

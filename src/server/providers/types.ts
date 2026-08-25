@@ -109,6 +109,12 @@ export async function withRetry<T>(
     } catch (err) {
       lastErr = err;
       if (err instanceof ProviderAbortError) throw err;
+      // A local economic boundary is a deliberate refusal, not a transient
+      // transport fault. Preserve its exact type/message and never back off
+      // into repeated attempts that cannot possibly be admitted.
+      if ((err as { name?: unknown })?.name === "PaidBudgetExhaustedError") {
+        throw err;
+      }
       if (isNonRetryable(err)) break;
       if (i < attempts - 1) {
         const backoff = Math.min(8000, 400 * 2 ** i);

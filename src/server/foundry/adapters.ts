@@ -14,23 +14,28 @@ import {
   sep,
 } from "node:path";
 import { z } from "zod";
-import { getConfig, getSecrets } from "../config.js";
+import { getConfig, getSecrets, type AppConfig } from "../config.js";
 import { underWorkTheme } from "../orchestrator/themeBind.js";
-import { createProviderRegistry } from "../providers/index.js";
+import { createProviderRegistry, type ProviderRegistry } from "../providers/index.js";
+import {
+  createTierProvider,
+  selectRunRouting,
+  type ResolvedRunRouting,
+} from "../orchestrator/runFactory.js";
 import { getRun } from "../storage/runsStore.js";
 import { withExtendPersistenceGoals } from "../orchestrator/composeExtendIdea.js";
-import { repoNameProblem, RunOptionsSchema } from "../../shared/schemas.js";
+import {
+  repoNameProblem,
+  RunOptionsSchema,
+  type RoutingMode,
+} from "../../shared/schemas.js";
+import type { LLMProvider } from "../../shared/types.js";
 import {
   STATIONS,
   type FoundryProject,
   type FoundryStore,
   type StationId,
 } from "./model.js";
-
-export const FOUNDRY_FLEXFACTOR_PROVIDER_RE =
-  /^(ollama|anthropic|openai|xai|grok)$/;
-export const FOUNDRY_FLEXFACTOR_PROVIDER_ERROR =
-  "PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER must be ollama, anthropic, openai, xai, or grok.";
 
 /** Same directed path as Factory Deck / FlexFactor: coding routes + one open issue. */
 function foundryProviderRegistry() {
@@ -43,6 +48,23 @@ function foundryProviderRegistry() {
     undefined,
     "purpose-foundry",
   );
+}
+
+/** Resolve every Foundry model call through Factory Deck's strict tier contract. */
+export function createFoundryTierProvider(
+  routingMode: RoutingMode | undefined,
+  registry: ProviderRegistry,
+  config: AppConfig,
+  role: "code" | "review" = "review",
+): { routing: ResolvedRunRouting; provider: LLMProvider } {
+  // Omitted mode deliberately keeps the documented legacy/default inference;
+  // once resolved, the call is still strict Free or strict Paid.
+  const routing = selectRunRouting({ routingMode }, registry, config);
+  const selected = role === "code" ? routing.codeProvider : routing.reviewProvider;
+  return {
+    routing,
+    provider: createTierProvider(routing, selected, registry),
+  };
 }
 
 function flexfactorDirectedScript(): string {
@@ -72,13 +94,15 @@ type ProcessResult = { stdout: string; stderr: string; exitCode: number };
 type ProcessRunner = (
   executable: string,
   args: string[],
-  options: { cwd?: string; timeoutMs: number },
+  options: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
 ) => Promise<ProcessResult>;
 
 type AdapterDependencies = {
   fetch: typeof fetch;
   processRunner: ProcessRunner;
   sleep: (ms: number) => Promise<void>;
+  config: () => AppConfig;
+  providerRegistry: () => ProviderRegistry;
 };
 
 const CrucibleResultSchema = z.object({
@@ -148,9 +172,7 @@ const PublisherPresetsSchema = z.object({
 
 function boolEnv(name: string, fallback = false): boolean {
   const value = process.env[name];
-  return value === undefined
-    ? fallback
-    : /^(1|true|yes|on)$/i.test(value.trim());
+  return value === undefined ? fallback : /^(1|true|yes|on)$/i.test(value.trim());
 }
 
 function numberEnv(name: string, fallback: number): number {
@@ -185,8 +207,7 @@ export function publisherPresetForProject(
     .map(normalizedIdentity)
     .filter(Boolean);
   const exactRepo = presets.find(
-    (preset) =>
-      preset.repo && identities.includes(normalizedIdentity(preset.repo)),
+    (preset) => preset.repo && identities.includes(normalizedIdentity(preset.repo)),
   );
   if (exactRepo) return exactRepo;
   const byName = presets.filter((preset) => {
@@ -199,8 +220,7 @@ export function publisherPresetForProject(
 function pathWithin(candidate: string, root: string): boolean {
   const rel = relative(root, candidate);
   return (
-    rel === "" ||
-    (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
+    rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
   );
 }
 
@@ -226,8 +246,7 @@ async function releaseRoots(project: FoundryProject): Promise<string[]> {
     try {
       const canonical = await realpath(resolve(candidate));
       const info = await lstat(canonical);
-      if (info.isDirectory() && !roots.includes(canonical))
-        roots.push(canonical);
+      if (info.isDirectory() && !roots.includes(canonical)) roots.push(canonical);
     } catch {
       // A target may be a future path or remote repository; it is not a release root yet.
     }
@@ -287,8 +306,7 @@ async function discoverReleaseArtifacts(
         continue;
       if (
         entry.isDirectory() ||
-        (entry.isFile() &&
-          RELEASE_EXTENSIONS.has(extname(entry.name).toLowerCase()))
+        (entry.isFile() && RELEASE_EXTENSIONS.has(extname(entry.name).toLowerCase()))
       ) {
         await inspectPath(join(canonical, entry.name));
       }
@@ -332,14 +350,11 @@ function multipartUploadBody(
   return {
     body,
     contentType: `multipart/form-data; boundary=${boundary}`,
-    contentLength:
-      expected.length + fileHeader.length + artifact.size + ending.length,
+    contentLength: expected.length + fileHeader.length + artifact.size + ending.length,
   };
 }
 
-function publisherEvidenceBody(
-  body: Record<string, unknown>,
-): Record<string, unknown> {
+function publisherEvidenceBody(body: Record<string, unknown>): Record<string, unknown> {
   const { approvalToken: _approvalToken, ...safe } = body;
   return safe;
 }
@@ -357,7 +372,7 @@ function safeUrl(value: string, label: string): string {
 function defaultProcessRunner(
   executable: string,
   args: string[],
-  options: { cwd?: string; timeoutMs: number },
+  options: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
 ): Promise<ProcessResult> {
   return new Promise((resolvePromise, reject) => {
     execFile(
@@ -369,7 +384,7 @@ function defaultProcessRunner(
         maxBuffer: MAX_PROCESS_OUTPUT,
         windowsHide: true,
         encoding: "utf8",
-        env: process.env,
+        env: options.env ?? process.env,
       },
       (error, stdout, stderr) => {
         if (error) {
@@ -378,9 +393,7 @@ function defaultProcessRunner(
           // environment values. A failed process is recorded generically;
           // raw stdout/stderr is never copied into the evidence ledger.
           reject(
-            new Error(
-              `Process exited ${code}. Inspect FlexFactor's local run log.`,
-            ),
+            new Error(`Process exited ${code}. Inspect FlexFactor's local run log.`),
           );
           return;
         }
@@ -395,10 +408,7 @@ function defaultProcessRunner(
 }
 
 function firstTarget(project: FoundryProject): string | null {
-  return (
-    project.constitution.targets.map((item) => item.trim()).find(Boolean) ??
-    null
-  );
+  return project.constitution.targets.map((item) => item.trim()).find(Boolean) ?? null;
 }
 
 /** Convert explicit local paths and GitHub references into Factory Deck input. */
@@ -430,8 +440,7 @@ export function repoSourceFromTarget(
 
 export function repoRewardsQuery(project: FoundryProject): string {
   const criteria =
-    project.constitution.successCriteria.join("; ") ||
-    "fulfill its stated purpose";
+    project.constitution.successCriteria.join("; ") || "fulfill its stated purpose";
   const constraints =
     project.constitution.constraints.join("; ") || "preserve existing behavior";
   return [
@@ -445,9 +454,7 @@ export function repoRewardsQuery(project: FoundryProject): string {
 
 function compactOutput(value: string): string {
   const clean = value.replace(/\u001b\[[0-9;]*m/g, "").trim();
-  return clean.length <= 500_000
-    ? clean
-    : `${clean.slice(0, 500_000)}\n[truncated]`;
+  return clean.length <= 500_000 ? clean : `${clean.slice(0, 500_000)}\n[truncated]`;
 }
 
 export class FoundryAdapters {
@@ -461,18 +468,16 @@ export class FoundryAdapters {
       fetch: dependencies.fetch ?? fetch,
       processRunner: dependencies.processRunner ?? defaultProcessRunner,
       sleep:
-        dependencies.sleep ??
-        ((ms) => new Promise((done) => setTimeout(done, ms))),
+        dependencies.sleep ?? ((ms) => new Promise((done) => setTimeout(done, ms))),
+      config: dependencies.config ?? getConfig,
+      providerRegistry: dependencies.providerRegistry ?? foundryProviderRegistry,
     };
   }
 
   descriptors(): AdapterDescriptor[] {
-    const config = getConfig();
     const flexScript = flexfactorDirectedScript();
-    const reviewProvider = foundryProviderRegistry().resolveLive(
-      undefined,
-      config.defaultReviewProvider,
-    );
+    const liveProviderConfigured =
+      this.dependencies.providerRegistry().availableLive().length > 0;
     const map: Record<StationId, Omit<AdapterDescriptor, "stationId">> = {
       "factory-deck": {
         mode: "internal",
@@ -493,9 +498,7 @@ export class FoundryAdapters {
       },
       "promo-pilot": {
         mode: "http",
-        configured: Boolean(
-          process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN?.trim(),
-        ),
+        configured: Boolean(process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN?.trim()),
         destination:
           process.env.PURPOSE_FOUNDRY_PROMOPILOT_URL?.trim() ||
           "https://promopilot-production-6370.up.railway.app",
@@ -507,8 +510,8 @@ export class FoundryAdapters {
       },
       crucible: {
         mode: "internal",
-        configured: reviewProvider.isConfigured(),
-        destination: `independent ${reviewProvider.name} adversarial review`,
+        configured: liveProviderConfigured,
+        destination: "independent adversarial review on the project's strict tier",
       },
       "app-store-publisher": {
         mode: "http",
@@ -521,8 +524,7 @@ export class FoundryAdapters {
         mode: "http",
         configured: Boolean(process.env.PURPOSE_FOUNDRY_WATCH_URLS?.trim()),
         destination:
-          process.env.PURPOSE_FOUNDRY_WATCH_URLS?.trim() ||
-          "No watch URLs configured",
+          process.env.PURPOSE_FOUNDRY_WATCH_URLS?.trim() || "No watch URLs configured",
       },
     };
     return STATIONS.map((station) => ({
@@ -555,10 +557,7 @@ export class FoundryAdapters {
     }
   }
 
-  private async fetchJson(
-    url: string,
-    init: RequestInit = {},
-  ): Promise<unknown> {
+  private async fetchJson(url: string, init: RequestInit = {}): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(),
@@ -573,8 +572,7 @@ export class FoundryAdapters {
       const body = await response.text();
       if (body.length > MAX_HTTP_BYTES)
         throw new Error("Adapter response exceeded 2 MB.");
-      if (!response.ok)
-        throw new Error(`Adapter returned HTTP ${response.status}.`);
+      if (!response.ok) throw new Error(`Adapter returned HTTP ${response.status}.`);
       return body ? (JSON.parse(body) as unknown) : {};
     } finally {
       clearTimeout(timeout);
@@ -614,15 +612,19 @@ export class FoundryAdapters {
   }
 
   private async factoryDeck(project: FoundryProject): Promise<AdapterOutcome> {
-    const config = getConfig();
+    const config = this.dependencies.config();
     const secrets = getSecrets();
+    const routing = selectRunRouting(
+      { routingMode: project.routingMode },
+      this.dependencies.providerRegistry(),
+      config,
+    );
     const target = firstTarget(project);
     const repoSource = target ? repoSourceFromTarget(target) : null;
     const upstreamEvidence = project.stations
       .filter(
         (station) =>
-          station.status === "completed" &&
-          station.stationId !== "factory-deck",
+          station.status === "completed" && station.stationId !== "factory-deck",
       )
       .map((station) => ({
         stationId: station.stationId,
@@ -646,6 +648,7 @@ export class FoundryAdapters {
     const options = target
       ? RunOptionsSchema.parse({
           mode: "extend",
+          ...routing,
           ...(repoSource ? { repoSource } : {}),
           goals: extendGoals,
           pushToOrigin: true,
@@ -659,6 +662,7 @@ export class FoundryAdapters {
           }
           return RunOptionsSchema.parse({
             mode: "new",
+            ...routing,
             goals: extendGoals,
             newRepo: { name: project.name, private: true, createRemote: true },
             idempotencyKey: `purpose-foundry:${project.id}:factory-deck`,
@@ -677,20 +681,15 @@ export class FoundryAdapters {
           ]
         : []),
     ].join("\n");
-    const runStart = (await this.fetchJson(
-      `http://127.0.0.1:${config.port}/api/runs`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": `purpose-foundry:${project.id}:factory-deck`,
-          ...(secrets.authToken
-            ? { authorization: `Bearer ${secrets.authToken}` }
-            : {}),
-        },
-        body: JSON.stringify({ idea, options }),
+    const runStart = (await this.fetchJson(`http://127.0.0.1:${config.port}/api/runs`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": `purpose-foundry:${project.id}:factory-deck`,
+        ...(secrets.authToken ? { authorization: `Bearer ${secrets.authToken}` } : {}),
       },
-    )) as { runId?: unknown };
+      body: JSON.stringify({ idea, options }),
+    })) as { runId?: unknown };
     if (typeof runStart.runId !== "string")
       throw new Error("Factory Deck did not return a run id.");
 
@@ -718,15 +717,16 @@ export class FoundryAdapters {
         status: "failed",
         summary:
           `Factory Deck run ${run.id} ended ${run.status}: ${run.error || "no error detail"}` +
-          (errorLedger.length ? ` (${errorLedger.length} error(s) in the run's error ledger)` : ""),
+          (errorLedger.length
+            ? ` (${errorLedger.length} error(s) in the run's error ledger)`
+            : ""),
         artifacts: [artifact],
         evidence: { runId: run.id, status: run.status, errorLedger },
       };
     }
     return {
       status: "completed",
-      summary:
-        run.finalReport?.summary || `Factory Deck completed run ${run.id}.`,
+      summary: run.finalReport?.summary || `Factory Deck completed run ${run.id}.`,
       artifacts: [
         artifact,
         ...(run.workspacePath ? [run.workspacePath] : []),
@@ -756,14 +756,20 @@ export class FoundryAdapters {
     }
     const script = flexfactorDirectedScript();
     const python = process.env.PURPOSE_FOUNDRY_PYTHON?.trim() || "python";
-    const provider =
-      process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER?.trim() ||
-      (getConfig().defaultCodeProvider === "free"
-        ? "ollama"
-        : getConfig().defaultCodeProvider);
-    if (!FOUNDRY_FLEXFACTOR_PROVIDER_RE.test(provider)) {
-      throw new Error(FOUNDRY_FLEXFACTOR_PROVIDER_ERROR);
+    const config = this.dependencies.config();
+    const routing = selectRunRouting(
+      { routingMode: project.routingMode },
+      this.dependencies.providerRegistry(),
+      config,
+    );
+    if (routing.routingMode === "paid") {
+      throw new Error(
+        "Paid Purpose Foundry Scout/FlexFactor is blocked: the external child process cannot participate in Factory Deck's per-call paid reservation ledger. Select Free for these stations or run a metered internal station; no untracked paid process was started.",
+      );
     }
+    // Free is a hard boundary. The child process is always pinned to Ollama;
+    // environment defaults must never promote it to a paid API.
+    const provider = "ollama";
     const args = [script, mode, "--program", target, "--provider", provider];
     if (mode === "scout") {
       args.push("--top", String(numberEnv("PURPOSE_FOUNDRY_SCOUT_TOP", 8)));
@@ -785,9 +791,21 @@ export class FoundryAdapters {
         String(numberEnv("PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST", 150)),
       );
     }
+    const childEnv = { ...process.env };
+    for (const name of [
+      "ANTHROPIC_API_KEY",
+      "OPENAI_API_KEY",
+      "XAI_API_KEY",
+      "GROK_API_KEY",
+      "OPENROUTER_API_KEY",
+      "PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER",
+    ]) {
+      delete childEnv[name];
+    }
     const result = await this.dependencies.processRunner(python, args, {
       cwd: dirname(resolve(script)),
       timeoutMs: numberEnv("PURPOSE_FOUNDRY_FLEXFACTOR_TIMEOUT_MS", 14_400_000),
+      env: childEnv,
     });
     const output = compactOutput(
       [result.stdout, result.stderr].filter(Boolean).join("\n"),
@@ -897,7 +915,7 @@ export class FoundryAdapters {
   }
 
   private async crucible(project: FoundryProject): Promise<AdapterOutcome> {
-    const config = getConfig();
+    const config = this.dependencies.config();
     const result = await underWorkTheme(
       {
         idea: `Purpose Foundry crucible for ${project.name}`,
@@ -907,25 +925,25 @@ export class FoundryAdapters {
           "Disprove every success claim using only supplied evidence; stay on this project's open release risks",
       },
       () => {
-        const provider = foundryProviderRegistry().resolveLive(
-          undefined,
-          config.defaultReviewProvider,
+        const { provider } = createFoundryTierProvider(
+          project.routingMode,
+          this.dependencies.providerRegistry(),
+          config,
+          "review",
         );
         return provider.generateJson({
           system:
             "You are The Crucible, an independent adversarial release reviewer. Assume the project is not ready. Try to disprove every success claim using only supplied evidence. Never reward effort, optimism, or self-attestation. A claim without evidence is a finding.",
-          prompt: `Review this Purpose Foundry project.\n\nPROJECT:\n${JSON.stringify(
-            {
-              name: project.name,
-              constitution: project.constitution,
-              stationEvidence: project.stations.map((station) => ({
-                stationId: station.stationId,
-                status: station.status,
-                summary: station.summary,
-                artifacts: station.artifacts,
-              })),
-            },
-          )}\n\nReturn hardened only when there are no critical/high unresolved findings and every stated success criterion has concrete evidence. Otherwise return needs_work with exact required fixes.`,
+          prompt: `Review this Purpose Foundry project.\n\nPROJECT:\n${JSON.stringify({
+            name: project.name,
+            constitution: project.constitution,
+            stationEvidence: project.stations.map((station) => ({
+              stationId: station.stationId,
+              status: station.status,
+              summary: station.summary,
+              artifacts: station.artifacts,
+            })),
+          })}\n\nReturn hardened only when there are no critical/high unresolved findings and every stated success criterion has concrete evidence. Otherwise return needs_work with exact required fixes.`,
           schema: CrucibleResultSchema,
           schemaName: "CrucibleResult",
           temperature: 0.1,
@@ -951,9 +969,7 @@ export class FoundryAdapters {
     };
   }
 
-  private async appStorePublisher(
-    project: FoundryProject,
-  ): Promise<AdapterOutcome> {
+  private async appStorePublisher(project: FoundryProject): Promise<AdapterOutcome> {
     const base = safeUrl(
       process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim() ||
         "http://127.0.0.1:4000",
@@ -970,9 +986,7 @@ export class FoundryAdapters {
     const preset = publisherPresetForProject(project, presets);
     const releaseArtifacts = await discoverReleaseArtifacts(project);
     const configured = new Map(
-      stores
-        .filter((store) => store.configured)
-        .map((store) => [store.id, store]),
+      stores.filter((store) => store.configured).map((store) => [store.id, store]),
     );
     const unresolved: string[] = [];
 
@@ -1002,10 +1016,7 @@ export class FoundryAdapters {
       string,
       { artifact: ReleaseArtifact; stores: PublisherStore[] }
     >();
-    const assign = (
-      store: PublisherStore,
-      artifact: ReleaseArtifact | undefined,
-    ) => {
+    const assign = (store: PublisherStore, artifact: ReleaseArtifact | undefined) => {
       if (!artifact) {
         unresolved.push(
           `${store.label || store.id} is configured but its required release artifact is missing.`,
@@ -1027,9 +1038,7 @@ export class FoundryAdapters {
       const galaxy = configured.get("galaxy_store");
       if (galaxy) {
         if (!preset.galaxyContentId)
-          unresolved.push(
-            `${preset.label} preset has no Galaxy Store contentId.`,
-          );
+          unresolved.push(`${preset.label} preset has no Galaxy Store contentId.`);
         else assign(galaxy, newest(".apk"));
       }
       const apple = configured.get("app_store");
@@ -1041,10 +1050,7 @@ export class FoundryAdapters {
     }
 
     const handoffs: Array<Record<string, unknown>> = [];
-    for (const {
-      artifact: release,
-      stores: targetStores,
-    } of assignments.values()) {
+    for (const { artifact: release, stores: targetStores } of assignments.values()) {
       const sha256 = await sha256File(release.path);
       const multipart = multipartUploadBody(release, sha256);
       const upload = await this.publisherJson(`${base}/api/upload`, {
@@ -1099,9 +1105,7 @@ export class FoundryAdapters {
           selected.push(store.id);
           metadata[store.id] = {
             packageName: preset.packageName,
-            track:
-              process.env.PURPOSE_FOUNDRY_GOOGLE_PLAY_TRACK?.trim() ||
-              "internal",
+            track: process.env.PURPOSE_FOUNDRY_GOOGLE_PLAY_TRACK?.trim() || "internal",
           };
         } else if (store.id === "galaxy_store" && preset?.galaxyContentId) {
           selected.push(store.id);
@@ -1113,9 +1117,7 @@ export class FoundryAdapters {
           };
         } else if (store.id === "app_store" && preset?.appleBundleId) {
           const versionString =
-            typeof fields.versionName === "string"
-              ? fields.versionName.trim()
-              : "";
+            typeof fields.versionName === "string" ? fields.versionName.trim() : "";
           if (!versionString) {
             unresolved.push(
               `Apple could not read CFBundleShortVersionString from ${basename(release.path)}; it was uploaded but not submitted.`,
@@ -1169,8 +1171,7 @@ export class FoundryAdapters {
       }
 
       const evidenceStores =
-        dryRun.body.artifactEvidence &&
-        typeof dryRun.body.artifactEvidence === "object"
+        dryRun.body.artifactEvidence && typeof dryRun.body.artifactEvidence === "object"
           ? (
               dryRun.body.artifactEvidence as {
                 stores?: Array<{
@@ -1182,8 +1183,7 @@ export class FoundryAdapters {
           : [];
       const unverified = evidenceStores.some(
         (store) =>
-          (store.unknowns?.length || 0) > 0 ||
-          (store.mismatches?.length || 0) > 0,
+          (store.unknowns?.length || 0) > 0 || (store.mismatches?.length || 0) > 0,
       );
       if (unverified) {
         unresolved.push(
@@ -1261,9 +1261,7 @@ export class FoundryAdapters {
       },
     );
     const submittedStores = handoffs.reduce((count, handoff) => {
-      const submission = handoff.submission as
-        | { results?: unknown[] }
-        | undefined;
+      const submission = handoff.submission as { results?: unknown[] } | undefined;
       return (
         count +
         (handoff.submitted && Array.isArray(submission?.results)
