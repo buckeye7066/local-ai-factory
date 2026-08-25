@@ -151,7 +151,10 @@ export async function createEpicShell(
  * callers run this in the background; a failed plan lands on the record with
  * its reason instead of throwing into the void.
  */
-export async function planEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRecord> {
+export async function planEpic(
+  epic: EpicRecord,
+  deps: EpicDeps,
+): Promise<EpicRecord> {
   try {
     const plan = EpicPlanSchema.parse(
       await deps.plan(epic.idea, epic.options as RunOptions),
@@ -215,7 +218,10 @@ export async function recoverOrphanedEpics(): Promise<number> {
   return recovered;
 }
 
-export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRecord> {
+export async function runEpic(
+  epic: EpicRecord,
+  deps: EpicDeps,
+): Promise<EpicRecord> {
   while (epic.currentSlice < epic.slices.length) {
     const i = epic.currentSlice;
     const slice = epic.slices[i]!;
