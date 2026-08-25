@@ -80,9 +80,96 @@ function normalizeLanguage(value) {
   return value.toLowerCase().replace(/[-_\s]+/g, " ");
 }
 
+function decodeUtf32(data, littleEndian, offset = 0) {
+  if ((data.length - offset) % 4 !== 0) return null;
+  let value = "";
+  for (let index = offset; index < data.length; index += 4) {
+    const codePoint = littleEndian
+      ? data.readUInt32LE(index)
+      : data.readUInt32BE(index);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff))
+      return null;
+    value += String.fromCodePoint(codePoint);
+  }
+  return value;
+}
+
+function decodeUtf16Be(data, offset = 0) {
+  if ((data.length - offset) % 2 !== 0) return null;
+  const swapped = Buffer.allocUnsafe(data.length - offset);
+  for (let index = offset; index < data.length; index += 2) {
+    const target = index - offset;
+    swapped[target] = data[index + 1];
+    swapped[target + 1] = data[index];
+  }
+  return swapped.toString("utf16le");
+}
+
+function looksLikeText(value) {
+  if (!value || value.includes("\0")) return false;
+  let controls = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint < 32 && !"\t\r\n".includes(character)) controls += 1;
+  }
+  return controls / value.length <= 0.05;
+}
+
+function decodeRepositoryText(data) {
+  if (
+    data.length >= 4 &&
+    data[0] === 0xff &&
+    data[1] === 0xfe &&
+    data[2] === 0x00 &&
+    data[3] === 0x00
+  )
+    return decodeUtf32(data, true, 4);
+  if (
+    data.length >= 4 &&
+    data[0] === 0x00 &&
+    data[1] === 0x00 &&
+    data[2] === 0xfe &&
+    data[3] === 0xff
+  )
+    return decodeUtf32(data, false, 4);
+  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe)
+    return data.subarray(2).toString("utf16le");
+  if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff)
+    return decodeUtf16Be(data, 2);
+  if (!data.includes(0)) return data.toString("utf8");
+
+  const candidates = [];
+  if (data.length % 4 === 0) {
+    candidates.push(decodeUtf32(data, true), decodeUtf32(data, false));
+  }
+  if (data.length % 2 === 0) {
+    candidates.push(data.toString("utf16le"), decodeUtf16Be(data));
+  }
+  return candidates.find((candidate) => looksLikeText(candidate)) ?? null;
+}
+
 const wrappedPhraseProbe = normalizeLanguage("manual\napproval");
 if (!prohibitedLanguage.some(([, phrase]) => wrappedPhraseProbe.includes(phrase))) {
   errors.push("release_language_policy_self_test:wrapped_phrase_not_detected");
+}
+const encodedPhraseProbe = "manual " + "approval";
+for (const [label, data] of [
+  ["utf16le", Buffer.from(encodedPhraseProbe, "utf16le")],
+  [
+    "utf32be",
+    Buffer.concat(
+      [...encodedPhraseProbe].map((character) => {
+        const encoded = Buffer.alloc(4);
+        encoded.writeUInt32BE(character.codePointAt(0) ?? 0);
+        return encoded;
+      }),
+    ),
+  ],
+]) {
+  const decoded = decodeRepositoryText(data);
+  if (!decoded || !normalizeLanguage(decoded).includes("manual " + "approval")) {
+    errors.push(`release_language_policy_self_test:${label}_not_detected`);
+  }
 }
 
 function fallbackRepositoryPaths(directory) {
@@ -93,7 +180,10 @@ function fallbackRepositoryPaths(directory) {
         paths.push(...fallbackRepositoryPaths(resolve(directory, entry.name)));
       continue;
     }
-    if (entry.isFile()) paths.push(resolve(directory, entry.name));
+    if (entry.isFile()) {
+      const path = resolve(directory, entry.name);
+      paths.push({ path, relativePath: relative(ROOT, path), tracked: false });
+    }
   }
   return paths;
 }
@@ -121,7 +211,11 @@ function repositoryPaths() {
     const paths = output
       .split("\0")
       .filter(Boolean)
-      .map((path) => resolve(ROOT, path));
+      .map((relativePath) => ({
+        path: resolve(ROOT, relativePath),
+        relativePath,
+        tracked: true,
+      }));
     if (paths.length === 0) throw new Error("Git index contains no files");
     return paths;
   } catch {
@@ -130,15 +224,34 @@ function repositoryPaths() {
   }
 }
 
+function readRepositoryEntry(entry) {
+  if (existsSync(entry.path) && lstatSync(entry.path).isFile()) {
+    return readFileSync(entry.path);
+  }
+  if (!entry.tracked) return null;
+  try {
+    return execFileSync("git", ["show", `:${entry.relativePath}`], {
+      cwd: ROOT,
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    errors.push(`tracked_blob_unavailable:${entry.relativePath}`);
+    return null;
+  }
+}
+
 function scanLanguage() {
-  for (const path of repositoryPaths()) {
-    if (!existsSync(path) || !lstatSync(path).isFile()) continue;
-    const data = readFileSync(path);
-    if (data.includes(0)) continue;
-    const normalized = normalizeLanguage(data.toString("utf8"));
+  for (const entry of repositoryPaths()) {
+    const data = readRepositoryEntry(entry);
+    if (data === null) continue;
+    const text = decodeRepositoryText(data);
+    if (text === null) continue;
+    const normalized = normalizeLanguage(text);
     for (const [label, phrase] of prohibitedLanguage) {
       if (normalized.includes(phrase)) {
-        errors.push(`prohibited_release_language:${label}:${relative(ROOT, path)}`);
+        errors.push(`prohibited_release_language:${label}:${entry.relativePath}`);
       }
     }
   }
