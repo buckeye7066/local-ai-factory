@@ -54,12 +54,8 @@ describe("provider tier UI wiring", () => {
       if (routingMode === "paid") {
         fireEvent.click(screen.getByRole("button", { name: /Paid rotation/i }));
       }
-      fireEvent.click(
-        screen.getByRole("tab", { name: /Extend an Existing Program/i }),
-      );
-      fireEvent.click(
-        screen.getByRole("tab", { name: /Ask Me Yes\/No Questions/i }),
-      );
+      fireEvent.click(screen.getByRole("tab", { name: /Extend an Existing Program/i }));
+      fireEvent.click(screen.getByRole("tab", { name: /Ask Me Yes\/No Questions/i }));
       fireEvent.change(
         screen.getByLabelText(/Describe what you want at a high level/i),
         { target: { value: "Clarify this existing app" } },
