@@ -1,12 +1,6 @@
 import { constants as FS } from "node:fs";
-import {
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  realpath,
-} from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, open, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { isValidRunId } from "../../shared/schemas.js";
 import {
@@ -82,7 +76,9 @@ export type ReadinessState = z.infer<typeof ReadinessStateSchema>;
 function safeSubjectId(subjectId: string): string {
   if (isValidRunId(subjectId)) return subjectId;
   if (/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(subjectId)) return subjectId;
-  throw new Error(`Refused: invalid readiness subject id: ${JSON.stringify(subjectId)}`);
+  throw new Error(
+    `Refused: invalid readiness subject id: ${JSON.stringify(subjectId)}`,
+  );
 }
 
 function statePath(subjectId: string): string {
@@ -137,10 +133,14 @@ export async function saveReadinessState(
     updatedAt: Date.now(),
   });
   if (parsed.status === "ready" && parsed.receipt?.ready !== true) {
-    throw new Error("Refused: readiness status cannot be ready without a ready receipt.");
+    throw new Error(
+      "Refused: readiness status cannot be ready without a ready receipt.",
+    );
   }
   if (parsed.receipt && parsed.receipt.evidenceDigest !== parsed.evidenceDigest) {
-    throw new Error("Refused: readiness receipt digest does not match state evidence.");
+    throw new Error(
+      "Refused: readiness receipt digest does not match state evidence.",
+    );
   }
   await ensureReadinessDir();
   const path = statePath(parsed.subjectId);
