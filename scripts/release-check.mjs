@@ -64,16 +64,76 @@ const excludedDirectories = new Set([
   "node_modules",
   "workspaces",
 ]);
+const phrase = (...codePoints) => String.fromCodePoint(...codePoints);
 const prohibitedLanguage = [
-  ["organizational_gate", "sign" + " off"],
-  ["organizational_gate_compact", "sign" + "off"],
-  ["completed_organizational_gate", "signed" + " off"],
-  ["identity_gate", "authenticated " + "reviewer"],
-  ["mandatory_reviewer_gate", "required " + "reviewer"],
-  ["person_gate", "human " + "review"],
-  ["manual_gate", "manual " + "approval"],
-  ["implementation_readiness_claim", "self " + "certif"],
-  ["main_revision_label", "certified " + "main"],
+  ["organizational_gate", phrase(115, 105, 103, 110, 32, 111, 102, 102)],
+  ["organizational_gate_compact", phrase(115, 105, 103, 110, 111, 102, 102)],
+  [
+    "completed_organizational_gate",
+    phrase(115, 105, 103, 110, 101, 100, 32, 111, 102, 102),
+  ],
+  [
+    "identity_gate",
+    phrase(
+      97,
+      117,
+      116,
+      104,
+      101,
+      110,
+      116,
+      105,
+      99,
+      97,
+      116,
+      101,
+      100,
+      32,
+      114,
+      101,
+      118,
+      105,
+      101,
+      119,
+      101,
+      114,
+    ),
+  ],
+  [
+    "mandatory_reviewer_gate",
+    phrase(
+      114,
+      101,
+      113,
+      117,
+      105,
+      114,
+      101,
+      100,
+      32,
+      114,
+      101,
+      118,
+      105,
+      101,
+      119,
+      101,
+      114,
+    ),
+  ],
+  ["person_gate", phrase(104, 117, 109, 97, 110, 32, 114, 101, 118, 105, 101, 119)],
+  [
+    "manual_gate",
+    phrase(109, 97, 110, 117, 97, 108, 32, 97, 112, 112, 114, 111, 118, 97, 108),
+  ],
+  [
+    "implementation_readiness_claim",
+    phrase(115, 101, 108, 102, 32, 99, 101, 114, 116, 105, 102),
+  ],
+  [
+    "main_revision_label",
+    phrase(99, 101, 114, 116, 105, 102, 105, 101, 100, 32, 109, 97, 105, 110),
+  ],
 ];
 
 function normalizeLanguage(value) {
@@ -155,11 +215,71 @@ function decodeRepositoryTexts(data) {
   return uniqueTextCandidates(candidates);
 }
 
+const renderedSourceExtensions = new Set([
+  ".htm",
+  ".html",
+  ".js",
+  ".jsx",
+  ".mdx",
+  ".svelte",
+  ".ts",
+  ".tsx",
+  ".vue",
+]);
+
+function sourceExtension(relativePath) {
+  const match = /(?:^|\/)(?:[^/]+)(\.[^./]+)$/.exec(relativePath.toLowerCase());
+  return match?.[1] ?? "";
+}
+
+function unquoteStaticLiteral(literal) {
+  return literal
+    .slice(1, -1)
+    .replace(
+      /\\(?:r\\n|n|r|t)/g,
+      (escape) =>
+        ({ "\\n": "\n", "\\r": "\r", "\\t": "\t", "\\r\\n": "\r\n" })[escape] ?? escape,
+    )
+    .replace(/\\(["'`\\])/g, "$1");
+}
+
+function renderedSourceCandidates(value, relativePath) {
+  if (!renderedSourceExtensions.has(sourceExtension(relativePath))) return [];
+  const candidates = [value.replace(/<\s*\/?\s*[A-Za-z][^>]*>/g, " ")];
+  const literalPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gs;
+  let previous = null;
+  for (const match of value.matchAll(literalPattern)) {
+    if (previous && /^\s*\+\s*$/.test(value.slice(previous.end, match.index))) {
+      candidates.push(
+        unquoteStaticLiteral(previous.literal) + unquoteStaticLiteral(match[0]),
+      );
+    }
+    previous = { literal: match[0], end: (match.index ?? 0) + match[0].length };
+  }
+  return candidates;
+}
+
 const wrappedPhraseProbe = normalizeLanguage("manual\napproval");
 if (!prohibitedLanguage.some(([, phrase]) => wrappedPhraseProbe.includes(phrase))) {
   errors.push("release_language_policy_self_test:wrapped_phrase_not_detected");
 }
-const encodedPhraseProbe = "manual " + "approval";
+const encodedPhraseProbe = phrase(
+  109,
+  97,
+  110,
+  117,
+  97,
+  108,
+  32,
+  97,
+  112,
+  112,
+  114,
+  111,
+  118,
+  97,
+  108,
+);
 function encodeUtf32(value, littleEndian) {
   return Buffer.concat(
     [...value].map((character) => {
@@ -190,7 +310,22 @@ for (const [label, data] of [
   const decodedCandidates = decodeRepositoryTexts(data);
   if (
     !decodedCandidates.some((decoded) =>
-      normalizeLanguage(decoded).includes("manual " + "approval"),
+      normalizeLanguage(decoded).includes(encodedPhraseProbe),
+    )
+  ) {
+    errors.push(`release_language_policy_self_test:${label}_not_detected`);
+  }
+}
+
+const probeFirstWord = phrase(109, 97, 110, 117, 97, 108);
+const probeSecondWord = phrase(97, 112, 112, 114, 111, 118, 97, 108);
+for (const [label, source] of [
+  ["jsx_boundary", `<span>${probeFirstWord}</span><span>${probeSecondWord}</span>`],
+  ["string_concatenation", `"${probeFirstWord}" + " ${probeSecondWord}"`],
+]) {
+  if (
+    !renderedSourceCandidates(source, "probe.jsx").some((candidate) =>
+      normalizeLanguage(candidate).includes(encodedPhraseProbe),
     )
   ) {
     errors.push(`release_language_policy_self_test:${label}_not_detected`);
@@ -283,8 +418,10 @@ function scanLanguage() {
   for (const entry of repositoryPaths()) {
     const data = readRepositoryEntry(entry);
     if (data === null) continue;
-    const normalizedCandidates = decodeRepositoryTexts(data).map((text) =>
-      normalizeLanguage(text),
+    const normalizedCandidates = decodeRepositoryTexts(data).flatMap((text) =>
+      [text, ...renderedSourceCandidates(text, entry.relativePath)].map((candidate) =>
+        normalizeLanguage(candidate),
+      ),
     );
     if (normalizedCandidates.length === 0) continue;
     for (const [label, phrase] of prohibitedLanguage) {
