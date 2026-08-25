@@ -140,8 +140,31 @@ const prohibitedLanguage = [
     phrase(109, 97, 110, 117, 97, 108, 32, 97, 112, 112, 114, 111, 118, 97, 108),
   ],
   [
-    "implementation_readiness_claim",
-    phrase(115, 101, 108, 102, 32, 99, 101, 114, 116, 105, 102),
+    "implementation_readiness_claim_past_tense",
+    phrase(115, 101, 108, 102, 32, 99, 101, 114, 116, 105, 102, 105, 101, 100),
+  ],
+  [
+    "implementation_readiness_claim_noun",
+    phrase(
+      115,
+      101,
+      108,
+      102,
+      32,
+      99,
+      101,
+      114,
+      116,
+      105,
+      102,
+      105,
+      99,
+      97,
+      116,
+      105,
+      111,
+      110,
+    ),
   ],
   [
     "main_revision_label",
@@ -151,6 +174,23 @@ const prohibitedLanguage = [
 
 function normalizeLanguage(value) {
   return value.toLowerCase().replace(/[-_\s]+/g, " ");
+}
+
+function isWordCharacter(value) {
+  return value !== undefined && /[\p{L}\p{N}_]/u.test(value);
+}
+
+function containsLanguagePhrase(value, target) {
+  let offset = 0;
+  while (offset <= value.length - target.length) {
+    const index = value.indexOf(target, offset);
+    if (index < 0) return false;
+    const before = value[index - 1];
+    const after = value[index + target.length];
+    if (!isWordCharacter(before) && !isWordCharacter(after)) return true;
+    offset = index + 1;
+  }
+  return false;
 }
 
 function decodeUtf32(data, littleEndian, offset = 0) {
@@ -263,11 +303,15 @@ function renderedSourceCandidates(value, relativePath) {
   const candidates = [value.replace(/<\s*\/?\s*[A-Za-z][^>]*>/g, " ")];
   const literalPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gs;
   let previous = null;
+  let chain = null;
   for (const match of value.matchAll(literalPattern)) {
     if (previous && /^\s*\+\s*$/.test(value.slice(previous.end, match.index))) {
-      candidates.push(
-        unquoteStaticLiteral(previous.literal) + unquoteStaticLiteral(match[0]),
-      );
+      chain =
+        (chain ?? unquoteStaticLiteral(previous.literal)) +
+        unquoteStaticLiteral(match[0]);
+      candidates.push(chain);
+    } else {
+      chain = null;
     }
     previous = { literal: match[0], end: (match.index ?? 0) + match[0].length };
   }
@@ -275,13 +319,21 @@ function renderedSourceCandidates(value, relativePath) {
 }
 
 const wrappedPhraseProbe = normalizeLanguage("manual\napproval");
-if (!prohibitedLanguage.some(([, phrase]) => wrappedPhraseProbe.includes(phrase))) {
+if (
+  !prohibitedLanguage.some(([, phrase]) =>
+    containsLanguagePhrase(wrappedPhraseProbe, phrase),
+  )
+) {
   errors.push("release_language_policy_self_test:wrapped_phrase_not_detected");
 }
 const thirdPersonProbe = normalizeLanguage(
   phrase(111, 119, 110, 101, 114, 32, 115, 105, 103, 110, 115, 32, 111, 102, 102),
 );
-if (!prohibitedLanguage.some(([, value]) => thirdPersonProbe.includes(value))) {
+if (
+  !prohibitedLanguage.some(([, value]) =>
+    containsLanguagePhrase(thirdPersonProbe, value),
+  )
+) {
   errors.push("release_language_policy_self_test:third_person_phrase_not_detected");
 }
 const encodedPhraseProbe = phrase(
@@ -331,7 +383,7 @@ for (const [label, data] of [
   const decodedCandidates = decodeRepositoryTexts(data);
   if (
     !decodedCandidates.some((decoded) =>
-      normalizeLanguage(decoded).includes(encodedPhraseProbe),
+      containsLanguagePhrase(normalizeLanguage(decoded), encodedPhraseProbe),
     )
   ) {
     errors.push(`release_language_policy_self_test:${label}_not_detected`);
@@ -349,15 +401,24 @@ const probeFirstWord = phrase(109, 97, 110, 117, 97, 108);
 const probeSecondWord = phrase(97, 112, 112, 114, 111, 118, 97, 108);
 for (const [label, source] of [
   ["jsx_boundary", `<span>${probeFirstWord}</span><span>${probeSecondWord}</span>`],
-  ["string_concatenation", `"${probeFirstWord}" + " ${probeSecondWord}"`],
+  ["string_concatenation", `"${probeFirstWord}" + " " + "${probeSecondWord}"`],
 ]) {
   if (
     !renderedSourceCandidates(source, "probe.jsx").some((candidate) =>
-      normalizeLanguage(candidate).includes(encodedPhraseProbe),
+      containsLanguagePhrase(normalizeLanguage(candidate), encodedPhraseProbe),
     )
   ) {
     errors.push(`release_language_policy_self_test:${label}_not_detected`);
   }
+}
+
+const benignBoundaryProbe = normalizeLanguage("Assign officer duties");
+if (
+  prohibitedLanguage.some(([, value]) =>
+    containsLanguagePhrase(benignBoundaryProbe, value),
+  )
+) {
+  errors.push("release_language_policy_self_test:lexical_boundary_false_positive");
 }
 
 function fallbackRepositoryPaths(directory) {
@@ -425,21 +486,23 @@ function repositoryPaths() {
 }
 
 function readRepositoryEntry(entry) {
+  if (entry.tracked) {
+    try {
+      return execFileSync("git", ["show", `:${entry.relativePath}`], {
+        cwd: ROOT,
+        encoding: "buffer",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      errors.push(`tracked_blob_unavailable:${entry.relativePath}`);
+      return null;
+    }
+  }
   if (existsSync(entry.path) && lstatSync(entry.path).isFile()) {
     return readFileSync(entry.path);
   }
-  if (!entry.tracked) return null;
-  try {
-    return execFileSync("git", ["show", `:${entry.relativePath}`], {
-      cwd: ROOT,
-      encoding: "buffer",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {
-    errors.push(`tracked_blob_unavailable:${entry.relativePath}`);
-    return null;
-  }
+  return null;
 }
 
 function scanLanguage() {
@@ -453,7 +516,11 @@ function scanLanguage() {
     );
     if (normalizedCandidates.length === 0) continue;
     for (const [label, phrase] of prohibitedLanguage) {
-      if (normalizedCandidates.some((normalized) => normalized.includes(phrase))) {
+      if (
+        normalizedCandidates.some((normalized) =>
+          containsLanguagePhrase(normalized, phrase),
+        )
+      ) {
         errors.push(`prohibited_release_language:${label}:${entry.relativePath}`);
       }
     }
