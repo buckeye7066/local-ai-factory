@@ -79,22 +79,40 @@ function fakeRun(overrides: Partial<RunRecord>): RunRecord {
   };
 }
 
-function deps(results: Array<Partial<RunRecord>>): EpicDeps & { ideas: string[] } {
+function deps(results: Array<Partial<RunRecord>>): EpicDeps & {
+  ideas: string[];
+  planOptions: Array<Record<string, unknown>>;
+} {
   const ideas: string[] = [];
+  const planOptions: Array<Record<string, unknown>> = [];
   let i = 0;
   return {
     ideas,
+    planOptions,
     executeSliceRun: async (idea) => {
       ideas.push(idea);
       return fakeRun(results[Math.min(i++, results.length - 1)]!);
     },
-    plan: async () => PLAN,
+    plan: async (_idea, options) => {
+      planOptions.push(options as Record<string, unknown>);
+      return PLAN;
+    },
     config: loadConfig({}),
     secrets: loadSecrets({}),
   };
 }
 
 describe("epic slices", () => {
+  it.each(["free", "paid"] as const)(
+    "passes the persisted %s routing tier into epic planning",
+    async (routingMode) => {
+      const d = deps([]);
+      await createEpic("big evolution", { mode: "extend", routingMode }, d);
+      expect(d.planOptions).toHaveLength(1);
+      expect(d.planOptions[0]?.routingMode).toBe(routingMode);
+    },
+  );
+
   it("renders a self-contained slice idea with wiring targets and the no-paper demand", async () => {
     const d = deps([]);
     const epic = await createEpic("big evolution", { mode: "extend" }, d);

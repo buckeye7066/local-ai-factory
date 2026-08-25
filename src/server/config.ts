@@ -41,8 +41,8 @@ function provider(value: string | undefined, fallback: ProviderName): ProviderNa
 
 /**
  * The FREE local route — the FCC proxy that "Claude Code - FREE (Ollama)"
- * turns on. This is the DEFAULT primary for every live run; Anthropic and
- * OpenAI exist only as a rescue tier for when it is genuinely wedged.
+ * turns on. Owner-facing runs select a strict Free or Paid tier; this route is
+ * the default for legacy callers that do not submit a tier.
  */
 export interface FreeRouteSettings {
   enabled: boolean;
@@ -134,9 +134,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     anthropicModel: env.ANTHROPIC_MODEL || "claude-opus-4-8",
     openaiModel: env.OPENAI_MODEL || "gpt-5.5",
-    // FREE-PRIMARY. The paid providers are a rescue tier, never the default —
-    // a config that defaults to paid is the exact failure this deck guards
-    // against.
+    // Legacy callers that omit routingMode inherit these defaults. The UI
+    // submits an explicit Free/Paid tier for every new or extend run.
     defaultCodeProvider: provider(env.DEFAULT_CODE_PROVIDER, "free"),
     defaultReviewProvider: provider(env.DEFAULT_REVIEW_PROVIDER, "free"),
     maxRepairLoops: num(env.MAX_REPAIR_LOOPS, 3),

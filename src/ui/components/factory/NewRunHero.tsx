@@ -158,7 +158,11 @@ export function NewRunHero({
       )}
 
       {runMode === "extend" ? (
-        <ExtendExistingPanel starting={starting} onStart={startWithRouting} />
+        <ExtendExistingPanel
+          starting={starting}
+          routingMode={routing}
+          onStart={startWithRouting}
+        />
       ) : (
         <NewAppPanel
           idea={idea}

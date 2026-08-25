@@ -153,7 +153,9 @@ This is designed to be safe to run on your own machine:
 
 - `MAX_MODEL_CALLS_PER_RUN` hard-caps LLM calls per run.
 - `MAX_REPAIR_LOOPS` bounds the repair loop.
-- The FREE route is the default primary; paid providers are a rescue tier.
+- Every owner-facing run chooses a strict economic tier. **Free** stays on the
+  $0 rotator with paid fallback disabled. **Paid** uses only configured paid
+  providers, budget-gating each call and quota-failing over only within Paid.
 
 ## Changing models
 

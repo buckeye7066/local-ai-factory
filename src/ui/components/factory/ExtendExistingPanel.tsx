@@ -33,9 +33,11 @@ import type { RunOptions } from "../../../shared/schemas.js";
  */
 export function ExtendExistingPanel({
   starting,
+  routingMode,
   onStart,
 }: {
   starting: boolean;
+  routingMode: NonNullable<RunOptions["routingMode"]>;
   onStart: (idea: string, options: RunOptions) => void;
 }) {
   const [sourceType, setSourceType] = useState<"path" | "git">("path");
@@ -95,17 +97,17 @@ export function ExtendExistingPanel({
         {repoSource ? (
           <span>
             The finished work is saved in{" "}
-            <strong className="font-mono">{repoSource.location}</strong> — committed
-            on this run's own <code>factory-deck/&lt;run-id&gt;</code> branch, pushed
-            back there, then <strong>merged into main</strong>, so it is in
-            production. The branch stays as the audit trail. Never a force-push:
-            main only ever fast-forwards, and a rejected fast-forward is reported
-            rather than overridden.
+            <strong className="font-mono">{repoSource.location}</strong> — committed on
+            this run's own <code>factory-deck/&lt;run-id&gt;</code> branch, pushed back
+            there, then <strong>merged into main</strong>, so it is in production. The
+            branch stays as the audit trail. Never a force-push: main only ever
+            fast-forwards, and a rejected fast-forward is reported rather than
+            overridden.
           </span>
         ) : (
           <span>
-            No repo attached yet. Factory Deck will resolve one from your prompt
-            below, and the work will be saved back into whichever repo it resolves.
+            No repo attached yet. Factory Deck will resolve one from your prompt below,
+            and the work will be saved back into whichever repo it resolves.
           </span>
         )}
       </div>
@@ -131,7 +133,12 @@ export function ExtendExistingPanel({
             onStart={onStart}
           />
         ) : (
-          <ClarifyMode starting={starting} repoSource={repoSource} onStart={onStart} />
+          <ClarifyMode
+            starting={starting}
+            routingMode={routingMode}
+            repoSource={repoSource}
+            onStart={onStart}
+          />
         )}
       </div>
     </motion.div>
@@ -184,10 +191,9 @@ function DirectPromptMode({
         <span>
           <span className="font-medium text-white">This is a big change</span>
           <span className="block text-xs text-slate-400">
-            Break it into small steps automatically. Each step is built, tested,
-            and merged on its own before the next one starts - so a large
-            evolution lands as a series of real, working improvements instead of
-            one giant attempt.
+            Break it into small steps automatically. Each step is built, tested, and
+            merged on its own before the next one starts - so a large evolution lands as
+            a series of real, working improvements instead of one giant attempt.
           </span>
         </span>
       </label>
@@ -209,10 +215,12 @@ function DirectPromptMode({
 
 function ClarifyMode({
   starting,
+  routingMode,
   repoSource,
   onStart,
 }: {
   starting: boolean;
+  routingMode: NonNullable<RunOptions["routingMode"]>;
   repoSource: { type: "path" | "git"; location: string } | undefined;
   onStart: (idea: string, options: RunOptions) => void;
 }) {
@@ -230,7 +238,7 @@ function ClarifyMode({
     setBusy(true);
     setError(null);
     try {
-      const res = await api.startClarify(trimmed);
+      const res = await api.startClarify(trimmed, routingMode);
       setSessionId(res.sessionId);
       setQuestion(res.question);
       setConfident(res.confident);

@@ -19,10 +19,9 @@ import type { Theme } from "../../lib/useTheme.js";
 /**
  * LiveRouteBadge — who is serving RIGHT NOW, always on screen.
  *
- * The whole point of the free-primary design is that a switch to a paid
- * provider can never happen quietly. Green means free and costing nothing;
- * amber means a paid rescue is currently serving and says why; slate means
- * nothing has run yet.
+ * Paid service can never happen quietly. Green means a $0 route is serving;
+ * amber means a paid route is serving (whether explicitly selected or reached
+ * by a legacy compatibility path); slate means nothing has run yet.
  */
 function LiveRouteBadge({ health }: { health: Health | null }) {
   const route = health?.route;
@@ -41,10 +40,9 @@ function LiveRouteBadge({ health }: { health: Health | null }) {
         : "FREE — idle";
 
   const tip = onPaid
-    ? `A paid rescue is serving this call because the free route stalled: ` +
-      `${route.lastFailoverReason ?? "unknown reason"}. ` +
-      `The free route stays primary and is re-probed automatically. ` +
-      `Est. rescue spend in the last 24h: $${spend.toFixed(4)} of ` +
+    ? `A paid provider is serving this call. Strict Free runs never attach a paid fallback. ` +
+      `${route.lastFailoverReason ? `Recorded failover reason: ${route.lastFailoverReason}. ` : ""}` +
+      `Est. paid spend in the last 24h: $${spend.toFixed(4)} of ` +
       `$${route.paidBudget.limits.usdPerDay.toFixed(2)}.`
     : `Running on the FREE local route at zero cost. ` +
       `Free calls: ${route.counts.free}, paid rescues: ` +
@@ -122,7 +120,7 @@ export function TopBar({
           </span>
         </Tooltip>
 
-        {/* ALWAYS-ON routing indicator. A paid rescue can never be silent:
+        {/* ALWAYS-ON routing indicator. A paid call can never be silent:
             this turns amber the moment a call is served by a paid tier. */}
         <LiveRouteBadge health={health} />
       </div>

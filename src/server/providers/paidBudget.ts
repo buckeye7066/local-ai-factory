@@ -9,7 +9,7 @@ import type {
 import type { ProviderName } from "../../shared/schemas.js";
 
 /**
- * paidBudget.ts — the blast radius around the paid rescue.
+ * paidBudget.ts — the blast radius around every paid provider call.
  *
  * Classification will sometimes be wrong. This file makes "wrong" cheap: even
  * if every stall detector misfires at once, the deck cannot run up a bill,
@@ -198,7 +198,7 @@ export function recordPaidCall(
 export class PaidBudgetExhaustedError extends Error {
   constructor(reason: string) {
     super(
-      `Paid rescue refused — ${reason}. The free route stays primary; ` +
+      `Paid provider call refused — ${reason}. No paid call was made; ` +
         `raise FACTORY_PAID_RESCUES_PER_HOUR / _PER_DAY / FACTORY_PAID_MAX_USD_PER_DAY to allow more.`,
     );
     this.name = "PaidBudgetExhaustedError";

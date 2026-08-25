@@ -613,6 +613,10 @@ export const ProviderNameSchema = z.enum([
 ]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
+/** Provider-neutral economic boundary selected by the owner. */
+export const RoutingModeSchema = z.enum(["free", "paid"]);
+export type RoutingMode = z.infer<typeof RoutingModeSchema>;
+
 /**
  * Where an EXISTING codebase to extend comes from. "path" is a local directory
  * on this machine; "git" is a clonable URL. `inPlace` is an explicit, narrow
@@ -732,7 +736,7 @@ export const RunOptionsSchema = z
      * rotate only among paid routes. Explicit provider fields remain for API
      * compatibility and imply "paid" when they name a paid provider.
      */
-    routingMode: z.enum(["free", "paid"]).optional(),
+    routingMode: RoutingModeSchema.optional(),
     codeProvider: ProviderNameSchema.optional(),
     reviewProvider: ProviderNameSchema.optional(),
     demo: z.boolean().optional(),
@@ -859,7 +863,7 @@ export const RunRecordSchema = z.object({
   resumable: z.boolean().optional(),
   demo: z.boolean(),
   /** Provider-neutral tier selected for this run; absent on legacy records. */
-  routingMode: z.enum(["free", "paid"]).optional(),
+  routingMode: RoutingModeSchema.optional(),
   codeProvider: ProviderNameSchema,
   reviewProvider: ProviderNameSchema,
   currentStage: StageIdSchema.nullable().default(null),

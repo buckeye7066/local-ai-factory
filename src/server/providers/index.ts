@@ -67,15 +67,15 @@ export interface ProviderRegistry {
    */
   resolve(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
   /**
-   * Live resolve — never returns mock/stub. Prefers the FREE route and hands
-   * back the failover chain (free -> Anthropic -> OpenAI) so a wedged free
-   * backend is rescued per call without ever becoming the default.
+   * Legacy live resolve — never returns mock/stub. Owner-selected runs use the
+   * strict tier builder instead, because this compatibility resolver may hand
+   * back the historical free-to-paid failover chain.
    */
   resolveLive(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
   available(): ProviderName[];
   /** Every configured LIVE provider, free included. */
   availableLive(): ProviderName[];
-  /** Configured PAID providers only — the rescue tier. */
+  /** Configured PAID providers only. */
   availablePaid(): ProviderName[];
   missingCredentialNames(): string[];
 }
@@ -183,7 +183,7 @@ export function createProviderRegistry(
       })
     : free;
 
-  /** The chain the deck actually runs on: free primary, paid rescue. */
+  /** Legacy compatibility chain; strict owner-selected Free runs bypass it. */
   const chain = new FailoverProvider(
     freePrimary,
     anthropic,

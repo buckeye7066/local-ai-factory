@@ -9,6 +9,8 @@ import {
   isValidRunId,
   repoNameProblem,
   ProviderNameSchema,
+  RoutingModeSchema,
+  type RoutingMode,
   type RunSummary,
 } from "../shared/schemas.js";
 import {
@@ -18,6 +20,7 @@ import {
   resumeFactory as resumeFactoryFull,
   MissingProviderCredentialError,
   RunNotResumableError,
+  createTierProvider,
   selectRunRouting,
 } from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
@@ -50,7 +53,6 @@ import { authorizeApiRequest, resolveBindHost } from "./security/access.js";
 import { snapshotRoute, getThresholds, probeLiveness } from "./providers/freeRoute.js";
 import { paidBudgetStatus } from "./providers/paidBudget.js";
 import { createProviderRegistry } from "./providers/index.js";
-import { QuotaFailoverProvider } from "./providers/quotaFailover.js";
 import {
   clarificationAgent,
   type ClarificationHistoryItem,
@@ -67,7 +69,7 @@ import { redactSecrets } from "./security/redact.js";
 import { findRemovedRunOption } from "./removedOptions.js";
 import { FATAL_EXIT_CODE } from "./exitCodes.js";
 import { underWorkTheme } from "./orchestrator/themeBind.js";
-import { resumeWorkTheme, ThemedProvider } from "./orchestrator/workTheme.js";
+import { resumeWorkTheme } from "./orchestrator/workTheme.js";
 
 /**
  * server/index.ts — the LOCAL backend API.
@@ -161,9 +163,24 @@ app.get("/api/route", (_req, res) => {
  * list the client passes into POST /api/runs as options.goals with
  * options.mode="extend".
  */
-function clarificationProvider() {
+function interactiveProvider(routingMode?: RoutingMode) {
   const registry = createProviderRegistry(config, secrets);
-  return registry.resolveLive(undefined, config.defaultCodeProvider);
+  const routing = selectRunRouting({ routingMode }, registry, config);
+  return {
+    routingMode: routing.routingMode,
+    provider: createTierProvider(routing, routing.codeProvider, registry),
+  };
+}
+
+function respondProviderUnavailable(res: Response, err: unknown): boolean {
+  if (!(err instanceof MissingProviderCredentialError)) return false;
+  res.status(409).json({
+    error: err.message,
+    missing: err.missing,
+    blocked: true,
+    hint: "Enable the selected Free route or configure at least one Paid provider, then retry. Factory Deck will not cross economic tiers automatically.",
+  });
+  return true;
 }
 
 app.post(
@@ -177,9 +194,23 @@ app.post(
       res.status(400).json({ error: "Field 'initialRequest' is required." });
       return;
     }
-    const session = createSession(initialRequest);
+    const parsedMode = RoutingModeSchema.optional().safeParse(req.body?.routingMode);
+    if (!parsedMode.success) {
+      res.status(400).json({ error: "Field 'routingMode' must be 'free' or 'paid'." });
+      return;
+    }
+    let selected;
+    try {
+      selected = interactiveProvider(parsedMode.data);
+    } catch (err) {
+      if (respondProviderUnavailable(res, err)) return;
+      throw err;
+    }
+    // Persist the resolved tier, including legacy/default inference when an
+    // older client omitted routingMode. Every later answer stays in this tier.
+    const session = createSession(initialRequest, selected.routingMode);
     const turn = await clarificationAgent(
-      { provider: clarificationProvider() },
+      { provider: selected.provider },
       { initialRequest, history: [] },
     );
     updateSession(session.id, {
@@ -231,20 +262,29 @@ app.post(
       { question: session.currentQuestion, answer },
     ];
     const forceConfident = history.length >= questionCap();
-    const turn = forceConfident
-      ? {
-          confident: true,
-          nextQuestion: null,
-          rationale: `Reached the ${questionCap()}-question cap — proceeding with what's known.`,
-          refinedGoals: [
-            session.initialRequest,
-            ...history.map((h) => `${h.question} -> ${h.answer}`),
-          ],
-        }
-      : await clarificationAgent(
-          { provider: clarificationProvider() },
+    let turn;
+    if (forceConfident) {
+      turn = {
+        confident: true,
+        nextQuestion: null,
+        rationale: `Reached the ${questionCap()}-question cap — proceeding with what's known.`,
+        refinedGoals: [
+          session.initialRequest,
+          ...history.map((h) => `${h.question} -> ${h.answer}`),
+        ],
+      };
+    } else {
+      try {
+        const selected = interactiveProvider(session.routingMode);
+        turn = await clarificationAgent(
+          { provider: selected.provider },
           { initialRequest: session.initialRequest, history },
         );
+      } catch (err) {
+        if (respondProviderUnavailable(res, err)) return;
+        throw err;
+      }
+    }
     updateSession(sessionId, {
       history,
       status: turn.confident ? "confident" : "active",
@@ -494,17 +534,7 @@ function epicDeps(): EpicDeps {
 
       const registry = createProviderRegistry(config, secrets);
       const routing = selectRunRouting(options, registry, config);
-      const primary = new ThemedProvider(registry.get(routing.codeProvider));
-      const provider =
-        routing.routingMode === "paid"
-          ? new QuotaFailoverProvider(
-              primary,
-              registry
-                .availablePaid()
-                .filter((name) => name !== routing.codeProvider)
-                .map((name) => new ThemedProvider(registry.get(name))),
-            )
-          : primary;
+      const provider = createTierProvider(routing, routing.codeProvider, registry);
       return withPlanTimeout(
         `${routing.routingMode}(${routing.codeProvider})`,
         epicPlannerAgent({ provider }, { idea }),
@@ -530,6 +560,15 @@ app.post(
         .status(400)
         .json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
       return;
+    }
+    // Validate the selected economic tier before returning 202. Previously a
+    // missing Paid key or disabled Free route failed only in the background,
+    // leaving an accepted-but-dead epic instead of an explicit blocked reply.
+    try {
+      selectRunRouting(parsed.data, createProviderRegistry(config, secrets), config);
+    } catch (err) {
+      if (respondProviderUnavailable(res, err)) return;
+      throw err;
     }
     const deps = epicDeps();
     // Respond immediately: planning alone can take minutes on the free route.

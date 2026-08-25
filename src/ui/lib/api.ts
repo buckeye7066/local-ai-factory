@@ -121,7 +121,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name }),
     }),
-  startClarify: (initialRequest: string) =>
+  startClarify: (
+    initialRequest: string,
+    routingMode?: NonNullable<RunOptions["routingMode"]>,
+  ) =>
     jsonFetch<{
       sessionId: string;
       confident: boolean;
@@ -129,7 +132,7 @@ export const api = {
       refinedGoals: string[];
     }>("/api/clarify/start", {
       method: "POST",
-      body: JSON.stringify({ initialRequest }),
+      body: JSON.stringify({ initialRequest, routingMode }),
     }),
   answerClarify: (sessionId: string, answer: "yes" | "no") =>
     jsonFetch<{
