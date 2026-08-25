@@ -8,7 +8,12 @@ const tmpData = resolve(process.cwd(), ".test-factory-data-mock");
 // MUST be set before importing storage modules (they capture DATA_ROOT at load).
 process.env.FACTORY_DATA_DIR = tmpData;
 await mkdir(tmpData, { recursive: true });
-await rm(resolve(tmpData, "audit"), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+await rm(resolve(tmpData, "audit"), {
+  recursive: true,
+  force: true,
+  maxRetries: 5,
+  retryDelay: 200,
+});
 
 const { runFactory } = await import("../orchestrator/runFactory.js");
 const { loadConfig, loadSecrets, toHealth } = await import("../config.js");
@@ -17,6 +22,7 @@ const { MockProvider } = await import("../providers/mockProvider.js");
 const { verifyAuditChain, _resetAuditCursorForTests } =
   await import("../storage/auditLog.js");
 const { rollbackWorkspace } = await import("../workspace/cleanup.js");
+const { loadReadinessState } = await import("../storage/readinessStore.js");
 const { ProductSpecSchema, QaReportSchema } = await import("../../shared/schemas.js");
 
 beforeAll(async () => {
@@ -71,7 +77,12 @@ describe("control-plane health vs providers (#237)", () => {
 describe("mock end-to-end job (#242)", () => {
   it("completes a full assembly line with zero paid credits + attribution", async () => {
     _resetAuditCursorForTests();
-    await rm(resolve(tmpData, "audit"), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    await rm(resolve(tmpData, "audit"), {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
     const config = {
       ...loadConfig({}),
       workspaceRoot: tmpRoot,
@@ -96,6 +107,16 @@ describe("mock end-to-end job (#242)", () => {
     expect(run.providerUsage.anthropic.calls).toBe(0);
     expect(run.providerUsage.openai.calls).toBe(0);
     expect(run.providerUsage.mock.calls).toBeGreaterThan(0);
+    expect(run.destination?.status).not.toBe("delivered");
+    expect(run.release?.released).not.toBe(true);
+
+    const readiness = await loadReadinessState(run.id);
+    expect(readiness?.status).toBe("blocked");
+    expect(readiness?.receipt?.ready).toBe(false);
+    expect(readiness?.reviews).toEqual([]);
+    expect(readiness?.blockers).toContain(
+      "Demo/mock output cannot be production-ready.",
+    );
 
     // Attribution (#244)
     expect(run.attribution).not.toBeNull();
