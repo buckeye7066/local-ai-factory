@@ -11,7 +11,7 @@ import {
   type FreePrimary,
   type RouteLogger,
 } from "./failoverProvider.js";
-import { recordPaidCall } from "./paidBudget.js";
+import { estimateUsd, loadLimits } from "./paidBudget.js";
 import {
   buildRotator,
   rotationEnabled,
@@ -67,15 +67,15 @@ export interface ProviderRegistry {
    */
   resolve(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
   /**
-   * Live resolve — never returns mock/stub. Prefers the FREE route and hands
-   * back the failover chain (free -> Anthropic -> OpenAI) so a wedged free
-   * backend is rescued per call without ever becoming the default.
+   * Legacy live resolve — never returns mock/stub. Owner-selected runs use the
+   * strict tier builder instead, because this compatibility resolver may hand
+   * back the historical free-to-paid failover chain.
    */
   resolveLive(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
   available(): ProviderName[];
   /** Every configured LIVE provider, free included. */
   availableLive(): ProviderName[];
-  /** Configured PAID providers only — the rescue tier. */
+  /** Configured PAID providers only. */
   availablePaid(): ProviderName[];
   missingCredentialNames(): string[];
 }
@@ -105,13 +105,14 @@ export function createProviderRegistry(
   const mock = new MockProvider();
   const stub = new StubProvider("stub");
 
-  // Every paid call reports its token usage into the spend ledger, so the
-  // daily ceiling is enforced against real usage rather than a guess.
+  // Every paid SDK call reserves admission before I/O. Its returned token
+  // usage then replaces the in-flight estimate in the local ledger; provider
+  // billing can include charges this estimate does not model.
   const anthropic = new AnthropicProvider(
     secrets.anthropicApiKey,
     config.anthropicModel,
     (u) => {
-      const usd = recordPaidCall("anthropic", u.inTokens, u.outTokens);
+      const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
       log(
         "warn",
         `[route] paid Anthropic call billed: ${u.inTokens} in / ${u.outTokens} out ` +
@@ -119,12 +120,13 @@ export function createProviderRegistry(
       );
     },
     signal,
+    true,
   );
   const openai = new OpenAIProvider(
     secrets.openaiApiKey,
     config.openaiModel,
     (u) => {
-      const usd = recordPaidCall("openai", u.inTokens, u.outTokens);
+      const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
       log(
         "warn",
         `[route] paid OpenAI call billed: ${u.inTokens} in / ${u.outTokens} out ` +
@@ -132,6 +134,7 @@ export function createProviderRegistry(
       );
     },
     signal,
+    true,
   );
 
   const free = new FreeProvider({
@@ -183,7 +186,7 @@ export function createProviderRegistry(
       })
     : free;
 
-  /** The chain the deck actually runs on: free primary, paid rescue. */
+  /** Legacy compatibility chain; strict owner-selected Free runs bypass it. */
   const chain = new FailoverProvider(
     freePrimary,
     anthropic,

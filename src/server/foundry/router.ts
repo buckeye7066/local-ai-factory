@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { safeErrorMessage } from "../errors.js";
+import { RoutingModeSchema } from "../../shared/schemas.js";
 import { FoundryAdapters } from "./adapters.js";
 import {
   FoundryIntakeSchema,
@@ -28,13 +29,18 @@ class FoundryRouteError extends Error {
 const MarkdownImportSchema = z.object({
   markdown: z.string().min(1).max(1_000_000),
   sourcePath: z.string().min(1).max(2_000).default("Obsidian/Purpose Foundry.md"),
+  routingMode: RoutingModeSchema.optional(),
 });
 
 function deriveProjectStatus(project: FoundryProject): FoundryProject["status"] {
-  const selected = project.stations.filter((station) => station.status !== "not_selected");
+  const selected = project.stations.filter(
+    (station) => station.status !== "not_selected",
+  );
   if (selected.some((station) => station.status === "failed")) return "failed";
-  if (selected.some((station) => station.status === "needs_attention")) return "needs_attention";
-  if (selected.length && selected.every((station) => station.status === "completed")) return "completed";
+  if (selected.some((station) => station.status === "needs_attention"))
+    return "needs_attention";
+  if (selected.length && selected.every((station) => station.status === "completed"))
+    return "completed";
   if (selected.some((station) => station.status === "active")) return "running";
   return "queued";
 }
@@ -60,9 +66,7 @@ export function createFoundryRouter(
     transitionWrites = transition.catch(() => undefined);
     return transition;
   };
-  const serialTransition = (
-    handler: (req: Request, res: Response) => Promise<void>,
-  ) =>
+  const serialTransition = (handler: (req: Request, res: Response) => Promise<void>) =>
     asyncRoute(async (req, res) => {
       await enqueueTransition(() => handler(req, res));
     });
@@ -73,10 +77,14 @@ export function createFoundryRouter(
     event: StationEvent,
   ): Promise<FoundryProject> => {
     const project = await store.get(projectId);
-    if (!project) throw new FoundryRouteError(404, "Purpose Foundry project not found.");
+    if (!project)
+      throw new FoundryRouteError(404, "Purpose Foundry project not found.");
     const station = project.stations.find((item) => item.stationId === stationId);
     if (!station || station.status === "not_selected") {
-      throw new FoundryRouteError(409, "That station is not selected for this project.");
+      throw new FoundryRouteError(
+        409,
+        "That station is not selected for this project.",
+      );
     }
     if (
       station.status === event.status &&
@@ -119,8 +127,12 @@ export function createFoundryRouter(
       station.endedAt = Date.now();
     }
     if (event.status === "completed") {
-      const currentIndex = project.stations.findIndex((item) => item.stationId === stationId);
-      const next = project.stations.slice(currentIndex + 1).find((item) => item.status === "queued");
+      const currentIndex = project.stations.findIndex(
+        (item) => item.stationId === stationId,
+      );
+      const next = project.stations
+        .slice(currentIndex + 1)
+        .find((item) => item.status === "queued");
       if (next) {
         next.status = "active";
         next.startedAt = Date.now();
@@ -147,7 +159,9 @@ export function createFoundryRouter(
       runningAdapters.add(key);
       let event: StationEvent;
       try {
-        event = StationEventSchema.parse(await adapters.execute(project, active.stationId));
+        event = StationEventSchema.parse(
+          await adapters.execute(project, active.stationId),
+        );
       } catch (error) {
         event = StationEventSchema.parse({
           status: "needs_attention",
@@ -167,17 +181,13 @@ export function createFoundryRouter(
         // A manual callback may have already advanced this station. The stale
         // adapter result must never complete a different station or crash the server.
         if (!(error instanceof FoundryRouteError && error.status === 409)) {
-          console.error(
-            `[foundry] adapter result failed: ${safeErrorMessage(error)}`,
-          );
+          console.error(`[foundry] adapter result failed: ${safeErrorMessage(error)}`);
         }
       } finally {
         runningAdapters.delete(key);
       }
     })().catch((error: unknown) => {
-      console.error(
-        `[foundry] adapter dispatch failed: ${safeErrorMessage(error)}`,
-      );
+      console.error(`[foundry] adapter dispatch failed: ${safeErrorMessage(error)}`);
     });
   };
 
@@ -202,9 +212,10 @@ export function createFoundryRouter(
   // Obsidian remains an independent application. Purpose Foundry watches only
   // the explicitly configured inbox folder and imports changed Markdown notes.
   if (obsidianInbox) {
-    const scan = () => void store.importObsidianInbox(obsidianInbox).catch((error: unknown) => {
-      console.error(`[foundry] Obsidian scan failed: ${safeErrorMessage(error)}`);
-    });
+    const scan = () =>
+      void store.importObsidianInbox(obsidianInbox).catch((error: unknown) => {
+        console.error(`[foundry] Obsidian scan failed: ${safeErrorMessage(error)}`);
+      });
     scan();
     const timer = setInterval(scan, 5_000);
     timer.unref();
@@ -222,124 +233,171 @@ export function createFoundryRouter(
     res.json({ configured: Boolean(obsidianInbox), inbox: obsidianInbox });
   });
 
-  router.get("/projects", asyncRoute(async (_req, res) => {
-    res.json({ projects: await store.list() });
-  }));
+  router.get(
+    "/projects",
+    asyncRoute(async (_req, res) => {
+      res.json({ projects: await store.list() });
+    }),
+  );
 
-  router.get("/projects/:projectId", asyncRoute(async (req, res) => {
-    const project = await store.get(String(req.params.projectId));
-    if (!project) {
-      res.status(404).json({ error: "Purpose Foundry project not found." });
-      return;
-    }
-    res.json(project);
-  }));
-
-  router.post("/projects", asyncRoute(async (req, res) => {
-    const intake = FoundryIntakeSchema.parse(req.body);
-    res.status(201).json(await store.create(intake));
-  }));
-
-  router.post("/obsidian/import", asyncRoute(async (req, res) => {
-    const input = MarkdownImportSchema.parse(req.body);
-    res.status(201).json(await store.create(intakeFromMarkdown(input.markdown, input.sourcePath)));
-  }));
-
-  router.post("/obsidian/scan", asyncRoute(async (_req, res) => {
-    const inbox = process.env.PURPOSE_FOUNDRY_OBSIDIAN_INBOX?.trim();
-    if (!inbox) {
-      res.status(409).json({
-        error: "Set PURPOSE_FOUNDRY_OBSIDIAN_INBOX to the Obsidian folder Purpose Foundry should watch.",
-      });
-      return;
-    }
-    res.json(await store.importObsidianInbox(inbox));
-  }));
-
-  router.post("/projects/:projectId/start", serialTransition(async (req, res) => {
-    const project = await store.get(String(req.params.projectId));
-    if (!project) {
-      res.status(404).json({ error: "Purpose Foundry project not found." });
-      return;
-    }
-    if (project.status === "running" || project.stations.some((station) => station.status === "active")) {
-      res.status(409).json({ error: "This project assembly line is already running." });
-      return;
-    }
-    if (project.status === "completed") {
-      res.status(409).json({ error: "This project has already completed its selected stations." });
-      return;
-    }
-    if (project.status === "failed" || project.status === "needs_attention") {
-      res.status(409).json({
-        error: "Resume the failed or attention-required station instead of skipping it.",
-      });
-      return;
-    }
-    const first = project.stations.find((station) => station.status === "queued");
-    if (!first) {
-      res.status(409).json({ error: "This project has no queued stations." });
-      return;
-    }
-    first.status = "active";
-    first.attempt += 1;
-    first.startedAt = Date.now();
-    project.status = "running";
-    await store.save(FoundryProjectSchema.parse(project));
-    await store.appendEvidence(project.id, first.stationId, "station.started", {
-      attempt: first.attempt,
-      constitution: project.constitution,
-    });
-    res.status(202).json(project);
-    queueMicrotask(() => dispatchActive(project.id));
-  }));
-
-  router.post("/projects/:projectId/stations/:stationId/run", serialTransition(async (req, res) => {
-    const projectId = String(req.params.projectId);
-    const stationId = StationIdSchema.parse(req.params.stationId);
-    const project = await store.get(projectId);
-    if (!project) {
-      res.status(404).json({ error: "Purpose Foundry project not found." });
-      return;
-    }
-    const station = project.stations.find((item) => item.stationId === stationId);
-    if (!station || station.status === "not_selected") {
-      res.status(409).json({ error: "That station is not selected for this project." });
-      return;
-    }
-    let updated = project;
-    if (station.status === "failed" || station.status === "needs_attention") {
-      updated = await applyStationEvent(projectId, stationId, {
-        status: "active",
-        summary: "Adapter retry requested.",
-        artifacts: station.artifacts,
-        evidence: { retry: true },
-      });
-    } else if (station.status !== "active") {
-      res.status(409).json({ error: `Station ${stationId} is ${station.status}, not active.` });
-      return;
-    }
-    res.status(202).json(updated);
-    queueMicrotask(() => dispatchActive(projectId));
-  }));
-
-  router.post("/projects/:projectId/stations/:stationId/events", serialTransition(async (req, res) => {
-    const stationId = StationIdSchema.parse(req.params.stationId);
-    const event = StationEventSchema.parse(req.body);
-    try {
-      const project = await applyStationEvent(String(req.params.projectId), stationId, event);
-      res.json(project);
-      if (event.status === "completed" && project.status === "running") {
-        queueMicrotask(() => dispatchActive(project.id));
-      }
-    } catch (error) {
-      if (error instanceof FoundryRouteError) {
-        res.status(error.status).json({ error: safeErrorMessage(error) });
+  router.get(
+    "/projects/:projectId",
+    asyncRoute(async (req, res) => {
+      const project = await store.get(String(req.params.projectId));
+      if (!project) {
+        res.status(404).json({ error: "Purpose Foundry project not found." });
         return;
       }
-      throw error;
-    }
-  }));
+      res.json(project);
+    }),
+  );
+
+  router.post(
+    "/projects",
+    asyncRoute(async (req, res) => {
+      const intake = FoundryIntakeSchema.parse(req.body);
+      res.status(201).json(await store.create(intake));
+    }),
+  );
+
+  router.post(
+    "/obsidian/import",
+    asyncRoute(async (req, res) => {
+      const input = MarkdownImportSchema.parse(req.body);
+      const intake = intakeFromMarkdown(input.markdown, input.sourcePath);
+      res.status(201).json(
+        await store.create({
+          ...intake,
+          routingMode: input.routingMode ?? intake.routingMode,
+        }),
+      );
+    }),
+  );
+
+  router.post(
+    "/obsidian/scan",
+    asyncRoute(async (_req, res) => {
+      const inbox = process.env.PURPOSE_FOUNDRY_OBSIDIAN_INBOX?.trim();
+      if (!inbox) {
+        res.status(409).json({
+          error:
+            "Set PURPOSE_FOUNDRY_OBSIDIAN_INBOX to the Obsidian folder Purpose Foundry should watch.",
+        });
+        return;
+      }
+      res.json(await store.importObsidianInbox(inbox));
+    }),
+  );
+
+  router.post(
+    "/projects/:projectId/start",
+    serialTransition(async (req, res) => {
+      const project = await store.get(String(req.params.projectId));
+      if (!project) {
+        res.status(404).json({ error: "Purpose Foundry project not found." });
+        return;
+      }
+      if (
+        project.status === "running" ||
+        project.stations.some((station) => station.status === "active")
+      ) {
+        res
+          .status(409)
+          .json({ error: "This project assembly line is already running." });
+        return;
+      }
+      if (project.status === "completed") {
+        res
+          .status(409)
+          .json({ error: "This project has already completed its selected stations." });
+        return;
+      }
+      if (project.status === "failed" || project.status === "needs_attention") {
+        res.status(409).json({
+          error:
+            "Resume the failed or attention-required station instead of skipping it.",
+        });
+        return;
+      }
+      const first = project.stations.find((station) => station.status === "queued");
+      if (!first) {
+        res.status(409).json({ error: "This project has no queued stations." });
+        return;
+      }
+      first.status = "active";
+      first.attempt += 1;
+      first.startedAt = Date.now();
+      project.status = "running";
+      await store.save(FoundryProjectSchema.parse(project));
+      await store.appendEvidence(project.id, first.stationId, "station.started", {
+        attempt: first.attempt,
+        constitution: project.constitution,
+      });
+      res.status(202).json(project);
+      queueMicrotask(() => dispatchActive(project.id));
+    }),
+  );
+
+  router.post(
+    "/projects/:projectId/stations/:stationId/run",
+    serialTransition(async (req, res) => {
+      const projectId = String(req.params.projectId);
+      const stationId = StationIdSchema.parse(req.params.stationId);
+      const project = await store.get(projectId);
+      if (!project) {
+        res.status(404).json({ error: "Purpose Foundry project not found." });
+        return;
+      }
+      const station = project.stations.find((item) => item.stationId === stationId);
+      if (!station || station.status === "not_selected") {
+        res
+          .status(409)
+          .json({ error: "That station is not selected for this project." });
+        return;
+      }
+      let updated = project;
+      if (station.status === "failed" || station.status === "needs_attention") {
+        updated = await applyStationEvent(projectId, stationId, {
+          status: "active",
+          summary: "Adapter retry requested.",
+          artifacts: station.artifacts,
+          evidence: { retry: true },
+        });
+      } else if (station.status !== "active") {
+        res
+          .status(409)
+          .json({ error: `Station ${stationId} is ${station.status}, not active.` });
+        return;
+      }
+      res.status(202).json(updated);
+      queueMicrotask(() => dispatchActive(projectId));
+    }),
+  );
+
+  router.post(
+    "/projects/:projectId/stations/:stationId/events",
+    serialTransition(async (req, res) => {
+      const stationId = StationIdSchema.parse(req.params.stationId);
+      const event = StationEventSchema.parse(req.body);
+      try {
+        const project = await applyStationEvent(
+          String(req.params.projectId),
+          stationId,
+          event,
+        );
+        res.json(project);
+        if (event.status === "completed" && project.status === "running") {
+          queueMicrotask(() => dispatchActive(project.id));
+        }
+      } catch (error) {
+        if (error instanceof FoundryRouteError) {
+          res.status(error.status).json({ error: safeErrorMessage(error) });
+          return;
+        }
+        throw error;
+      }
+    }),
+  );
 
   return router;
 }

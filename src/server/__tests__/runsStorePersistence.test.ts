@@ -25,6 +25,7 @@ function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
     idea: "test idea",
     status: "completed",
     demo: true,
+    routingMode: "free",
     codeProvider: "stub",
     reviewProvider: "stub",
     currentStage: null,
@@ -99,5 +100,24 @@ describe("runsStore persistence across restarts", () => {
       },
       { timeout: 5000 },
     );
+  });
+
+  it("includes the persisted economic tier in run summaries", async () => {
+    const store1 = await freshStore();
+    const run = makeRun({
+      routingMode: "paid",
+      codeProvider: "openai",
+      reviewProvider: "openai",
+    });
+    await store1.saveRun(run);
+
+    const store2 = await freshStore();
+    const summary = (await store2.listRuns()).find((item) => item.id === run.id);
+    expect(summary).toMatchObject({
+      id: run.id,
+      routingMode: "paid",
+      codeProvider: "openai",
+      reviewProvider: "openai",
+    });
   });
 });

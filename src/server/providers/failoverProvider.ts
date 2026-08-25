@@ -222,8 +222,9 @@ export class FailoverProvider implements LLMProvider {
   }
 
   /**
-   * The rescue tier. Refuses to spend past the caps, and when it refuses it
-   * hands the work BACK to free rather than failing the run.
+   * The rescue tier. Refuses attempts past the in-process call limits or local
+   * estimated-USD admission guard, then hands work BACK to free rather than
+   * failing the run. Provider-native caps own hard actual-dollar enforcement.
    */
   private async runPaid<T>(
     label: string,

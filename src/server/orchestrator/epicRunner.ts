@@ -115,7 +115,7 @@ export interface EpicDeps {
   ) => Promise<RunRecord>;
   /** Resume a failed-but-resumable slice run from its checkpoint (paid work salvage). */
   resumeSliceRun?: (runId: string) => Promise<RunRecord>;
-  plan: (idea: string) => Promise<EpicPlan>;
+  plan: (idea: string, options: RunOptions) => Promise<EpicPlan>;
   config: AppConfig;
   secrets: AppSecrets;
 }
@@ -153,7 +153,9 @@ export async function createEpicShell(
  */
 export async function planEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRecord> {
   try {
-    const plan = EpicPlanSchema.parse(await deps.plan(epic.idea));
+    const plan = EpicPlanSchema.parse(
+      await deps.plan(epic.idea, epic.options as RunOptions),
+    );
     epic.summary = plan.summary;
     epic.slices = plan.slices.map((s) => ({
       ...s,

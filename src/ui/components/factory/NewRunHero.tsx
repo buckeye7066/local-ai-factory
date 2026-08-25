@@ -16,7 +16,7 @@ import { Input } from "../ui/Input.js";
 import { Badge } from "../ui/Badge.js";
 import { Tabs } from "../ui/Tabs.js";
 import { slideUp, staggerContainer, staggerItem } from "../../lib/motion.js";
-import { ProviderRoutingCards, type PaidRouting } from "./ProviderRoutingCards.js";
+import { ProviderRoutingCards, type ProviderTier } from "./ProviderRoutingCards.js";
 import { SafetySettingsPreview } from "./SafetySettingsPreview.js";
 import { ExtendExistingPanel } from "./ExtendExistingPanel.js";
 import { api } from "../../lib/api.js";
@@ -51,12 +51,9 @@ export function NewRunHero({
   // producing a mock app. The option no longer exists at all: the server
   // rejects options.demo outright.
   const [runMode, setRunMode] = useState<"new" | "extend">("new");
-  // Which provider is PRIMARY for runs started from this screen. "auto" is
-  // the free-first default; pinning Claude/OpenAI sends an explicit
-  // codeProvider/reviewProvider, which is the ONLY thing that makes the
-  // server prefer a paid provider (configured keys alone never do — the
-  // owner read the checkmarks as "paid" on 2026-08-14 and got a free run).
-  const [routing, setRouting] = useState<PaidRouting>("auto");
+  // The owner chooses an economic tier, not a vendor. The server keeps free
+  // and paid routes disjoint, then rotates only inside the selected tier.
+  const [routing, setRouting] = useState<ProviderTier>("free");
   // The owner names a brand-new app/repo up front. Factory Deck never invents
   // one and never buries the build in an anonymous workspace folder.
   const [repoName, setRepoName] = useState("");
@@ -67,16 +64,11 @@ export function NewRunHero({
   const [publish, setPublish] = useState(true);
   const nameCheck = useRepoNameCheck(repoName);
 
-  // EVERY submission path (new app, extend direct, extend clarify) flows
-  // through this wrapper so a pinned paid primary is never silently dropped
-  // by a panel that forgot to include it.
+  // EVERY submission path carries the tier explicitly. Omitting it used to
+  // let critical stages silently spend on a configured paid key during an
+  // otherwise free run.
   const startWithRouting = (ideaText: string, options: RunOptions) =>
-    onStart(
-      ideaText,
-      routing !== "auto"
-        ? { ...options, codeProvider: routing, reviewProvider: routing }
-        : options,
-    );
+    onStart(ideaText, { ...options, routingMode: routing });
 
   const start = () => {
     const trimmed = idea.trim();
@@ -109,7 +101,7 @@ export function NewRunHero({
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-pretty text-sm leading-relaxed text-slate-400 sm:text-base">
           Planner, architect, builder, tester, critic, and repair agents work together
-          locally while calling your configured Claude and OpenAI APIs.
+          locally through your selected free or paid provider tier.
         </p>
       </motion.div>
 
@@ -156,10 +148,9 @@ export function NewRunHero({
             <span>
               <span className="font-medium text-white">Publish this app</span>
               <span className="block text-xs text-slate-400">
-                List the finished app in your Axiom BioLabs app store and let
-                PromoPilot promote it. Uncheck for something that is just for
-                you - it still gets built, saved to GitHub, and hosted, but
-                never listed or promoted.
+                List the finished app in your Axiom BioLabs app store and let PromoPilot
+                promote it. Uncheck for something that is just for you - it still gets
+                built, saved to GitHub, and hosted, but never listed or promoted.
               </span>
             </span>
           </label>
@@ -167,7 +158,11 @@ export function NewRunHero({
       )}
 
       {runMode === "extend" ? (
-        <ExtendExistingPanel starting={starting} onStart={startWithRouting} />
+        <ExtendExistingPanel
+          starting={starting}
+          routingMode={routing}
+          onStart={startWithRouting}
+        />
       ) : (
         <NewAppPanel
           idea={idea}
@@ -359,8 +354,8 @@ function NewAppPanel({
         <div className="mt-5 space-y-2">
           {!hasAnyKey && (
             <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
-              No API keys detected — add keys in <code>.env</code> to build. Every
-              run does real work; there is no demo or test mode.
+              No API keys detected — add keys in <code>.env</code> to build. Every run
+              does real work; there is no demo or test mode.
             </Helper>
           )}
         </div>

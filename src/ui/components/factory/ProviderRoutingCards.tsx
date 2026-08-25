@@ -1,24 +1,17 @@
 import { motion } from "framer-motion";
-import { Sparkles, Cpu, Check, AlertTriangle, Gift } from "lucide-react";
+import { Sparkles, Check, AlertTriangle, Gift } from "lucide-react";
 import { cn } from "../../lib/cn.js";
 import { Badge } from "../ui/Badge.js";
 import { staggerContainer, staggerItem } from "../../lib/motion.js";
 import type { Health } from "../../../shared/schemas.js";
 
-/** Which provider a NEW run pins as its primary. "auto" = free-first. */
-export type PaidRouting = "auto" | "anthropic" | "openai";
+/** Provider-neutral owner control: spend no money, or use paid rotation. */
+export type ProviderTier = "free" | "paid";
 
 /**
- * ProviderRoutingCards — how work actually flows across providers, and the
- * owner's control over it.
- *
- * The FREE local route is the default primary. Clicking Claude or OpenAI PINS
- * that paid provider as the PRIMARY for runs started from this screen (the
- * server honors an explicitly requested paid provider; without the pin it
- * always prefers the free route no matter which keys are configured — the
- * checkmarks alone never meant "paid"). Clicking Free returns to free-first.
- * The card for whoever is serving right now carries a live marker, so the
- * routing shown here can never disagree with what the deck is doing.
+ * ProviderRoutingCards exposes exactly the economic choice the owner asked
+ * for. Vendor choice stays inside the server's rotator and quota failover.
+ * Selecting Free is a hard boundary: paid rescue is disabled for that run.
  */
 export function ProviderRoutingCards({
   health,
@@ -26,68 +19,46 @@ export function ProviderRoutingCards({
   onRoutingChange,
 }: {
   health: Health | null;
-  routing: PaidRouting;
-  onRoutingChange: (routing: PaidRouting) => void;
+  routing: ProviderTier;
+  onRoutingChange: (routing: ProviderTier) => void;
 }) {
   const freeReady = health?.freeConfigured ?? false;
   const anthropicReady = health?.anthropicConfigured ?? false;
   const openaiReady = health?.openaiConfigured ?? false;
+  const paidReady = anthropicReady || openaiReady;
   const serving = health?.route?.serving ?? null;
   const counts = health?.route?.counts;
 
   const cards = [
     {
       key: "free",
-      title: "Free (Ollama / FCC)",
-      role:
-        routing === "auto"
-          ? "Primary — zero cost"
-          : "Click to return to free-first",
+      title: "Free",
+      role: routing === "free" ? "$0 rotation only" : "Click to disable paid routes",
       icon: Gift,
       ready: freeReady,
-      selected: routing === "auto",
+      selected: routing === "free",
       accent: "emerald" as const,
       serving: serving === "free",
       calls: counts?.free,
       onClick: () => {
-        if (!freeReady) return;
-        onRoutingChange("auto");
+        if (freeReady) onRoutingChange("free");
       },
     },
     {
-      key: "code",
-      title: "Claude",
+      key: "paid",
+      title: "Paid rotation",
       role:
-        routing === "anthropic"
-          ? "Paid PRIMARY — pinned for new runs"
-          : "Paid rescue — click to pin as primary",
+        routing === "paid"
+          ? "Paid tier — call-gated; USD estimated"
+          : "Click to use configured paid routes",
       icon: Sparkles,
-      ready: anthropicReady,
-      selected: routing === "anthropic",
+      ready: paidReady,
+      selected: routing === "paid",
       accent: "violet" as const,
-      serving: serving === "anthropic",
-      calls: counts?.anthropic,
+      serving: serving === "anthropic" || serving === "openai",
+      calls: (counts?.anthropic ?? 0) + (counts?.openai ?? 0),
       onClick: () => {
-        if (!anthropicReady) return;
-        onRoutingChange("anthropic");
-      },
-    },
-    {
-      key: "review",
-      title: "OpenAI",
-      role:
-        routing === "openai"
-          ? "Paid PRIMARY — pinned for new runs"
-          : "Paid rescue — click to pin as primary",
-      icon: Cpu,
-      ready: openaiReady,
-      selected: routing === "openai",
-      accent: "cyan" as const,
-      serving: serving === "openai",
-      calls: counts?.openai,
-      onClick: () => {
-        if (!openaiReady) return;
-        onRoutingChange("openai");
+        if (paidReady) onRoutingChange("paid");
       },
     },
   ];
@@ -100,10 +71,7 @@ export function ProviderRoutingCards({
       variants={staggerContainer}
       initial="hidden"
       animate="show"
-      className={cn(
-        "grid grid-cols-1 gap-3 sm:grid-cols-2",
-        cards.length === 4 ? "lg:grid-cols-4" : "lg:grid-cols-3",
-      )}
+      className="grid grid-cols-1 gap-3 sm:grid-cols-2"
     >
       {cards.map((c) => {
         const Icon = c.icon;
@@ -131,7 +99,6 @@ export function ProviderRoutingCards({
                 className={cn(
                   "grid h-9 w-9 place-items-center rounded-lg",
                   c.accent === "violet" && "bg-aurora-violet/15 text-aurora-violet",
-                  c.accent === "cyan" && "bg-aurora-cyan/15 text-aurora-cyan",
                   c.accent === "emerald" && "bg-aurora-emerald/15 text-aurora-emerald",
                 )}
               >
@@ -146,23 +113,16 @@ export function ProviderRoutingCards({
             <p className="mt-3 text-sm font-semibold text-white">{c.title}</p>
             <p className="text-xs text-slate-400">{c.role}</p>
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              {c.key === "free" ? (
-                c.ready ? (
-                  <Badge tone="emerald" icon={<Check className="h-3 w-3" />}>
-                    Free route ready
-                  </Badge>
-                ) : (
-                  <Badge tone="amber" icon={<AlertTriangle className="h-3 w-3" />}>
-                    Free route off
-                  </Badge>
-                )
-              ) : c.ready ? (
+              {c.ready ? (
                 <Badge tone="emerald" icon={<Check className="h-3 w-3" />}>
-                  Rescue key set
+                  {c.key === "free" ? "Free route ready" : "Paid route ready"}
                 </Badge>
               ) : (
-                <Badge tone="neutral" icon={<AlertTriangle className="h-3 w-3" />}>
-                  No rescue key
+                <Badge
+                  tone={c.key === "free" ? "amber" : "neutral"}
+                  icon={<AlertTriangle className="h-3 w-3" />}
+                >
+                  {c.key === "free" ? "Free route off" : "No paid key"}
                 </Badge>
               )}
               {c.serving && <Badge tone="cyan">serving now</Badge>}

@@ -19,7 +19,9 @@ export interface CallIntent {
   /** author | reviewer | judge | vision */
   role?: "author" | "reviewer" | "judge" | "vision";
   /** Capabilities the route MUST have when its capability list is known. */
-  needs?: Array<"code_author" | "structured_json" | "code_review" | "honest" | "vision">;
+  needs?: Array<
+    "code_author" | "structured_json" | "code_review" | "honest" | "vision"
+  >;
   /** Model family the route must not be, when any alternative exists. */
   avoidFamily?: string;
   /** Short slug of the program purpose this call serves (journaled). */
@@ -54,6 +56,8 @@ export interface GenerateJsonInput<T> {
 
 export interface LLMProvider {
   name: ProviderName;
+  /** True when the concrete provider reserves every billable SDK attempt itself. */
+  paidBudgetManaged?: boolean;
   /** True only when the provider has a usable API key (stub is always ready). */
   isConfigured(): boolean;
   generateText(input: GenerateTextInput): Promise<GenerateTextResult>;

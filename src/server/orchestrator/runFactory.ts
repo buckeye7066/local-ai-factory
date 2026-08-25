@@ -21,11 +21,11 @@ import type { FileEdit } from "../../shared/schemas.js";
 import type { LLMProvider } from "../../shared/types.js";
 import {
   createProviderRegistry,
-  FailoverProvider,
   MissingProviderCredentialError,
   OFFLINE_PROVIDERS,
   ProviderAbortError,
 } from "../providers/index.js";
+import type { ProviderRegistry } from "../providers/index.js";
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import {
@@ -96,7 +96,6 @@ import { parseDirectTestEvidence } from "./directTestEvidence.js";
 import { groundFinalReport } from "./reportGrounding.js";
 import { ErrorLedger, renderErrorLines } from "./errorLedger.js";
 import { ThemedProvider } from "./workTheme.js";
-import { PaidFirstOneRoundProvider } from "../providers/paidFirst.js";
 import { foldTestExit, freshTestVerdict, relevantTestStatus } from "./testVerdict.js";
 import { classifyEnvironmentFailure } from "./envFailure.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
@@ -328,11 +327,125 @@ export class RunTimeoutError extends Error {
   }
 }
 
+export interface ResolvedRunRouting {
+  routingMode: "free" | "paid";
+  codeProvider: ProviderName;
+  reviewProvider: ProviderName;
+}
+
+function isPaidProvider(
+  name: ProviderName | undefined,
+): name is "anthropic" | "openai" {
+  return name === "anthropic" || name === "openai";
+}
+
 class StaleCheckpointSpecificationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "StaleCheckpointSpecificationError";
   }
+}
+
+/**
+ * Resolve the owner's provider-neutral tier into concrete internal providers.
+ *
+ * Free mode is a hard economic boundary: every role stays on the $0 rotator
+ * and no paid rescue is attached. Paid mode selects only configured paid
+ * providers; quota failover may rotate among those paid providers later.
+ */
+export function selectRunRouting(
+  options: RunOptions,
+  registry: ProviderRegistry,
+  config: AppConfig,
+): ResolvedRunRouting {
+  const hasExplicitProvider = Boolean(options.codeProvider || options.reviewProvider);
+  const inferredPaid =
+    isPaidProvider(options.codeProvider) ||
+    isPaidProvider(options.reviewProvider) ||
+    (!hasExplicitProvider &&
+      (isPaidProvider(config.defaultCodeProvider) ||
+        isPaidProvider(config.defaultReviewProvider)));
+  const routingMode = options.routingMode ?? (inferredPaid ? "paid" : "free");
+
+  if (routingMode === "free") {
+    if (!registry.get("free").isConfigured()) {
+      throw new MissingProviderCredentialError([
+        "FACTORY_FREE_ENABLED / FACTORY_FREE_BASE_URL",
+      ]);
+    }
+    return { routingMode, codeProvider: "free", reviewProvider: "free" };
+  }
+
+  const paid = registry.availablePaid().filter(isPaidProvider);
+  if (paid.length === 0) {
+    throw new MissingProviderCredentialError([
+      "ANTHROPIC_API_KEY or OPENAI_API_KEY (paid mode selected)",
+    ]);
+  }
+  const choose = (
+    requested: ProviderName | undefined,
+    fallback: ProviderName,
+  ): "anthropic" | "openai" => {
+    for (const candidate of [requested, fallback, ...paid]) {
+      if (isPaidProvider(candidate) && paid.includes(candidate)) return candidate;
+    }
+    return paid[0]!;
+  };
+  return {
+    routingMode,
+    codeProvider: choose(options.codeProvider, config.defaultCodeProvider),
+    reviewProvider: choose(options.reviewProvider, config.defaultReviewProvider),
+  };
+}
+
+/**
+ * Build one provider role from an already-resolved economic tier.
+ *
+ * This is the single choke point for non-demo calls outside and inside a run:
+ * Free returns only the $0 route; Paid budget-gates every concrete provider
+ * before quota failover can reach it. `decorate` lets a run attach its own
+ * call counter to each attempted provider, including paid alternates.
+ */
+export function createTierProvider(
+  routing: ResolvedRunRouting,
+  selected: ProviderName,
+  registry: ProviderRegistry,
+  options: {
+    decorate?: (provider: LLMProvider) => LLMProvider;
+    onFailover?: (from: string, to: string, reason: string) => void;
+  } = {},
+): LLMProvider {
+  const decorate = options.decorate ?? ((provider: LLMProvider) => provider);
+  const buildConcrete = (name: ProviderName): LLMProvider => {
+    const concrete = registry.get(name);
+    const themed = new ThemedProvider(concrete);
+    const budgeted =
+      isPaidProvider(name) && concrete.paidBudgetManaged !== true
+        ? new BudgetGatedProvider(themed, name)
+        : themed;
+    // Run call-count rejection stays outside the paid gate, so a call refused
+    // before provider I/O never creates a phantom paid reservation.
+    return decorate(budgeted);
+  };
+
+  if (routing.routingMode === "free") {
+    return buildConcrete("free");
+  }
+  if (!isPaidProvider(selected)) {
+    throw new MissingProviderCredentialError([
+      `paid routing cannot use non-paid provider "${selected}"`,
+    ]);
+  }
+  const alternates = registry
+    .availablePaid()
+    .filter(isPaidProvider)
+    .filter((name) => name !== selected)
+    .map(buildConcrete);
+  return new QuotaFailoverProvider(
+    buildConcrete(selected),
+    alternates,
+    options.onFailover,
+  );
 }
 
 /** Create the initial queued record. Providers are resolved at queue time. */
@@ -360,18 +473,13 @@ function createRecord(args: StartRunArgs): RunRecord {
     }
   }
 
-  const codeProvider: ProviderName = demo
-    ? "mock"
-    : registry.resolveLive(
-        options.codeProvider ?? config.defaultCodeProvider,
-        config.defaultCodeProvider,
-      ).name;
-  const reviewProvider: ProviderName = demo
-    ? "mock"
-    : registry.resolveLive(
-        options.reviewProvider ?? config.defaultReviewProvider,
-        config.defaultReviewProvider,
-      ).name;
+  const routing = demo
+    ? {
+        routingMode: options.routingMode ?? ("free" as const),
+        codeProvider: "mock" as const,
+        reviewProvider: "mock" as const,
+      }
+    : selectRunRouting(options, registry, config);
 
   return {
     id: randomUUID(),
@@ -382,8 +490,9 @@ function createRecord(args: StartRunArgs): RunRecord {
     status: "queued",
     resumable: false,
     demo,
-    codeProvider,
-    reviewProvider,
+    routingMode: routing.routingMode,
+    codeProvider: routing.codeProvider,
+    reviewProvider: routing.reviewProvider,
     currentStage: null,
     stages: freshStages(),
     logs: [],
@@ -490,7 +599,9 @@ function combineAbortSignals(
       controller.abort(s.reason);
       break;
     }
-    s.addEventListener("abort", () => controller.abort(s.reason), { once: true });
+    s.addEventListener("abort", () => controller.abort(s.reason), {
+      once: true,
+    });
   }
   return controller.signal;
 }
@@ -556,134 +667,63 @@ async function executeRun(
     callSignal,
   );
 
-  // Resolve + meter providers (budget enforced inside CountingProvider).
-  // Demo journeys use mock; live journeys use resolveLive (never mock/stub).
-  const rawCode = run.demo
-    ? registry.get("mock")
-    : registry.resolveLive(run.codeProvider, config.defaultCodeProvider);
-  const rawReview = run.demo
-    ? registry.get("mock")
-    : registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);
-  // The failover chain declares itself as "free" but may serve a call from a
-  // paid rescue tier, so it must be attributed by who ACTUALLY served —
-  // otherwise a paid call would be booked as free and the spend would hide.
-  const attribution = (p: LLMProvider): "declared" | "served" =>
-    p instanceof FailoverProvider ? "served" : "declared";
-  // BUDGET BYPASS FIX (2026-08-16): only the concurrent pool was budget-gated.
-  // When a run's own codeProvider/reviewProvider resolved to a RAW paid
-  // provider (pinned routing, or a paid default), every stage call skipped
-  // canPayNow() entirely — spend was RECORDED but never CHECKED. Measured
-  // result: 68 paid calls / $26.64 in 24h against configured caps of 24/day
-  // and $2/day. The failover chain gates itself; raw paid providers must be
-  // wrapped here, exactly like the pool.
-  const gateIfPaid = (p: LLMProvider, counted: LLMProvider): LLMProvider =>
-    p.name === "anthropic" || p.name === "openai"
-      ? new BudgetGatedProvider(counted, p.name)
-      : counted;
-  // QUOTA FAILOVER (owner rule: fix, don't block). A pinned provider answering
-  // "no credits remaining" used to end the slice while a funded second key sat
-  // unused. Only quota refusals fail over; a real 400 still fails loudly.
-  const alternates = (): LLMProvider[] =>
-    run.demo
-      ? []
-      : registry
-          .availableLive()
-          .filter((n) => n !== "free")
-          .map((n) => registry.get(n));
-  const withFailover = (p: LLMProvider): LLMProvider =>
-    run.demo
-      ? p
-      : new QuotaFailoverProvider(p, alternates(), (from, to, reason) =>
-          log(
-            "warning",
-            `${from} refused on quota — continuing on ${to}. (${reason.slice(0, 120)})`,
-          ),
-        );
-  const code: LLMProvider = withFailover(
-    gateIfPaid(
-      rawCode,
-      new CountingProvider(
-        rawCode,
-        run,
-        config.maxModelCallsPerRun,
-        attribution(rawCode),
-      ),
-    ),
-  );
-  const review: LLMProvider = withFailover(
-    gateIfPaid(
-      rawReview,
-      new CountingProvider(
-        rawReview,
-        run,
-        config.maxModelCallsPerRun,
-        attribution(rawReview),
-      ),
-    ),
-  );
-  // CRITICAL-STAGE provider (owner order 2026-08-16: fix known-weak backends
-  // before they fail, don't wait). Spec, architecture, research, planning and
-  // the final report are ONE call each whose quality shapes or judges the
-  // whole run - the free small model demonstrably planned junk and gave up on
-  // competitor research ("no conclusion within 5 steps"). These few calls
-  // prefer the first configured PAID provider (budget-gated like the pool);
-  // free remains the keyless fallback and the builder's bulk free-primary
-  // economics are unchanged.
-  // The run's OWN pinned paid provider wins (2026-08-16): picking
-  // availablePaid()[0] made every run - including ones explicitly pinned to
-  // OpenAI - route its spec/architecture/research/planning through Anthropic,
-  // so an Anthropic credit outage failed five epics that had a funded OpenAI
-  // key sitting right there. Order: the run's own paid choice, then any
-  // configured paid provider, then free.
-  const runPinnedPaid =
-    run.codeProvider === "anthropic" || run.codeProvider === "openai"
-      ? run.codeProvider
-      : undefined;
-  const firstPaid = registry.availablePaid()[0];
-  let critical: LLMProvider;
-  if (!run.demo && !runPinnedPaid && firstPaid) {
-    // AUTO MODE (owner decision 2026-08-23: "paid models first followed by
-    // free. Only do one round, though."): a critical call gets ONE attempt on
-    // the first configured paid provider through the budget gate; if it fails
-    // or is refused, the SAME call falls to the free rotator. The free side is
-    // the $0 primary alone — not the failover chain — so there is never a
-    // second paid attempt for that call. Cost is attributed by who served.
-    const paidRaw = registry.resolveLive(firstPaid, config.defaultCodeProvider);
-    const paidOnce = gateIfPaid(
-      paidRaw,
-      new CountingProvider(
-        paidRaw,
-        run,
-        config.maxModelCallsPerRun,
-        attribution(paidRaw),
-      ),
-    );
-    const freeRaw = new ThemedProvider(registry.get("free"));
-    const freeOnly = new CountingProvider(
-      freeRaw,
-      run,
-      config.maxModelCallsPerRun,
-      attribution(freeRaw),
-    );
-    critical = new PaidFirstOneRoundProvider(paidOnce, freeOnly, (m) => log("info", m));
+  // Resolve strict-tier providers. The outer CountingProvider enforces the
+  // run call cap before inner paid providers reserve each SDK attempt.
+  const routingMode: "free" | "paid" =
+    run.routingMode ??
+    (run.codeProvider === "anthropic" ||
+    run.codeProvider === "openai" ||
+    run.reviewProvider === "anthropic" ||
+    run.reviewProvider === "openai"
+      ? "paid"
+      : "free");
+  const liveRouting = run.demo
+    ? null
+    : selectRunRouting(
+        {
+          routingMode,
+          codeProvider: run.codeProvider,
+          reviewProvider: run.reviewProvider,
+        },
+        registry,
+        config,
+      );
+  if (liveRouting) {
+    run.routingMode = liveRouting.routingMode;
+    run.codeProvider = liveRouting.codeProvider;
+    run.reviewProvider = liveRouting.reviewProvider;
+  }
+  const countProvider = (provider: LLMProvider): LLMProvider =>
+    new CountingProvider(provider, run, config.maxModelCallsPerRun, "declared");
+  const onPaidFailover = (from: string, to: string, reason: string) =>
     log(
-      "info",
-      `Critical stages: auto mode — paid first (${firstPaid}, one round), then free.`,
+      "warning",
+      `${from} refused on quota — continuing on ${to}. (${reason.slice(0, 120)})`,
     );
-  } else {
-    const rawCritical = run.demo
-      ? registry.get("mock")
-      : registry.resolveLive(
-          runPinnedPaid ?? run.codeProvider,
-          config.defaultCodeProvider,
-        );
-    const criticalCounted = new CountingProvider(
-      rawCritical,
-      run,
-      config.maxModelCallsPerRun,
-      attribution(rawCritical),
-    );
-    critical = withFailover(gateIfPaid(rawCritical, criticalCounted));
+
+  // Demo stays on mock. Every live role goes through the same strict tier
+  // builder: Free has no paid rescue; Paid gates and counts every attempted
+  // concrete provider, including a quota-failover alternate.
+  const code: LLMProvider = run.demo
+    ? countProvider(registry.get("mock"))
+    : createTierProvider(liveRouting!, liveRouting!.codeProvider, registry, {
+        decorate: countProvider,
+        onFailover: onPaidFailover,
+      });
+  const review: LLMProvider = run.demo
+    ? countProvider(registry.get("mock"))
+    : createTierProvider(liveRouting!, liveRouting!.reviewProvider, registry, {
+        decorate: countProvider,
+        onFailover: onPaidFailover,
+      });
+  const critical: LLMProvider = run.demo
+    ? countProvider(registry.get("mock"))
+    : createTierProvider(liveRouting!, liveRouting!.codeProvider, registry, {
+        decorate: countProvider,
+        onFailover: onPaidFailover,
+      });
+  if (!run.demo && routingMode === "free") {
+    log("info", "Critical stages: free mode — $0 rotation only; paid rescue disabled.");
   }
   // The live in-memory view of the workspace, restored from the private
   // checkpoint so a resumed run never needs the redacted API copy.
@@ -841,7 +881,12 @@ async function executeRun(
    */
   const writeBuild = async (
     workspacePath: string,
-    incoming: { path: string; purpose: string; contents: string; edits?: FileEdit[] }[],
+    incoming: {
+      path: string;
+      purpose: string;
+      contents: string;
+      edits?: FileEdit[];
+    }[],
     stage: StageId,
     allowedExistingPaths?: Iterable<string>,
   ): Promise<WriteTally> => {
@@ -1164,7 +1209,10 @@ async function executeRun(
         for (const line of ingested.log) log("info", line);
         ingestedWorkspacePath = ingested.path;
         if (ingested.inPlace && ingested.previousBranch) {
-          inPlaceRestore = { path: ingested.path, branch: ingested.previousBranch };
+          inPlaceRestore = {
+            path: ingested.path,
+            branch: ingested.previousBranch,
+          };
         }
         // Record the workspace NOW (not at builder time) so a crash between
         // intake and builder still resumes into the SAME ingested copy.
@@ -2791,7 +2839,10 @@ async function executeRun(
 
     run.status = "completed";
     run.resumable = false;
-    const doneEv = await appendAuditEvent({ type: "run.completed", runId: run.id });
+    const doneEv = await appendAuditEvent({
+      type: "run.completed",
+      runId: run.id,
+    });
     await persistAttribution(testStatus, doneEv.seq);
     // "Complete" describes the PIPELINE, never the outcome. A run whose tests
     // failed or whose work was held back read "Run complete — X is ready",
@@ -2865,7 +2916,10 @@ async function executeRun(
           ? "Run cancelled by user — stopping cleanly. The durable checkpoint is kept; resume to pick up where it left off."
           : "Run cancelled by user — stopping cleanly.",
       );
-      const ev = await appendAuditEvent({ type: "run.cancelled", runId: run.id });
+      const ev = await appendAuditEvent({
+        type: "run.cancelled",
+        runId: run.id,
+      });
       await persistAttribution("not_run", ev.seq).catch(() => {});
     } else if (err instanceof RunTimeoutError) {
       run.status = "failed";
@@ -2979,6 +3033,45 @@ export class RunNotResumableError extends Error {
 // record and start duplicate executions.
 const resumeClaims = new Set<string>();
 
+export type ResumeProviderSwitch = {
+  codeProvider?: ProviderName;
+  reviewProvider?: ProviderName;
+};
+
+/** Resolve a resume-time provider override without allowing a mixed tier. */
+export function selectResumeRouting(
+  run: Pick<RunRecord, "routingMode" | "codeProvider" | "reviewProvider">,
+  providers: ResumeProviderSwitch | undefined,
+  registry: ProviderRegistry,
+  config: AppConfig,
+): ResolvedRunRouting {
+  const requested = [providers?.codeProvider, providers?.reviewProvider].filter(
+    (name): name is ProviderName => Boolean(name),
+  );
+  if (requested.some((name) => OFFLINE_PROVIDERS.has(name))) {
+    throw new MissingProviderCredentialError([
+      "resume provider switch must use a configured live tier",
+    ]);
+  }
+  const asksFree = requested.includes("free");
+  const asksPaid = requested.some(isPaidProvider);
+  if (asksFree && asksPaid) {
+    throw new RunNotResumableError(
+      "Resume provider switch cannot mix Free and Paid tiers in one run.",
+    );
+  }
+  const requestedMode = asksFree ? "free" : asksPaid ? "paid" : run.routingMode;
+  return selectRunRouting(
+    {
+      routingMode: requestedMode,
+      codeProvider: providers?.codeProvider ?? run.codeProvider,
+      reviewProvider: providers?.reviewProvider ?? run.reviewProvider,
+    },
+    registry,
+    config,
+  );
+}
+
 async function assertResumeWorkspace(
   workspaceRoot: string,
   workspacePath: string,
@@ -3019,6 +3112,7 @@ async function prepareResume(
   runId: string,
   config: AppConfig,
   secrets: AppSecrets,
+  providers?: ResumeProviderSwitch,
 ): Promise<{
   run: RunRecord;
   checkpoint: FactoryCheckpoint;
@@ -3055,8 +3149,29 @@ async function prepareResume(
       if (registry.availableLive().length === 0) {
         throw new MissingProviderCredentialError(registry.missingCredentialNames());
       }
-      registry.resolveLive(run.codeProvider, config.defaultCodeProvider);
-      registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);
+      const requested = [providers?.codeProvider, providers?.reviewProvider].filter(
+        (name): name is ProviderName => Boolean(name),
+      );
+      const routing = selectResumeRouting(run, providers, registry, config);
+      run.routingMode = routing.routingMode;
+      run.codeProvider = routing.codeProvider;
+      run.reviewProvider = routing.reviewProvider;
+      checkpoint.options = {
+        ...checkpoint.options,
+        routingMode: routing.routingMode,
+        codeProvider: routing.codeProvider,
+        reviewProvider: routing.reviewProvider,
+      };
+      await saveRunCheckpoint(checkpoint);
+      if (requested.length > 0) {
+        run.logs.push(
+          makeLog(
+            "info",
+            `Provider tier switched on resume: ${routing.routingMode}; code=${routing.codeProvider}, review=${routing.reviewProvider}.`,
+            run.currentStage,
+          ),
+        );
+      }
     }
 
     for (const stage of run.stages) {
@@ -3108,31 +3223,9 @@ export async function resumeRun(
    * was to abandon its paid checkpoint and start over. The override is
    * validated against configured live providers and persisted with the run.
    */
-  providers?: { codeProvider?: ProviderName; reviewProvider?: ProviderName },
+  providers?: ResumeProviderSwitch,
 ): Promise<RunRecord> {
-  const prepared = await prepareResume(runId, config, secrets);
-  if (providers?.codeProvider || providers?.reviewProvider) {
-    const registry = createProviderRegistry(config, secrets);
-    const live = new Set(registry.availableLive());
-    for (const name of [providers.codeProvider, providers.reviewProvider]) {
-      if (name && !live.has(name)) {
-        throw new MissingProviderCredentialError([
-          `provider "${name}" is not configured — cannot resume onto it`,
-        ]);
-      }
-    }
-    if (providers.codeProvider) prepared.run.codeProvider = providers.codeProvider;
-    if (providers.reviewProvider)
-      prepared.run.reviewProvider = providers.reviewProvider;
-    prepared.run.logs.push(
-      makeLog(
-        "info",
-        `Provider switched on resume: code=${prepared.run.codeProvider}, review=${prepared.run.reviewProvider}.`,
-        prepared.run.currentStage,
-      ),
-    );
-    await saveRun(prepared.run);
-  }
+  const prepared = await prepareResume(runId, config, secrets, providers);
   void executeRun(prepared.run, prepared.args, prepared.checkpoint).catch(
     async (err) => {
       await restoreFailedResume(prepared.run, err).catch(() => {});

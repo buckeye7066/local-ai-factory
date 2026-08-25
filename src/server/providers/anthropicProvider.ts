@@ -6,6 +6,12 @@ import type {
   GenerateJsonInput,
 } from "../../shared/types.js";
 import { withRetry, extractJson, generateJsonWithRepair } from "./types.js";
+import {
+  abandonPaidCall,
+  reservePaidCall,
+  settlePaidCall,
+  type PaidCallReservation,
+} from "./paidBudget.js";
 
 /**
  * anthropicProvider.ts — Claude via the official SDK.
@@ -13,11 +19,12 @@ import { withRetry, extractJson, generateJsonWithRepair } from "./types.js";
  * The API key is captured in this closure only and never logged or returned.
  * JSON mode asks for strict JSON and validates with the caller's Zod schema.
  */
-/** Reports token usage for one paid call, so the spend ceiling can see it. */
+/** Reports token usage for the local estimated-USD ledger and telemetry. */
 export type UsageSink = (usage: { inTokens: number; outTokens: number }) => void;
 
 export class AnthropicProvider implements LLMProvider {
   readonly name = "anthropic" as const;
+  readonly paidBudgetManaged: boolean;
   private client: Anthropic | null;
   private model: string;
   private onUsage: UsageSink;
@@ -34,6 +41,7 @@ export class AnthropicProvider implements LLMProvider {
     model: string,
     onUsage: UsageSink = () => {},
     signal?: AbortSignal,
+    paidBudgetManaged = false,
   ) {
     // Explicit apiKey AND baseURL. This is the PAID tier, and the free route
     // sets ANTHROPIC_BASE_URL-shaped configuration elsewhere in this process;
@@ -45,6 +53,7 @@ export class AnthropicProvider implements LLMProvider {
     this.model = model;
     this.onUsage = onUsage;
     this.signal = signal;
+    this.paidBudgetManaged = paidBudgetManaged;
   }
 
   isConfigured(): boolean {
@@ -60,6 +69,33 @@ export class AnthropicProvider implements LLMProvider {
     return this.client;
   }
 
+  private reserve(
+    system: string,
+    prompt: string,
+    maxTokens: number,
+  ): PaidCallReservation | null {
+    return this.paidBudgetManaged
+      ? reservePaidCall(this.name, { system, prompt, maxTokens })
+      : null;
+  }
+
+  private recordUsage(
+    reservation: PaidCallReservation | null,
+    usage: { inTokens: number; outTokens: number },
+  ): void {
+    if (reservation) settlePaidCall(reservation, usage);
+    try {
+      this.onUsage(usage);
+    } catch {
+      // Telemetry/logging is non-billable bookkeeping. A sink failure after a
+      // successful response must never make withRetry buy the same answer again.
+    }
+  }
+
+  private abandon(reservation: PaidCallReservation | null): void {
+    if (reservation) abandonPaidCall(reservation);
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
     const text = await withRetry(
@@ -73,18 +109,26 @@ export class AnthropicProvider implements LLMProvider {
         // may take longer than 10 minutes") - the first real epic's 16k-token
         // planning call died on exactly that. finalMessage() returns the same
         // Message shape, so nothing downstream changes.
-        const res = await client.messages
-          .stream(
-            {
-              model: this.model,
-              max_tokens: input.maxTokens ?? 4096,
-              system: input.system,
-              messages: [{ role: "user", content: input.prompt }],
-            },
-            { signal: this.signal },
-          )
-          .finalMessage();
-        this.onUsage({
+        const maxTokens = input.maxTokens ?? 4096;
+        const reservation = this.reserve(input.system, input.prompt, maxTokens);
+        let res;
+        try {
+          res = await client.messages
+            .stream(
+              {
+                model: this.model,
+                max_tokens: maxTokens,
+                system: input.system,
+                messages: [{ role: "user", content: input.prompt }],
+              },
+              { signal: this.signal },
+            )
+            .finalMessage();
+        } catch (error) {
+          this.abandon(reservation);
+          throw error;
+        }
+        this.recordUsage(reservation, {
           inTokens: res.usage?.input_tokens ?? 0,
           outTokens: res.usage?.output_tokens ?? 0,
         });
@@ -112,18 +156,25 @@ JSON.parse() as-is.`;
     const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> => {
       // Streamed for the same reason as generateText - large max_tokens
       // non-streaming calls are refused by the SDK outright.
-      const res = await client.messages
-        .stream(
-          {
-            model: this.model,
-            max_tokens: maxTokens,
-            system,
-            messages: [{ role: "user", content: prompt }],
-          },
-          { signal: this.signal },
-        )
-        .finalMessage();
-      this.onUsage({
+      const reservation = this.reserve(system, prompt, maxTokens);
+      let res;
+      try {
+        res = await client.messages
+          .stream(
+            {
+              model: this.model,
+              max_tokens: maxTokens,
+              system,
+              messages: [{ role: "user", content: prompt }],
+            },
+            { signal: this.signal },
+          )
+          .finalMessage();
+      } catch (error) {
+        this.abandon(reservation);
+        throw error;
+      }
+      this.recordUsage(reservation, {
         inTokens: res.usage?.input_tokens ?? 0,
         outTokens: res.usage?.output_tokens ?? 0,
       });

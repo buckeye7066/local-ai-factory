@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { z } from "zod";
+import { RoutingModeSchema } from "../../shared/schemas.js";
 
 export const StationIdSchema = z.enum([
   "factory-deck",
@@ -36,30 +37,118 @@ export type StationDefinition = {
 };
 
 export const STATIONS: StationDefinition[] = [
-  { id: "scout", name: "Scout a Program", department: "Discovery Wing", purpose: "Find programs, patterns, and capabilities that could improve the project.", standalone: true, order: 10, color: "blue" },
-  { id: "repo-rewards", name: "Repo Rewards", department: "Discovery Wing", purpose: "Find and evaluate reusable open-source repositories and components.", standalone: true, order: 20, color: "violet" },
-  { id: "promo-pilot", name: "PromoPilot", department: "Market Laboratory", purpose: "Supply market, campaign, attribution, and advertisement evidence.", standalone: true, order: 30, color: "amber" },
-  { id: "factory-deck", name: "Factory Deck", department: "Control Tower", purpose: "Turn the constitution and upstream evidence into the coordinated implementation.", standalone: true, order: 40, color: "cyan" },
-  { id: "flexfactor", name: "FlexFactor", department: "Engineering Floor", purpose: "Inspect, improve, test, repair, and align implementation with purpose.", standalone: true, order: 50, color: "emerald" },
-  { id: "crucible", name: "The Crucible", department: "Adversarial Chamber", purpose: "Assume the work is wrong and independently try to disprove readiness.", standalone: false, order: 60, color: "rose" },
-  { id: "app-store-publisher", name: "App Store Publisher", department: "Shipping Department", purpose: "Package, verify, submit, and record release artifacts.", standalone: true, order: 70, color: "indigo" },
-  { id: "watchtower", name: "Watchtower", department: "Operations", purpose: "Observe deployed behavior and return failures and outcomes to the factory.", standalone: false, order: 80, color: "sky" },
+  {
+    id: "scout",
+    name: "Scout a Program",
+    department: "Discovery Wing",
+    purpose:
+      "Find programs, patterns, and capabilities that could improve the project.",
+    standalone: true,
+    order: 10,
+    color: "blue",
+  },
+  {
+    id: "repo-rewards",
+    name: "Repo Rewards",
+    department: "Discovery Wing",
+    purpose: "Find and evaluate reusable open-source repositories and components.",
+    standalone: true,
+    order: 20,
+    color: "violet",
+  },
+  {
+    id: "promo-pilot",
+    name: "PromoPilot",
+    department: "Market Laboratory",
+    purpose: "Supply market, campaign, attribution, and advertisement evidence.",
+    standalone: true,
+    order: 30,
+    color: "amber",
+  },
+  {
+    id: "factory-deck",
+    name: "Factory Deck",
+    department: "Control Tower",
+    purpose:
+      "Turn the constitution and upstream evidence into the coordinated implementation.",
+    standalone: true,
+    order: 40,
+    color: "cyan",
+  },
+  {
+    id: "flexfactor",
+    name: "FlexFactor",
+    department: "Engineering Floor",
+    purpose: "Inspect, improve, test, repair, and align implementation with purpose.",
+    standalone: true,
+    order: 50,
+    color: "emerald",
+  },
+  {
+    id: "crucible",
+    name: "The Crucible",
+    department: "Adversarial Chamber",
+    purpose: "Assume the work is wrong and independently try to disprove readiness.",
+    standalone: false,
+    order: 60,
+    color: "rose",
+  },
+  {
+    id: "app-store-publisher",
+    name: "App Store Publisher",
+    department: "Shipping Department",
+    purpose: "Package, verify, submit, and record release artifacts.",
+    standalone: true,
+    order: 70,
+    color: "indigo",
+  },
+  {
+    id: "watchtower",
+    name: "Watchtower",
+    department: "Operations",
+    purpose:
+      "Observe deployed behavior and return failures and outcomes to the factory.",
+    standalone: false,
+    order: 80,
+    color: "sky",
+  },
 ];
 
 const StringListSchema = z.array(z.string().trim().min(1)).max(50).default([]);
-export const FoundryIntakeSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-  purpose: z.string().trim().min(1).max(20_000),
-  targetUsers: StringListSchema,
-  successCriteria: StringListSchema,
-  constraints: StringListSchema,
-  nonGoals: StringListSchema,
-  targets: StringListSchema,
-  source: z.enum(["manual", "obsidian", "api"]).default("manual"),
-  sourcePath: z.string().trim().max(2_000).nullable().default(null),
-  sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
-  selectedStations: z.array(StationIdSchema).min(1).default(STATIONS.map((station) => station.id)),
-});
+export const FoundryIntakeSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    purpose: z.string().trim().min(1).max(20_000),
+    targetUsers: StringListSchema,
+    successCriteria: StringListSchema,
+    constraints: StringListSchema,
+    nonGoals: StringListSchema,
+    targets: StringListSchema,
+    source: z.enum(["manual", "obsidian", "api"]).default("manual"),
+    sourcePath: z.string().trim().max(2_000).nullable().default(null),
+    sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
+    /** Explicit owner-selected economic tier; absent preserves legacy defaults. */
+    routingMode: RoutingModeSchema.optional(),
+    selectedStations: z
+      .array(StationIdSchema)
+      .min(1)
+      .default(STATIONS.map((station) => station.id)),
+  })
+  .superRefine((intake, context) => {
+    if (
+      intake.routingMode === "paid" &&
+      intake.selectedStations.every(
+        (station) => station === "scout" || station === "flexfactor",
+      )
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["selectedStations"],
+        message:
+          "Paid Purpose Foundry requires at least one metered internal station; Scout and FlexFactor cannot join the paid-call ledger.",
+      });
+    }
+  });
 export type FoundryIntake = z.infer<typeof FoundryIntakeSchema>;
 
 export const StationRunStatusSchema = z.enum([
@@ -86,7 +175,16 @@ export type StationRun = z.infer<typeof StationRunSchema>;
 export const FoundryProjectSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  status: z.enum(["draft", "queued", "running", "needs_attention", "completed", "failed"]),
+  status: z.enum([
+    "draft",
+    "queued",
+    "running",
+    "needs_attention",
+    "completed",
+    "failed",
+  ]),
+  /** Optional only so projects created before provider tiers still load. */
+  routingMode: RoutingModeSchema.optional(),
   constitution: z.object({
     purpose: z.string(),
     targetUsers: z.array(z.string()),
@@ -132,7 +230,10 @@ function splitList(value: string | undefined): string[] {
 }
 
 /** Parse the deliberately small YAML subset used by Purpose Foundry notes. */
-export function intakeFromMarkdown(markdown: string, sourcePath: string): FoundryIntake {
+export function intakeFromMarkdown(
+  markdown: string,
+  sourcePath: string,
+): FoundryIntake {
   const normalized = markdown.replace(/\r\n/g, "\n");
   const match = normalized.match(/^---\n([\s\S]*?)\n---\n?/);
   const metadata: Record<string, string> = {};
@@ -148,7 +249,8 @@ export function intakeFromMarkdown(markdown: string, sourcePath: string): Foundr
   }
   const body = normalized.slice(match?.[0].length ?? 0).trim();
   const heading = body.match(/^#\s+(.+)$/m)?.[1]?.trim();
-  const name = metadata.project || metadata.name || heading || basename(sourcePath, ".md");
+  const name =
+    metadata.project || metadata.name || heading || basename(sourcePath, ".md");
   const purpose = metadata.purpose || body;
   return FoundryIntakeSchema.parse({
     name,
@@ -161,6 +263,7 @@ export function intakeFromMarkdown(markdown: string, sourcePath: string): Foundr
     source: "obsidian",
     sourcePath,
     sourceMarkdown: normalized,
+    routingMode: metadata.routing_mode || undefined,
   });
 }
 
@@ -182,7 +285,8 @@ export class FoundryStore {
   }
 
   private projectPath(id: string): string {
-    if (!z.string().uuid().safeParse(id).success) throw new Error("Invalid project id.");
+    if (!z.string().uuid().safeParse(id).success)
+      throw new Error("Invalid project id.");
     return join(this.projectsRoot, `${id}.json`);
   }
 
@@ -211,7 +315,10 @@ export class FoundryStore {
       realpath(directory),
     ]);
     const separator = process.platform === "win32" ? "\\" : "/";
-    if (directoryReal !== rootReal && !directoryReal.startsWith(`${rootReal}${separator}`)) {
+    if (
+      directoryReal !== rootReal &&
+      !directoryReal.startsWith(`${rootReal}${separator}`)
+    ) {
       throw new Error("Artifact directory escapes the Foundry data root.");
     }
     const target = join(directory, filename);
@@ -232,11 +339,17 @@ export class FoundryStore {
 
   async list(): Promise<FoundryProject[]> {
     await this.ready();
-    const names = (await readdir(this.projectsRoot)).filter((name) => name.endsWith(".json"));
+    const names = (await readdir(this.projectsRoot)).filter((name) =>
+      name.endsWith(".json"),
+    );
     const projects: FoundryProject[] = [];
     for (const name of names) {
       try {
-        projects.push(FoundryProjectSchema.parse(JSON.parse(await readFile(join(this.projectsRoot, name), "utf8"))));
+        projects.push(
+          FoundryProjectSchema.parse(
+            JSON.parse(await readFile(join(this.projectsRoot, name), "utf8")),
+          ),
+        );
       } catch {
         // A corrupt record is excluded rather than treated as trustworthy state.
       }
@@ -246,17 +359,21 @@ export class FoundryStore {
 
   async get(id: string): Promise<FoundryProject | null> {
     try {
-      return FoundryProjectSchema.parse(JSON.parse(await readFile(this.projectPath(id), "utf8")));
+      return FoundryProjectSchema.parse(
+        JSON.parse(await readFile(this.projectPath(id), "utf8")),
+      );
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") return null;
-      if (error instanceof z.ZodError) throw new Error("Foundry project record is corrupt.");
+      if (error instanceof z.ZodError)
+        throw new Error("Foundry project record is corrupt.");
       throw error;
     }
   }
 
   async create(input: FoundryIntake): Promise<FoundryProject> {
-    const create = this.projectCreates.then(() => this.createUnlocked(input));
+    const parsed = FoundryIntakeSchema.parse(input);
+    const create = this.projectCreates.then(() => this.createUnlocked(parsed));
     this.projectCreates = create.catch(() => undefined);
     return create;
   }
@@ -264,15 +381,35 @@ export class FoundryStore {
   private async createUnlocked(input: FoundryIntake): Promise<FoundryProject> {
     await this.ready();
     if (input.sourcePath) {
-      const existing = (await this.list()).find((project) => project.source.path === input.sourcePath);
-      if (existing && existing.source.contentHash === hashText(input.sourceMarkdown ?? input.purpose)) return existing;
+      const existing = (await this.list()).find(
+        (project) =>
+          project.source.path === input.sourcePath &&
+          project.routingMode === input.routingMode,
+      );
+      if (
+        existing &&
+        existing.source.contentHash === hashText(input.sourceMarkdown ?? input.purpose)
+      )
+        return existing;
     }
     const now = Date.now();
-    const selected = new Set(input.selectedStations);
+    const blockedUnmeteredStations = new Set<StationId>(
+      input.routingMode === "paid"
+        ? input.selectedStations.filter(
+            (station) => station === "scout" || station === "flexfactor",
+          )
+        : [],
+    );
+    const selected = new Set(
+      input.selectedStations.filter(
+        (station) => !blockedUnmeteredStations.has(station),
+      ),
+    );
     const project: FoundryProject = {
       id: randomUUID(),
       name: input.name,
       status: "draft",
+      routingMode: input.routingMode,
       constitution: {
         purpose: input.purpose,
         targetUsers: input.targetUsers,
@@ -299,7 +436,12 @@ export class FoundryStore {
       updatedAt: now,
     };
     await this.save(project);
-    await this.appendEvidence(project.id, "factory-deck", "project.created", { source: project.source, constitution: project.constitution });
+    await this.appendEvidence(project.id, "factory-deck", "project.created", {
+      source: project.source,
+      constitution: project.constitution,
+      routingMode: project.routingMode ?? "legacy-default",
+      blockedUnmeteredStations: [...blockedUnmeteredStations],
+    });
     return project;
   }
 
@@ -308,11 +450,19 @@ export class FoundryStore {
     const parsed = FoundryProjectSchema.parse({ ...project, updatedAt: Date.now() });
     const target = this.projectPath(parsed.id);
     const temporary = `${target}.${randomUUID()}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(parsed, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await writeFile(temporary, `${JSON.stringify(parsed, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     await rename(temporary, target);
   }
 
-  async appendEvidence(projectId: string, stationId: StationId, type: string, payload: unknown): Promise<EvidenceEvent> {
+  async appendEvidence(
+    projectId: string,
+    stationId: StationId,
+    type: string,
+    payload: unknown,
+  ): Promise<EvidenceEvent> {
     const write = this.ledgerWrites.then(() =>
       this.appendEvidenceUnlocked(projectId, stationId, type, payload),
     );
@@ -322,11 +472,19 @@ export class FoundryStore {
     return write;
   }
 
-  private async appendEvidenceUnlocked(projectId: string, stationId: StationId, type: string, payload: unknown): Promise<EvidenceEvent> {
+  private async appendEvidenceUnlocked(
+    projectId: string,
+    stationId: StationId,
+    type: string,
+    payload: unknown,
+  ): Promise<EvidenceEvent> {
     await this.ready();
     let previous: EvidenceEvent | null = null;
     try {
-      const lines = (await readFile(this.ledgerPath, "utf8")).trim().split("\n").filter(Boolean);
+      const lines = (await readFile(this.ledgerPath, "utf8"))
+        .trim()
+        .split("\n")
+        .filter(Boolean);
       if (lines.length) previous = JSON.parse(lines[lines.length - 1]) as EvidenceEvent;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -340,7 +498,10 @@ export class FoundryStore {
       payload,
       previousHash: previous?.hash ?? null,
     };
-    const event: EvidenceEvent = { ...unsigned, hash: hashText(JSON.stringify(unsigned)) };
+    const event: EvidenceEvent = {
+      ...unsigned,
+      hash: hashText(JSON.stringify(unsigned)),
+    };
     await appendFile(this.ledgerPath, `${JSON.stringify(event)}\n`, {
       encoding: "utf8",
       mode: 0o600,
@@ -348,7 +509,9 @@ export class FoundryStore {
     return event;
   }
 
-  async importObsidianInbox(inbox: string): Promise<{ imported: number; unchanged: number; errors: string[] }> {
+  async importObsidianInbox(
+    inbox: string,
+  ): Promise<{ imported: number; unchanged: number; errors: string[] }> {
     const root = resolve(inbox);
     const info = await stat(root);
     if (!info.isDirectory()) throw new Error("Obsidian inbox is not a directory.");
@@ -363,19 +526,28 @@ export class FoundryStore {
         continue;
       }
       const path = resolve(root, entry.name);
-      if (!path.startsWith(`${root}${process.platform === "win32" ? "\\" : "/"}`)) continue;
+      if (!path.startsWith(`${root}${process.platform === "win32" ? "\\" : "/"}`))
+        continue;
       try {
         const markdown = await readFile(path, "utf8");
         const normalized = markdown.replace(/\r\n/g, "\n");
         const contentHash = hashText(normalized);
-        if (existing.some((project) => project.source.path === path && project.source.contentHash === contentHash)) {
+        if (
+          existing.some(
+            (project) =>
+              project.source.path === path &&
+              project.source.contentHash === contentHash,
+          )
+        ) {
           unchanged += 1;
           continue;
         }
         await this.create(intakeFromMarkdown(normalized, path));
         imported += 1;
       } catch (error) {
-        errors.push(`${entry.name}: ${error instanceof Error ? error.message : "import failed"}`);
+        errors.push(
+          `${entry.name}: ${error instanceof Error ? error.message : "import failed"}`,
+        );
       }
     }
     return { imported, unchanged, errors };

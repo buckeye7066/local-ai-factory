@@ -12,6 +12,7 @@ import {
   JsonExtractionError,
 } from "./types.js";
 import type { UsageSink } from "./anthropicProvider.js";
+import { abandonPaidCall, reservePaidCall, settlePaidCall } from "./paidBudget.js";
 
 /**
  * openaiProvider.ts — OpenAI via the official SDK's Responses API.
@@ -21,6 +22,7 @@ import type { UsageSink } from "./anthropicProvider.js";
  */
 export class OpenAIProvider implements LLMProvider {
   readonly name = "openai" as const;
+  readonly paidBudgetManaged: boolean;
   private client: OpenAI | null;
   private model: string;
   private onUsage: UsageSink;
@@ -37,6 +39,7 @@ export class OpenAIProvider implements LLMProvider {
     model: string,
     onUsage: UsageSink = () => {},
     signal?: AbortSignal,
+    paidBudgetManaged = false,
   ) {
     // Explicit apiKey AND baseURL — same reasoning as the Anthropic tier. An
     // empty-but-PRESENT OPENAI_BASE_URL in the environment is honoured by the
@@ -48,6 +51,7 @@ export class OpenAIProvider implements LLMProvider {
     this.model = model;
     this.onUsage = onUsage;
     this.signal = signal;
+    this.paidBudgetManaged = paidBudgetManaged;
   }
 
   isConfigured(): boolean {
@@ -61,26 +65,61 @@ export class OpenAIProvider implements LLMProvider {
     return this.client;
   }
 
+  private async bill<T>(
+    system: string,
+    prompt: string,
+    maxTokens: number,
+    call: () => Promise<T>,
+    usageOf: (response: T) => { inTokens: number; outTokens: number },
+  ): Promise<T> {
+    const reservation = this.paidBudgetManaged
+      ? reservePaidCall(this.name, { system, prompt, maxTokens })
+      : null;
+    let response: T;
+    try {
+      response = await call();
+    } catch (error) {
+      if (reservation) abandonPaidCall(reservation);
+      throw error;
+    }
+    const usage = usageOf(response);
+    if (reservation) settlePaidCall(reservation, usage);
+    try {
+      this.onUsage(usage);
+    } catch {
+      // A telemetry/logging failure occurs after the provider billed and
+      // answered. It must not escape into withRetry and duplicate that call.
+    }
+    return response;
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
     const text = await withRetry(
       "openai.generateText",
       async () => {
+        const maxTokens = input.maxTokens ?? 4096;
         // NOTE: no `temperature` — gpt-5.x reasoning models reject it (400),
         // same as current Claude models. Model defaults are used instead.
-        const res = await client.responses.create(
-          {
-            model: this.model,
-            instructions: input.system,
-            input: input.prompt,
-            max_output_tokens: input.maxTokens ?? 4096,
-          },
-          { signal: this.signal },
+        const res = await this.bill(
+          input.system,
+          input.prompt,
+          maxTokens,
+          () =>
+            client.responses.create(
+              {
+                model: this.model,
+                instructions: input.system,
+                input: input.prompt,
+                max_output_tokens: maxTokens,
+              },
+              { signal: this.signal },
+            ),
+          (response) => ({
+            inTokens: response.usage?.input_tokens ?? 0,
+            outTokens: response.usage?.output_tokens ?? 0,
+          }),
         );
-        this.onUsage({
-          inTokens: res.usage?.input_tokens ?? 0,
-          outTokens: res.usage?.output_tokens ?? 0,
-        });
         return res.output_text ?? "";
       },
       3,
@@ -99,20 +138,26 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
     const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> => {
       // Prefer json_object when the Responses API accepts it; fall back plain.
       try {
-        const res = await client.responses.create(
-          {
-            model: this.model,
-            instructions,
-            input: prompt,
-            max_output_tokens: maxTokens,
-            text: { format: { type: "json_object" } },
-          },
-          { signal: this.signal },
+        const res = await this.bill(
+          instructions,
+          prompt,
+          maxTokens,
+          () =>
+            client.responses.create(
+              {
+                model: this.model,
+                instructions,
+                input: prompt,
+                max_output_tokens: maxTokens,
+                text: { format: { type: "json_object" } },
+              },
+              { signal: this.signal },
+            ),
+          (response) => ({
+            inTokens: response.usage?.input_tokens ?? 0,
+            outTokens: response.usage?.output_tokens ?? 0,
+          }),
         );
-        this.onUsage({
-          inTokens: res.usage?.input_tokens ?? 0,
-          outTokens: res.usage?.output_tokens ?? 0,
-        });
         return extractJson(res.output_text ?? "");
       } catch (err) {
         // An aborted call must propagate as-is — the format-fallback retry
@@ -125,19 +170,25 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
         if (err instanceof JsonExtractionError) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         if (/format|json_object|text\.format|unsupported/i.test(msg)) {
-          const res = await client.responses.create(
-            {
-              model: this.model,
-              instructions,
-              input: prompt,
-              max_output_tokens: maxTokens,
-            },
-            { signal: this.signal },
+          const res = await this.bill(
+            instructions,
+            prompt,
+            maxTokens,
+            () =>
+              client.responses.create(
+                {
+                  model: this.model,
+                  instructions,
+                  input: prompt,
+                  max_output_tokens: maxTokens,
+                },
+                { signal: this.signal },
+              ),
+            (response) => ({
+              inTokens: response.usage?.input_tokens ?? 0,
+              outTokens: response.usage?.output_tokens ?? 0,
+            }),
           );
-          this.onUsage({
-            inTokens: res.usage?.input_tokens ?? 0,
-            outTokens: res.usage?.output_tokens ?? 0,
-          });
           return extractJson(res.output_text ?? "");
         }
         throw err;

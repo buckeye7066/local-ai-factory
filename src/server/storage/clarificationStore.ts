@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ClarificationHistoryItem } from "../agents/clarificationAgent.js";
+import type { RoutingMode } from "../../shared/schemas.js";
 
 /**
  * clarificationStore.ts — in-memory session state for the yes/no clarification
@@ -13,6 +14,8 @@ const MAX_QUESTIONS = 8;
 export interface ClarificationSession {
   id: string;
   initialRequest: string;
+  /** Economic tier pinned when the session starts; answers cannot cross it. */
+  routingMode: RoutingMode;
   history: ClarificationHistoryItem[];
   status: "active" | "confident" | "abandoned";
   currentQuestion: string | null;
@@ -23,11 +26,15 @@ export interface ClarificationSession {
 
 const sessions = new Map<string, ClarificationSession>();
 
-export function createSession(initialRequest: string): ClarificationSession {
+export function createSession(
+  initialRequest: string,
+  routingMode: RoutingMode,
+): ClarificationSession {
   const now = Date.now();
   const session: ClarificationSession = {
     id: randomUUID(),
     initialRequest,
+    routingMode,
     history: [],
     status: "active",
     currentQuestion: null,
@@ -45,7 +52,7 @@ export function getSession(id: string): ClarificationSession | null {
 
 export function updateSession(
   id: string,
-  patch: Partial<Omit<ClarificationSession, "id" | "createdAt">>,
+  patch: Partial<Omit<ClarificationSession, "id" | "createdAt" | "routingMode">>,
 ): ClarificationSession | null {
   const s = sessions.get(id);
   if (!s) return null;

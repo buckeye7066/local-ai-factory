@@ -9,6 +9,8 @@ import {
   isValidRunId,
   repoNameProblem,
   ProviderNameSchema,
+  RoutingModeSchema,
+  type RoutingMode,
   type RunSummary,
 } from "../shared/schemas.js";
 import {
@@ -18,6 +20,8 @@ import {
   resumeFactory as resumeFactoryFull,
   MissingProviderCredentialError,
   RunNotResumableError,
+  createTierProvider,
+  selectRunRouting,
 } from "./orchestrator/runFactory.js";
 import { requestCancel } from "./orchestrator/cancellation.js";
 import {
@@ -159,9 +163,24 @@ app.get("/api/route", (_req, res) => {
  * list the client passes into POST /api/runs as options.goals with
  * options.mode="extend".
  */
-function clarificationProvider() {
+function interactiveProvider(routingMode?: RoutingMode) {
   const registry = createProviderRegistry(config, secrets);
-  return registry.resolveLive(undefined, config.defaultCodeProvider);
+  const routing = selectRunRouting({ routingMode }, registry, config);
+  return {
+    routingMode: routing.routingMode,
+    provider: createTierProvider(routing, routing.codeProvider, registry),
+  };
+}
+
+function respondProviderUnavailable(res: Response, err: unknown): boolean {
+  if (!(err instanceof MissingProviderCredentialError)) return false;
+  res.status(409).json({
+    error: err.message,
+    missing: err.missing,
+    blocked: true,
+    hint: "Enable the selected Free route or configure at least one Paid provider, then retry. Factory Deck will not cross economic tiers automatically.",
+  });
+  return true;
 }
 
 app.post(
@@ -175,9 +194,23 @@ app.post(
       res.status(400).json({ error: "Field 'initialRequest' is required." });
       return;
     }
-    const session = createSession(initialRequest);
+    const parsedMode = RoutingModeSchema.optional().safeParse(req.body?.routingMode);
+    if (!parsedMode.success) {
+      res.status(400).json({ error: "Field 'routingMode' must be 'free' or 'paid'." });
+      return;
+    }
+    let selected;
+    try {
+      selected = interactiveProvider(parsedMode.data);
+    } catch (err) {
+      if (respondProviderUnavailable(res, err)) return;
+      throw err;
+    }
+    // Persist the resolved tier, including legacy/default inference when an
+    // older client omitted routingMode. Every later answer stays in this tier.
+    const session = createSession(initialRequest, selected.routingMode);
     const turn = await clarificationAgent(
-      { provider: clarificationProvider() },
+      { provider: selected.provider },
       { initialRequest, history: [] },
     );
     updateSession(session.id, {
@@ -229,20 +262,29 @@ app.post(
       { question: session.currentQuestion, answer },
     ];
     const forceConfident = history.length >= questionCap();
-    const turn = forceConfident
-      ? {
-          confident: true,
-          nextQuestion: null,
-          rationale: `Reached the ${questionCap()}-question cap — proceeding with what's known.`,
-          refinedGoals: [
-            session.initialRequest,
-            ...history.map((h) => `${h.question} -> ${h.answer}`),
-          ],
-        }
-      : await clarificationAgent(
-          { provider: clarificationProvider() },
+    let turn;
+    if (forceConfident) {
+      turn = {
+        confident: true,
+        nextQuestion: null,
+        rationale: `Reached the ${questionCap()}-question cap — proceeding with what's known.`,
+        refinedGoals: [
+          session.initialRequest,
+          ...history.map((h) => `${h.question} -> ${h.answer}`),
+        ],
+      };
+    } else {
+      try {
+        const selected = interactiveProvider(session.routingMode);
+        turn = await clarificationAgent(
+          { provider: selected.provider },
           { initialRequest: session.initialRequest, history },
         );
+      } catch (err) {
+        if (respondProviderUnavailable(res, err)) return;
+        throw err;
+      }
+    }
     updateSession(sessionId, {
       history,
       status: turn.confident ? "confident" : "active",
@@ -452,31 +494,17 @@ function epicDeps(): EpicDeps {
       underWorkTheme(resumeWorkTheme(await getRun(runId), runId, "epic-resume"), () =>
         resumeFactoryFull(runId, config, secrets),
       ),
-    plan: async (idea) => {
-      // FREE PRIMARY, PAID RESCUE, AND BOUNDED -- the same shape every other
-      // call site uses (resolveLive(undefined, config.defaultCodeProvider)).
-      //
-      // This preferred `availablePaid()[0]`, so epic planning ignored
-      // defaultCodeProvider ('free') and went straight to Anthropic.
-      // `anthropicConfigured: true` only says a KEY EXISTS -- it says nothing
-      // about credit. Measured 2026-08-20: two real epics died in ~350ms with
-      // "Your credit balance is too low to access the Anthropic API" while a
-      // healthy free route sat idle at 127.0.0.1:8082 and the launcher banner
-      // promised "all model calls are free". A dead paid key silently killed
-      // the epic, and free must never silently become paid.
-      //
-      // The original concern was real -- a small free model once produced a
-      // 15-minute planning crawl -- but an epic that dies in 350ms is worse
-      // than a slow plan, and this deployment's free route proxies a frontier
-      // model rather than a small local one. Paid is the RESCUE now, and a
-      // rescue that also fails reports BOTH failures, not just the last.
-      //
-      // BOUNDED: planning had no timeout at all. Measured the same day, one
-      // epic sat in status "planning" for 88 minutes with a single call in
-      // flight and no failure, no progress, and no signal to the operator. An
-      // unbounded wait is indistinguishable from a hang.
-      const planTimeoutMs = Number(process.env.FACTORY_PLAN_TIMEOUT_MS ?? 20 * 60 * 1000);
-      const withPlanTimeout = async <T>(label: string, work: Promise<T>): Promise<T> => {
+    plan: async (idea, options) => {
+      // Planning obeys the same owner-selected economic tier as every slice.
+      // Free never rescues to paid; Paid may rotate only among configured paid
+      // providers on a narrow quota refusal. Both paths remain time-bounded.
+      const planTimeoutMs = Number(
+        process.env.FACTORY_PLAN_TIMEOUT_MS ?? 20 * 60 * 1000,
+      );
+      const withPlanTimeout = async <T>(
+        label: string,
+        work: Promise<T>,
+      ): Promise<T> => {
         let timer: NodeJS.Timeout | undefined;
         const started = Date.now();
         try {
@@ -484,11 +512,16 @@ function epicDeps(): EpicDeps {
             work,
             new Promise<never>((_, reject) => {
               timer = setTimeout(
-                () => reject(new Error(
-                  `${label} planning exceeded ${Math.round(planTimeoutMs / 1000)}s `
-                  + `(waited ${Math.round((Date.now() - started) / 1000)}s) and was abandoned. `
-                  + `Raise FACTORY_PLAN_TIMEOUT_MS if this route is simply slow.`,
-                )),
+                () =>
+                  reject(
+                    new Error(
+                      `${label} planning exceeded ${Math.round(
+                        planTimeoutMs / 1000,
+                      )}s (waited ${Math.round(
+                        (Date.now() - started) / 1000,
+                      )}s) and was abandoned. Raise FACTORY_PLAN_TIMEOUT_MS if this route is simply slow.`,
+                    ),
+                  ),
                 planTimeoutMs,
               );
               timer.unref?.();
@@ -500,26 +533,12 @@ function epicDeps(): EpicDeps {
       };
 
       const registry = createProviderRegistry(config, secrets);
-      const primary = registry.resolveLive(undefined, config.defaultCodeProvider);
-      try {
-        return await withPlanTimeout("free", epicPlannerAgent({ provider: primary }, { idea }));
-      } catch (primaryErr) {
-        const paid = registry.availablePaid();
-        if (paid.length === 0) throw primaryErr;
-        try {
-          const rescue = registry.resolveLive(paid[0], config.defaultCodeProvider);
-          return await withPlanTimeout(
-            `paid(${paid[0]})`,
-            epicPlannerAgent({ provider: rescue }, { idea }),
-          );
-        } catch (rescueErr) {
-          throw new Error(
-            `planning failed on the free route and on the paid rescue. `
-            + `free: ${String((primaryErr as Error)?.message ?? primaryErr)} | `
-            + `paid(${paid[0]}): ${String((rescueErr as Error)?.message ?? rescueErr)}`,
-          );
-        }
-      }
+      const routing = selectRunRouting(options, registry, config);
+      const provider = createTierProvider(routing, routing.codeProvider, registry);
+      return withPlanTimeout(
+        `${routing.routingMode}(${routing.codeProvider})`,
+        epicPlannerAgent({ provider }, { idea }),
+      );
     },
     config,
     secrets,
@@ -541,6 +560,15 @@ app.post(
         .status(400)
         .json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
       return;
+    }
+    // Validate the selected economic tier before returning 202. Previously a
+    // missing Paid key or disabled Free route failed only in the background,
+    // leaving an accepted-but-dead epic instead of an explicit blocked reply.
+    try {
+      selectRunRouting(parsed.data, createProviderRegistry(config, secrets), config);
+    } catch (err) {
+      if (respondProviderUnavailable(res, err)) return;
+      throw err;
     }
     const deps = epicDeps();
     // Respond immediately: planning alone can take minutes on the free route.
@@ -713,7 +741,11 @@ function isFinished(status: string): boolean {
 async function deleteRunAndWorkspace(
   run: { id: string; workspacePath: string | null },
   liveWorkspaces: Set<string>,
-): Promise<{ runId: string; workspaceRemoved: boolean; workspaceNote: string }> {
+): Promise<{
+  runId: string;
+  workspaceRemoved: boolean;
+  workspaceNote: string;
+}> {
   let workspaceRemoved = false;
   let workspaceNote = "No workspace directory recorded.";
   if (run.workspacePath) {
@@ -920,7 +952,10 @@ void pruneOldRuns().then((n) => {
 // Decide the bind interface. Default is loopback (127.0.0.1) so run history and
 // generated file contents are NOT reachable from other LAN devices. LAN binding
 // is an explicit opt-in (FACTORY_BIND_LAN=1) and is refused without a token.
-const bind = resolveBindHost({ bindLan: config.bindLan, token: secrets.authToken });
+const bind = resolveBindHost({
+  bindLan: config.bindLan,
+  token: secrets.authToken,
+});
 if (bind.error) {
   console.error(`[factory] ${bind.error}`);
   process.exit(FATAL_EXIT_CODE);

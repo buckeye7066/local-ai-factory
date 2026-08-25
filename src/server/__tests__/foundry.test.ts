@@ -1,11 +1,11 @@
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FoundryAdapters,
-  FOUNDRY_FLEXFACTOR_PROVIDER_RE,
+  createFoundryTierProvider,
   repoRewardsQuery,
   repoSourceFromTarget,
 } from "../foundry/adapters.js";
@@ -13,25 +13,207 @@ import {
   EXTEND_PERSISTENCE_CONTRACT,
   withExtendPersistenceGoals,
 } from "../orchestrator/composeExtendIdea.js";
-import {
-  FoundryStore,
-  STATIONS,
-  intakeFromMarkdown,
-} from "../foundry/model.js";
+import { FoundryStore, STATIONS, intakeFromMarkdown } from "../foundry/model.js";
+import { loadConfig } from "../config.js";
+import type { ProviderRegistry } from "../providers/index.js";
+import type { LLMProvider } from "../../shared/types.js";
+import type { ProviderName } from "../../shared/schemas.js";
+import { resetPaidBudget } from "../providers/paidBudget.js";
+
+function providerRegistry(providers: LLMProvider[]): ProviderRegistry {
+  const byName = new Map(providers.map((provider) => [provider.name, provider]));
+  const missing = (name: ProviderName) =>
+    ({ name, isConfigured: () => false }) as LLMProvider;
+  const get = (name: ProviderName) => byName.get(name) ?? missing(name);
+  const configured = providers.map((provider) => provider.name);
+  const paid = configured.filter(
+    (name): name is "anthropic" | "openai" => name === "anthropic" || name === "openai",
+  );
+  return {
+    get,
+    resolve: (requested, fallback) => get(requested ?? fallback),
+    resolveLive: (requested, fallback) => get(requested ?? fallback),
+    available: () => configured,
+    availableLive: () =>
+      configured.filter((name) => name !== "mock" && name !== "stub"),
+    availablePaid: () => paid,
+    missingCredentialNames: () => [],
+  };
+}
+
+function callable(name: ProviderName, fail = false): LLMProvider & { calls: number } {
+  const provider = {
+    name,
+    calls: 0,
+    isConfigured: () => true,
+    async generateText() {
+      provider.calls += 1;
+      if (fail) throw new Error(`${name} failed`);
+      return { text: "ok", provider: name };
+    },
+    async generateJson<T>() {
+      provider.calls += 1;
+      if (fail) throw new Error(`${name} failed`);
+      return {} as T;
+    },
+  };
+  return provider;
+}
 
 describe("Purpose Foundry", () => {
-  it("accepts FlexFactor xai and grok providers used by Factory Deck paid routes", () => {
-    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("ollama")).toBe(true);
-    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("anthropic")).toBe(true);
-    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("openai")).toBe(true);
-    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("xai")).toBe(true);
-    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("grok")).toBe(true);
-    expect(FOUNDRY_FLEXFACTOR_PROVIDER_RE.test("azure")).toBe(false);
+  it("pins Paid routing, omits unmetered children, and retains internal stations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown(
+        "---\nproject: Safe Line\npurpose: Ship safely\nrouting_mode: paid\n---\n# Safe Line",
+        "C:/Vault/Safe-Line.md",
+      ),
+    );
+
+    expect(project.routingMode).toBe("paid");
+    expect((await store.get(project.id))?.routingMode).toBe("paid");
+    expect(
+      project.stations.find((station) => station.stationId === "scout")?.status,
+    ).toBe("not_selected");
+    expect(
+      project.stations.find((station) => station.stationId === "flexfactor")?.status,
+    ).toBe("not_selected");
+    expect(
+      project.stations.find((station) => station.stationId === "factory-deck")?.status,
+    ).toBe("queued");
+    expect(
+      project.stations.find((station) => station.stationId === "crucible")?.status,
+    ).toBe("queued");
+    const createdEvent = JSON.parse(
+      (await readFile(join(root, "evidence.jsonl"), "utf8")).trim(),
+    ) as { payload: { blockedUnmeteredStations?: string[] } };
+    expect(createdEvent.payload.blockedUnmeteredStations).toEqual([
+      "scout",
+      "flexfactor",
+    ]);
+  });
+
+  it("rejects a Paid project containing only unmetered child stations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const intake = intakeFromMarkdown(
+      "# Empty Paid Line\nDo paid work.",
+      "C:/Vault/Empty-Paid-Line.md",
+    );
+
+    await expect(
+      store.create({
+        ...intake,
+        routingMode: "paid",
+        selectedStations: ["scout", "flexfactor"],
+      }),
+    ).rejects.toThrow(/requires at least one metered internal station/i);
+    expect(await store.list()).toHaveLength(0);
+  });
+
+  it("keeps a Free Foundry model call off every configured paid provider", async () => {
+    const free = callable("free", true);
+    const paid = callable("openai");
+    const registry = providerRegistry([free, paid]);
+    const config = loadConfig({
+      FACTORY_FREE_ENABLED: "true",
+      DEFAULT_CODE_PROVIDER: "openai",
+      DEFAULT_REVIEW_PROVIDER: "openai",
+    });
+    const selected = createFoundryTierProvider("free", registry, config, "review");
+
+    await expect(
+      selected.provider.generateText({ system: "", prompt: "" }),
+    ).rejects.toThrow("free failed");
+    expect(selected.routing.routingMode).toBe("free");
+    expect(free.calls).toBe(1);
+    expect(paid.calls).toBe(0);
+  });
+
+  it("budget-gates a Paid Foundry model before the provider can spend", async () => {
+    const dataDir = ".vitest-factory-data-foundry-routing";
+    const previousDir = process.env.FACTORY_DATA_DIR;
+    const previousDay = process.env.FACTORY_PAID_RESCUES_PER_DAY;
+    process.env.FACTORY_DATA_DIR = dataDir;
+    process.env.FACTORY_PAID_RESCUES_PER_DAY = "0";
+    await rm(resolve(process.cwd(), dataDir), { recursive: true, force: true });
+    resetPaidBudget();
+    try {
+      const paid = callable("openai");
+      const registry = providerRegistry([paid]);
+      const config = loadConfig({
+        FACTORY_FREE_ENABLED: "false",
+        DEFAULT_CODE_PROVIDER: "openai",
+        DEFAULT_REVIEW_PROVIDER: "openai",
+      });
+      const selected = createFoundryTierProvider("paid", registry, config, "review");
+
+      await expect(
+        selected.provider.generateText({ system: "", prompt: "" }),
+      ).rejects.toThrow(/Paid provider call refused/i);
+      expect(paid.calls).toBe(0);
+    } finally {
+      if (previousDir === undefined) delete process.env.FACTORY_DATA_DIR;
+      else process.env.FACTORY_DATA_DIR = previousDir;
+      if (previousDay === undefined) delete process.env.FACTORY_PAID_RESCUES_PER_DAY;
+      else process.env.FACTORY_PAID_RESCUES_PER_DAY = previousDay;
+      resetPaidBudget();
+    }
+  });
+
+  it("forwards the resolved Paid tier to Factory Deck's run API", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create({
+      ...intakeFromMarkdown(
+        "# Metered-Build\nBuild through Factory Deck.",
+        "C:/Vault/Metered-Build.md",
+      ),
+      routingMode: "paid",
+      selectedStations: ["factory-deck", "crucible"],
+    });
+    const posted: Array<{ options?: Record<string, unknown> }> = [];
+    const adapters = new FoundryAdapters(store, {
+      config: () =>
+        loadConfig({
+          FACTORY_FREE_ENABLED: "false",
+          DEFAULT_CODE_PROVIDER: "openai",
+          DEFAULT_REVIEW_PROVIDER: "openai",
+        }),
+      providerRegistry: () => providerRegistry([callable("openai")]),
+      fetch: async (_url, init) => {
+        posted.push(
+          JSON.parse(String(init?.body)) as {
+            options?: Record<string, unknown>;
+          },
+        );
+        return new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    await expect(adapters.execute(project, "factory-deck")).rejects.toThrow(
+      /did not return a run id/i,
+    );
+    expect(posted[0]?.options).toMatchObject({
+      routingMode: "paid",
+      codeProvider: "openai",
+      reviewProvider: "openai",
+    });
   });
 
   it("uses the directed FlexFactor run script by default in descriptors and process mode", async () => {
     const previousScript = process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
+    const previousProvider = process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER;
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
     delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
+    // A stale operator override is adversarial input now: strict Free must
+    // ignore it and force the unmetered child to local Ollama.
+    process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER = "anthropic";
+    process.env.OPENAI_API_KEY = "paid-secret-must-not-reach-free-child";
     try {
       const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
       const store = new FoundryStore(root);
@@ -42,9 +224,18 @@ describe("Purpose Foundry", () => {
         ),
       );
       let receivedArgs: string[] = [];
+      let receivedEnv: NodeJS.ProcessEnv | undefined;
       const adapters = new FoundryAdapters(store, {
-        processRunner: async (_python, args) => {
+        config: () =>
+          loadConfig({
+            FACTORY_FREE_ENABLED: "true",
+            DEFAULT_CODE_PROVIDER: "free",
+            DEFAULT_REVIEW_PROVIDER: "free",
+          }),
+        providerRegistry: () => providerRegistry([callable("free")]),
+        processRunner: async (_python, args, options) => {
           receivedArgs = args;
+          receivedEnv = options.env;
           return { stdout: "ok", stderr: "", exitCode: 0 };
         },
       });
@@ -60,11 +251,53 @@ describe("Purpose Foundry", () => {
 
       await adapters.execute(project, "scout");
       expect(receivedArgs[0]).toBe(directedScript);
+      expect(receivedArgs).toContain("ollama");
+      expect(receivedArgs).not.toContain("anthropic");
+      expect(receivedEnv?.OPENAI_API_KEY).toBeUndefined();
+      expect(receivedEnv?.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER).toBeUndefined();
     } finally {
       if (previousScript === undefined)
         delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
       else process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT = previousScript;
+      if (previousProvider === undefined)
+        delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER;
+      else process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER = previousProvider;
+      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousOpenAiKey;
     }
+  });
+
+  it("fails closed before launching an unmetered Paid FlexFactor child", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create({
+      ...intakeFromMarkdown(
+        "---\nproject: Paid Line\npurpose: Review the app\ntargets: buckeye7066/local-ai-factory\n---\n# Paid Line",
+        "C:/Vault/Paid-Line.md",
+      ),
+      routingMode: "paid",
+    });
+    project.stations.find((station) => station.stationId === "flexfactor")!.status =
+      "queued";
+    let processCalls = 0;
+    const adapters = new FoundryAdapters(store, {
+      config: () =>
+        loadConfig({
+          FACTORY_FREE_ENABLED: "true",
+          DEFAULT_CODE_PROVIDER: "free",
+          DEFAULT_REVIEW_PROVIDER: "free",
+        }),
+      providerRegistry: () => providerRegistry([callable("free"), callable("openai")]),
+      processRunner: async () => {
+        processCalls += 1;
+        return { stdout: "unexpected", stderr: "", exitCode: 0 };
+      },
+    });
+
+    await expect(adapters.execute(project, "flexfactor")).rejects.toThrow(
+      /external child process cannot participate/i,
+    );
+    expect(processCalls).toBe(0);
   });
 
   it("turns an Obsidian note into a versioned project constitution", async () => {
@@ -82,17 +315,11 @@ describe("Purpose Foundry", () => {
     expect(project.stations).toHaveLength(STATIONS.length);
     expect(project.stations[0].stationId).toBe("scout");
     expect(
-      project.stations.findIndex(
-        (station) => station.stationId === "factory-deck",
-      ),
+      project.stations.findIndex((station) => station.stationId === "factory-deck"),
     ).toBeGreaterThan(
-      project.stations.findIndex(
-        (station) => station.stationId === "promo-pilot",
-      ),
+      project.stations.findIndex((station) => station.stationId === "promo-pilot"),
     );
-    expect(
-      project.stations.every((station) => station.status === "queued"),
-    ).toBe(true);
+    expect(project.stations.every((station) => station.status === "queued")).toBe(true);
   });
 
   it("deduplicates an unchanged Obsidian note and hash-chains evidence", async () => {
@@ -112,10 +339,7 @@ describe("Purpose Foundry", () => {
     const lines = (await readFile(join(root, "evidence.jsonl"), "utf8"))
       .trim()
       .split("\n")
-      .map(
-        (line) =>
-          JSON.parse(line) as { hash: string; previousHash: string | null },
-      );
+      .map((line) => JSON.parse(line) as { hash: string; previousHash: string | null });
     expect(lines).toHaveLength(2);
     expect(lines[1].previousHash).toBe(lines[0].hash);
   });
@@ -150,9 +374,7 @@ describe("Purpose Foundry", () => {
     expect(lines).toHaveLength(13);
     lines.forEach((event, index) => {
       expect(event.sequence).toBe(index + 1);
-      expect(event.previousHash).toBe(
-        index === 0 ? null : lines[index - 1].hash,
-      );
+      expect(event.previousHash).toBe(index === 0 ? null : lines[index - 1].hash);
     });
   });
 
@@ -186,9 +408,7 @@ describe("Purpose Foundry", () => {
     const first = await store.importObsidianInbox(inbox);
     const second = await store.importObsidianInbox(inbox);
     expect(first.imported).toBe(1);
-    expect(first.errors.some((error) => error.startsWith("outside.md:"))).toBe(
-      true,
-    );
+    expect(first.errors.some((error) => error.startsWith("outside.md:"))).toBe(true);
     expect(second.imported).toBe(0);
     expect(second.unchanged).toBe(1);
     expect(await store.list()).toHaveLength(1);
@@ -225,13 +445,10 @@ describe("Purpose Foundry", () => {
     const adapters = new FoundryAdapters(store, {
       fetch: async (_url, init) => {
         posted = JSON.parse(String(init?.body));
-        return new Response(
-          JSON.stringify({ results: [{ name: "useful/repo" }] }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        );
+        return new Response(JSON.stringify({ results: [{ name: "useful/repo" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       },
     });
     const outcome = await adapters.execute(project, "repo-rewards");
@@ -247,9 +464,7 @@ describe("Purpose Foundry", () => {
       store.writeArtifact(project.id, "repo-rewards", "../escape.json", {}),
     ).rejects.toThrow("Invalid artifact filename");
 
-    const outside = await mkdtemp(
-      join(tmpdir(), "purpose-foundry-artifact-outside-"),
-    );
+    const outside = await mkdtemp(join(tmpdir(), "purpose-foundry-artifact-outside-"));
     const stationParent = join(root, "artifacts", project.id);
     await mkdir(stationParent, { recursive: true });
     await symlink(outside, join(stationParent, "watchtower"), "dir");
@@ -330,9 +545,7 @@ describe("Purpose Foundry", () => {
           let body: Record<string, unknown>;
           if (path === "/api/stores") {
             body = {
-              stores: [
-                { id: "google_play", label: "Google Play", configured: true },
-              ],
+              stores: [{ id: "google_play", label: "Google Play", configured: true }],
             };
           } else if (path === "/api/presets") {
             body = {
@@ -402,9 +615,7 @@ describe("Purpose Foundry", () => {
         submittedStores: 1,
       });
       expect(calls).toContain("POST /api/upload");
-      expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(
-        2,
-      );
+      expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(2);
     }
   });
 });
