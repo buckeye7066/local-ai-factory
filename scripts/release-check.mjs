@@ -69,6 +69,19 @@ const prohibitedLanguage = [
   ["organizational_gate", phrase(115, 105, 103, 110, 32, 111, 102, 102)],
   ["organizational_gate_compact", phrase(115, 105, 103, 110, 111, 102, 102)],
   [
+    "organizational_gate_third_person",
+    phrase(115, 105, 103, 110, 115, 32, 111, 102, 102),
+  ],
+  [
+    "organizational_gate_gerund",
+    phrase(115, 105, 103, 110, 105, 110, 103, 32, 111, 102, 102),
+  ],
+  ["organizational_gate_plural", phrase(115, 105, 103, 110, 32, 111, 102, 102, 115)],
+  [
+    "organizational_gate_compact_plural",
+    phrase(115, 105, 103, 110, 111, 102, 102, 115),
+  ],
+  [
     "completed_organizational_gate",
     phrase(115, 105, 103, 110, 101, 100, 32, 111, 102, 102),
   ],
@@ -262,6 +275,12 @@ function renderedSourceCandidates(value, relativePath) {
 const wrappedPhraseProbe = normalizeLanguage("manual\napproval");
 if (!prohibitedLanguage.some(([, phrase]) => wrappedPhraseProbe.includes(phrase))) {
   errors.push("release_language_policy_self_test:wrapped_phrase_not_detected");
+}
+const thirdPersonProbe = normalizeLanguage(
+  phrase(111, 119, 110, 101, 114, 32, 115, 105, 103, 110, 115, 32, 111, 102, 102),
+);
+if (!prohibitedLanguage.some(([, value]) => thirdPersonProbe.includes(value))) {
+  errors.push("release_language_policy_self_test:third_person_phrase_not_detected");
 }
 const encodedPhraseProbe = phrase(
   109,
