@@ -97,7 +97,6 @@ import { parseDirectTestEvidence } from "./directTestEvidence.js";
 import { groundFinalReport } from "./reportGrounding.js";
 import { ErrorLedger, renderErrorLines } from "./errorLedger.js";
 import { ThemedProvider } from "./workTheme.js";
-import { PaidFirstOneRoundProvider } from "../providers/paidFirst.js";
 import { foldTestExit, freshTestVerdict, relevantTestStatus } from "./testVerdict.js";
 import { classifyEnvironmentFailure } from "./envFailure.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
@@ -352,9 +351,12 @@ export function selectRunRouting(
   codeProvider: ProviderName;
   reviewProvider: ProviderName;
 } {
-  const isPaid = (name: ProviderName | undefined): name is "anthropic" | "openai" =>
+  const isPaid = (
+    name: ProviderName | undefined,
+  ): name is "anthropic" | "openai" =>
     name === "anthropic" || name === "openai";
-  const inferredPaid = isPaid(options.codeProvider) || isPaid(options.reviewProvider);
+  const inferredPaid =
+    isPaid(options.codeProvider) || isPaid(options.reviewProvider);
   const routingMode = options.routingMode ?? (inferredPaid ? "paid" : "free");
 
   if (routingMode === "free") {
@@ -700,7 +702,6 @@ async function executeRun(
     run.codeProvider === "anthropic" || run.codeProvider === "openai"
       ? run.codeProvider
       : undefined;
-  const firstPaid = registry.availablePaid()[0];
   let critical: LLMProvider;
   if (!run.demo && routingMode === "free") {
     const freeRaw = new ThemedProvider(registry.get("free"));
@@ -710,35 +711,9 @@ async function executeRun(
       config.maxModelCallsPerRun,
       attribution(freeRaw),
     );
-    log("info", "Critical stages: free mode — $0 rotation only; paid rescue disabled.");
-  } else if (!run.demo && !runPinnedPaid && firstPaid) {
-    // AUTO MODE (owner decision 2026-08-23: "paid models first followed by
-    // free. Only do one round, though."): a critical call gets ONE attempt on
-    // the first configured paid provider through the budget gate; if it fails
-    // or is refused, the SAME call falls to the free rotator. The free side is
-    // the $0 primary alone — not the failover chain — so there is never a
-    // second paid attempt for that call. Cost is attributed by who served.
-    const paidRaw = registry.resolveLive(firstPaid, config.defaultCodeProvider);
-    const paidOnce = gateIfPaid(
-      paidRaw,
-      new CountingProvider(
-        paidRaw,
-        run,
-        config.maxModelCallsPerRun,
-        attribution(paidRaw),
-      ),
-    );
-    const freeRaw = new ThemedProvider(registry.get("free"));
-    const freeOnly = new CountingProvider(
-      freeRaw,
-      run,
-      config.maxModelCallsPerRun,
-      attribution(freeRaw),
-    );
-    critical = new PaidFirstOneRoundProvider(paidOnce, freeOnly, (m) => log("info", m));
     log(
       "info",
-      `Critical stages: auto mode — paid first (${firstPaid}, one round), then free.`,
+      "Critical stages: free mode — $0 rotation only; paid rescue disabled.",
     );
   } else {
     const rawCritical = run.demo
