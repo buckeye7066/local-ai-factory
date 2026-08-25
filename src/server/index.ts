@@ -76,7 +76,7 @@ import { redactSecrets } from "./security/redact.js";
 import { findRemovedRunOption } from "./removedOptions.js";
 import { FATAL_EXIT_CODE } from "./exitCodes.js";
 import { underWorkTheme } from "./orchestrator/themeBind.js";
-import { resumeWorkTheme } from "./orchestrator/workTheme.js";
+import { resumeWorkTheme, ThemedProvider } from "./orchestrator/workTheme.js";
 
 /**
  * server/index.ts — the LOCAL backend API.
@@ -513,7 +513,7 @@ function epicDeps(): EpicDeps {
 
       const registry = createProviderRegistry(config, secrets);
       const routing = selectRunRouting(options, registry, config);
-      const primary = registry.get(routing.codeProvider);
+      const primary = new ThemedProvider(registry.get(routing.codeProvider));
       const provider =
         routing.routingMode === "paid"
           ? new QuotaFailoverProvider(
@@ -521,7 +521,7 @@ function epicDeps(): EpicDeps {
               registry
                 .availablePaid()
                 .filter((name) => name !== routing.codeProvider)
-                .map((name) => registry.get(name)),
+                .map((name) => new ThemedProvider(registry.get(name))),
             )
           : primary;
       return withPlanTimeout(
