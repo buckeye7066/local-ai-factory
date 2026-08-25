@@ -34,7 +34,9 @@ export function ProviderRoutingCards({
       key: "free",
       title: "Free",
       role:
-        routing === "free" ? "$0 rotation only" : "Click to disable paid routes",
+        routing === "free"
+          ? "$0 rotation only"
+          : "Click to disable paid routes",
       icon: Gift,
       ready: freeReady,
       selected: routing === "free",
@@ -99,8 +101,10 @@ export function ProviderRoutingCards({
               <span
                 className={cn(
                   "grid h-9 w-9 place-items-center rounded-lg",
-                  c.accent === "violet" && "bg-aurora-violet/15 text-aurora-violet",
-                  c.accent === "emerald" && "bg-aurora-emerald/15 text-aurora-emerald",
+                  c.accent === "violet" &&
+                    "bg-aurora-violet/15 text-aurora-violet",
+                  c.accent === "emerald" &&
+                    "bg-aurora-emerald/15 text-aurora-emerald",
                 )}
               >
                 <Icon className="h-4.5 w-4.5" />
