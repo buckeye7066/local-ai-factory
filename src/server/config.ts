@@ -71,6 +71,10 @@ export interface AppConfig {
   free: FreeRouteSettings;
   anthropicModel: string;
   openaiModel: string;
+  /** OpenAI-family lead model used only for mandatory readiness review. */
+  solModel: string;
+  /** Anthropic Fable/Opus-class model used only for independent readiness review. */
+  fableOrOpusModel: string;
   defaultCodeProvider: ProviderName;
   defaultReviewProvider: ProviderName;
   maxRepairLoops: number;
@@ -116,6 +120,8 @@ export interface AppSecrets {
 
 /** Build the typed config from process.env (pure — easy to test). */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const anthropicModel = env.ANTHROPIC_MODEL || "claude-opus-4-8";
+  const openaiModel = env.OPENAI_MODEL || "gpt-5.5";
   return {
     free: {
       enabled: bool(env.FACTORY_FREE_ENABLED, true),
@@ -132,8 +138,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       maxBackpressureRetries: num(env.FACTORY_FREE_BACKPRESSURE_RETRIES, 20),
       autoRestart: bool(env.FACTORY_FREE_AUTORESTART, true),
     },
-    anthropicModel: env.ANTHROPIC_MODEL || "claude-opus-4-8",
-    openaiModel: env.OPENAI_MODEL || "gpt-5.5",
+    anthropicModel,
+    openaiModel,
+    // Readiness models are separate from ordinary build routing. Helper models
+    // may build, but they can never impersonate the required production brains.
+    solModel: env.FACTORY_SOL_MODEL || openaiModel,
+    fableOrOpusModel:
+      env.FACTORY_FABLE_OR_OPUS_MODEL || anthropicModel,
     // Legacy callers that omit routingMode inherit these defaults. The UI
     // submits an explicit Free/Paid tier for every new or extend run.
     defaultCodeProvider: provider(env.DEFAULT_CODE_PROVIDER, "free"),
@@ -177,6 +188,26 @@ export function isOpenAiConfigured(secrets: AppSecrets): boolean {
   return secrets.openaiApiKey.length > 0;
 }
 
+export function isFableOrOpusModel(model: string): boolean {
+  return /(fable|opus)/i.test(model.trim());
+}
+
+/** Mandatory non-demo readiness brain floor. */
+export function readinessBrainFloor(config: AppConfig, secrets: AppSecrets) {
+  const solConfigured =
+    isOpenAiConfigured(secrets) && config.solModel.trim().length > 0;
+  const fableOrOpusConfigured =
+    isAnthropicConfigured(secrets) &&
+    isFableOrOpusModel(config.fableOrOpusModel);
+  return {
+    configured: solConfigured && fableOrOpusConfigured,
+    solConfigured,
+    fableOrOpusConfigured,
+    solModel: config.solModel,
+    fableOrOpusModel: config.fableOrOpusModel,
+  };
+}
+
 /**
  * Public, secret-free view of configuration. Safe to return from /api/health
  * and to log. Notice there is no field that could carry an API key.
@@ -189,6 +220,7 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
   const anthropicConfigured = isAnthropicConfigured(secrets);
   const openaiConfigured = isOpenAiConfigured(secrets);
   const freeConfigured = isFreeConfigured(config);
+  const brainFloor = readinessBrainFloor(config, secrets);
   const providersAvailable: ProviderName[] = ["mock", "stub"];
   if (freeConfigured) providersAvailable.push("free");
   if (anthropicConfigured) providersAvailable.push("anthropic");
@@ -210,6 +242,13 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
     providersAvailable,
     anthropicModel: config.anthropicModel,
     openaiModel: config.openaiModel,
+    mandatoryProductionReadiness: true as const,
+    readinessBrainFloorConfigured: brainFloor.configured,
+    solConfigured: brainFloor.solConfigured,
+    fableOrOpusConfigured: brainFloor.fableOrOpusConfigured,
+    solModel: brainFloor.solModel,
+    fableOrOpusModel: brainFloor.fableOrOpusModel,
+    ownerExternalMatters: "owner-managed-outside-cyberland" as const,
     defaultCodeProvider: config.defaultCodeProvider,
     defaultReviewProvider: config.defaultReviewProvider,
     maxRepairLoops: config.maxRepairLoops,
