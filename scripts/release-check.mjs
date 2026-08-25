@@ -214,20 +214,29 @@ function fallbackRepositoryPaths(directory) {
 }
 
 function repositoryPaths() {
+  let gitRoot;
   try {
-    const gitRoot = resolve(
+    gitRoot = resolve(
       execFileSync("git", ["rev-parse", "--show-toplevel"], {
         cwd: ROOT,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       }).trim(),
     );
-    const comparableRoot = process.platform === "win32" ? ROOT.toLowerCase() : ROOT;
-    const comparableGitRoot =
-      process.platform === "win32" ? gitRoot.toLowerCase() : gitRoot;
-    if (comparableGitRoot !== comparableRoot) {
-      throw new Error("enclosing Git index does not belong to Factory Deck");
-    }
+  } catch {
+    notes.push("git_index_unavailable:scanned_workspace_fallback");
+    return fallbackRepositoryPaths(ROOT);
+  }
+
+  const comparableRoot = process.platform === "win32" ? ROOT.toLowerCase() : ROOT;
+  const comparableGitRoot =
+    process.platform === "win32" ? gitRoot.toLowerCase() : gitRoot;
+  if (comparableGitRoot !== comparableRoot) {
+    notes.push("foreign_git_index:scanned_workspace_fallback");
+    return fallbackRepositoryPaths(ROOT);
+  }
+
+  try {
     const output = execFileSync("git", ["ls-files", "-z"], {
       cwd: ROOT,
       encoding: "utf8",
@@ -241,11 +250,14 @@ function repositoryPaths() {
         relativePath,
         tracked: true,
       }));
-    if (paths.length === 0) throw new Error("Git index contains no files");
+    if (paths.length === 0) {
+      errors.push("git_index_empty:exact_repository_has_no_tracked_files");
+      return [];
+    }
     return paths;
   } catch {
-    notes.push("git_index_unavailable:scanned_workspace_fallback");
-    return fallbackRepositoryPaths(ROOT);
+    errors.push("git_index_unreadable:exact_repository_cannot_be_scanned");
+    return [];
   }
 }
 
