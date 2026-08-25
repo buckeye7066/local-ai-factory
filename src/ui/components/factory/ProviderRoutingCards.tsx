@@ -33,7 +33,8 @@ export function ProviderRoutingCards({
     {
       key: "free",
       title: "Free",
-      role: routing === "free" ? "$0 rotation only" : "Click to disable paid routes",
+      role:
+        routing === "free" ? "$0 rotation only" : "Click to disable paid routes",
       icon: Gift,
       ready: freeReady,
       selected: routing === "free",
@@ -71,10 +72,7 @@ export function ProviderRoutingCards({
       variants={staggerContainer}
       initial="hidden"
       animate="show"
-      className={cn(
-        "grid grid-cols-1 gap-3 sm:grid-cols-2",
-        "sm:grid-cols-2",
-      )}
+      className="grid grid-cols-1 gap-3 sm:grid-cols-2"
     >
       {cards.map((c) => {
         const Icon = c.icon;
@@ -122,7 +120,10 @@ export function ProviderRoutingCards({
                   {c.key === "free" ? "Free route ready" : "Paid route ready"}
                 </Badge>
               ) : (
-                <Badge tone={c.key === "free" ? "amber" : "neutral"} icon={<AlertTriangle className="h-3 w-3" />}>
+                <Badge
+                  tone={c.key === "free" ? "amber" : "neutral"}
+                  icon={<AlertTriangle className="h-3 w-3" />}
+                >
                   {c.key === "free" ? "Free route off" : "No paid key"}
                 </Badge>
               )}
