@@ -181,11 +181,13 @@ function decodeUtf16Be(data, offset = 0) {
 function looksLikeText(value) {
   if (!value || value.includes("\0")) return false;
   let controls = 0;
+  let replacements = 0;
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
     if (codePoint < 32 && !"\t\r\n".includes(character)) controls += 1;
+    if (codePoint === 0xfffd) replacements += 1;
   }
-  return controls / value.length <= 0.05;
+  return controls / value.length <= 0.05 && replacements / value.length <= 0.02;
 }
 
 function uniqueTextCandidates(candidates) {
@@ -334,6 +336,13 @@ for (const [label, data] of [
   ) {
     errors.push(`release_language_policy_self_test:${label}_not_detected`);
   }
+}
+const replacementHeavyBinaryProbe = Buffer.concat([
+  Buffer.alloc(128, 0xff),
+  Buffer.from(encodedPhraseProbe, "utf8"),
+]);
+if (decodeRepositoryTexts(replacementHeavyBinaryProbe).length !== 0) {
+  errors.push("release_language_policy_self_test:binary_blob_misclassified");
 }
 
 const probeFirstWord = phrase(109, 97, 110, 117, 97, 108);
