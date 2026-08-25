@@ -64,7 +64,7 @@ the report surfaces that limitation explicitly.
 | No fake-success       | Live paths never fall back to mock/stub; unavailable routes produce an explicit error                                                                                                                |
 | Controls              | Executable `release:check`, `.github/workflows/production-readiness.yml`, typechecking, and the complete automated test suite                                                                        |
 | Evidence              | This contract, exact-revision CI results, changed-file digests, executed commands/exit statuses, and journey evidence                                                                                |
-| Verification          | Author and verifier contexts are recorded separately; implementation output alone is not readiness evidence                                                                                           |
+| Verification          | Author and verifier contexts are recorded separately; implementation output alone is not readiness evidence                                                                                          |
 | Command safety        | Generated install/build/test scripts remain disabled on the host unless execution occurs in a disposable container/VM with workspace-only write access and no host secrets                           |
 | Identity              | Exact default-branch SHA equals local launcher/runtime tree before Production Ready                                                                                                                  |
 

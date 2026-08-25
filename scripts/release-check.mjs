@@ -39,7 +39,9 @@ if (existsSync(packagePath)) {
       errors.push("forbidden_readiness_bookkeeping_script:release:manifest");
     }
   } catch (error) {
-    errors.push(`invalid_package_json:${error instanceof Error ? error.message : String(error)}`);
+    errors.push(
+      `invalid_package_json:${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
@@ -92,10 +94,12 @@ const prohibitedLanguage = [
 function scanLanguage(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      if (!excludedDirectories.has(entry.name)) scanLanguage(resolve(directory, entry.name));
+      if (!excludedDirectories.has(entry.name))
+        scanLanguage(resolve(directory, entry.name));
       continue;
     }
-    if (!entry.isFile() || !textExtensions.has(extname(entry.name).toLowerCase())) continue;
+    if (!entry.isFile() || !textExtensions.has(extname(entry.name).toLowerCase()))
+      continue;
     const path = resolve(directory, entry.name);
     const lines = readFileSync(path, "utf8").split(/\r?\n/);
     for (const [index, line] of lines.entries()) {
