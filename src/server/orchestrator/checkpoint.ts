@@ -77,6 +77,24 @@ export const FactoryCheckpointSchema = z.object({
             isTest: z.boolean().optional(),
             directTestPath: z.string().optional(),
             isBrowser: z.boolean().optional(),
+            hostPlatform: z
+              .enum([
+                "aix",
+                "android",
+                "darwin",
+                "freebsd",
+                "haiku",
+                "linux",
+                "openbsd",
+                "sunos",
+                "win32",
+                "cygwin",
+                "netbsd",
+              ])
+              .optional(),
+            verifiedTargets: z
+              .array(z.enum(["windows", "webkit", "macos", "ios", "android"]))
+              .optional(),
             runner: z.enum(["vitest", "jest", "playwright", "pytest"]).optional(),
             directEvidenceValid: z.boolean().optional(),
             passedCount: z.number().int().nonnegative().optional(),

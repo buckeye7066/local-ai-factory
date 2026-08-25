@@ -286,11 +286,77 @@ export type ExecutedPlatformCommand = {
   /** Stamp imported CI evidence with the OS that actually executed it. */
   hostPlatform?: NodeJS.Platform;
   isBrowser?: boolean;
-  /** Targets this successful browser invocation directly exercised. */
+  /** Targets this successful invocation directly exercised. */
   verifiedTargets?: PlatformTarget[];
   directEvidenceValid?: boolean;
   outputTail?: string;
 };
+
+const BROWSER_TARGET_PATTERNS: Record<"webkit" | "ios" | "android", RegExp> = {
+  webkit: /\bwebkit\b|Desktop Safari/i,
+  ios: /\b(?:iPhone|iPad|Mobile Safari|iOS)\b/i,
+  android: /\b(?:Pixel|Android|Mobile Chrome)\b/i,
+};
+
+const ANDROID_PRODUCTION_EVIDENCE =
+  /(?:gradlew?|capacitor|cordova|expo)[^\n]*(?:assembleRelease|bundleRelease|testRelease|connectedAndroidTest|lintRelease|android[^\n]*(?:release|test))|android[^\n]*(?:assembleRelease|bundleRelease|testRelease|connectedAndroidTest|lintRelease)/i;
+const IOS_PRODUCTION_EVIDENCE =
+  /xcodebuild[^\n]*(?:archive|test|build-for-testing|test-without-building|-configuration\s+Release)|(?:capacitor|cordova|expo)[^\n]*ios[^\n]*(?:release|archive|test)/i;
+
+/** Stamp target evidence at the command-runner boundary, never from config. */
+export function platformStampForExecutedCommand(
+  entry: Omit<ExecutedPlatformCommand, "hostPlatform" | "verifiedTargets">,
+  hostPlatform: NodeJS.Platform = process.platform,
+): Pick<ExecutedPlatformCommand, "hostPlatform" | "verifiedTargets"> {
+  const text = `${entry.command}\n${entry.outputTail ?? ""}`;
+  const verifiedTargets: PlatformTarget[] = [];
+  if (
+    entry.exitCode === 0 &&
+    entry.isBrowser === true &&
+    entry.directEvidenceValid !== false
+  ) {
+    for (const targetName of ["webkit", "ios", "android"] as const) {
+      if (BROWSER_TARGET_PATTERNS[targetName].test(text))
+        verifiedTargets.push(targetName);
+    }
+  }
+  if (entry.exitCode === 0 && entry.isBrowser !== true) {
+    if (ANDROID_PRODUCTION_EVIDENCE.test(text)) verifiedTargets.push("android");
+    if (hostPlatform === "darwin" && IOS_PRODUCTION_EVIDENCE.test(text)) {
+      verifiedTargets.push("ios");
+    }
+  }
+  return {
+    hostPlatform,
+    ...(verifiedTargets.length > 0 ? { verifiedTargets } : {}),
+  };
+}
+
+/** Preserve other-OS evidence only when it covers these exact deliverable bytes. */
+export function carryForwardPlatformEvidence<T extends ExecutedPlatformCommand>(
+  executed: T[],
+  priorDigests: Record<string, string> | undefined,
+  currentDigests: Record<string, string>,
+  currentHost: NodeJS.Platform = process.platform,
+): T[] {
+  const priorEntries = Object.entries(priorDigests ?? {}).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  const currentEntries = Object.entries(currentDigests).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  const sameTree =
+    priorEntries.length > 0 &&
+    priorEntries.length === currentEntries.length &&
+    priorEntries.every(
+      ([path, digest], index) =>
+        currentEntries[index]?.[0] === path && currentEntries[index]?.[1] === digest,
+    );
+  if (!sameTree) return [];
+  return executed.filter(
+    (entry) => entry.hostPlatform !== undefined && entry.hostPlatform !== currentHost,
+  );
+}
 
 function packageSignals(workspacePath: string): {
   web: boolean;
@@ -397,28 +463,30 @@ export function assessPlatformCompatibility(
   // (or an explicit verifiedTargets stamp from an imported runner) count.
   const webkitBrowserEvidence = browserTargetEvidence(
     "webkit",
-    /\bwebkit\b|Desktop Safari/i,
+    BROWSER_TARGET_PATTERNS.webkit,
   );
-  const iosBrowserEvidence = browserTargetEvidence(
-    "ios",
-    /\b(?:iPhone|iPad|Mobile Safari|iOS)\b/i,
-  );
+  const iosBrowserEvidence = browserTargetEvidence("ios", BROWSER_TARGET_PATTERNS.ios);
   const androidBrowserEvidence = browserTargetEvidence(
     "android",
-    /\b(?:Pixel|Android|Mobile Chrome)\b/i,
+    BROWSER_TARGET_PATTERNS.android,
   );
-  const androidNativePass = successful.some((entry) =>
-    /(?:gradlew?|capacitor|cordova|expo).*android|android.*(?:assemble|test|build)/i.test(
-      `${entry.command}\n${entry.outputTail ?? ""}`,
-    ),
+  const androidNativeEvidence = successful.filter(
+    (entry) =>
+      entry.isBrowser !== true &&
+      (entry.verifiedTargets?.includes("android") === true ||
+        ANDROID_PRODUCTION_EVIDENCE.test(
+          `${entry.command}\n${entry.outputTail ?? ""}`,
+        )),
   );
-  const iosNativePass = successful.some(
+  const androidNativePass = androidNativeEvidence.length > 0;
+  const iosNativeEvidence = successful.filter(
     (entry) =>
       ranOn(entry, "darwin") &&
-      /xcodebuild|(?:capacitor|cordova|expo).*ios|ios.*(?:build|test)/i.test(
-        `${entry.command}\n${entry.outputTail ?? ""}`,
-      ),
+      entry.isBrowser !== true &&
+      (entry.verifiedTargets?.includes("ios") === true ||
+        IOS_PRODUCTION_EVIDENCE.test(`${entry.command}\n${entry.outputTail ?? ""}`)),
   );
+  const iosNativePass = iosNativeEvidence.length > 0;
 
   const webkitOk = signals.web && webkitBrowserEvidence.length > 0;
   const iosWebOk = signals.web && iosBrowserEvidence.length > 0;
@@ -449,15 +517,7 @@ export function assessPlatformCompatibility(
       iosOk
         ? [
             ...iosBrowserEvidence.map((entry) => entry.command),
-            ...successful
-              .filter(
-                (entry) =>
-                  ranOn(entry, "darwin") &&
-                  /xcodebuild|(?:capacitor|cordova|expo).*ios|ios.*(?:build|test)/i.test(
-                    `${entry.command}\n${entry.outputTail ?? ""}`,
-                  ),
-              )
-              .map((entry) => entry.command),
+            ...iosNativeEvidence.map((entry) => entry.command),
           ].slice(0, 8)
         : [],
     ),
@@ -467,13 +527,7 @@ export function assessPlatformCompatibility(
       androidOk
         ? [
             ...androidBrowserEvidence.map((entry) => entry.command),
-            ...successful
-              .filter((entry) =>
-                /(?:gradlew?|capacitor|cordova|expo).*android|android.*(?:assemble|test|build)/i.test(
-                  `${entry.command}\n${entry.outputTail ?? ""}`,
-                ),
-              )
-              .map((entry) => entry.command),
+            ...androidNativeEvidence.map((entry) => entry.command),
           ].slice(0, 8)
         : [],
     ),

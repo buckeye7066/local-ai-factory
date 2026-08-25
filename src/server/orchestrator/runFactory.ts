@@ -64,7 +64,9 @@ import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { assessPhantomImports } from "../workspace/phantomImports.js";
 import {
   assessPlatformCompatibility,
+  carryForwardPlatformEvidence,
   enforceCompletionQa,
+  platformStampForExecutedCommand,
   scanCompletionGaps,
 } from "../workspace/completionEvidence.js";
 import { resolveGeneratedWrite } from "../workspace/applyEdits.js";
@@ -1896,12 +1898,21 @@ async function executeRun(
      */
     const verifyWorkspace = async (): Promise<void> => {
       commandOutput = "";
-      verification = { executed: [], incomplete: [], fileDigests: {} };
       testsExecuted = false;
       testExit = null;
       const intendedDigests = Object.fromEntries(
         [...files].map(([path, file]) => [path, sha256Text(file.contents)]),
       );
+      const carriedPlatformEvidence = carryForwardPlatformEvidence(
+        verification.executed,
+        verification.fileDigests,
+        intendedDigests,
+      );
+      verification = {
+        executed: carriedPlatformEvidence,
+        incomplete: [],
+        fileDigests: {},
+      };
       // Distinct from `testExit === null`: a timeout-killed suite legitimately
       // reports a null exit, so null cannot double as "nothing recorded yet".
       let verdict = freshTestVerdict();
@@ -1980,18 +1991,27 @@ async function executeRun(
                 parsedDirect === undefined
                   ? undefined
                   : res.exitCode === 0 && parsedDirect.valid;
+              const outputTail = `${res.stdout}\n${res.stderr}`;
+              const platformStamp = platformStampForExecutedCommand({
+                command: res.command,
+                exitCode: res.exitCode,
+                isBrowser: cmd.isBrowser ?? false,
+                directEvidenceValid,
+                outputTail,
+              });
               verification.executed.push({
                 command: res.command,
                 exitCode: res.exitCode,
                 isTest: cmd.isTest,
                 directTestPath: cmd.directTestPath,
                 isBrowser: cmd.isBrowser ?? false,
+                ...platformStamp,
                 runner: cmd.runner,
                 directEvidenceValid,
                 passedCount: parsedDirect?.passedCount,
                 skippedCount: parsedDirect?.skippedCount,
                 passedTestNames: parsedDirect?.passedTestNames,
-                outputTail: `${res.stdout}\n${res.stderr}`,
+                outputTail,
               });
               if (parsedDirect && !directEvidenceValid) {
                 verification.incomplete!.push({
@@ -2137,6 +2157,29 @@ async function executeRun(
       // after every repair so QA always receives fresh executable evidence.
       await verifyWorkspace();
       await checkpointNow({ testWriterComplete: true });
+    }
+    const hasCurrentHostEvidence = verification.executed.some(
+      (entry) => entry.hostPlatform === process.platform,
+    );
+    if (
+      !run.demo &&
+      restored !== undefined &&
+      checkpoint.testWriterComplete &&
+      !hasCurrentHostEvidence
+    ) {
+      log(
+        "info",
+        `Resume on ${process.platform}: executing the exact checkpointed tree and carrying forward only digest-matched evidence from other OS runners.`,
+        "test_writer",
+      );
+      resetStagesFrom("qa_critic");
+      await checkpointNow({
+        qa: undefined,
+        pendingRepair: undefined,
+        repairComplete: false,
+        finalReport: undefined,
+      });
+      await verifyWorkspace();
     }
     if (!stageDone("test_writer")) {
       finishStage(run, "test_writer", "completed");

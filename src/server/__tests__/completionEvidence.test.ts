@@ -4,10 +4,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ProductSpec, QaReport } from "../../shared/schemas.js";
 import {
   assessPlatformCompatibility,
+  carryForwardPlatformEvidence,
   enforceCompletionQa,
+  platformStampForExecutedCommand,
   scanCompletionGaps,
   withProductionAcceptanceCriteria,
 } from "../workspace/completionEvidence.js";
+import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
 
 const roots: string[] = [];
 
@@ -202,5 +205,83 @@ describe("deterministic completion evidence", () => {
     );
     expect(aggregated.windows.verified).toBe(true);
     expect(aggregated.macos.verified).toBe(true);
+  });
+
+  it("stamps production command evidence and preserves it through exact-tree resume", () => {
+    const windows = {
+      command: "pnpm test",
+      exitCode: 0,
+      outputTail: "all tests passed",
+      ...platformStampForExecutedCommand(
+        { command: "pnpm test", exitCode: 0, outputTail: "all tests passed" },
+        "win32",
+      ),
+    };
+    expect(windows.hostPlatform).toBe("win32");
+    const carried = carryForwardPlatformEvidence(
+      [windows],
+      { "src/app.ts": "digest-a" },
+      { "src/app.ts": "digest-a" },
+      "darwin",
+    );
+    expect(carried).toEqual([windows]);
+    expect(
+      carryForwardPlatformEvidence(
+        [windows],
+        { "src/app.ts": "digest-a" },
+        { "src/app.ts": "digest-b" },
+        "darwin",
+      ),
+    ).toEqual([]);
+
+    const resumed = FactoryCheckpointSchema.parse(
+      JSON.parse(
+        JSON.stringify({
+          schemaVersion: 3,
+          runId: crypto.randomUUID(),
+          idea: "Ship cross-platform",
+          options: {},
+          files: [],
+          verification: {
+            executed: [
+              {
+                ...windows,
+                isBrowser: true,
+                verifiedTargets: ["webkit", "ios"],
+              },
+            ],
+            fileDigests: { "src/app.ts": "digest-a" },
+          },
+          updatedAt: Date.now(),
+        }),
+      ),
+    );
+    expect(resumed.verification?.executed[0]).toMatchObject({
+      hostPlatform: "win32",
+      verifiedTargets: ["webkit", "ios"],
+    });
+  });
+
+  it("rejects debug-only native builds and requires release, archive, test, or a trusted stamp", () => {
+    const root = workspace("native-production-evidence");
+    put(root, "android/app/build.gradle", "plugins { id 'com.android.application' }");
+    put(root, "ios/App.xcodeproj/project.pbxproj", "// project");
+    const debugOnly = assessPlatformCompatibility(root, [
+      { command: "./gradlew assembleDebug", exitCode: 0, hostPlatform: "linux" },
+      { command: "xcodebuild -scheme App build", exitCode: 0, hostPlatform: "darwin" },
+    ]);
+    expect(debugOnly.android.verified).toBe(false);
+    expect(debugOnly.ios.verified).toBe(false);
+
+    const production = assessPlatformCompatibility(root, [
+      { command: "./gradlew assembleRelease", exitCode: 0, hostPlatform: "linux" },
+      {
+        command: "xcodebuild -scheme App archive",
+        exitCode: 0,
+        hostPlatform: "darwin",
+      },
+    ]);
+    expect(production.android.verified).toBe(true);
+    expect(production.ios.verified).toBe(true);
   });
 });
