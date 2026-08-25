@@ -115,7 +115,11 @@ function looksLikeText(value) {
   return controls / value.length <= 0.05;
 }
 
-function decodeRepositoryText(data) {
+function uniqueTextCandidates(candidates) {
+  return [...new Set(candidates.filter((candidate) => looksLikeText(candidate)))];
+}
+
+function decodeRepositoryTexts(data) {
   if (
     data.length >= 4 &&
     data[0] === 0xff &&
@@ -123,7 +127,7 @@ function decodeRepositoryText(data) {
     data[2] === 0x00 &&
     data[3] === 0x00
   )
-    return decodeUtf32(data, true, 4);
+    return uniqueTextCandidates([decodeUtf32(data, true, 4)]);
   if (
     data.length >= 4 &&
     data[0] === 0x00 &&
@@ -131,12 +135,12 @@ function decodeRepositoryText(data) {
     data[2] === 0xfe &&
     data[3] === 0xff
   )
-    return decodeUtf32(data, false, 4);
+    return uniqueTextCandidates([decodeUtf32(data, false, 4)]);
   if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe)
-    return data.subarray(2).toString("utf16le");
+    return uniqueTextCandidates([data.subarray(2).toString("utf16le")]);
   if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff)
-    return decodeUtf16Be(data, 2);
-  if (!data.includes(0)) return data.toString("utf8");
+    return uniqueTextCandidates([decodeUtf16Be(data, 2)]);
+  if (!data.includes(0)) return uniqueTextCandidates([data.toString("utf8")]);
 
   const candidates = [];
   if (data.length % 4 === 0) {
@@ -145,7 +149,10 @@ function decodeRepositoryText(data) {
   if (data.length % 2 === 0) {
     candidates.push(data.toString("utf16le"), decodeUtf16Be(data));
   }
-  return candidates.find((candidate) => looksLikeText(candidate)) ?? null;
+  // Without a BOM, several byte orders can decode to printable Unicode. Scan
+  // every plausible interpretation so a wrong-endian candidate cannot hide a
+  // prohibited phrase in the correct interpretation.
+  return uniqueTextCandidates(candidates);
 }
 
 const wrappedPhraseProbe = normalizeLanguage("manual\napproval");
@@ -153,21 +160,39 @@ if (!prohibitedLanguage.some(([, phrase]) => wrappedPhraseProbe.includes(phrase)
   errors.push("release_language_policy_self_test:wrapped_phrase_not_detected");
 }
 const encodedPhraseProbe = "manual " + "approval";
+function encodeUtf32(value, littleEndian) {
+  return Buffer.concat(
+    [...value].map((character) => {
+      const encoded = Buffer.alloc(4);
+      if (littleEndian) encoded.writeUInt32LE(character.codePointAt(0) ?? 0);
+      else encoded.writeUInt32BE(character.codePointAt(0) ?? 0);
+      return encoded;
+    }),
+  );
+}
+
+function encodeUtf16Be(value) {
+  const littleEndian = Buffer.from(value, "utf16le");
+  const bigEndian = Buffer.allocUnsafe(littleEndian.length);
+  for (let index = 0; index < littleEndian.length; index += 2) {
+    bigEndian[index] = littleEndian[index + 1];
+    bigEndian[index + 1] = littleEndian[index];
+  }
+  return bigEndian;
+}
+
 for (const [label, data] of [
   ["utf16le", Buffer.from(encodedPhraseProbe, "utf16le")],
-  [
-    "utf32be",
-    Buffer.concat(
-      [...encodedPhraseProbe].map((character) => {
-        const encoded = Buffer.alloc(4);
-        encoded.writeUInt32BE(character.codePointAt(0) ?? 0);
-        return encoded;
-      }),
-    ),
-  ],
+  ["utf16be", encodeUtf16Be(encodedPhraseProbe)],
+  ["utf32le", encodeUtf32(encodedPhraseProbe, true)],
+  ["utf32be", encodeUtf32(encodedPhraseProbe, false)],
 ]) {
-  const decoded = decodeRepositoryText(data);
-  if (!decoded || !normalizeLanguage(decoded).includes("manual " + "approval")) {
+  const decodedCandidates = decodeRepositoryTexts(data);
+  if (
+    !decodedCandidates.some((decoded) =>
+      normalizeLanguage(decoded).includes("manual " + "approval"),
+    )
+  ) {
     errors.push(`release_language_policy_self_test:${label}_not_detected`);
   }
 }
@@ -246,11 +271,12 @@ function scanLanguage() {
   for (const entry of repositoryPaths()) {
     const data = readRepositoryEntry(entry);
     if (data === null) continue;
-    const text = decodeRepositoryText(data);
-    if (text === null) continue;
-    const normalized = normalizeLanguage(text);
+    const normalizedCandidates = decodeRepositoryTexts(data).map((text) =>
+      normalizeLanguage(text),
+    );
+    if (normalizedCandidates.length === 0) continue;
     for (const [label, phrase] of prohibitedLanguage) {
-      if (normalized.includes(phrase)) {
+      if (normalizedCandidates.some((normalized) => normalized.includes(phrase))) {
         errors.push(`prohibited_release_language:${label}:${entry.relativePath}`);
       }
     }
