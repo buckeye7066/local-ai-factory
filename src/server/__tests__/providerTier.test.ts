@@ -82,7 +82,11 @@ describe("provider-neutral run routing", () => {
 
   it("free mode fails closed when the free route is unavailable", () => {
     expect(() =>
-      selectRunRouting({ routingMode: "free" }, registry(false, ["openai"]), config),
+      selectRunRouting(
+        { routingMode: "free" },
+        registry(false, ["openai"]),
+        config,
+      ),
     ).toThrow(MissingProviderCredentialError);
   });
 });
