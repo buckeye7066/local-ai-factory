@@ -56,6 +56,14 @@ const evidence = (
     wiringComplete: true,
     highOrCriticalSecurityIssues: 0,
     operationallyRunnable: true,
+    completionGaps: 0,
+    platformCompatibility: {
+      windows: { applicable: false, verified: true, evidence: ["not applicable"] },
+      webkit: { applicable: false, verified: true, evidence: ["not applicable"] },
+      macos: { applicable: false, verified: true, evidence: ["not applicable"] },
+      ios: { applicable: false, verified: true, evidence: ["not applicable"] },
+      android: { applicable: false, verified: true, evidence: ["not applicable"] },
+    },
   },
   delivery: {
     kind: "existing-repo",
@@ -175,6 +183,30 @@ describe("mandatory production-readiness policy", () => {
     );
     expect(receipt.ready).toBe(false);
     expect(receipt.blockers.join(" ")).toMatch(/High or critical/);
+  });
+
+  it("blocks placeholders, unfinished code, and missing applicable platform evidence", () => {
+    const gaps = evaluateProductionReadiness(
+      evidence({
+        technical: { ...evidence().technical, completionGaps: 2 },
+      }),
+    );
+    expect(gaps.ready).toBe(false);
+    expect(gaps.blockers.join(" ")).toMatch(/unfinished production path/i);
+
+    const platform = evaluateProductionReadiness(
+      evidence({
+        technical: {
+          ...evidence().technical,
+          platformCompatibility: {
+            ...evidence().technical.platformCompatibility,
+            webkit: { applicable: true, verified: false, evidence: [] },
+          },
+        },
+      }),
+    );
+    expect(platform.ready).toBe(false);
+    expect(platform.blockers.join(" ")).toMatch(/webkit compatibility/i);
   });
 
   it("requires an existing-repo revision to reach the trunk", () => {

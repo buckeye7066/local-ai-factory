@@ -62,6 +62,11 @@ import {
 } from "../workspace/unwiredFiles.js";
 import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { assessPhantomImports } from "../workspace/phantomImports.js";
+import {
+  assessPlatformCompatibility,
+  enforceCompletionQa,
+  scanCompletionGaps,
+} from "../workspace/completionEvidence.js";
 import { resolveGeneratedWrite } from "../workspace/applyEdits.js";
 import {
   inspectExplicitFiles,
@@ -2130,11 +2135,12 @@ async function executeRun(
     const isExtendRun = ingestedWorkspacePath !== null;
     const withWiringGate = (report: QaReport): QaReport => {
       try {
-        return enforceWiredIntegration(
+        const wired = enforceWiredIntegration(
           report,
           findUnwiredNewFiles(workspacePath, generatedPathsForWiring(files.values())),
           isExtendRun,
         );
+        return enforceCompletionQa(wired, scanCompletionGaps(workspacePath));
       } catch (error) {
         if (!isExtendRun) return report;
         const detail = error instanceof Error ? error.message : String(error);
@@ -2883,8 +2889,13 @@ async function executeRun(
         digestReceiptValid: receipt.ok,
         blockingWriteRefusals: blockingWriteRefusals.length,
         wiringComplete,
-        criticalSecurityIssues: highOrCriticalIssues,
+        highOrCriticalSecurityIssues: highOrCriticalIssues,
         operationallyRunnable: verifiedOutcome && Boolean(report.howToRun?.trim()),
+        completionGaps: scanCompletionGaps(workspacePath).length,
+        platformCompatibility: assessPlatformCompatibility(
+          workspacePath,
+          verification.executed,
+        ),
       },
       delivery: {
         kind: readinessKind,

@@ -61,8 +61,16 @@ const facts: ProductionReadinessFacts = {
     digestReceiptValid: true,
     blockingWriteRefusals: 0,
     wiringComplete: true,
-    criticalSecurityIssues: 0,
+    highOrCriticalSecurityIssues: 0,
     operationallyRunnable: true,
+    completionGaps: 0,
+    platformCompatibility: {
+      windows: { applicable: false, verified: true, evidence: ["not applicable"] },
+      webkit: { applicable: false, verified: true, evidence: ["not applicable"] },
+      macos: { applicable: false, verified: true, evidence: ["not applicable"] },
+      ios: { applicable: false, verified: true, evidence: ["not applicable"] },
+      android: { applicable: false, verified: true, evidence: ["not applicable"] },
+    },
   },
   delivery: {
     kind: "workspace-only",

@@ -27,11 +27,13 @@ afterAll(async () => {
   delete process.env.FACTORY_DATA_DIR;
 });
 
+const DIGEST = `sha256:${"1".repeat(64)}`;
+
 const review = (identity: "sol" | "opus") => ({
   identity,
   provider: identity === "sol" ? ("openai" as const) : ("anthropic" as const),
   model: identity === "sol" ? "gpt-5.6-pro" : "claude-opus-4-8",
-  evidenceDigest: "sha256:one",
+  evidenceDigest: DIGEST,
   decision: "ready" as const,
   purposeAligned: true,
   implementationComplete: true,
@@ -41,7 +43,7 @@ const review = (identity: "sol" | "opus") => ({
 
 function receipt() {
   return evaluateProductionReadiness({
-    evidenceDigest: "sha256:one",
+    evidenceDigest: DIGEST,
     appName: "Ready App",
     purpose: {
       stated: true,
@@ -57,8 +59,16 @@ function receipt() {
       digestReceiptValid: true,
       blockingWriteRefusals: 0,
       wiringComplete: true,
-      criticalSecurityIssues: 0,
+      highOrCriticalSecurityIssues: 0,
       operationallyRunnable: true,
+      completionGaps: 0,
+      platformCompatibility: {
+        windows: { applicable: false, verified: true, evidence: ["not applicable"] },
+        webkit: { applicable: false, verified: true, evidence: ["not applicable"] },
+        macos: { applicable: false, verified: true, evidence: ["not applicable"] },
+        ios: { applicable: false, verified: true, evidence: ["not applicable"] },
+        android: { applicable: false, verified: true, evidence: ["not applicable"] },
+      },
     },
     delivery: {
       kind: "workspace-only",
@@ -86,12 +96,12 @@ describe("durable readiness state", () => {
     await markReadinessEvaluating({
       subjectType: "run",
       subjectId: id,
-      evidenceDigest: "sha256:one",
+      evidenceDigest: DIGEST,
     });
     const stored = await loadReadinessState(id);
     expect(stored).toMatchObject({
       status: "evaluating",
-      evidenceDigest: "sha256:one",
+      evidenceDigest: DIGEST,
       ownerExternalMatters: "owner-managed-outside-cyberland",
     });
   });
@@ -102,11 +112,11 @@ describe("durable readiness state", () => {
     await recordReadinessEvaluation({
       subjectType: "run",
       subjectId: id,
-      evidenceDigest: "sha256:one",
+      evidenceDigest: DIGEST,
       reviews: [review("sol"), review("opus")],
       receipt: ready,
     });
-    expect((await assertReadyReceipt(id, "sha256:one")).ready).toBe(true);
+    expect((await assertReadyReceipt(id, DIGEST)).ready).toBe(true);
     await expect(assertReadyReceipt(id, "sha256:changed")).rejects.toThrow(/stale/);
   });
 

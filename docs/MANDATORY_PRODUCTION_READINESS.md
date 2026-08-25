@@ -13,12 +13,13 @@ The gate must prove all of the following:
 1. The app's purpose is stated and grounded in the supplied product brief or existing repository evidence.
 2. The requested goals and every essential purpose workflow are covered by executable acceptance criteria.
 3. Every criterion actually executed and passed. Generated prose, test files that never ran, and a green unrelated host suite are not evidence.
-4. Grounded QA passed; required writes landed; verification is complete; the exact file-digest receipt remains valid; generated features are wired into the product; no high or critical technical security blocker remains; and the app is operationally runnable.
-5. The verified work reached its intended production destination:
+4. Grounded QA passed; required writes landed; verification is complete; the exact file-digest receipt remains valid; generated features are wired into the product; no placeholder, TODO, FIXME, stubbed route, coming-soon surface, or missing implementation remains; no high or critical technical security blocker remains; and the app is operationally runnable.
+5. Every applicable platform has executed evidence: Safari/WebKit plus iOS and Android mobile browser profiles for web products, Android and iOS production builds for native mobile products, and Windows and macOS execution for desktop/CLI products. An unexecuted target is a blocker, not a portability claim.
+6. The verified work reached its intended production destination:
    - existing repository: exact verified revision on the default branch;
    - hosted new app: live deployment observed answering;
    - private/local app: verified runnable production artifact. Public listing is not required for a private app.
-6. A Sol lead and an independent Fable-or-Opus reviewer approved the same exact evidence digest.
+7. A Sol lead and an independent Fable-or-Opus reviewer approved the same exact evidence digest.
 
 A pending PR, held release, failed deployment, partial implementation, unexecuted criterion, unresolved purpose-critical gap, model-only claim, or missing second brain is not production-ready.
 
@@ -78,6 +79,8 @@ Tests must prove at least:
 - a lower Anthropic model cannot masquerade as Fable/Opus;
 - stale/mismatched evidence digests fail;
 - green tests with incomplete goals fail;
+- production placeholders, TODO/FIXME markers, stubbed routes, and coming-soon surfaces fail;
+- applicable Windows, Safari/WebKit, macOS, iOS, or Android targets without executed evidence fail;
 - unexecuted acceptance criteria fail;
 - existing-repo work not merged to trunk fails;
 - failed or skipped hosted deployment fails;

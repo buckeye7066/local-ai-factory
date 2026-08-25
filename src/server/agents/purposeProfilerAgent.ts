@@ -186,6 +186,18 @@ export function withPurposeAcceptanceCriteria(
         `[PURPOSE-I${index + 1}] Preserve invariant: ${invariant.text} ` +
         `(evidence: ${invariant.evidenceIds.join(", ")}).`,
     ),
+    ...profile.evidence
+      .filter(
+        (evidence) =>
+          evidence.signal ===
+          "explicit gap, skipped behavior, or unfinished implementation",
+      )
+      .map(
+        (evidence, index) =>
+          `[PURPOSE-G${index + 1}] Replace the evidenced unfinished implementation in ` +
+          `${evidence.path}:${evidence.lineStart}-${evidence.lineEnd} with real, wired behavior ` +
+          `and direct executable coverage (evidence: ${evidence.id}).`,
+      ),
   ];
   const acceptanceCriteria = [...spec.acceptanceCriteria];
   for (const criterion of additions) {

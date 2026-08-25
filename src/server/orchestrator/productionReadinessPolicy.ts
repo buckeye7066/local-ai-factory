@@ -60,6 +60,11 @@ export type ProductionReadinessEvidence = {
     wiringComplete: boolean;
     highOrCriticalSecurityIssues: number;
     operationallyRunnable: boolean;
+    completionGaps: number;
+    platformCompatibility: Record<
+      "windows" | "webkit" | "macos" | "ios" | "android",
+      { applicable: boolean; verified: boolean; evidence: string[] }
+    >;
   };
   delivery: {
     kind: "existing-repo" | "new-repo" | "workspace-only";
@@ -177,6 +182,19 @@ export function evaluateProductionReadiness(
     evidence.technical.operationallyRunnable,
     "The app is not operationally runnable.",
   );
+  add(
+    evidence.technical.completionGaps === 0,
+    `${evidence.technical.completionGaps} placeholder, TODO, stub, or unfinished production path(s) remain.`,
+  );
+  for (const [platform, result] of Object.entries(
+    evidence.technical.platformCompatibility,
+  )) {
+    if (!result.applicable) continue;
+    add(
+      result.verified && result.evidence.length > 0,
+      `${platform} compatibility is applicable but lacks executed evidence.`,
+    );
+  }
 
   add(
     evidence.delivery.delivered,

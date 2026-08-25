@@ -3,6 +3,7 @@ import {
   type ProductSpec,
   type PurposeProfile,
 } from "../../shared/schemas.js";
+import { withProductionAcceptanceCriteria } from "../workspace/completionEvidence.js";
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 
 const ProductSpecDraftSchema = ProductSpecSchema.omit({ purposeProfile: true });
@@ -40,7 +41,12 @@ acceptanceCriteria MUST include at least two ease-of-use criteria a non-technica
 user could check themselves (e.g. "a first-time user can complete the core task
 from the opening screen without instructions", "every error message says what to
 do next in plain words"). When a purpose constitution is present, acceptance
-criteria must also cover the affected cited workflows and invariants.`,
+criteria must also cover the affected cited workflows and invariants. Any
+placeholder, TODO, FIXME, stubbed route, coming-soon surface, or missing code is
+unfinished implementation, not an acceptable scaffold. Include executable
+cross-platform criteria for every applicable surface: Safari/WebKit plus iOS and
+Android mobile browser profiles for web apps, both native mobile targets for
+mobile apps, and Windows plus macOS for local desktop/CLI apps.`,
     // Purpose evidence is orchestrator-owned. A model can neither mint nor
     // copy a profile into a greenfield spec through this output boundary.
     schema: ProductSpecDraftSchema,
@@ -51,5 +57,6 @@ criteria must also cover the affected cited workflows and invariants.`,
     // real repo's spec comes back with 20-30 features across seven arrays.
     maxTokens: 16_000,
   });
-  return purposeProfile ? { ...spec, purposeProfile } : spec;
+  const hardened = withProductionAcceptanceCriteria(spec);
+  return purposeProfile ? { ...hardened, purposeProfile } : hardened;
 }
