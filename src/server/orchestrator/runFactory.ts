@@ -684,12 +684,12 @@ async function executeRun(
     ? registry.get("mock")
     : routingMode === "free"
       ? new ThemedProvider(registry.get("free"))
-      : registry.get(liveRouting!.codeProvider);
+      : new ThemedProvider(registry.get(liveRouting!.codeProvider));
   const rawReview = run.demo
     ? registry.get("mock")
     : routingMode === "free"
       ? new ThemedProvider(registry.get("free"))
-      : registry.get(liveRouting!.reviewProvider);
+      : new ThemedProvider(registry.get(liveRouting!.reviewProvider));
   // The failover chain declares itself as "free" but may serve a call from a
   // paid rescue tier, so it must be attributed by who ACTUALLY served —
   // otherwise a paid call would be booked as free and the spend would hide.
@@ -781,7 +781,9 @@ async function executeRun(
   } else {
     const rawCritical = run.demo
       ? registry.get("mock")
-      : registry.get(runPinnedPaid ?? liveRouting!.codeProvider);
+      : new ThemedProvider(
+          registry.get(runPinnedPaid ?? liveRouting!.codeProvider),
+        );
     const criticalCounted = new CountingProvider(
       rawCritical,
       run,
