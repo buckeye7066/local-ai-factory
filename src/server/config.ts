@@ -1,6 +1,7 @@
 import { config as loadDotenv } from "dotenv";
 import { resolve } from "node:path";
 import type { ProviderName } from "../shared/schemas.js";
+import { isSupportedFableOrOpusModel } from "./orchestrator/readinessModels.js";
 
 /**
  * config.ts — loads environment safely.
@@ -187,8 +188,9 @@ export function isOpenAiConfigured(secrets: AppSecrets): boolean {
   return secrets.openaiApiKey.length > 0;
 }
 
+/** Backward-compatible export backed by the explicit readiness model class. */
 export function isFableOrOpusModel(model: string): boolean {
-  return /(fable|opus)/i.test(model.trim());
+  return isSupportedFableOrOpusModel(model);
 }
 
 /** Mandatory non-demo readiness brain floor. */
@@ -196,7 +198,8 @@ export function readinessBrainFloor(config: AppConfig, secrets: AppSecrets) {
   const solConfigured =
     isOpenAiConfigured(secrets) && config.solModel.trim().length > 0;
   const fableOrOpusConfigured =
-    isAnthropicConfigured(secrets) && isFableOrOpusModel(config.fableOrOpusModel);
+    isAnthropicConfigured(secrets) &&
+    isSupportedFableOrOpusModel(config.fableOrOpusModel);
   return {
     configured: solConfigured && fableOrOpusConfigured,
     solConfigured,
