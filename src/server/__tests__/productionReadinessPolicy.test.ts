@@ -6,9 +6,7 @@ import {
   type ReadinessBrainReview,
 } from "../orchestrator/productionReadinessPolicy.js";
 
-const sol = (
-  over: Partial<ReadinessBrainReview> = {},
-): ReadinessBrainReview => ({
+const sol = (over: Partial<ReadinessBrainReview> = {}): ReadinessBrainReview => ({
   identity: "sol",
   provider: "openai",
   model: "gpt-5.6-pro",
@@ -21,9 +19,7 @@ const sol = (
   ...over,
 });
 
-const opus = (
-  over: Partial<ReadinessBrainReview> = {},
-): ReadinessBrainReview => ({
+const opus = (over: Partial<ReadinessBrainReview> = {}): ReadinessBrainReview => ({
   identity: "opus",
   provider: "anthropic",
   model: "claude-opus-4-8",
@@ -90,10 +86,7 @@ describe("mandatory production-readiness policy", () => {
 
     const disguised = evaluateProductionReadiness(
       evidence({
-        reviews: [
-          sol(),
-          opus({ provider: "openai", model: "claude-opus-4-8" }),
-        ],
+        reviews: [sol(), opus({ provider: "openai", model: "claude-opus-4-8" })],
       }),
     );
     expect(disguised.ready).toBe(false);
@@ -174,8 +167,6 @@ describe("mandatory production-readiness policy", () => {
     );
     expect(receipt.ready).toBe(true);
     expect(receipt.blockers.join(" ")).not.toMatch(/legal|licens|regulat/i);
-    expect(receipt.ownerExternalMatters).toBe(
-      "owner-managed-outside-cyberland",
-    );
+    expect(receipt.ownerExternalMatters).toBe("owner-managed-outside-cyberland");
   });
 });

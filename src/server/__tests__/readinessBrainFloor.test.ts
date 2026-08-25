@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  loadConfig,
-  loadSecrets,
-  readinessBrainFloor,
-  toHealth,
-} from "../config.js";
+import { loadConfig, loadSecrets, readinessBrainFloor, toHealth } from "../config.js";
 import { createReadinessBrainProviders } from "../providers/readinessBrains.js";
 
 const keys = {

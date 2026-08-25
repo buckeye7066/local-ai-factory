@@ -136,26 +136,19 @@ export function evaluateProductionReadiness(
     evidence.purpose.grounded,
     "Purpose is not grounded in product or repository evidence.",
   );
-  add(
-    evidence.purpose.goalsCovered,
-    "The requested goals are not fully covered.",
-  );
+  add(evidence.purpose.goalsCovered, "The requested goals are not fully covered.");
   add(
     evidence.purpose.acceptanceCriteria > 0,
     "No executable acceptance criteria define completion.",
   );
   add(
-    evidence.purpose.acceptanceCriteriaExecuted ===
-      evidence.purpose.acceptanceCriteria,
+    evidence.purpose.acceptanceCriteriaExecuted === evidence.purpose.acceptanceCriteria,
     "Not every acceptance criterion executed successfully.",
   );
 
   add(evidence.technical.qaPassed, "Grounded QA did not pass.");
   add(evidence.technical.testsPassed, "Executable tests did not pass.");
-  add(
-    evidence.technical.verificationComplete,
-    "Verification is incomplete.",
-  );
+  add(evidence.technical.verificationComplete, "Verification is incomplete.");
   add(
     evidence.technical.digestReceiptValid,
     "The exact delivered bytes lack a valid receipt.",
@@ -208,10 +201,7 @@ export function evaluateProductionReadiness(
     .every((review) => review.evidenceDigest === evidence.evidenceDigest);
 
   add(sol, "Sol did not approve the exact readiness evidence.");
-  add(
-    fableOrOpus,
-    "Neither Fable nor Opus approved the exact readiness evidence.",
-  );
+  add(fableOrOpus, "Neither Fable nor Opus approved the exact readiness evidence.");
   add(
     independentFamilies,
     "The readiness review did not use independent OpenAI and Anthropic families.",

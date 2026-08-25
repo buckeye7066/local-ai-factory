@@ -41,9 +41,7 @@ describe("Purpose Foundry mandatory production path", () => {
   });
 
   it("keeps FlexFactor mandatory even in Paid mode", () => {
-    expect(normalizeFoundryStations(["factory-deck"], "paid")).toContain(
-      "flexfactor",
-    );
+    expect(normalizeFoundryStations(["factory-deck"], "paid")).toContain("flexfactor");
   });
 
   it("does not confuse all station badges with a production-ready project", () => {
@@ -52,7 +50,9 @@ describe("Purpose Foundry mandatory production path", () => {
       stations: stationEvidence,
     });
     expect(decision.completed).toBe(false);
-    expect(decision.blockers.join(" ")).toMatch(/no ready production-readiness receipt/i);
+    expect(decision.blockers.join(" ")).toMatch(
+      /no ready production-readiness receipt/i,
+    );
   });
 
   it("requires every mandatory station to agree with the receipt digest", () => {

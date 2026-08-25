@@ -143,8 +143,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // Readiness models are separate from ordinary build routing. Helper models
     // may build, but they can never impersonate the required production brains.
     solModel: env.FACTORY_SOL_MODEL || openaiModel,
-    fableOrOpusModel:
-      env.FACTORY_FABLE_OR_OPUS_MODEL || anthropicModel,
+    fableOrOpusModel: env.FACTORY_FABLE_OR_OPUS_MODEL || anthropicModel,
     // Legacy callers that omit routingMode inherit these defaults. The UI
     // submits an explicit Free/Paid tier for every new or extend run.
     defaultCodeProvider: provider(env.DEFAULT_CODE_PROVIDER, "free"),
@@ -197,8 +196,7 @@ export function readinessBrainFloor(config: AppConfig, secrets: AppSecrets) {
   const solConfigured =
     isOpenAiConfigured(secrets) && config.solModel.trim().length > 0;
   const fableOrOpusConfigured =
-    isAnthropicConfigured(secrets) &&
-    isFableOrOpusModel(config.fableOrOpusModel);
+    isAnthropicConfigured(secrets) && isFableOrOpusModel(config.fableOrOpusModel);
   return {
     configured: solConfigured && fableOrOpusConfigured,
     solConfigured,

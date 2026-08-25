@@ -15,9 +15,8 @@ const {
   recordReadinessEvaluation,
   saveReadinessState,
 } = await import("../storage/readinessStore.js");
-const { evaluateProductionReadiness } = await import(
-  "../orchestrator/productionReadinessPolicy.js"
-);
+const { evaluateProductionReadiness } =
+  await import("../orchestrator/productionReadinessPolicy.js");
 
 beforeAll(async () => {
   await rm(resolve(root, "readiness"), { recursive: true, force: true });
@@ -30,8 +29,7 @@ afterAll(async () => {
 
 const review = (identity: "sol" | "opus") => ({
   identity,
-  provider:
-    identity === "sol" ? ("openai" as const) : ("anthropic" as const),
+  provider: identity === "sol" ? ("openai" as const) : ("anthropic" as const),
   model: identity === "sol" ? "gpt-5.6-pro" : "claude-opus-4-8",
   evidenceDigest: "sha256:one",
   decision: "ready" as const,
@@ -109,9 +107,7 @@ describe("durable readiness state", () => {
       receipt: ready,
     });
     expect((await assertReadyReceipt(id, "sha256:one")).ready).toBe(true);
-    await expect(assertReadyReceipt(id, "sha256:changed")).rejects.toThrow(
-      /stale/,
-    );
+    await expect(assertReadyReceipt(id, "sha256:changed")).rejects.toThrow(/stale/);
   });
 
   it("refuses a forged ready status without a ready receipt", async () => {
@@ -125,8 +121,8 @@ describe("durable readiness state", () => {
   });
 
   it("refuses unsafe subject identifiers", () => {
-    expect(() =>
-      initialReadinessState("foundry-project", "../escape"),
-    ).toThrow(/invalid readiness subject id/);
+    expect(() => initialReadinessState("foundry-project", "../escape")).toThrow(
+      /invalid readiness subject id/,
+    );
   });
 });

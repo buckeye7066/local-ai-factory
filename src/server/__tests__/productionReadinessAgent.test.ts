@@ -17,7 +17,11 @@ class ReviewProvider implements LLMProvider {
   constructor(
     name: "openai" | "anthropic",
     private readonly response: unknown,
-    private readonly barrier?: { arrivals: number; release: () => void; wait: Promise<void> },
+    private readonly barrier?: {
+      arrivals: number;
+      release: () => void;
+      wait: Promise<void>;
+    },
   ) {
     this.name = name;
   }

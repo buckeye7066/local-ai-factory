@@ -1,9 +1,5 @@
 import type { LLMProvider } from "../../shared/types.js";
-import {
-  readinessBrainFloor,
-  type AppConfig,
-  type AppSecrets,
-} from "../config.js";
+import { readinessBrainFloor, type AppConfig, type AppSecrets } from "../config.js";
 import { estimateUsd, loadLimits } from "./paidBudget.js";
 import { AnthropicProvider } from "./anthropicProvider.js";
 import { OpenAIProvider } from "./openaiProvider.js";
@@ -44,7 +40,8 @@ export function createReadinessBrainProviders(
     throw new MissingProviderCredentialError(missing);
   }
 
-  const usageLogger = (label: "Sol" | "Fable/Opus") =>
+  const usageLogger =
+    (label: "Sol" | "Fable/Opus") =>
     (usage: { inTokens: number; outTokens: number }) => {
       const usd = estimateUsd(usage.inTokens, usage.outTokens, loadLimits());
       log(
@@ -73,9 +70,7 @@ export function createReadinessBrainProviders(
     sol,
     solModel: config.solModel,
     second,
-    secondIdentity: /fable/i.test(config.fableOrOpusModel)
-      ? "fable"
-      : "opus",
+    secondIdentity: /fable/i.test(config.fableOrOpusModel) ? "fable" : "opus",
     secondModel: config.fableOrOpusModel,
   };
 }

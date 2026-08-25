@@ -9,8 +9,7 @@ export const REQUIRED_PRODUCTION_STATIONS = Object.freeze([
   "watchtower",
 ] as const satisfies readonly StationId[]);
 
-export type RequiredProductionStation =
-  (typeof REQUIRED_PRODUCTION_STATIONS)[number];
+export type RequiredProductionStation = (typeof REQUIRED_PRODUCTION_STATIONS)[number];
 
 /**
  * User selection may add stations, never remove the four stations that prove a
@@ -87,9 +86,7 @@ export function evaluateFoundryCompletion(input: {
 
   const revisions = new Set(
     input.stations
-      .filter((station) =>
-        REQUIRED_PRODUCTION_STATIONS.includes(station.stationId),
-      )
+      .filter((station) => REQUIRED_PRODUCTION_STATIONS.includes(station.stationId))
       .map((station) => station.revision)
       .filter((revision): revision is string => Boolean(revision)),
   );

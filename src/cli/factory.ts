@@ -1,8 +1,4 @@
-import {
-  getConfig,
-  getSecrets,
-  readinessBrainFloor,
-} from "../server/config.js";
+import { getConfig, getSecrets, readinessBrainFloor } from "../server/config.js";
 import {
   startRun,
   MissingProviderCredentialError,
@@ -138,7 +134,9 @@ async function main() {
         }
 
         const r = run.finalReport;
-        console.log(`\n${COLORS.green}✔ ${r.appName} — PRODUCTION READY${COLORS.reset}`);
+        console.log(
+          `\n${COLORS.green}✔ ${r.appName} — PRODUCTION READY${COLORS.reset}`,
+        );
         console.log(`  ${r.summary}`);
         console.log(`\n  ${COLORS.cyan}How to run:${COLORS.reset} ${r.howToRun}`);
         console.log(

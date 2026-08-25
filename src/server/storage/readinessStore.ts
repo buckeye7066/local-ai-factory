@@ -10,10 +10,7 @@ import {
 } from "../orchestrator/productionReadinessPolicy.js";
 import { writeFileContained } from "./runsStore.js";
 
-const DATA_ROOT = resolve(
-  process.cwd(),
-  process.env.FACTORY_DATA_DIR || ".factory",
-);
+const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".factory");
 const READINESS_DIR = join(DATA_ROOT, "readiness");
 
 const BrainReviewSchema = z.object({
@@ -125,9 +122,7 @@ export function initialReadinessState(
   };
 }
 
-export async function saveReadinessState(
-  state: ReadinessState,
-): Promise<void> {
+export async function saveReadinessState(state: ReadinessState): Promise<void> {
   const parsed = ReadinessStateSchema.parse({
     ...state,
     updatedAt: Date.now(),
@@ -138,9 +133,7 @@ export async function saveReadinessState(
     );
   }
   if (parsed.receipt && parsed.receipt.evidenceDigest !== parsed.evidenceDigest) {
-    throw new Error(
-      "Refused: readiness receipt digest does not match state evidence.",
-    );
+    throw new Error("Refused: readiness receipt digest does not match state evidence.");
   }
   await ensureReadinessDir();
   const path = statePath(parsed.subjectId);
@@ -162,9 +155,7 @@ export async function loadReadinessState(
     throw new Error("Refused: readiness state is not a regular file.");
   }
   // O_NOFOLLOW adds defense at the final component on platforms that support it.
-  const flags =
-    FS.O_RDONLY |
-    (typeof FS.O_NOFOLLOW === "number" ? FS.O_NOFOLLOW : 0);
+  const flags = FS.O_RDONLY | (typeof FS.O_NOFOLLOW === "number" ? FS.O_NOFOLLOW : 0);
   const handle = await open(path, flags);
   try {
     return ReadinessStateSchema.parse(JSON.parse(await handle.readFile("utf8")));

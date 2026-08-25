@@ -28,11 +28,7 @@ export type ProductionReadinessCompletion = {
 /** Stable JSON form so object key order can never create a different receipt. */
 export function canonicalReadinessJson(value: unknown): string {
   const stable = (input: unknown): unknown => {
-    if (
-      input === null ||
-      typeof input === "string" ||
-      typeof input === "boolean"
-    ) {
+    if (input === null || typeof input === "string" || typeof input === "boolean") {
       return input;
     }
     if (typeof input === "number") {
@@ -58,9 +54,7 @@ export function canonicalReadinessJson(value: unknown): string {
   return JSON.stringify(stable(value));
 }
 
-export function productionReadinessDigest(
-  facts: ProductionReadinessFacts,
-): string {
+export function productionReadinessDigest(facts: ProductionReadinessFacts): string {
   return `sha256:${createHash("sha256")
     .update(canonicalReadinessJson(facts), "utf8")
     .digest("hex")}`;
