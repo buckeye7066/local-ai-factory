@@ -382,8 +382,15 @@ export function selectRunRouting(
     name: ProviderName | undefined,
   ): name is "anthropic" | "openai" =>
     name === "anthropic" || name === "openai";
+  const hasExplicitProvider = Boolean(
+    options.codeProvider || options.reviewProvider,
+  );
   const inferredPaid =
-    isPaid(options.codeProvider) || isPaid(options.reviewProvider);
+    isPaid(options.codeProvider) ||
+    isPaid(options.reviewProvider) ||
+    (!hasExplicitProvider &&
+      (isPaid(config.defaultCodeProvider) ||
+        isPaid(config.defaultReviewProvider)));
   const routingMode = options.routingMode ?? (inferredPaid ? "paid" : "free");
 
   if (routingMode === "free") {
@@ -657,16 +664,32 @@ async function executeRun(
     run.reviewProvider === "openai"
       ? "paid"
       : "free");
+  const liveRouting = run.demo
+    ? null
+    : selectRunRouting(
+        {
+          routingMode,
+          codeProvider: run.codeProvider,
+          reviewProvider: run.reviewProvider,
+        },
+        registry,
+        config,
+      );
+  if (liveRouting) {
+    run.routingMode = liveRouting.routingMode;
+    run.codeProvider = liveRouting.codeProvider;
+    run.reviewProvider = liveRouting.reviewProvider;
+  }
   const rawCode = run.demo
     ? registry.get("mock")
     : routingMode === "free"
       ? new ThemedProvider(registry.get("free"))
-      : registry.resolveLive(run.codeProvider, config.defaultCodeProvider);
+      : registry.get(liveRouting!.codeProvider);
   const rawReview = run.demo
     ? registry.get("mock")
     : routingMode === "free"
       ? new ThemedProvider(registry.get("free"))
-      : registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);
+      : registry.get(liveRouting!.reviewProvider);
   // The failover chain declares itself as "free" but may serve a call from a
   // paid rescue tier, so it must be attributed by who ACTUALLY served —
   // otherwise a paid call would be booked as free and the spend would hide.
@@ -758,10 +781,7 @@ async function executeRun(
   } else {
     const rawCritical = run.demo
       ? registry.get("mock")
-      : registry.resolveLive(
-          runPinnedPaid ?? run.codeProvider,
-          config.defaultCodeProvider,
-        );
+      : registry.get(runPinnedPaid ?? liveRouting!.codeProvider);
     const criticalCounted = new CountingProvider(
       rawCritical,
       run,
@@ -3204,6 +3224,11 @@ export class RunNotResumableError extends Error {
 // record and start duplicate executions.
 const resumeClaims = new Set<string>();
 
+type ResumeProviderSwitch = {
+  codeProvider?: ProviderName;
+  reviewProvider?: ProviderName;
+};
+
 async function assertResumeWorkspace(
   workspaceRoot: string,
   workspacePath: string,
@@ -3244,6 +3269,7 @@ async function prepareResume(
   runId: string,
   config: AppConfig,
   secrets: AppSecrets,
+  providers?: ResumeProviderSwitch,
 ): Promise<{
   run: RunRecord;
   checkpoint: FactoryCheckpoint;
@@ -3282,8 +3308,57 @@ async function prepareResume(
           registry.missingCredentialNames(),
         );
       }
-      registry.resolveLive(run.codeProvider, config.defaultCodeProvider);
-      registry.resolveLive(run.reviewProvider, config.defaultReviewProvider);
+      const requested = [
+        providers?.codeProvider,
+        providers?.reviewProvider,
+      ].filter((name): name is ProviderName => Boolean(name));
+      if (requested.some((name) => OFFLINE_PROVIDERS.has(name))) {
+        throw new MissingProviderCredentialError([
+          "resume provider switch must use a configured live tier",
+        ]);
+      }
+      const asksFree = requested.includes("free");
+      const asksPaid = requested.some(
+        (name) => name === "anthropic" || name === "openai",
+      );
+      if (asksFree && asksPaid) {
+        throw new RunNotResumableError(
+          "Resume provider switch cannot mix Free and Paid tiers in one run.",
+        );
+      }
+      const requestedMode = asksFree
+        ? "free"
+        : asksPaid
+          ? "paid"
+          : run.routingMode;
+      const routing = selectRunRouting(
+        {
+          routingMode: requestedMode,
+          codeProvider: providers?.codeProvider ?? run.codeProvider,
+          reviewProvider: providers?.reviewProvider ?? run.reviewProvider,
+        },
+        registry,
+        config,
+      );
+      run.routingMode = routing.routingMode;
+      run.codeProvider = routing.codeProvider;
+      run.reviewProvider = routing.reviewProvider;
+      checkpoint.options = {
+        ...checkpoint.options,
+        routingMode: routing.routingMode,
+        codeProvider: routing.codeProvider,
+        reviewProvider: routing.reviewProvider,
+      };
+      await saveRunCheckpoint(checkpoint);
+      if (requested.length > 0) {
+        run.logs.push(
+          makeLog(
+            "info",
+            `Provider tier switched on resume: ${routing.routingMode}; code=${routing.codeProvider}, review=${routing.reviewProvider}.`,
+            run.currentStage,
+          ),
+        );
+      }
     }
 
     for (const stage of run.stages) {
@@ -3338,32 +3413,9 @@ export async function resumeRun(
    * was to abandon its paid checkpoint and start over. The override is
    * validated against configured live providers and persisted with the run.
    */
-  providers?: { codeProvider?: ProviderName; reviewProvider?: ProviderName },
+  providers?: ResumeProviderSwitch,
 ): Promise<RunRecord> {
-  const prepared = await prepareResume(runId, config, secrets);
-  if (providers?.codeProvider || providers?.reviewProvider) {
-    const registry = createProviderRegistry(config, secrets);
-    const live = new Set(registry.availableLive());
-    for (const name of [providers.codeProvider, providers.reviewProvider]) {
-      if (name && !live.has(name)) {
-        throw new MissingProviderCredentialError([
-          `provider "${name}" is not configured — cannot resume onto it`,
-        ]);
-      }
-    }
-    if (providers.codeProvider)
-      prepared.run.codeProvider = providers.codeProvider;
-    if (providers.reviewProvider)
-      prepared.run.reviewProvider = providers.reviewProvider;
-    prepared.run.logs.push(
-      makeLog(
-        "info",
-        `Provider switched on resume: code=${prepared.run.codeProvider}, review=${prepared.run.reviewProvider}.`,
-        prepared.run.currentStage,
-      ),
-    );
-    await saveRun(prepared.run);
-  }
+  const prepared = await prepareResume(runId, config, secrets, providers);
   void executeRun(prepared.run, prepared.args, prepared.checkpoint).catch(
     async (err) => {
       await restoreFailedResume(prepared.run, err).catch(() => {});
