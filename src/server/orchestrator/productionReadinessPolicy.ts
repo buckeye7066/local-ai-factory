@@ -137,10 +137,7 @@ export function evaluateProductionReadiness(
   };
 
   const digestValid = isReadinessEvidenceDigest(evidence.evidenceDigest);
-  add(
-    digestValid,
-    "The production-readiness evidence digest is missing or malformed.",
-  );
+  add(digestValid, "The production-readiness evidence digest is missing or malformed.");
 
   add(evidence.purpose.stated, "Purpose is not stated.");
   add(
@@ -153,8 +150,7 @@ export function evaluateProductionReadiness(
     "No executable acceptance criteria define completion.",
   );
   add(
-    evidence.purpose.acceptanceCriteriaExecuted ===
-      evidence.purpose.acceptanceCriteria,
+    evidence.purpose.acceptanceCriteriaExecuted === evidence.purpose.acceptanceCriteria,
     "Not every acceptance criterion executed successfully.",
   );
 
