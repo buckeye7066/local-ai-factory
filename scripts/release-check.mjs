@@ -568,13 +568,30 @@ function unquoteStaticLiteral(literal) {
     );
 }
 
+const sourceTriviaPatternSource =
+  String.raw`(?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*(?:\r\n|[\r\n\u2028\u2029]))*`;
+const staticQuotedLiteralPatternSource =
+  String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`;
+const staticQuotedLiteralPattern = new RegExp(
+  staticQuotedLiteralPatternSource,
+  "gs",
+);
+const constantTemplateInterpolationPattern = new RegExp(
+  String.raw`(?<!\\)\$\{(${sourceTriviaPatternSource}${staticQuotedLiteralPatternSource}(?:${sourceTriviaPatternSource}\+${sourceTriviaPatternSource}${staticQuotedLiteralPatternSource})*${sourceTriviaPatternSource})\}`,
+  "gs",
+);
+
 function renderStaticLiteral(literal) {
   if (!literal.startsWith("`")) return unquoteStaticLiteral(literal);
   const body = literal
     .slice(1, -1)
     .replace(
-      /(?<!\\)\$\{\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\}/gs,
-      (match, interpolation) => unquoteStaticLiteral(interpolation),
+      constantTemplateInterpolationPattern,
+      (match, expression) =>
+        [...expression.matchAll(staticQuotedLiteralPattern)]
+          .map((literalMatch) => unquoteStaticLiteral(literalMatch[0]))
+          .join("")
+          .replaceAll("\\", "\\\\"),
     );
   return unquoteStaticLiteral(`\`${body}\``);
 }
@@ -941,6 +958,16 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "commented_constant_template_literal_chain",
+    "`" +
+      probeFirstWord +
+      ' ${/* split */ " " /* split */ + ""}' +
+      probeSecondWord +
+      "`",
+    "probe.js",
+    encodedPhraseProbe,
+  ],
+  [
     "json_unicode_escape",
     `{"copy":"${probeFirstWord}\\u0020${probeSecondWord}"}`,
     "probe.json",
@@ -1046,7 +1073,7 @@ for (const [label, source, relativePath, target] of [
   }
 }
 
-for (const [label, source, relativePath] of [
+for (const [label, source, relativePath, target = encodedPhraseProbe] of [
   [
     "markdown_unmatched_delimiter",
     `${probeFirstWord} * ${probeSecondWord}`,
@@ -1061,11 +1088,29 @@ for (const [label, source, relativePath] of [
     "javascript_even_backslash",
     `"${compactOrganizationalProbe.slice(0, 2)}\\\\${compactOrganizationalProbe.slice(2)}"`,
     "probe.js",
+    compactOrganizationalProbe,
+  ],
+  [
+    "dynamic_template_interpolation",
+    "`" + probeFirstWord + " ${separator}" + probeSecondWord + "`",
+    "probe.js",
+  ],
+  [
+    "constant_template_backslash_preserved",
+    "`" +
+      compactOrganizationalProbe.slice(0, 2) +
+      '${"\\\\' +
+      compactOrganizationalProbe[2] +
+      '"}' +
+      compactOrganizationalProbe.slice(3) +
+      "`",
+    "probe.js",
+    compactOrganizationalProbe,
   ],
 ]) {
   if (
     renderedSourceCandidates(source, relativePath).some((candidate) =>
-      containsLanguagePhrase(normalizeLanguage(candidate), encodedPhraseProbe),
+      containsLanguagePhrase(normalizeLanguage(candidate), target),
     )
   ) {
     errors.push(`release_language_policy_self_test:${label}_false_positive`);
