@@ -316,16 +316,17 @@ function containsLanguagePhrase(value, target) {
 }
 
 function decodeUtf32(data, littleEndian, offset = 0) {
-  if ((data.length - offset) % 4 !== 0) return null;
   let value = "";
-  for (let index = offset; index < data.length; index += 4) {
+  const completeLength = data.length - ((data.length - offset) % 4);
+  for (let index = offset; index < completeLength; index += 4) {
     const codePoint = littleEndian
       ? data.readUInt32LE(index)
       : data.readUInt32BE(index);
     if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff))
-      return null;
-    value += String.fromCodePoint(codePoint);
+      value += "\ufffd";
+    else value += String.fromCodePoint(codePoint);
   }
+  if (completeLength !== data.length) value += "\ufffd";
   return value;
 }
 
@@ -341,7 +342,7 @@ function decodeUtf16Be(data, offset = 0) {
 }
 
 function looksLikeText(value) {
-  if (!value || value.includes("\0")) return false;
+  if (!value) return false;
   let controls = 0;
   let replacements = 0;
   for (const character of value) {
@@ -349,7 +350,9 @@ function looksLikeText(value) {
     if (codePoint < 32 && !"\t\r\n".includes(character)) controls += 1;
     if (codePoint === 0xfffd) replacements += 1;
   }
-  return controls / value.length <= 0.05 && replacements / value.length <= 0.02;
+  const controlLimit = Math.max(1, Math.floor(value.length / 20));
+  const replacementLimit = Math.max(1, Math.floor(value.length / 50));
+  return controls <= controlLimit && replacements <= replacementLimit;
 }
 
 function uniqueTextCandidates(candidates) {
@@ -377,9 +380,9 @@ function decodeRepositoryTexts(data) {
     return uniqueTextCandidates([data.subarray(2).toString("utf16le")]);
   if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff)
     return uniqueTextCandidates([decodeUtf16Be(data, 2)]);
-  if (!data.includes(0)) return uniqueTextCandidates([data.toString("utf8")]);
+  const candidates = [data.toString("utf8")];
+  if (!data.includes(0)) return uniqueTextCandidates(candidates);
 
-  const candidates = [];
   if (data.length % 4 === 0) {
     candidates.push(decodeUtf32(data, true), decodeUtf32(data, false));
   }
@@ -397,6 +400,7 @@ const literalSourceExtensions = new Set([
   ".cts",
   ".js",
   ".jsx",
+  ".json",
   ".mjs",
   ".mts",
   ".svelte",
@@ -404,6 +408,7 @@ const literalSourceExtensions = new Set([
   ".tsx",
   ".vue",
 ]);
+const cssSourceExtensions = new Set([".css", ".less", ".sass", ".scss"]);
 const markupSourceExtensions = new Set([
   ".htm",
   ".html",
@@ -530,6 +535,65 @@ function unquoteStaticLiteral(literal) {
     );
 }
 
+function renderStaticLiteral(literal) {
+  if (!literal.startsWith("`")) return unquoteStaticLiteral(literal);
+  const body = literal
+    .slice(1, -1)
+    .replace(
+      /(?<!\\)\$\{\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\}/gs,
+      (match, interpolation) => unquoteStaticLiteral(interpolation),
+    );
+  return unquoteStaticLiteral(`\`${body}\``);
+}
+
+function decodeCssString(literal) {
+  return literal
+    .slice(1, -1)
+    .replace(
+      /\\([0-9A-Fa-f]{1,6})(?:\r\n|[\t\n\f\r ])?|\\(?:\r\n|[\n\f\r])|\\([\s\S])/g,
+      (escape, hexadecimal, escapedCharacter) => {
+        if (hexadecimal !== undefined) {
+          const codePoint = Number.parseInt(hexadecimal, 16);
+          if (
+            codePoint > 0 &&
+            codePoint <= 0x10ffff &&
+            !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+          )
+            return String.fromCodePoint(codePoint);
+          return "\ufffd";
+        }
+        return escapedCharacter ?? "";
+      },
+    );
+}
+
+function renderCssContent(value) {
+  const candidates = [];
+  const withoutComments = value.replace(/\/\*[\s\S]*?\*\//g, "");
+  const declarationPattern = /\bcontent\s*:\s*([^;}]+)/gi;
+  const stringPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/gs;
+  for (const declaration of withoutComments.matchAll(declarationPattern)) {
+    let combined = "";
+    for (const literal of declaration[1].matchAll(stringPattern)) {
+      const rendered = decodeCssString(literal[0]);
+      candidates.push(rendered);
+      combined += rendered;
+    }
+    if (combined) candidates.push(combined);
+  }
+  return candidates;
+}
+
+function replaceJsxWhitespaceExpressions(value) {
+  return value.replace(
+    /\{\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\}/gs,
+    (match, literal) => {
+      const rendered = renderStaticLiteral(literal);
+      return rendered && /^\s+$/u.test(rendered) ? rendered : match;
+    },
+  );
+}
+
 function stripMarkupNodes(value) {
   return value
     .replace(/<!--[\s\S]*?-->/g, "")
@@ -537,29 +601,45 @@ function stripMarkupNodes(value) {
 }
 
 function renderMarkdown(value) {
-  return stripMarkupNodes(value)
+  const referenceIds = new Set(
+    [...value.matchAll(/^\s{0,3}\[([^\]]+)\]:\s+\S+.*$/gm)].map((match) =>
+      normalizeLanguage(match[1]),
+    ),
+  );
+  const withoutDefinitions = value.replace(/^\s{0,3}\[[^\]]+\]:\s+\S+.*$/gm, "");
+  return stripMarkupNodes(withoutDefinitions)
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/!?\[([^\]]+)\]\[([^\]]*)\]/g, (match, label, reference) =>
+      referenceIds.has(normalizeLanguage(reference || label)) ? label : match,
+    )
+    .replace(/!?\[([^\]]+)\]/g, (match, label) =>
+      referenceIds.has(normalizeLanguage(label)) ? label : match,
+    )
     .replace(/[*~`]+/g, "");
 }
 
 function renderedSourceCandidates(value, relativePath) {
   const extension = sourceExtension(relativePath);
   const candidates = [];
+  const visibleValue = markupSourceExtensions.has(extension)
+    ? replaceJsxWhitespaceExpressions(value)
+    : value;
   if (markupSourceExtensions.has(extension))
-    candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(value)));
+    candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(visibleValue)));
   if (markdownSourceExtensions.has(extension))
-    candidates.push(decodeHtmlCharacterReferences(renderMarkdown(value)));
+    candidates.push(decodeHtmlCharacterReferences(renderMarkdown(visibleValue)));
+  if (cssSourceExtensions.has(extension)) candidates.push(...renderCssContent(value));
   if (!literalSourceExtensions.has(extension)) return candidates;
 
   const literalPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gs;
   let previous = null;
   let chain = null;
   for (const match of value.matchAll(literalPattern)) {
-    const renderedLiteral = unquoteStaticLiteral(match[0]);
+    const renderedLiteral = renderStaticLiteral(match[0]);
     candidates.push(renderedLiteral);
     if (previous && /^\s*\+\s*$/.test(value.slice(previous.end, match.index))) {
-      chain = (chain ?? unquoteStaticLiteral(previous.literal)) + renderedLiteral;
+      chain = (chain ?? renderStaticLiteral(previous.literal)) + renderedLiteral;
       candidates.push(chain);
     } else {
       chain = null;
@@ -673,6 +753,18 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "constant_template_interpolation",
+    "`" + probeFirstWord + ' ${""}' + probeSecondWord + "`",
+    "probe.js",
+    encodedPhraseProbe,
+  ],
+  [
+    "json_unicode_escape",
+    `{"copy":"${probeFirstWord}\\u0020${probeSecondWord}"}`,
+    "probe.json",
+    encodedPhraseProbe,
+  ],
+  [
     "html_numeric_entity",
     `${probeFirstWord}&#32;${probeSecondWord}`,
     "probe.html",
@@ -702,6 +794,24 @@ for (const [label, source, relativePath, target] of [
     "probe.md",
     encodedPhraseProbe,
   ],
+  [
+    "markdown_reference_link",
+    `${probeFirstWord} [${probeSecondWord}][policy]\n\n[policy]: https://example.test/policy`,
+    "probe.md",
+    encodedPhraseProbe,
+  ],
+  [
+    "css_generated_content_escape",
+    `.status::after { content: "${probeFirstWord}\\20 ${probeSecondWord}"; }`,
+    "probe.css",
+    encodedPhraseProbe,
+  ],
+  [
+    "jsx_whitespace_expression",
+    `<span>${probeFirstWord}</span>{' '}<span>${probeSecondWord}</span>`,
+    "probe.jsx",
+    encodedPhraseProbe,
+  ],
 ]) {
   if (
     !renderedSourceCandidates(source, relativePath).some((candidate) =>
@@ -710,6 +820,18 @@ for (const [label, source, relativePath, target] of [
   ) {
     errors.push(`release_language_policy_self_test:${label}_not_detected`);
   }
+}
+
+const nulInterruptedUtf8Probe = Buffer.concat([
+  Buffer.from(encodedPhraseProbe, "utf8"),
+  Buffer.from([0]),
+]);
+if (
+  !decodeRepositoryTexts(nulInterruptedUtf8Probe).some((decoded) =>
+    containsLanguagePhrase(normalizeLanguage(decoded), encodedPhraseProbe),
+  )
+) {
+  errors.push("release_language_policy_self_test:nul_utf8_not_detected");
 }
 
 const pluralManualProbe = normalizeLanguage(encodedPhraseProbe + phrase(115));
