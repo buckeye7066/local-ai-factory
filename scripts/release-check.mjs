@@ -810,10 +810,9 @@ function decodeCssString(literal) {
 function renderCssContent(value) {
   const candidates = [];
   const withoutComments = stripCssComments(value);
-  const declarationPattern = /\bcontent\s*:\s*([^;}]+)/gi;
   const stringPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/gs;
-  for (const declaration of withoutComments.matchAll(declarationPattern)) {
-    for (const branch of splitCssAlternativeContent(declaration[1])) {
+  for (const declaration of cssContentDeclarationValues(withoutComments)) {
+    for (const branch of splitCssAlternativeContent(declaration)) {
       let combined = "";
       for (const literal of branch.matchAll(stringPattern)) {
         const rendered = decodeCssString(literal[0]);
@@ -824,6 +823,70 @@ function renderCssContent(value) {
     }
   }
   return candidates;
+}
+
+function* cssContentDeclarationValues(value) {
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] === '"' || value[index] === "'") {
+      const quote = value[index];
+      index += 1;
+      while (index < value.length) {
+        if (value[index] === "\\") {
+          index += 2;
+          continue;
+        }
+        index += 1;
+        if (value[index - 1] === quote) break;
+      }
+      continue;
+    }
+    if (value.slice(index, index + 7).toLowerCase() !== "content") {
+      index += 1;
+      continue;
+    }
+    const before = value[index - 1] ?? "";
+    const after = value[index + 7] ?? "";
+    if (
+      (before && /[\p{L}\p{N}_-]/u.test(before)) ||
+      (after && /[\p{L}\p{N}_-]/u.test(after))
+    ) {
+      index += 7;
+      continue;
+    }
+    let cursor = index + 7;
+    while (/\s/u.test(value[cursor] ?? "")) cursor += 1;
+    if (value[cursor] !== ":") {
+      index += 7;
+      continue;
+    }
+    const start = cursor + 1;
+    cursor = start;
+    let quote = null;
+    let escaped = false;
+    let parentheses = 0;
+    while (cursor < value.length) {
+      const character = value[cursor];
+      if (quote !== null) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === quote) quote = null;
+        cursor += 1;
+        continue;
+      }
+      if (character === '"' || character === "'") quote = character;
+      else if (character === "\\") {
+        cursor += 2;
+        continue;
+      } else if (character === "(") parentheses += 1;
+      else if (character === ")" && parentheses > 0) parentheses -= 1;
+      else if ((character === ";" || character === "}") && parentheses === 0)
+        break;
+      cursor += 1;
+    }
+    yield value.slice(start, cursor);
+    index = cursor + 1;
+  }
 }
 
 function stripCssComments(value) {
@@ -921,7 +984,8 @@ function renderMarkupAttributeValues(value) {
 
 function renderInlineExecutableScripts(value) {
   const candidates = [];
-  const scriptPattern = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+  const scriptPattern =
+    /<script\b((?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?)\s*>([\s\S]*?)<\/script\s*>/gi;
   const executableTypes = new Set([
     "",
     "application/ecmascript",
@@ -952,13 +1016,28 @@ function stripJsxComments(value) {
 }
 
 function replaceJsxWhitespaceExpressions(value) {
-  return value.replace(
-    /\{\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\}/gs,
-    (match, literal) => {
-      const rendered = renderStaticLiteral(literal);
-      return rendered && /^\s+$/u.test(rendered) ? rendered : match;
-    },
-  );
+  let projected = "";
+  let cursor = 0;
+  while (cursor < value.length) {
+    const start = value.indexOf("{", cursor);
+    if (start < 0) {
+      projected += value.slice(cursor);
+      break;
+    }
+    projected += value.slice(cursor, start);
+    const end = findTemplateExpressionEnd(value, start + 1);
+    if (end < 0) {
+      projected += value.slice(start);
+      break;
+    }
+    const expression = renderConstantJavascriptExpression(
+      value.slice(start + 1, end),
+    );
+    const original = value.slice(start, end + 1);
+    projected += expression && /^\s+$/u.test(expression) ? expression : original;
+    cursor = end + 1;
+  }
+  return projected;
 }
 
 function removeNonRenderingJsxExpressions(value) {
@@ -968,8 +1047,18 @@ function removeNonRenderingJsxExpressions(value) {
 function stripMarkupNodes(value) {
   return value
     .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
-    .replace(/<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*?)?\s*\/?>/gs, " ");
+    .replace(
+      /<(script|style|template)\b(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*>[\s\S]*?<\/\1\s*>/gi,
+      "",
+    )
+    .replace(
+      /<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*\/?>/gs,
+      " ",
+    );
+}
+
+function normalizeMarkdownReferenceLabel(value) {
+  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("und");
 }
 
 function renderMarkdown(value) {
@@ -986,7 +1075,7 @@ function renderMarkdown(value) {
   shielded = shielded.replace(/(`+)([^\r\n]*?)\1/g, (segment) => shield(segment));
   const referenceIds = new Set(
     [...shielded.matchAll(/^\s{0,3}\[([^\]]+)\]:\s+\S+.*$/gm)].map((match) =>
-      normalizeLanguage(match[1]),
+      normalizeMarkdownReferenceLabel(match[1]),
     ),
   );
   const withoutDefinitions = shielded.replace(
@@ -997,10 +1086,12 @@ function renderMarkdown(value) {
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/!?\[([^\]]+)\]\[([^\]]*)\]/g, (match, label, reference) =>
-      referenceIds.has(normalizeLanguage(reference || label)) ? label : match,
+      referenceIds.has(normalizeMarkdownReferenceLabel(reference || label))
+        ? label
+        : match,
     )
     .replace(/!?\[([^\]]+)\]/g, (match, label) =>
-      referenceIds.has(normalizeLanguage(label)) ? label : match,
+      referenceIds.has(normalizeMarkdownReferenceLabel(label)) ? label : match,
     )
     .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
     .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, "$1")
@@ -1565,6 +1656,18 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "css_string_declaration_terminator",
+    `.status::after { content: "x;${probeFirstWord}\\20 ${probeSecondWord}"; }`,
+    "probe.css",
+    encodedPhraseProbe,
+  ],
+  [
+    "quoted_html_attribute_boundary",
+    `<span>${probeFirstWord} </span><span title='>'>${probeSecondWord}</span>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
     "embedded_css_generated_content_escape",
     `<style>.status::after { content: "${probeFirstWord}\\20 ${probeSecondWord}"; }</style>`,
     "probe.html",
@@ -1609,6 +1712,12 @@ for (const [label, source, relativePath, target] of [
   [
     "jsx_whitespace_expression",
     `<span>${probeFirstWord}</span>{' '}<span>${probeSecondWord}</span>`,
+    "probe.jsx",
+    encodedPhraseProbe,
+  ],
+  [
+    "jsx_grouped_whitespace_expression",
+    `<span>${probeFirstWord}</span>{((" " + ""))}<span>${probeSecondWord}</span>`,
     "probe.jsx",
     encodedPhraseProbe,
   ],
@@ -1707,6 +1816,11 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
     "ambiguous_legacy_entity_in_attribute",
     `<div aria-label="${probeFirstWord}&nbsp${probeSecondWord}"></div>`,
     "probe.html",
+  ],
+  [
+    "markdown_reference_punctuation_mismatch",
+    `${probeFirstWord} [${probeSecondWord}][foo_bar]\n\n[foo-bar]: https://example.test`,
+    "probe.md",
   ],
   [
     "markdown_code_span_markup",
