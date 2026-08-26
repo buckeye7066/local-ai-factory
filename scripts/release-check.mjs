@@ -16,6 +16,13 @@ const errors = [];
 const notes = [];
 
 function selectRepositorySource() {
+  let hasGitMetadata = false;
+  try {
+    lstatSync(resolve(ROOT, ".git"));
+    hasGitMetadata = true;
+  } catch {
+    // An exported tree has no repository metadata and may use workspace mode.
+  }
   let gitRoot;
   try {
     gitRoot = resolve(
@@ -26,14 +33,18 @@ function selectRepositorySource() {
       }).trim(),
     );
   } catch {
-    return { type: "workspace", note: "git_index_unavailable" };
+    return hasGitMetadata
+      ? { type: "error", note: "git_index_unavailable" }
+      : { type: "workspace", note: "git_index_unavailable" };
   }
 
   const comparableRoot = process.platform === "win32" ? ROOT.toLowerCase() : ROOT;
   const comparableGitRoot =
     process.platform === "win32" ? gitRoot.toLowerCase() : gitRoot;
   if (comparableGitRoot !== comparableRoot) {
-    return { type: "workspace", note: "foreign_git_index" };
+    return hasGitMetadata
+      ? { type: "error", note: "foreign_git_index" }
+      : { type: "workspace", note: "foreign_git_index" };
   }
   return { type: "index", note: null };
 }
@@ -492,21 +503,31 @@ const markupSourceExtensions = new Set([
   ".html",
   ".jsx",
   ".mdx",
+  ".svg",
   ".svelte",
   ".tsx",
   ".vue",
 ]);
+const jsxSourceExtensions = new Set([".jsx", ".mdx", ".tsx"]);
 const markdownSourceExtensions = new Set([".md", ".mdx"]);
 
 let namedHtmlCharacterReferences = new Map();
+let legacyHtmlCharacterReferenceNames = [];
 const namedHtmlReferenceData = readSelectedRepositoryPath(
   "scripts/html-named-character-references.json",
 );
 if (namedHtmlReferenceData !== null) {
   try {
+    const parsedReferences = JSON.parse(namedHtmlReferenceData.toString("utf8"));
+    const namedReferences = parsedReferences.entities ?? parsedReferences;
     namedHtmlCharacterReferences = new Map(
-      Object.entries(JSON.parse(namedHtmlReferenceData.toString("utf8"))),
+      Object.entries(namedReferences),
     );
+    legacyHtmlCharacterReferenceNames = Array.isArray(parsedReferences.legacy)
+      ? parsedReferences.legacy.filter((name) =>
+          namedHtmlCharacterReferences.has(name),
+        )
+      : ["amp", "AMP", "gt", "GT", "lt", "LT", "nbsp", "quot", "QUOT"];
   } catch (error) {
     errors.push(
       `invalid_html_named_references:${error instanceof Error ? error.message : String(error)}`,
@@ -514,14 +535,15 @@ if (namedHtmlReferenceData !== null) {
   }
 }
 
-const semicolonOptionalHtmlReferences = new Map(
-  ["amp", "AMP", "gt", "GT", "lt", "LT", "nbsp", "quot", "QUOT"].map((name) => [
-    name,
-    namedHtmlCharacterReferences.get(name),
-  ]),
+const legacyHtmlCharacterReferencePattern = new RegExp(
+  `&(${legacyHtmlCharacterReferenceNames
+    .toSorted((left, right) => right.length - left.length || left.localeCompare(right))
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|")})`,
+  "g",
 );
 
-function decodeHtmlCharacterReferences(value) {
+function decodeHtmlCharacterReferences(value, inAttribute = false) {
   const numericDecoded = value.replace(
     /&#(?:[xX]([0-9A-Fa-f]+)|(\d+));?/g,
     (match, hexadecimal, decimal) => {
@@ -544,8 +566,12 @@ function decodeHtmlCharacterReferences(value) {
     (match, named) => namedHtmlCharacterReferences.get(named) ?? match,
   );
   return namedDecoded.replace(
-    /&(amp|AMP|gt|GT|lt|LT|nbsp|quot|QUOT)(?=[\s<&]|$)/g,
-    (match, named) => semicolonOptionalHtmlReferences.get(named) ?? match,
+    legacyHtmlCharacterReferencePattern,
+    (match, named, offset, input) => {
+      const nextCharacter = input[offset + match.length] ?? "";
+      if (inAttribute && /[A-Za-z0-9=]/.test(nextCharacter)) return match;
+      return namedHtmlCharacterReferences.get(named) ?? match;
+    },
   );
 }
 
@@ -596,34 +622,168 @@ function unquoteStaticLiteral(literal) {
     );
 }
 
-const sourceTriviaPatternSource =
-  String.raw`(?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*(?:\r\n|[\r\n\u2028\u2029]))*`;
-const sourceGroupingPatternSource =
-  String.raw`(?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*(?:\r\n|[\r\n\u2028\u2029])|[()])*`;
-const staticQuotedLiteralPatternSource =
-  String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`;
-const staticQuotedLiteralPattern = new RegExp(
-  staticQuotedLiteralPatternSource,
-  "gs",
-);
-const constantTemplateInterpolationPattern = new RegExp(
-  String.raw`(?<!\\)\$\{(${sourceGroupingPatternSource}${staticQuotedLiteralPatternSource}(?:${sourceGroupingPatternSource}\+${sourceGroupingPatternSource}${staticQuotedLiteralPatternSource})*${sourceGroupingPatternSource})\}`,
-  "gs",
-);
-
 function renderStaticLiteral(literal) {
   if (!literal.startsWith("`")) return unquoteStaticLiteral(literal);
-  const body = literal
-    .slice(1, -1)
-    .replace(
-      constantTemplateInterpolationPattern,
-      (match, expression) =>
-        [...expression.matchAll(staticQuotedLiteralPattern)]
-          .map((literalMatch) => unquoteStaticLiteral(literalMatch[0]))
-          .join("")
-          .replaceAll("\\", "\\\\"),
-    );
-  return unquoteStaticLiteral(`\`${body}\``);
+  return renderStaticTemplateLiteral(literal);
+}
+
+function scanJavascriptLiteral(value, start) {
+  const delimiter = value[start];
+  if (!['"', "'", "`"].includes(delimiter)) return null;
+  let index = 0;
+  let braceDepth = 0;
+  index = start + 1;
+  while (index < value.length) {
+    if (value[index] === "\\") {
+      index += value[index + 1] === "\r" && value[index + 2] === "\n" ? 3 : 2;
+      continue;
+    }
+    if (value[index] === delimiter && (delimiter !== "`" || braceDepth === 0))
+      return { literal: value.slice(start, index + 1), end: index + 1 };
+    if (delimiter === "`" && value.startsWith("${", index)) {
+      braceDepth += 1;
+      index += 2;
+      continue;
+    }
+    if (delimiter === "`" && braceDepth > 0) {
+      if (value.startsWith("/*", index)) {
+        const end = value.indexOf("*/", index + 2);
+        if (end < 0) return null;
+        index = end + 2;
+        continue;
+      }
+      if (value.startsWith("//", index)) {
+        const terminator = /[\r\n\u2028\u2029]/u.exec(value.slice(index + 2));
+        index = terminator
+          ? index + 2 + (terminator.index ?? 0) + terminator[0].length
+          : value.length;
+        continue;
+      }
+      if (['"', "'", "`"].includes(value[index])) {
+        const nested = scanJavascriptLiteral(value, index);
+        if (!nested) return null;
+        index = nested.end;
+        continue;
+      }
+      if (value[index] === "{") braceDepth += 1;
+      else if (value[index] === "}") braceDepth -= 1;
+    }
+    index += 1;
+  }
+  return null;
+}
+
+function findTemplateExpressionEnd(value, start) {
+  let braces = 1;
+  let index = start;
+  while (index < value.length) {
+    if (value.startsWith("/*", index)) {
+      const end = value.indexOf("*/", index + 2);
+      if (end < 0) return -1;
+      index = end + 2;
+      continue;
+    }
+    if (value.startsWith("//", index)) {
+      const terminator = /[\r\n\u2028\u2029]/u.exec(value.slice(index + 2));
+      index = terminator
+        ? index + 2 + (terminator.index ?? 0) + terminator[0].length
+        : value.length;
+      continue;
+    }
+    if (['"', "'", "`"].includes(value[index])) {
+      const literal = scanJavascriptLiteral(value, index);
+      if (!literal) return -1;
+      index = literal.end;
+      continue;
+    }
+    if (value[index] === "{") braces += 1;
+    else if (value[index] === "}" && --braces === 0) return index;
+    index += 1;
+  }
+  return -1;
+}
+
+function renderConstantJavascriptExpression(expression) {
+  const rendered = [];
+  let parentheses = 0;
+  let expectOperand = true;
+  let index = 0;
+  while (index < expression.length) {
+    const character = expression[index];
+    if (/\s/u.test(character)) {
+      index += 1;
+      continue;
+    }
+    if (expression.startsWith("/*", index)) {
+      const end = expression.indexOf("*/", index + 2);
+      if (end < 0) return null;
+      index = end + 2;
+      continue;
+    }
+    if (expression.startsWith("//", index)) {
+      const remainder = expression.slice(index + 2);
+      const terminator = /[\r\n\u2028\u2029]/u.exec(remainder);
+      if (terminator === null) return null;
+      index += 2 + (terminator.index ?? 0) + terminator[0].length;
+      continue;
+    }
+    if (character === "(") {
+      parentheses += 1;
+      index += 1;
+      continue;
+    }
+    if (character === ")") {
+      if (parentheses === 0 || expectOperand) return null;
+      parentheses -= 1;
+      index += 1;
+      continue;
+    }
+    if (character === "+") {
+      if (expectOperand) return null;
+      expectOperand = true;
+      index += 1;
+      continue;
+    }
+    if (!expectOperand || !['"', "'", "`"].includes(character)) return null;
+    const literal = scanJavascriptLiteral(expression, index);
+    if (!literal) return null;
+    const value = renderStaticLiteral(literal.literal);
+    if (value === null) return null;
+    rendered.push(value);
+    expectOperand = false;
+    index = literal.end;
+  }
+  return !expectOperand && parentheses === 0 ? rendered.join("") : null;
+}
+
+function renderStaticTemplateLiteral(literal) {
+  let renderedBody = "";
+  let index = 1;
+  while (index < literal.length - 1) {
+    if (literal[index] === "\\") {
+      const width = literal[index + 1] === "\r" && literal[index + 2] === "\n" ? 3 : 2;
+      renderedBody += literal.slice(index, index + width);
+      index += width;
+      continue;
+    }
+    if (literal.startsWith("${", index)) {
+      const end = findTemplateExpressionEnd(literal, index + 2);
+      if (end < 0) return null;
+      const expression = renderConstantJavascriptExpression(
+        literal.slice(index + 2, end),
+      );
+      if (expression === null) return null;
+      renderedBody += expression
+        .replaceAll("\\", "\\\\")
+        .replaceAll("`", "\\`")
+        .replaceAll("${", "\\${");
+      index = end + 1;
+      continue;
+    }
+    renderedBody += literal[index];
+    index += 1;
+  }
+  return unquoteStaticLiteral(`\`${renderedBody}\``);
 }
 
 function decodeCssString(literal) {
@@ -649,7 +809,7 @@ function decodeCssString(literal) {
 
 function renderCssContent(value) {
   const candidates = [];
-  const withoutComments = value.replace(/\/\*[\s\S]*?\*\//g, "");
+  const withoutComments = stripCssComments(value);
   const declarationPattern = /\bcontent\s*:\s*([^;}]+)/gi;
   const stringPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/gs;
   for (const declaration of withoutComments.matchAll(declarationPattern)) {
@@ -664,6 +824,38 @@ function renderCssContent(value) {
     }
   }
   return candidates;
+}
+
+function stripCssComments(value) {
+  let rendered = "";
+  let quote = null;
+  let escaped = false;
+  let index = 0;
+  while (index < value.length) {
+    const character = value[index];
+    if (quote !== null) {
+      rendered += character;
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      rendered += character;
+      index += 1;
+      continue;
+    }
+    if (value.startsWith("/*", index)) {
+      const end = value.indexOf("*/", index + 2);
+      index = end < 0 ? value.length : end + 2;
+      continue;
+    }
+    rendered += character;
+    index += 1;
+  }
+  return rendered;
 }
 
 function splitCssAlternativeContent(value) {
@@ -717,7 +909,10 @@ function renderMarkupAttributeValues(value) {
     for (const attribute of tag[0].matchAll(attributePattern)) {
       if (!exposedAttributeNames.has(attribute[1].toLowerCase())) continue;
       candidates.push(
-        decodeHtmlCharacterReferences(attribute[2] ?? attribute[3] ?? attribute[4]),
+        decodeHtmlCharacterReferences(
+          attribute[2] ?? attribute[3] ?? attribute[4],
+          true,
+        ),
       );
     }
   }
@@ -739,7 +934,10 @@ function renderInlineExecutableScripts(value) {
     const typeMatch = /(?:^|\s)type\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(
       script[1],
     );
-    const type = (typeMatch?.[1] ?? typeMatch?.[2] ?? typeMatch?.[3] ?? "")
+    const type = decodeHtmlCharacterReferences(
+      typeMatch?.[1] ?? typeMatch?.[2] ?? typeMatch?.[3] ?? "",
+      true,
+    )
       .trim()
       .toLowerCase()
       .split(";", 1)[0]
@@ -761,6 +959,10 @@ function replaceJsxWhitespaceExpressions(value) {
       return rendered && /^\s+$/u.test(rendered) ? rendered : match;
     },
   );
+}
+
+function removeNonRenderingJsxExpressions(value) {
+  return value.replace(/\{\s*(?:false|null|true|undefined)\s*\}/g, "");
 }
 
 function stripMarkupNodes(value) {
@@ -804,19 +1006,14 @@ function renderMarkdown(value) {
     .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, "$1")
     .replace(/__(?=\S)([\s\S]*?\S)__/g, "$1")
     .replace(/\*(?=\S)([^*\r\n]*?\S)\*/g, "$1")
-    .replace(/_(?=\S)([^_\r\n]*?\S)_/g, "$1");
+    .replace(/_(?=\S)([^_\r\n]*?\S)_/g, "$1")
+    .replace(/\\(?:\r\n|[\r\n])/g, " ");
   for (const [placeholder, segment] of codeSegments)
     rendered = rendered.replaceAll(placeholder, segment);
   return rendered;
 }
 
-function renderPythonString(literal) {
-  const prefixMatch = /^([rRuUbBfF]{0,2})("""|'''|"|')/.exec(literal);
-  if (!prefixMatch) return literal;
-  const prefix = prefixMatch[1].toLowerCase();
-  const delimiter = prefixMatch[2];
-  const body = literal.slice(prefixMatch[0].length, -delimiter.length);
-  if (prefix.includes("r")) return body;
+function decodePythonStringBody(body) {
   return `"${body.replace(/"/g, '\\"')}"`
     .slice(1, -1)
     .replace(
@@ -858,6 +1055,131 @@ function renderPythonString(literal) {
     );
 }
 
+function scanPythonLiteral(value, start) {
+  const prefix = /^[rRuUbB]{0,2}/.exec(value.slice(start))?.[0] ?? "";
+  const delimiterStart = start + prefix.length;
+  const delimiter = value.startsWith('"""', delimiterStart)
+    ? '"""'
+    : value.startsWith("'''", delimiterStart)
+      ? "'''"
+      : ['"', "'"].includes(value[delimiterStart])
+        ? value[delimiterStart]
+        : null;
+  if (delimiter === null) return null;
+  let index = delimiterStart + delimiter.length;
+  while (index < value.length) {
+    if (value[index] === "\\" && !prefix.toLowerCase().includes("r")) {
+      index += value[index + 1] === "\r" && value[index + 2] === "\n" ? 3 : 2;
+      continue;
+    }
+    if (value.startsWith(delimiter, index))
+      return {
+        literal: value.slice(start, index + delimiter.length),
+        end: index + delimiter.length,
+      };
+    index += 1;
+  }
+  return null;
+}
+
+function renderConstantPythonExpression(expression) {
+  const rendered = [];
+  let parentheses = 0;
+  let expectOperand = true;
+  let index = 0;
+  while (index < expression.length) {
+    if (/\s/u.test(expression[index])) {
+      index += 1;
+      continue;
+    }
+    if (expression[index] === "(") {
+      parentheses += 1;
+      index += 1;
+      continue;
+    }
+    if (expression[index] === ")") {
+      if (parentheses === 0 || expectOperand) return null;
+      parentheses -= 1;
+      index += 1;
+      continue;
+    }
+    if (expression[index] === "+") {
+      if (expectOperand) return null;
+      expectOperand = true;
+      index += 1;
+      continue;
+    }
+    if (!expectOperand) return null;
+    const literal = scanPythonLiteral(expression, index);
+    if (!literal) return null;
+    const value = renderPythonString(literal.literal);
+    if (value === null) return null;
+    rendered.push(value);
+    expectOperand = false;
+    index = literal.end;
+  }
+  return !expectOperand && parentheses === 0 ? rendered.join("") : null;
+}
+
+function renderStaticPythonFString(body, raw) {
+  let rendered = "";
+  let literalSegment = "";
+  const flushLiteral = () => {
+    rendered += raw ? literalSegment : decodePythonStringBody(literalSegment);
+    literalSegment = "";
+  };
+  let index = 0;
+  while (index < body.length) {
+    if (body.startsWith("{{", index)) {
+      literalSegment += "{";
+      index += 2;
+      continue;
+    }
+    if (body.startsWith("}}", index)) {
+      literalSegment += "}";
+      index += 2;
+      continue;
+    }
+    if (body[index] === "{") {
+      flushLiteral();
+      let braces = 1;
+      let end = index + 1;
+      while (end < body.length && braces > 0) {
+        const literal = scanPythonLiteral(body, end);
+        if (literal) {
+          end = literal.end;
+          continue;
+        }
+        if (body[end] === "{") braces += 1;
+        else if (body[end] === "}") braces -= 1;
+        if (braces > 0) end += 1;
+      }
+      if (braces !== 0) return null;
+      const expression = renderConstantPythonExpression(body.slice(index + 1, end));
+      if (expression === null) return null;
+      rendered += expression;
+      index = end + 1;
+      continue;
+    }
+    if (body[index] === "}") return null;
+    literalSegment += body[index];
+    index += 1;
+  }
+  flushLiteral();
+  return rendered;
+}
+
+function renderPythonString(literal) {
+  const prefixMatch = /^([rRuUbBfF]{0,2})("""|'''|"|')/.exec(literal);
+  if (!prefixMatch) return literal;
+  const prefix = prefixMatch[1].toLowerCase();
+  const delimiter = prefixMatch[2];
+  const body = literal.slice(prefixMatch[0].length, -delimiter.length);
+  if (prefix.includes("f"))
+    return renderStaticPythonFString(body, prefix.includes("r"));
+  return prefix.includes("r") ? body : decodePythonStringBody(body);
+}
+
 function renderPythonLiterals(value) {
   const candidates = [];
   const literalPattern =
@@ -866,9 +1188,23 @@ function renderPythonLiterals(value) {
   let chain = null;
   for (const match of value.matchAll(literalPattern)) {
     const rendered = renderPythonString(match[0]);
+    if (rendered === null) {
+      previous = null;
+      chain = null;
+      continue;
+    }
     candidates.push(rendered);
     const separator = previous ? value.slice(previous.end, match.index) : "";
-    if (previous && /^(?:(?:[ \t\f]+)|(?:#[^\r\n]*$)|(?:\\\r?\n))*$/.test(separator)) {
+    const projectedSeparator = separator
+      .replace(/#[^\r\n]*/g, "")
+      .replace(/\\(?:\r\n|[\r\n])/g, "");
+    if (
+      previous &&
+      (/^[ \t\f]*$/.test(projectedSeparator) ||
+        ((separator.includes("#") || separator.includes("\\")) &&
+          /^\s*$/.test(projectedSeparator)) ||
+        /^\s*\+\s*$/.test(projectedSeparator))
+    ) {
       chain = (chain ?? previous.rendered) + rendered;
       candidates.push(chain);
     } else {
@@ -884,26 +1220,55 @@ function renderPythonLiterals(value) {
 
 function renderJavascriptLiterals(value) {
   const candidates = [];
-  const literalPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gs;
   let previous = null;
   let chain = null;
-  for (const match of value.matchAll(literalPattern)) {
-    const renderedLiteral = renderStaticLiteral(match[0]);
+  let index = 0;
+  while (index < value.length) {
+    if (value.startsWith("/*", index)) {
+      const end = value.indexOf("*/", index + 2);
+      index = end < 0 ? value.length : end + 2;
+      continue;
+    }
+    if (value.startsWith("//", index)) {
+      const terminator = /[\r\n\u2028\u2029]/u.exec(value.slice(index + 2));
+      index = terminator
+        ? index + 2 + (terminator.index ?? 0) + terminator[0].length
+        : value.length;
+      continue;
+    }
+    if (!['"', "'", "`"].includes(value[index])) {
+      index += 1;
+      continue;
+    }
+    const literal = scanJavascriptLiteral(value, index);
+    if (!literal) {
+      index += 1;
+      continue;
+    }
+    const renderedLiteral = renderStaticLiteral(literal.literal);
+    if (renderedLiteral === null) {
+      previous = null;
+      chain = null;
+      index = literal.end;
+      continue;
+    }
     candidates.push(renderedLiteral);
     if (
       previous &&
       /^\s*\+\s*$/.test(
         value
-          .slice(previous.end, match.index)
-          .replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*/g, ""),
+          .slice(previous.end, index)
+          .replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*/g, "")
+          .replace(/[()]/g, ""),
       )
     ) {
-      chain = (chain ?? renderStaticLiteral(previous.literal)) + renderedLiteral;
+      chain = (chain ?? previous.rendered) + renderedLiteral;
       candidates.push(chain);
     } else {
       chain = null;
     }
-    previous = { literal: match[0], end: (match.index ?? 0) + match[0].length };
+    previous = { rendered: renderedLiteral, end: literal.end };
+    index = literal.end;
   }
   return candidates;
 }
@@ -911,8 +1276,10 @@ function renderJavascriptLiterals(value) {
 function renderedSourceCandidates(value, relativePath) {
   const extension = sourceExtension(relativePath);
   const candidates = [];
-  const visibleValue = markupSourceExtensions.has(extension)
-    ? stripJsxComments(replaceJsxWhitespaceExpressions(value))
+  const visibleValue = jsxSourceExtensions.has(extension)
+    ? removeNonRenderingJsxExpressions(
+        stripJsxComments(replaceJsxWhitespaceExpressions(value)),
+      )
     : value;
   if (markupSourceExtensions.has(extension)) {
     candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(visibleValue)));
@@ -1104,6 +1471,28 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "nested_constant_template_literal",
+    "`" + probeFirstWord + ' ${(``)}' + probeSecondWord + "`",
+    "probe.js",
+    encodedPhraseProbe,
+  ],
+  [
+    "grouped_javascript_literal_chain",
+    `"${probeFirstWord} " + ("${probeSecondWord}")`,
+    "probe.js",
+    encodedPhraseProbe,
+  ],
+  [
+    "quoted_interpolation_comment_is_not_an_operand",
+    "`" +
+      probeFirstWord +
+      ' ${" " /* "hidden" */ + ""}' +
+      probeSecondWord +
+      "`",
+    "probe.js",
+    encodedPhraseProbe,
+  ],
+  [
     "json_unicode_escape",
     `{"copy":"${probeFirstWord}\\u0020${probeSecondWord}"}`,
     "probe.json",
@@ -1134,6 +1523,12 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "html_legacy_entity_before_letter",
+    `<span>${probeFirstWord}&nbsp${probeSecondWord}</span>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
     "html_encoded_attribute",
     `<input aria-label="${probeFirstWord}&#32;${probeSecondWord}">`,
     "probe.html",
@@ -1154,6 +1549,12 @@ for (const [label, source, relativePath, target] of [
   [
     "markdown_reference_link",
     `${probeFirstWord} [${probeSecondWord}][policy]\n\n[policy]: https://example.test/policy`,
+    "probe.md",
+    encodedPhraseProbe,
+  ],
+  [
+    "markdown_backslash_hard_break",
+    `${probeFirstWord}\\\n${probeSecondWord}`,
     "probe.md",
     encodedPhraseProbe,
   ],
@@ -1182,6 +1583,18 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "encoded_inline_script_type",
+    `<script type="text&#47;javascript">document.body.textContent = "${probeFirstWord}" + " ${probeSecondWord}";</script>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "standalone_svg_text",
+    `<svg><text>${probeFirstWord}<tspan> ${probeSecondWord}</tspan></text></svg>`,
+    "probe.svg",
+    encodedPhraseProbe,
+  ],
+  [
     "default_ignorable_variation_selector",
     `${compactOrganizationalProbe.slice(0, 4)}${String.fromCodePoint(0xfe0f)}${compactOrganizationalProbe.slice(4)}`,
     "probe.html",
@@ -1206,8 +1619,32 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "jsx_non_rendering_expression",
+    `<span>${probeFirstWord}</span>{null}<span> ${probeSecondWord}</span>`,
+    "probe.jsx",
+    encodedPhraseProbe,
+  ],
+  [
     "python_implicit_literal_concatenation",
     `message = ("${probeFirstWord} " "${probeSecondWord}")`,
+    "probe.py",
+    encodedPhraseProbe,
+  ],
+  [
+    "python_static_f_string",
+    `message = f"${probeFirstWord}\\x20${probeSecondWord}"`,
+    "probe.py",
+    encodedPhraseProbe,
+  ],
+  [
+    "python_static_f_string_substitution",
+    `message = f"${compactOrganizationalProbe.slice(0, 2)}{''}${compactOrganizationalProbe.slice(2)}"`,
+    "probe.py",
+    compactOrganizationalProbe,
+  ],
+  [
+    "python_explicit_literal_concatenation",
+    `message = "${probeFirstWord} " + "${probeSecondWord}"`,
     "probe.py",
     encodedPhraseProbe,
   ],
@@ -1267,6 +1704,11 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
     "probe.html",
   ],
   [
+    "ambiguous_legacy_entity_in_attribute",
+    `<div aria-label="${probeFirstWord}&nbsp${probeSecondWord}"></div>`,
+    "probe.html",
+  ],
+  [
     "markdown_code_span_markup",
     "`<span>" +
       compactOrganizationalProbe.slice(0, 4) +
@@ -1281,6 +1723,11 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
     `.status::after { content: "${compactOrganizationalProbe.slice(0, 4)}" / "${compactOrganizationalProbe.slice(4)}"; }`,
     "probe.css",
     compactOrganizationalProbe,
+  ],
+  [
+    "css_comment_marker_inside_string",
+    `.status::after { content: "${probeFirstWord}/*note*/ ${probeSecondWord}"; }`,
+    "probe.css",
   ],
 ]) {
   if (
@@ -1383,6 +1830,12 @@ function fallbackRepositoryPaths(directory) {
 }
 
 function repositoryPaths() {
+  if (repositorySource.type === "error") {
+    errors.push(
+      `git_index_unreadable:${repositorySource.note}:exact_repository_cannot_be_scanned`,
+    );
+    return [];
+  }
   if (repositorySource.type !== "index") {
     notes.push(`${repositorySource.note}:scanned_workspace_fallback`);
     return fallbackRepositoryPaths(ROOT);
