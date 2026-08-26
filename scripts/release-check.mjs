@@ -12,6 +12,52 @@ import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const errors = [];
+const notes = [];
+
+function selectRepositorySource() {
+  let gitRoot;
+  try {
+    gitRoot = resolve(
+      execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim(),
+    );
+  } catch {
+    return { type: "workspace", note: "git_index_unavailable" };
+  }
+
+  const comparableRoot = process.platform === "win32" ? ROOT.toLowerCase() : ROOT;
+  const comparableGitRoot =
+    process.platform === "win32" ? gitRoot.toLowerCase() : gitRoot;
+  if (comparableGitRoot !== comparableRoot) {
+    return { type: "workspace", note: "foreign_git_index" };
+  }
+  return { type: "index", note: null };
+}
+
+const repositorySource = selectRepositorySource();
+
+function readSelectedRepositoryPath(relativePath) {
+  if (repositorySource.type === "index") {
+    try {
+      return execFileSync("git", ["show", `:${relativePath}`], {
+        cwd: ROOT,
+        encoding: "buffer",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      return null;
+    }
+  }
+  const path = resolve(ROOT, relativePath);
+  if (!existsSync(path) || !lstatSync(path).isFile()) return null;
+  return readFileSync(path);
+}
+
 const required = [
   ["purpose_contract", "docs/purpose-contract.md"],
   ["production_readiness_workflow", ".github/workflows/production-readiness.yml"],
@@ -21,18 +67,16 @@ const required = [
   ["package", "package.json"],
 ];
 
-const errors = [];
-const notes = [];
 for (const [label, relativePath] of required) {
-  const path = resolve(ROOT, relativePath);
-  if (!existsSync(path)) errors.push(`missing_required:${label}:${relativePath}`);
+  if (readSelectedRepositoryPath(relativePath) === null)
+    errors.push(`missing_required:${label}:${relativePath}`);
   else notes.push(`present:${label}`);
 }
 
-const packagePath = resolve(ROOT, "package.json");
-if (existsSync(packagePath)) {
+const packageData = readSelectedRepositoryPath("package.json");
+if (packageData !== null) {
   try {
-    const pkg = JSON.parse(readFileSync(packagePath, "utf8"));
+    const pkg = JSON.parse(packageData.toString("utf8"));
     for (const script of ["typecheck", "test", "release:check"]) {
       if (!pkg?.scripts?.[script]) errors.push(`missing_package_script:${script}`);
     }
@@ -51,7 +95,7 @@ for (const forbidden of [
   "docs/release-manifest.schema.json",
   "docs/reviews/SEQUENTIAL_REVIEW.md",
 ]) {
-  if (existsSync(resolve(ROOT, forbidden))) {
+  if (readSelectedRepositoryPath(forbidden) !== null) {
     errors.push(`forbidden_readiness_bookkeeping:${forbidden}`);
   }
 }
@@ -113,6 +157,34 @@ const prohibitedLanguage = [
     ),
   ],
   [
+    "identity_gate_plural",
+    phrase(
+      97,
+      117,
+      116,
+      104,
+      101,
+      110,
+      116,
+      105,
+      99,
+      97,
+      116,
+      101,
+      100,
+      32,
+      114,
+      101,
+      118,
+      105,
+      101,
+      119,
+      101,
+      114,
+      115,
+    ),
+  ],
+  [
     "mandatory_reviewer_gate",
     phrase(
       114,
@@ -134,10 +206,41 @@ const prohibitedLanguage = [
       114,
     ),
   ],
+  [
+    "mandatory_reviewer_gate_plural",
+    phrase(
+      114,
+      101,
+      113,
+      117,
+      105,
+      114,
+      101,
+      100,
+      32,
+      114,
+      101,
+      118,
+      105,
+      101,
+      119,
+      101,
+      114,
+      115,
+    ),
+  ],
   ["person_gate", phrase(104, 117, 109, 97, 110, 32, 114, 101, 118, 105, 101, 119)],
+  [
+    "person_gate_plural",
+    phrase(104, 117, 109, 97, 110, 32, 114, 101, 118, 105, 101, 119, 115),
+  ],
   [
     "manual_gate",
     phrase(109, 97, 110, 117, 97, 108, 32, 97, 112, 112, 114, 111, 118, 97, 108),
+  ],
+  [
+    "manual_gate_plural",
+    phrase(109, 97, 110, 117, 97, 108, 32, 97, 112, 112, 114, 111, 118, 97, 108, 115),
   ],
   [
     "implementation_readiness_claim_past_tense",
@@ -183,13 +286,29 @@ function isWordCharacter(value) {
   return value !== undefined && /[\p{L}\p{N}_]/u.test(value);
 }
 
+function codePointBefore(value, index) {
+  if (index <= 0) return undefined;
+  const last = value.charCodeAt(index - 1);
+  if (last >= 0xdc00 && last <= 0xdfff && index >= 2) {
+    const first = value.charCodeAt(index - 2);
+    if (first >= 0xd800 && first <= 0xdbff) return value.slice(index - 2, index);
+  }
+  return value[index - 1];
+}
+
+function codePointAfter(value, index) {
+  if (index >= value.length) return undefined;
+  const codePoint = value.codePointAt(index);
+  return codePoint === undefined ? undefined : String.fromCodePoint(codePoint);
+}
+
 function containsLanguagePhrase(value, target) {
   let offset = 0;
   while (offset <= value.length - target.length) {
     const index = value.indexOf(target, offset);
     if (index < 0) return false;
-    const before = value[index - 1];
-    const after = value[index + target.length];
+    const before = codePointBefore(value, index);
+    const after = codePointAfter(value, index + target.length);
     if (!isWordCharacter(before) && !isWordCharacter(after)) return true;
     offset = index + 1;
   }
@@ -273,17 +392,28 @@ function decodeRepositoryTexts(data) {
   return uniqueTextCandidates(candidates);
 }
 
-const renderedSourceExtensions = new Set([
-  ".htm",
-  ".html",
+const literalSourceExtensions = new Set([
+  ".cjs",
+  ".cts",
   ".js",
   ".jsx",
-  ".mdx",
+  ".mjs",
+  ".mts",
   ".svelte",
   ".ts",
   ".tsx",
   ".vue",
 ]);
+const markupSourceExtensions = new Set([
+  ".htm",
+  ".html",
+  ".jsx",
+  ".mdx",
+  ".svelte",
+  ".tsx",
+  ".vue",
+]);
+const markdownSourceExtensions = new Set([".md", ".mdx"]);
 
 const namedHtmlCharacterReferences = new Map([
   ["Tab", "\t"],
@@ -313,17 +443,27 @@ const namedHtmlCharacterReferences = new Map([
   ["lrm", "\u200e"],
   ["rlm", "\u200f"],
   ["amp", "&"],
+  ["AMP", "&"],
   ["apos", "'"],
   ["gt", ">"],
+  ["GT", ">"],
   ["lt", "<"],
+  ["LT", "<"],
   ["quot", '"'],
+  ["QUOT", '"'],
 ]);
 
+const semicolonOptionalHtmlReferences = new Map(
+  ["amp", "AMP", "gt", "GT", "lt", "LT", "nbsp", "quot", "QUOT"].map((name) => [
+    name,
+    namedHtmlCharacterReferences.get(name),
+  ]),
+);
+
 function decodeHtmlCharacterReferences(value) {
-  return value.replace(
-    /&#(?:[xX]([0-9A-Fa-f]+)|(\d+));?|&([A-Za-z][A-Za-z0-9]+);/g,
-    (match, hexadecimal, decimal, named) => {
-      if (named) return namedHtmlCharacterReferences.get(named) ?? match;
+  const numericDecoded = value.replace(
+    /&#(?:[xX]([0-9A-Fa-f]+)|(\d+));?/g,
+    (match, hexadecimal, decimal) => {
       const codePoint = Number.parseInt(
         hexadecimal ?? decimal,
         hexadecimal === undefined ? 10 : 16,
@@ -338,6 +478,14 @@ function decodeHtmlCharacterReferences(value) {
       return String.fromCodePoint(codePoint);
     },
   );
+  const namedDecoded = numericDecoded.replace(
+    /&([A-Za-z][A-Za-z0-9]+);/g,
+    (match, named) => namedHtmlCharacterReferences.get(named) ?? match,
+  );
+  return namedDecoded.replace(
+    /&(amp|AMP|gt|GT|lt|LT|nbsp|quot|QUOT)(?=[\s<&]|$)/g,
+    (match, named) => semicolonOptionalHtmlReferences.get(named) ?? match,
+  );
 }
 
 function sourceExtension(relativePath) {
@@ -349,26 +497,69 @@ function unquoteStaticLiteral(literal) {
   return literal
     .slice(1, -1)
     .replace(
-      /\\(?:r\\n|n|r|t)/g,
-      (escape) =>
-        ({ "\\n": "\n", "\\r": "\r", "\\t": "\t", "\\r\\n": "\r\n" })[escape] ?? escape,
-    )
-    .replace(/\\(["'`\\])/g, "$1");
+      /\\u\{([0-9A-Fa-f]{1,6})\}|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\(?:\r\n|[\n\r])|\\([0btnvfr"'`\\])/g,
+      (escape, bracedUnicode, fixedUnicode, hexadecimal, simple) => {
+        if (bracedUnicode !== undefined) {
+          const codePoint = Number.parseInt(bracedUnicode, 16);
+          if (codePoint <= 0x10ffff && !(codePoint >= 0xd800 && codePoint <= 0xdfff))
+            return String.fromCodePoint(codePoint);
+          return escape;
+        }
+        if (fixedUnicode !== undefined)
+          return String.fromCharCode(Number.parseInt(fixedUnicode, 16));
+        if (hexadecimal !== undefined)
+          return String.fromCharCode(Number.parseInt(hexadecimal, 16));
+        if (simple !== undefined)
+          return (
+            {
+              0: "\0",
+              b: "\b",
+              t: "\t",
+              n: "\n",
+              v: "\v",
+              f: "\f",
+              r: "\r",
+              '"': '"',
+              "'": "'",
+              "`": "`",
+              "\\": "\\",
+            }[simple] ?? simple
+          );
+        return "";
+      },
+    );
+}
+
+function stripMarkupNodes(value) {
+  return value
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*?)?\s*\/?>/gs, " ");
+}
+
+function renderMarkdown(value) {
+  return stripMarkupNodes(value)
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[*~`]+/g, "");
 }
 
 function renderedSourceCandidates(value, relativePath) {
-  if (!renderedSourceExtensions.has(sourceExtension(relativePath))) return [];
-  const candidates = [
-    decodeHtmlCharacterReferences(value.replace(/<\s*\/?\s*[A-Za-z][^>]*>/g, " ")),
-  ];
+  const extension = sourceExtension(relativePath);
+  const candidates = [];
+  if (markupSourceExtensions.has(extension))
+    candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(value)));
+  if (markdownSourceExtensions.has(extension))
+    candidates.push(decodeHtmlCharacterReferences(renderMarkdown(value)));
+  if (!literalSourceExtensions.has(extension)) return candidates;
+
   const literalPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gs;
   let previous = null;
   let chain = null;
   for (const match of value.matchAll(literalPattern)) {
+    const renderedLiteral = unquoteStaticLiteral(match[0]);
+    candidates.push(renderedLiteral);
     if (previous && /^\s*\+\s*$/.test(value.slice(previous.end, match.index))) {
-      chain =
-        (chain ?? unquoteStaticLiteral(previous.literal)) +
-        unquoteStaticLiteral(match[0]);
+      chain = (chain ?? unquoteStaticLiteral(previous.literal)) + renderedLiteral;
       candidates.push(chain);
     } else {
       chain = null;
@@ -378,7 +569,9 @@ function renderedSourceCandidates(value, relativePath) {
   return candidates;
 }
 
-const wrappedPhraseProbe = normalizeLanguage("manual\napproval");
+const wrappedPhraseProbe = normalizeLanguage(
+  phrase(109, 97, 110, 117, 97, 108, 10, 97, 112, 112, 114, 111, 118, 97, 108),
+);
 if (
   !prohibitedLanguage.some(([, phrase]) =>
     containsLanguagePhrase(wrappedPhraseProbe, phrase),
@@ -459,22 +652,73 @@ if (decodeRepositoryTexts(replacementHeavyBinaryProbe).length !== 0) {
 
 const probeFirstWord = phrase(109, 97, 110, 117, 97, 108);
 const probeSecondWord = phrase(97, 112, 112, 114, 111, 118, 97, 108);
-for (const [label, source] of [
-  ["jsx_boundary", `<span>${probeFirstWord}</span><span>${probeSecondWord}</span>`],
-  ["string_concatenation", `"${probeFirstWord}" + " " + "${probeSecondWord}"`],
-  ["html_numeric_entity", `${probeFirstWord}&#32;${probeSecondWord}`],
+const compactOrganizationalProbe = phrase(115, 105, 103, 110, 111, 102, 102);
+for (const [label, source, relativePath, target] of [
+  [
+    "jsx_boundary",
+    `<span>${probeFirstWord}</span><span>${probeSecondWord}</span>`,
+    "probe.jsx",
+    encodedPhraseProbe,
+  ],
+  [
+    "string_concatenation",
+    `"${probeFirstWord}" + " " + "${probeSecondWord}"`,
+    "probe.js",
+    encodedPhraseProbe,
+  ],
+  [
+    "unicode_escape",
+    `"${probeFirstWord}" + "\\u0020" + "${probeSecondWord}"`,
+    "probe.js",
+    encodedPhraseProbe,
+  ],
+  [
+    "html_numeric_entity",
+    `${probeFirstWord}&#32;${probeSecondWord}`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
   [
     "html_named_entity",
     `<span>${probeFirstWord}</span>&nbsp;<span>${probeSecondWord}</span>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "html_legacy_entity_without_semicolon",
+    `<span>${probeFirstWord}&nbsp ${probeSecondWord}</span>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "html_comment",
+    `<p>${phrase(115, 105, 103, 110)}<!-- split -->${phrase(111, 102, 102)}</p>`,
+    "probe.html",
+    compactOrganizationalProbe,
+  ],
+  [
+    "markdown_emphasis",
+    `${probeFirstWord} **${probeSecondWord}**`,
+    "probe.md",
+    encodedPhraseProbe,
   ],
 ]) {
   if (
-    !renderedSourceCandidates(source, "probe.jsx").some((candidate) =>
-      containsLanguagePhrase(normalizeLanguage(candidate), encodedPhraseProbe),
+    !renderedSourceCandidates(source, relativePath).some((candidate) =>
+      containsLanguagePhrase(normalizeLanguage(candidate), target),
     )
   ) {
     errors.push(`release_language_policy_self_test:${label}_not_detected`);
   }
+}
+
+const pluralManualProbe = normalizeLanguage(encodedPhraseProbe + phrase(115));
+if (
+  !prohibitedLanguage.some(([, value]) =>
+    containsLanguagePhrase(pluralManualProbe, value),
+  )
+) {
+  errors.push("release_language_policy_self_test:plural_phrase_not_detected");
 }
 
 const benignBoundaryProbe = normalizeLanguage("Assign officer duties");
@@ -484,6 +728,31 @@ if (
   )
 ) {
   errors.push("release_language_policy_self_test:lexical_boundary_false_positive");
+}
+
+for (const [label, value] of [
+  ["unicode_prefix", String.fromCodePoint(0x10400) + compactOrganizationalProbe],
+  ["unicode_suffix", compactOrganizationalProbe + String.fromCodePoint(0x10400)],
+]) {
+  if (containsLanguagePhrase(normalizeLanguage(value), compactOrganizationalProbe)) {
+    errors.push(`release_language_policy_self_test:${label}_boundary_false_positive`);
+  }
+}
+
+const comparisonProbe = `${phrase(115, 105, 103, 110)} < threshold > ${phrase(
+  111,
+  102,
+  102,
+)}`;
+if (
+  renderedSourceCandidates(comparisonProbe, "probe.js").some((candidate) =>
+    containsLanguagePhrase(
+      normalizeLanguage(candidate),
+      phrase(115, 105, 103, 110, 32, 111, 102, 102),
+    ),
+  )
+) {
+  errors.push("release_language_policy_self_test:comparison_misclassified_as_markup");
 }
 
 function fallbackRepositoryPaths(directory) {
@@ -503,25 +772,8 @@ function fallbackRepositoryPaths(directory) {
 }
 
 function repositoryPaths() {
-  let gitRoot;
-  try {
-    gitRoot = resolve(
-      execFileSync("git", ["rev-parse", "--show-toplevel"], {
-        cwd: ROOT,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim(),
-    );
-  } catch {
-    notes.push("git_index_unavailable:scanned_workspace_fallback");
-    return fallbackRepositoryPaths(ROOT);
-  }
-
-  const comparableRoot = process.platform === "win32" ? ROOT.toLowerCase() : ROOT;
-  const comparableGitRoot =
-    process.platform === "win32" ? gitRoot.toLowerCase() : gitRoot;
-  if (comparableGitRoot !== comparableRoot) {
-    notes.push("foreign_git_index:scanned_workspace_fallback");
+  if (repositorySource.type !== "index") {
+    notes.push(`${repositorySource.note}:scanned_workspace_fallback`);
     return fallbackRepositoryPaths(ROOT);
   }
 
