@@ -813,8 +813,16 @@ function renderCssContent(value) {
   const stringPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/gs;
   for (const declaration of cssContentDeclarationValues(withoutComments)) {
     for (const branch of splitCssAlternativeContent(declaration)) {
+      const urlRanges = cssUrlArgumentRanges(branch);
       let combined = "";
       for (const literal of branch.matchAll(stringPattern)) {
+        if (
+          urlRanges.some(
+            ([start, end]) =>
+              start <= (literal.index ?? -1) && (literal.index ?? -1) < end,
+          )
+        )
+          continue;
         const rendered = decodeCssString(literal[0]);
         candidates.push(rendered);
         combined += rendered;
@@ -823,6 +831,61 @@ function renderCssContent(value) {
     }
   }
   return candidates;
+}
+
+function cssUrlArgumentRanges(value) {
+  const ranges = [];
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] === '"' || value[index] === "'") {
+      const quote = value[index];
+      index += 1;
+      while (index < value.length) {
+        if (value[index] === "\\") index += 2;
+        else if (value[index++] === quote) break;
+        else index += 0;
+      }
+      continue;
+    }
+    if (value.slice(index, index + 3).toLowerCase() !== "url") {
+      index += 1;
+      continue;
+    }
+    const before = value[index - 1] ?? "";
+    const after = value[index + 3] ?? "";
+    if (
+      (before && /[\p{L}\p{N}_-]/u.test(before)) ||
+      (after && /[\p{L}\p{N}_-]/u.test(after))
+    ) {
+      index += 3;
+      continue;
+    }
+    let cursor = index + 3;
+    while (/\s/u.test(value[cursor] ?? "")) cursor += 1;
+    if (value[cursor] !== "(") {
+      index += 3;
+      continue;
+    }
+    const start = cursor + 1;
+    cursor = start;
+    let quote = null;
+    let escaped = false;
+    let parentheses = 1;
+    while (cursor < value.length && parentheses > 0) {
+      const character = value[cursor];
+      if (quote !== null) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === quote) quote = null;
+      } else if (character === '"' || character === "'") quote = character;
+      else if (character === "(") parentheses += 1;
+      else if (character === ")") parentheses -= 1;
+      cursor += 1;
+    }
+    ranges.push([start, parentheses === 0 ? cursor - 1 : value.length]);
+    index = cursor;
+  }
+  return ranges;
 }
 
 function* cssContentDeclarationValues(value) {
@@ -965,18 +1028,55 @@ function renderMarkupAttributeValues(value) {
     "title",
   ]);
   const tagPattern =
+    /<([A-Za-z][A-Za-z0-9:-]*)(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*\/?>/gs;
+  const attributePattern =
+    /(?:^|\s)([^\s"'=<>`]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+  for (const tag of value.matchAll(tagPattern)) {
+    const attributes = [...tag[0].matchAll(attributePattern)].map((attribute) => ({
+      name: attribute[1].toLowerCase(),
+      value: decodeHtmlCharacterReferences(
+        attribute[2] ?? attribute[3] ?? attribute[4],
+        true,
+      ),
+    }));
+    const inputType = attributes
+      .find((attribute) => attribute.name === "type")
+      ?.value.trim()
+      .toLowerCase();
+    for (const attribute of attributes) {
+      const exposedInputValue =
+        tag[1].toLowerCase() === "input" &&
+        attribute.name === "value" &&
+        new Set(["button", "reset", "submit"]).has(inputType ?? "");
+      if (!exposedAttributeNames.has(attribute.name) && !exposedInputValue) continue;
+      candidates.push(attribute.value);
+    }
+  }
+  return candidates;
+}
+
+function maskMarkupRcdataBodies(value) {
+  return value.replace(
+    /(<(textarea|title)\b(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*>)([\s\S]*?)(<\/\2\s*>)/gi,
+    (segment, opening, tag, body, closing) =>
+      opening + body.replace(/[^\r\n]/g, " ") + closing,
+  );
+}
+
+function renderInlineEventHandlers(value) {
+  const candidates = [];
+  const tagPattern =
     /<[A-Za-z][A-Za-z0-9:-]*(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*\/?>/gs;
   const attributePattern =
     /(?:^|\s)([^\s"'=<>`]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
   for (const tag of value.matchAll(tagPattern)) {
     for (const attribute of tag[0].matchAll(attributePattern)) {
-      if (!exposedAttributeNames.has(attribute[1].toLowerCase())) continue;
-      candidates.push(
-        decodeHtmlCharacterReferences(
-          attribute[2] ?? attribute[3] ?? attribute[4],
-          true,
-        ),
+      if (!/^on[a-z]+$/i.test(attribute[1])) continue;
+      const source = decodeHtmlCharacterReferences(
+        attribute[2] ?? attribute[3] ?? attribute[4],
+        true,
       );
+      candidates.push(...renderJavascriptLiterals(source));
     }
   }
   return candidates;
@@ -1015,7 +1115,109 @@ function stripJsxComments(value) {
   return value.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "");
 }
 
-function replaceJsxWhitespaceExpressions(value) {
+const jsxVoidElements = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+function scanJsxTag(value, start) {
+  if (value.startsWith("<>", start))
+    return { closing: false, end: start + 2, fragment: true, selfClosing: false };
+  if (value.startsWith("</>", start))
+    return { closing: true, end: start + 3, fragment: true, selfClosing: false };
+  const opening = /^<\/?([A-Za-z][A-Za-z0-9:.-]*)/u.exec(value.slice(start));
+  if (!opening) return null;
+  let quote = null;
+  let escaped = false;
+  let index = start + opening[0].length;
+  while (index < value.length) {
+    const character = value[index];
+    if (quote !== null) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === ">") {
+      const closing = value[start + 1] === "/";
+      const selfClosing = /\/\s*$/u.test(value.slice(start, index));
+      return {
+        closing,
+        end: index + 1,
+        fragment: false,
+        name: opening[1].toLowerCase(),
+        selfClosing,
+      };
+    }
+    index += 1;
+  }
+  return null;
+}
+
+function jsxElementDepthAt(value, position) {
+  let depth = 0;
+  let index = 0;
+  while (index < position) {
+    if (value.startsWith("/*", index)) {
+      const end = value.indexOf("*/", index + 2);
+      index = end < 0 ? position : end + 2;
+      continue;
+    }
+    if (value.startsWith("//", index)) {
+      const end = /[\r\n\u2028\u2029]/u.exec(value.slice(index + 2));
+      index = end ? index + 2 + (end.index ?? 0) + end[0].length : position;
+      continue;
+    }
+    if (['"', "'", "`"].includes(value[index])) {
+      const literal = scanJavascriptLiteral(value, index);
+      index = literal ? literal.end : index + 1;
+      continue;
+    }
+    if (value[index] === "<") {
+      const tag = scanJsxTag(value, index);
+      if (tag) {
+        if (tag.closing) depth = Math.max(0, depth - 1);
+        else if (
+          !tag.selfClosing &&
+          (tag.fragment || !jsxVoidElements.has(tag.name ?? ""))
+        )
+          depth += 1;
+        index = tag.end;
+        continue;
+      }
+    }
+    if (value[index] === "{" && depth > 0) {
+      const end = findTemplateExpressionEnd(value, index + 1);
+      if (end >= 0 && end < position) {
+        index = end + 1;
+        continue;
+      }
+    }
+    index += 1;
+  }
+  return depth;
+}
+
+function isLikelyJsxChildExpression(value, start, end) {
+  if (jsxElementDepthAt(value, start) > 0) return true;
+  const before = value.slice(0, start).trimEnd();
+  const after = value.slice(end + 1).trimStart();
+  return /<\/[A-Za-z][A-Za-z0-9:.-]*\s*>$/u.test(before) &&
+    /^(?:<|\{)/u.test(after);
+}
+
+function replaceStaticJsxExpressions(value) {
   let projected = "";
   let cursor = 0;
   while (cursor < value.length) {
@@ -1034,7 +1236,10 @@ function replaceJsxWhitespaceExpressions(value) {
       value.slice(start + 1, end),
     );
     const original = value.slice(start, end + 1);
-    projected += expression && /^\s+$/u.test(expression) ? expression : original;
+    projected +=
+      expression !== null && isLikelyJsxChildExpression(value, start, end)
+        ? expression
+        : original;
     cursor = end + 1;
   }
   return projected;
@@ -1045,7 +1250,16 @@ function removeNonRenderingJsxExpressions(value) {
 }
 
 function stripMarkupNodes(value) {
-  return value
+  const rcdataSegments = [];
+  const shielded = value.replace(
+    /<(textarea|title)\b(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*>([\s\S]*?)<\/\1\s*>/gi,
+    (segment, tag, body) => {
+      const placeholder = `\u0000RCDATA${rcdataSegments.length}\u0000`;
+      rcdataSegments.push([placeholder, body]);
+      return placeholder;
+    },
+  );
+  let rendered = shielded
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(
       /<(script|style|template)\b(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*>[\s\S]*?<\/\1\s*>/gi,
@@ -1055,6 +1269,9 @@ function stripMarkupNodes(value) {
       /<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*\/?>/gs,
       " ",
     );
+  for (const [placeholder, segment] of rcdataSegments)
+    rendered = rendered.replaceAll(placeholder, segment);
+  return rendered;
 }
 
 function normalizeMarkdownReferenceLabel(value) {
@@ -1099,6 +1316,7 @@ function renderMarkdown(value) {
     .replace(/\*(?=\S)([^*\r\n]*?\S)\*/g, "$1")
     .replace(/_(?=\S)([^_\r\n]*?\S)_/g, "$1")
     .replace(/\\(?:\r\n|[\r\n])/g, " ");
+  rendered = decodeHtmlCharacterReferences(rendered);
   for (const [placeholder, segment] of codeSegments)
     rendered = rendered.replaceAll(placeholder, segment);
   return rendered;
@@ -1246,7 +1464,9 @@ function renderStaticPythonFString(body, raw) {
         if (braces > 0) end += 1;
       }
       if (braces !== 0) return null;
-      const expression = renderConstantPythonExpression(body.slice(index + 1, end));
+      const expression = renderStaticPythonFStringField(
+        body.slice(index + 1, end),
+      );
       if (expression === null) return null;
       rendered += expression;
       index = end + 1;
@@ -1260,6 +1480,64 @@ function renderStaticPythonFString(body, raw) {
   return rendered;
 }
 
+function renderStaticPythonFStringField(field) {
+  let parentheses = 0;
+  let conversionIndex = -1;
+  let formatIndex = -1;
+  let index = 0;
+  while (index < field.length) {
+    const literal = scanPythonLiteral(field, index);
+    if (literal) {
+      index = literal.end;
+      continue;
+    }
+    if (field[index] === "(") parentheses += 1;
+    else if (field[index] === ")") parentheses -= 1;
+    else if (parentheses === 0 && field[index] === "!" && conversionIndex < 0)
+      conversionIndex = index;
+    else if (parentheses === 0 && field[index] === ":") {
+      formatIndex = index;
+      break;
+    }
+    index += 1;
+  }
+  if (parentheses !== 0) return null;
+  const expressionEnd = [conversionIndex, formatIndex]
+    .filter((offset) => offset >= 0)
+    .reduce((first, offset) => Math.min(first, offset), field.length);
+  let rendered = renderConstantPythonExpression(field.slice(0, expressionEnd));
+  if (rendered === null) return null;
+
+  if (conversionIndex >= 0) {
+    const conversionEnd = formatIndex >= 0 ? formatIndex : field.length;
+    const conversion = field.slice(conversionIndex + 1, conversionEnd).trim();
+    if (!new Set(["a", "r", "s"]).has(conversion)) return null;
+    if (conversion === "a" || conversion === "r")
+      rendered = `'${rendered
+        .replaceAll("\\", "\\\\")
+        .replaceAll("'", "\\'")}'`;
+  }
+
+  if (formatIndex < 0) return rendered;
+  const specifier = field.slice(formatIndex + 1);
+  const format = /^(?:(.)([<^>])|([<^>]))?(\d+)?(?:\.(\d+))?s?$/su.exec(
+    specifier,
+  );
+  if (!format) return null;
+  const fill = format[1] ?? " ";
+  const alignment = format[2] ?? format[3] ?? "<";
+  const width = Number.parseInt(format[4] ?? "0", 10);
+  const precision = format[5] === undefined ? null : Number.parseInt(format[5], 10);
+  if (precision !== null) rendered = [...rendered].slice(0, precision).join("");
+  const padding = Math.max(0, width - [...rendered].length);
+  if (alignment === ">") return fill.repeat(padding) + rendered;
+  if (alignment === "^") {
+    const before = Math.floor(padding / 2);
+    return fill.repeat(before) + rendered + fill.repeat(padding - before);
+  }
+  return rendered + fill.repeat(padding);
+}
+
 function renderPythonString(literal) {
   const prefixMatch = /^([rRuUbBfF]{0,2})("""|'''|"|')/.exec(literal);
   if (!prefixMatch) return literal;
@@ -1271,13 +1549,51 @@ function renderPythonString(literal) {
   return prefix.includes("r") ? body : decodePythonStringBody(body);
 }
 
+function maskPythonComments(value) {
+  let projected = "";
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] === '"' || value[index] === "'") {
+      const delimiter = value.startsWith(value[index].repeat(3), index)
+        ? value[index].repeat(3)
+        : value[index];
+      const start = index;
+      index += delimiter.length;
+      while (index < value.length) {
+        if (value[index] === "\\") {
+          index += value[index + 1] === "\r" && value[index + 2] === "\n" ? 3 : 2;
+          continue;
+        }
+        if (value.startsWith(delimiter, index)) {
+          index += delimiter.length;
+          break;
+        }
+        index += 1;
+      }
+      projected += value.slice(start, index);
+      continue;
+    }
+    if (value[index] === "#") {
+      const end = /[\r\n]/u.exec(value.slice(index));
+      const width = end?.index ?? value.length - index;
+      projected += " ".repeat(width);
+      index += width;
+      continue;
+    }
+    projected += value[index];
+    index += 1;
+  }
+  return projected;
+}
+
 function renderPythonLiterals(value) {
   const candidates = [];
+  const projectedValue = maskPythonComments(value);
   const literalPattern =
     /[rRuUbBfF]{0,2}(?:"""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g;
   let previous = null;
   let chain = null;
-  for (const match of value.matchAll(literalPattern)) {
+  for (const match of projectedValue.matchAll(literalPattern)) {
     const rendered = renderPythonString(match[0]);
     if (rendered === null) {
       previous = null;
@@ -1285,15 +1601,16 @@ function renderPythonLiterals(value) {
       continue;
     }
     candidates.push(rendered);
-    const separator = previous ? value.slice(previous.end, match.index) : "";
+    const separator = previous
+      ? projectedValue.slice(previous.end, match.index)
+      : "";
     const projectedSeparator = separator
-      .replace(/#[^\r\n]*/g, "")
-      .replace(/\\(?:\r\n|[\r\n])/g, "");
+      .replace(/\\(?:\r\n|[\r\n])/g, "")
+      .replace(/[()]/g, "");
     if (
       previous &&
       (/^[ \t\f]*$/.test(projectedSeparator) ||
-        ((separator.includes("#") || separator.includes("\\")) &&
-          /^\s*$/.test(projectedSeparator)) ||
+        (separator.includes("\\") && /^\s*$/.test(projectedSeparator)) ||
         /^\s*\+\s*$/.test(projectedSeparator))
     ) {
       chain = (chain ?? previous.rendered) + rendered;
@@ -1307,6 +1624,76 @@ function renderPythonLiterals(value) {
     };
   }
   return candidates;
+}
+
+function javascriptRegexCanStart(value, index) {
+  const prefix = value.slice(0, index).trimEnd();
+  if (!prefix) return true;
+  if (/=>$/u.test(prefix)) return true;
+  const last = prefix.at(-1) ?? "";
+  if (/[([{,:;=!?~%&|^*+\-<>]/u.test(last)) return true;
+  const word = /([A-Za-z_$][\w$]*)$/u.exec(prefix)?.[1];
+  return new Set([
+    "await",
+    "case",
+    "delete",
+    "in",
+    "instanceof",
+    "of",
+    "return",
+    "throw",
+    "typeof",
+    "void",
+    "yield",
+  ]).has(word ?? "");
+}
+
+function scanJavascriptRegex(value, start) {
+  let escaped = false;
+  let characterClass = false;
+  let index = start + 1;
+  while (index < value.length) {
+    const character = value[index];
+    if (escaped) escaped = false;
+    else if (character === "\\") escaped = true;
+    else if (character === "[") characterClass = true;
+    else if (character === "]") characterClass = false;
+    else if (/\r|\n|\u2028|\u2029/u.test(character)) return null;
+    else if (character === "/" && !characterClass) {
+      index += 1;
+      while (/[A-Za-z]/u.test(value[index] ?? "")) index += 1;
+      return index;
+    }
+    index += 1;
+  }
+  return null;
+}
+
+function renderStaticRawTemplateLiteral(literal) {
+  let rendered = "";
+  let index = 1;
+  while (index < literal.length - 1) {
+    if (literal[index] === "\\") {
+      const width = literal[index + 1] === "\r" && literal[index + 2] === "\n" ? 3 : 2;
+      rendered += literal.slice(index, index + width);
+      index += width;
+      continue;
+    }
+    if (literal.startsWith("${", index)) {
+      const end = findTemplateExpressionEnd(literal, index + 2);
+      if (end < 0) return null;
+      const expression = renderConstantJavascriptExpression(
+        literal.slice(index + 2, end),
+      );
+      if (expression === null) return null;
+      rendered += expression;
+      index = end + 1;
+      continue;
+    }
+    rendered += literal[index];
+    index += 1;
+  }
+  return rendered;
 }
 
 function renderJavascriptLiterals(value) {
@@ -1327,6 +1714,15 @@ function renderJavascriptLiterals(value) {
         : value.length;
       continue;
     }
+    if (value[index] === "/" && javascriptRegexCanStart(value, index)) {
+      const end = scanJavascriptRegex(value, index);
+      if (end !== null) {
+        previous = null;
+        chain = null;
+        index = end;
+        continue;
+      }
+    }
     if (!['"', "'", "`"].includes(value[index])) {
       index += 1;
       continue;
@@ -1336,7 +1732,12 @@ function renderJavascriptLiterals(value) {
       index += 1;
       continue;
     }
-    const renderedLiteral = renderStaticLiteral(literal.literal);
+    const stringRawTag =
+      literal.literal.startsWith("`") &&
+      /String\s*\.\s*raw\s*$/u.test(value.slice(0, index));
+    const renderedLiteral = stringRawTag
+      ? renderStaticRawTemplateLiteral(literal.literal)
+      : renderStaticLiteral(literal.literal);
     if (renderedLiteral === null) {
       previous = null;
       chain = null;
@@ -1369,17 +1770,19 @@ function renderedSourceCandidates(value, relativePath) {
   const candidates = [];
   const visibleValue = jsxSourceExtensions.has(extension)
     ? removeNonRenderingJsxExpressions(
-        stripJsxComments(replaceJsxWhitespaceExpressions(value)),
+        stripJsxComments(replaceStaticJsxExpressions(value)),
       )
     : value;
   if (markupSourceExtensions.has(extension)) {
+    const executableMarkup = maskMarkupRcdataBodies(visibleValue);
     candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(visibleValue)));
-    candidates.push(...renderMarkupAttributeValues(visibleValue));
-    candidates.push(...renderEmbeddedCssContent(visibleValue));
-    candidates.push(...renderInlineExecutableScripts(visibleValue));
+    candidates.push(...renderMarkupAttributeValues(executableMarkup));
+    candidates.push(...renderEmbeddedCssContent(executableMarkup));
+    candidates.push(...renderInlineExecutableScripts(executableMarkup));
+    candidates.push(...renderInlineEventHandlers(executableMarkup));
   }
   if (markdownSourceExtensions.has(extension))
-    candidates.push(decodeHtmlCharacterReferences(renderMarkdown(visibleValue)));
+    candidates.push(renderMarkdown(visibleValue));
   if (cssSourceExtensions.has(extension)) candidates.push(...renderCssContent(value));
   if (extension === ".py" || extension === ".pyw") {
     candidates.push(...renderPythonLiterals(value));
@@ -1662,6 +2065,12 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "css_adjacent_quoted_declaration_terminator",
+    `.status::after { content: "${probeFirstWord} " "${probeSecondWord};"; }`,
+    "probe.css",
+    encodedPhraseProbe,
+  ],
+  [
     "quoted_html_attribute_boundary",
     `<span>${probeFirstWord} </span><span title='>'>${probeSecondWord}</span>`,
     "probe.html",
@@ -1688,6 +2097,30 @@ for (const [label, source, relativePath, target] of [
   [
     "encoded_inline_script_type",
     `<script type="text&#47;javascript">document.body.textContent = "${probeFirstWord}" + " ${probeSecondWord}";</script>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "inline_event_handler_literal_chain",
+    `<button onclick='this.textContent = "${probeFirstWord} " + "${probeSecondWord}"'>Run</button>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "visible_submit_input_value",
+    `<input type="submit" value="${probeFirstWord} ${probeSecondWord}">`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "visible_button_input_encoded_value",
+    `<input type="button" value="${probeFirstWord}&#32;${probeSecondWord}">`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "rcdata_visible_text",
+    `<textarea>${probeFirstWord} ${probeSecondWord}</textarea>`,
     "probe.html",
     encodedPhraseProbe,
   ],
@@ -1722,6 +2155,12 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "jsx_static_string_child",
+    `<p>{"${probeFirstWord} "}${probeSecondWord}</p>`,
+    "probe.jsx",
+    encodedPhraseProbe,
+  ],
+  [
     "jsx_comment_expression",
     `<span>${probeFirstWord}</span>{/* split */}<span> ${probeSecondWord}</span>`,
     "probe.jsx",
@@ -1752,9 +2191,39 @@ for (const [label, source, relativePath, target] of [
     compactOrganizationalProbe,
   ],
   [
+    "python_static_f_string_conversion",
+    `message = f"{'${probeFirstWord} '!s}${probeSecondWord}"`,
+    "probe.py",
+    encodedPhraseProbe,
+  ],
+  [
+    "python_static_f_string_format",
+    `message = f"{'${probeFirstWord} ':<7}${probeSecondWord}"`,
+    "probe.py",
+    encodedPhraseProbe,
+  ],
+  [
     "python_explicit_literal_concatenation",
     `message = "${probeFirstWord} " + "${probeSecondWord}"`,
     "probe.py",
+    encodedPhraseProbe,
+  ],
+  [
+    "python_grouped_literal_concatenation",
+    `message = "${probeFirstWord} " + ("${probeSecondWord}")`,
+    "probe.py",
+    encodedPhraseProbe,
+  ],
+  [
+    "markdown_visible_named_entity",
+    `${probeFirstWord}&nbsp;${probeSecondWord}`,
+    "probe.md",
+    encodedPhraseProbe,
+  ],
+  [
+    "css_url_alternative_text",
+    `.status::after { content: url("icon.svg") / "${probeFirstWord} ${probeSecondWord}"; }`,
+    "probe.css",
     encodedPhraseProbe,
   ],
 ]) {
@@ -1842,6 +2311,46 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
     "css_comment_marker_inside_string",
     `.status::after { content: "${probeFirstWord}/*note*/ ${probeSecondWord}"; }`,
     "probe.css",
+  ],
+  [
+    "css_url_resource_value",
+    `.status::after { content: url("${probeFirstWord} ${probeSecondWord}"); }`,
+    "probe.css",
+  ],
+  [
+    "python_comment_literal",
+    `label = "${probeFirstWord} " # not "${probeSecondWord}"`,
+    "probe.py",
+  ],
+  [
+    "javascript_regex_literal",
+    `const pattern = /"${probeFirstWord} " + "${probeSecondWord}"/;`,
+    "probe.js",
+  ],
+  [
+    "rcdata_tag_like_text",
+    `<textarea>${probeFirstWord}<span> ${probeSecondWord}</textarea>`,
+    "probe.html",
+  ],
+  [
+    "dynamic_jsx_child",
+    `<p>{"${probeFirstWord} "}{separator}${probeSecondWord}</p>`,
+    "probe.jsx",
+  ],
+  [
+    "non_visible_text_input_value",
+    `<input type="text" value="${probeFirstWord} ${probeSecondWord}">`,
+    "probe.html",
+  ],
+  [
+    "markdown_code_entity",
+    `\`${probeFirstWord}&#32;${probeSecondWord}\``,
+    "probe.md",
+  ],
+  [
+    "string_raw_escape",
+    `String.raw\`${probeFirstWord}\\u0020${probeSecondWord}\``,
+    "probe.js",
   ],
 ]) {
   if (
