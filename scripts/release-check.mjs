@@ -535,7 +535,7 @@ function unquoteStaticLiteral(literal) {
   return literal
     .slice(1, -1)
     .replace(
-      /\\u\{(0*[0-9A-Fa-f]{1,6})\}|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\(?:\r\n|[\n\r\u2028\u2029])|\\([0btnvfr"'`\\])/g,
+      /\\u\{(0*[0-9A-Fa-f]{1,6})\}|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\(?:\r\n|[\n\r\u2028\u2029])|\\(0|[^\d\r\n\u2028\u2029])/g,
       (escape, bracedUnicode, fixedUnicode, hexadecimal, simple) => {
         if (bracedUnicode !== undefined) {
           const codePoint = Number.parseInt(bracedUnicode, 16);
@@ -917,6 +917,12 @@ for (const [label, source, relativePath, target] of [
     compactOrganizationalProbe,
   ],
   [
+    "javascript_identity_escape",
+    `"${compactOrganizationalProbe.slice(0, 2)}\\${compactOrganizationalProbe.slice(2)}"`,
+    "probe.js",
+    compactOrganizationalProbe,
+  ],
+  [
     "ecmascript_line_separator_continuation",
     `"${compactOrganizationalProbe.slice(0, 4)}\\${String.fromCodePoint(0x2028)}${compactOrganizationalProbe.slice(4)}"`,
     "probe.js",
@@ -1050,6 +1056,11 @@ for (const [label, source, relativePath] of [
     "python_separate_statements",
     `first = "${probeFirstWord} "\nsecond = "${probeSecondWord}"`,
     "probe.py",
+  ],
+  [
+    "javascript_even_backslash",
+    `"${compactOrganizationalProbe.slice(0, 2)}\\\\${compactOrganizationalProbe.slice(2)}"`,
+    "probe.js",
   ],
 ]) {
   if (
