@@ -374,10 +374,7 @@ function decodeUtf16Be(data, offset = 0) {
     swapped[target] = data[index + 1];
     swapped[target + 1] = data[index];
   }
-  return (
-    swapped.toString("utf16le") +
-    (completeLength === data.length ? "" : "\ufffd")
-  );
+  return swapped.toString("utf16le") + (completeLength === data.length ? "" : "\ufffd");
 }
 
 function looksLikeText(value) {
@@ -444,7 +441,9 @@ const binarySourceExtensions = new Set([
 ]);
 
 function shouldRetainUtf8(relativePath) {
-  return Boolean(relativePath) && !binarySourceExtensions.has(sourceExtension(relativePath));
+  return (
+    Boolean(relativePath) && !binarySourceExtensions.has(sourceExtension(relativePath))
+  );
 }
 
 function decodeRepositoryTexts(data, relativePath = "") {
@@ -510,6 +509,8 @@ const markupSourceExtensions = new Set([
   ".svelte",
   ".tsx",
   ".vue",
+  ".xht",
+  ".xhtml",
 ]);
 const jsxSourceExtensions = new Set([".jsx", ".mdx", ".tsx"]);
 const markdownSourceExtensions = new Set([".md", ".mdx"]);
@@ -524,13 +525,9 @@ if (namedHtmlReferenceData !== null) {
   try {
     const parsedReferences = JSON.parse(namedHtmlReferenceData.toString("utf8"));
     const namedReferences = parsedReferences.entities ?? parsedReferences;
-    namedHtmlCharacterReferences = new Map(
-      Object.entries(namedReferences),
-    );
+    namedHtmlCharacterReferences = new Map(Object.entries(namedReferences));
     legacyHtmlCharacterReferenceNames = Array.isArray(parsedReferences.legacy)
-      ? parsedReferences.legacy.filter((name) =>
-          namedHtmlCharacterReferences.has(name),
-        )
+      ? parsedReferences.legacy.filter((name) => namedHtmlCharacterReferences.has(name))
       : ["amp", "AMP", "gt", "GT", "lt", "LT", "nbsp", "quot", "QUOT"];
   } catch (error) {
     errors.push(
@@ -835,9 +832,10 @@ function renderCssContent(value, extension = "") {
           )
         )
           continue;
-        const rendered = extension === ".sass" || extension === ".scss"
-          ? renderStaticSassString(literal[0])
-          : decodeCssString(literal[0]);
+        const rendered =
+          extension === ".sass" || extension === ".scss"
+            ? renderStaticSassString(literal[0])
+            : decodeCssString(literal[0]);
         candidates.push(rendered);
         const start = literal.index ?? 0;
         chain =
@@ -907,6 +905,25 @@ function cssUrlArgumentRanges(value) {
   return ranges;
 }
 
+function decodeCssIdentifier(value) {
+  return value.replace(
+    /\\([0-9A-Fa-f]{1,6})(?:\r\n|[\t\n\f\r ])?|\\(?:\r\n|[\n\f\r])|\\([\s\S])/g,
+    (escape, hexadecimal, escapedCharacter) => {
+      if (hexadecimal !== undefined) {
+        const codePoint = Number.parseInt(hexadecimal, 16);
+        if (
+          codePoint > 0 &&
+          codePoint <= 0x10ffff &&
+          !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+        )
+          return String.fromCodePoint(codePoint);
+        return "\ufffd";
+      }
+      return escapedCharacter ?? "";
+    },
+  );
+}
+
 function* cssContentDeclarationValues(value) {
   let index = 0;
   let statementStart = 0;
@@ -954,34 +971,20 @@ function* cssContentDeclarationValues(value) {
       index += 1;
       continue;
     }
-    if (value.slice(index, index + 7).toLowerCase() !== "content") {
+    if (value[index] !== ":") {
       index += 1;
       continue;
     }
     if (
       blockKinds.at(-1) !== "style-rule" ||
-      value.slice(statementStart, index).trim() !== ""
+      decodeCssIdentifier(value.slice(statementStart, index).trim()).toLowerCase() !==
+        "content"
     ) {
-      index += 7;
+      index += 1;
       continue;
     }
-    const before = value[index - 1] ?? "";
-    const after = value[index + 7] ?? "";
-    if (
-      (before && /[\p{L}\p{N}_-]/u.test(before)) ||
-      (after && /[\p{L}\p{N}_-]/u.test(after))
-    ) {
-      index += 7;
-      continue;
-    }
-    let cursor = index + 7;
-    while (/\s/u.test(value[cursor] ?? "")) cursor += 1;
-    if (value[cursor] !== ":") {
-      index += 7;
-      continue;
-    }
-    const start = cursor + 1;
-    cursor = start;
+    const start = index + 1;
+    let cursor = start;
     let quote = null;
     let escaped = false;
     let valueParentheses = 0;
@@ -999,12 +1002,8 @@ function* cssContentDeclarationValues(value) {
         cursor += 2;
         continue;
       } else if (character === "(") valueParentheses += 1;
-      else if (character === ")" && valueParentheses > 0)
-        valueParentheses -= 1;
-      else if (
-        (character === ";" || character === "}") &&
-        valueParentheses === 0
-      )
+      else if (character === ")" && valueParentheses > 0) valueParentheses -= 1;
+      else if ((character === ";" || character === "}") && valueParentheses === 0)
         break;
       cursor += 1;
     }
@@ -1253,15 +1252,99 @@ function renderHtmlFragmentCandidates(value) {
   ];
 }
 
+function skipJavascriptTrivia(value, start) {
+  let index = start;
+  while (index < value.length) {
+    if (/\s/u.test(value[index])) {
+      index += 1;
+      continue;
+    }
+    if (value.startsWith("/*", index)) {
+      const end = value.indexOf("*/", index + 2);
+      return end < 0 ? value.length : skipJavascriptTrivia(value, end + 2);
+    }
+    if (value.startsWith("//", index)) {
+      const terminator = /[\r\n\u2028\u2029]/u.exec(value.slice(index + 2));
+      if (!terminator) return value.length;
+      index += 2 + (terminator.index ?? 0) + terminator[0].length;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function htmlSinkAssignmentValueStart(value, start) {
+  const dotProperty = /^\.\s*(?:innerHTML|outerHTML)\s*=\s*/u.exec(value.slice(start));
+  if (dotProperty) return start + dotProperty[0].length;
+  if (value[start] !== "[") return null;
+  let cursor = skipJavascriptTrivia(value, start + 1);
+  const property = scanJavascriptLiteral(value, cursor);
+  if (!property) return null;
+  const propertyName = renderStaticLiteral(property.literal);
+  if (!new Set(["innerHTML", "outerHTML"]).has(propertyName ?? "")) return null;
+  cursor = skipJavascriptTrivia(value, property.end);
+  if (value[cursor] !== "]") return null;
+  cursor = skipJavascriptTrivia(value, cursor + 1);
+  if (value[cursor] !== "=" || value[cursor + 1] === "=") return null;
+  return skipJavascriptTrivia(value, cursor + 1);
+}
+
 function renderInlineHtmlAssignments(value) {
   const candidates = [];
-  const assignmentPattern = /\.(?:innerHTML|outerHTML)\s*=\s*/g;
-  for (const assignment of value.matchAll(assignmentPattern)) {
-    const start = (assignment.index ?? 0) + assignment[0].length;
+  let index = 0;
+  while (index < value.length) {
+    const triviaEnd = skipJavascriptTrivia(value, index);
+    if (triviaEnd !== index) {
+      index = triviaEnd;
+      continue;
+    }
+    if (['"', "'", "`"].includes(value[index])) {
+      const literal = scanJavascriptLiteral(value, index);
+      if (!literal) {
+        index += 1;
+        continue;
+      }
+      if (literal.literal.startsWith("`")) {
+        let templateIndex = 1;
+        while (templateIndex < literal.literal.length - 1) {
+          if (literal.literal[templateIndex] === "\\") {
+            templateIndex += 2;
+            continue;
+          }
+          if (literal.literal.startsWith("${", templateIndex)) {
+            const end = findTemplateExpressionEnd(literal.literal, templateIndex + 2);
+            if (end < 0) break;
+            candidates.push(
+              ...renderInlineHtmlAssignments(
+                literal.literal.slice(templateIndex + 2, end),
+              ),
+            );
+            templateIndex = end + 1;
+            continue;
+          }
+          templateIndex += 1;
+        }
+      }
+      index = literal.end;
+      continue;
+    }
+    if (value[index] === "/" && javascriptRegexCanStart(value, index)) {
+      const end = scanJavascriptRegex(value, index);
+      if (end !== null) {
+        index = end;
+        continue;
+      }
+    }
+    const start = htmlSinkAssignmentValueStart(value, index);
+    if (start === null) {
+      index += 1;
+      continue;
+    }
     const end = javascriptExpressionEnd(value, start);
     const rendered = renderConstantJavascriptExpression(value.slice(start, end));
-    if (rendered !== null)
-      candidates.push(...renderHtmlFragmentCandidates(rendered));
+    if (rendered !== null) candidates.push(...renderHtmlFragmentCandidates(rendered));
+    index = Math.max(end + 1, start);
   }
   return candidates;
 }
@@ -1368,8 +1451,7 @@ function isLikelyJsxChildExpression(value, start, end) {
   if (jsxElementDepthAt(value, start) > 0) return true;
   const before = value.slice(0, start).trimEnd();
   const after = value.slice(end + 1).trimStart();
-  return /<\/[A-Za-z][A-Za-z0-9:.-]*\s*>$/u.test(before) &&
-    /^(?:<|\{)/u.test(after);
+  return /<\/[A-Za-z][A-Za-z0-9:.-]*\s*>$/u.test(before) && /^(?:<|\{)/u.test(after);
 }
 
 function unwrapStaticJavascriptGrouping(expression) {
@@ -1403,10 +1485,7 @@ function renderStaticJsxChildExpression(expression) {
   if (rendered !== null) return rendered;
   const unwrapped = unwrapStaticJavascriptGrouping(expression);
   if (/^(?:false|null|true|undefined)$/u.test(unwrapped)) return "";
-  if (
-    /^(?:\(\s*)*(?:false|null|undefined)(?:\s*\))*\s*&&/u.test(unwrapped)
-  )
-    return "";
+  if (/^(?:\(\s*)*(?:false|null|undefined)(?:\s*\))*\s*&&/u.test(unwrapped)) return "";
   return null;
 }
 
@@ -1456,6 +1535,7 @@ function stripMarkupNodes(value) {
       /<(script|style|template)\b(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*>[\s\S]*?<\/\1\s*>/gi,
       "",
     )
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
     .replace(
       /<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*\/?>/gs,
       " ",
@@ -1469,11 +1549,39 @@ function normalizeMarkdownReferenceLabel(value) {
   return value.trim().replace(/\s+/gu, " ").toUpperCase().toLowerCase();
 }
 
+function replaceMarkdownFencedBlocks(value, replaceBlock) {
+  const lines = [...value.matchAll(/[^\r\n]*(?:\r\n|[\r\n]|$)/g)]
+    .map((match) => match[0])
+    .filter(Boolean);
+  let rendered = "";
+  for (let index = 0; index < lines.length; index += 1) {
+    const opening = /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r\n|[\r\n]|$)/u.exec(lines[index]);
+    if (!opening) {
+      rendered += lines[index];
+      continue;
+    }
+    let closingIndex = index + 1;
+    while (closingIndex < lines.length) {
+      const closing = /^ {0,3}(`{3,}|~{3,})[ \t]*(?:\r\n|[\r\n]|$)/u.exec(
+        lines[closingIndex],
+      );
+      if (
+        closing &&
+        closing[1][0] === opening[1][0] &&
+        closing[1].length >= opening[1].length
+      )
+        break;
+      closingIndex += 1;
+    }
+    const finalIndex = Math.min(closingIndex, lines.length - 1);
+    rendered += replaceBlock(lines.slice(index, finalIndex + 1).join(""));
+    index = finalIndex;
+  }
+  return rendered;
+}
+
 function renderMarkdownLinkTitles(value) {
-  let projected = value.replace(
-    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r\n|[\r\n])[\s\S]*?^ {0,3}\1[ \t]*$/gm,
-    "",
-  );
+  let projected = replaceMarkdownFencedBlocks(value, () => "");
   projected = projected
     .replace(/(`+)([^\r\n]*?)\1/g, "")
     .replace(/^(?: {4}|\t)[^\r\n]*(?:\r\n|[\r\n]|$)/gm, "");
@@ -1481,15 +1589,11 @@ function renderMarkdownLinkTitles(value) {
   const inlineTitle =
     /!?\[[^\]\r\n]*\]\(\s*(?:<[^>\r\n]*>|[^\s)\r\n]+)[ \t]+(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\(([^()\r\n]*)\))\s*\)/g;
   for (const match of projected.matchAll(inlineTitle))
-    candidates.push(
-      decodeHtmlCharacterReferences(match[1] ?? match[2] ?? match[3]),
-    );
+    candidates.push(decodeHtmlCharacterReferences(match[1] ?? match[2] ?? match[3]));
   const definitionTitle =
     /^ {0,3}\[[^\]\r\n]+\]:[ \t]+(?:<[^>\r\n]*>|\S+)[ \t]+(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\(([^()\r\n]*)\))[ \t]*$/gm;
   for (const match of projected.matchAll(definitionTitle))
-    candidates.push(
-      decodeHtmlCharacterReferences(match[1] ?? match[2] ?? match[3]),
-    );
+    candidates.push(decodeHtmlCharacterReferences(match[1] ?? match[2] ?? match[3]));
   return candidates;
 }
 
@@ -1500,13 +1604,9 @@ function renderMarkdown(value) {
     codeSegments.push([placeholder, segment]);
     return placeholder;
   };
-  let shielded = value.replace(
-    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r\n|[\r\n])[\s\S]*?^ {0,3}\1[ \t]*$/gm,
-    (segment) => shield(segment),
-  );
-  shielded = shielded.replace(
-    /^(?: {4}|\t)[^\r\n]*(?:\r\n|[\r\n]|$)/gm,
-    (segment) => shield(segment),
+  let shielded = replaceMarkdownFencedBlocks(value, (segment) => shield(segment));
+  shielded = shielded.replace(/^(?: {4}|\t)[^\r\n]*(?:\r\n|[\r\n]|$)/gm, (segment) =>
+    shield(segment),
   );
   shielded = shielded.replace(/(`+)([^\r\n]*?)\1/g, (segment) => shield(segment));
   const referenceIds = new Set(
@@ -1514,10 +1614,7 @@ function renderMarkdown(value) {
       normalizeMarkdownReferenceLabel(match[1]),
     ),
   );
-  const withoutDefinitions = shielded.replace(
-    /^\s{0,3}\[[^\]]+\]:\s+\S+.*$/gm,
-    "",
-  );
+  const withoutDefinitions = shielded.replace(/^\s{0,3}\[[^\]]+\]:\s+\S+.*$/gm, "");
   let rendered = stripMarkupNodes(withoutDefinitions)
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
@@ -1541,13 +1638,31 @@ function renderMarkdown(value) {
   return rendered;
 }
 
+const pythonNamedEscapeCharacters = new Map([
+  ["CHARACTER TABULATION", "\t"],
+  ["HYPHEN-MINUS", "-"],
+  ["LINE FEED", "\n"],
+  ["LOW LINE", "_"],
+  ["NO-BREAK SPACE", "\u00a0"],
+  ["SPACE", " "],
+]);
+for (let codePoint = 65; codePoint <= 90; codePoint += 1) {
+  const capital = String.fromCodePoint(codePoint);
+  pythonNamedEscapeCharacters.set(`LATIN CAPITAL LETTER ${capital}`, capital);
+  pythonNamedEscapeCharacters.set(
+    `LATIN SMALL LETTER ${capital}`,
+    capital.toLowerCase(),
+  );
+}
+
 function decodePythonStringBody(body) {
   return `"${body.replace(/"/g, '\\"')}"`
     .slice(1, -1)
     .replace(
-      /\\u\{([0-9A-Fa-f]{1,6})\}|\\U([0-9A-Fa-f]{8})|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\([0-7]{1,3})|\\(?:\r\n|[\n\r])|\\([abtnvfr"'\\])/g,
+      /\\N\{([^}\r\n]+)\}|\\u\{([0-9A-Fa-f]{1,6})\}|\\U([0-9A-Fa-f]{8})|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\([0-7]{1,3})|\\(?:\r\n|[\n\r])|\\([abtnvfr"'\\])/g,
       (
         escape,
+        named,
         bracedUnicode,
         longUnicode,
         fixedUnicode,
@@ -1555,6 +1670,8 @@ function decodePythonStringBody(body) {
         octal,
         simple,
       ) => {
+        if (named !== undefined)
+          return pythonNamedEscapeCharacters.get(named) ?? escape;
         const encoded = bracedUnicode ?? longUnicode ?? fixedUnicode ?? hexadecimal;
         if (encoded !== undefined) {
           const codePoint = Number.parseInt(encoded, 16);
@@ -1683,9 +1800,7 @@ function renderStaticPythonFString(body, raw) {
         if (braces > 0) end += 1;
       }
       if (braces !== 0) return null;
-      const expression = renderStaticPythonFStringField(
-        body.slice(index + 1, end),
-      );
+      const expression = renderStaticPythonFStringField(body.slice(index + 1, end));
       if (expression === null) return null;
       rendered += expression;
       index = end + 1;
@@ -1732,16 +1847,12 @@ function renderStaticPythonFStringField(field) {
     const conversion = field.slice(conversionIndex + 1, conversionEnd).trim();
     if (!new Set(["a", "r", "s"]).has(conversion)) return null;
     if (conversion === "a" || conversion === "r")
-      rendered = `'${rendered
-        .replaceAll("\\", "\\\\")
-        .replaceAll("'", "\\'")}'`;
+      rendered = `'${rendered.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
   }
 
   if (formatIndex < 0) return rendered;
   const specifier = field.slice(formatIndex + 1);
-  const format = /^(?:(.)([<^>])|([<^>]))?(\d+)?(?:\.(\d+))?s?$/su.exec(
-    specifier,
-  );
+  const format = /^(?:(.)([<^>])|([<^>]))?(\d+)?(?:\.(\d+))?s?$/su.exec(specifier);
   if (!format) return null;
   const fill = format[1] ?? " ";
   const alignment = format[2] ?? format[3] ?? "<";
@@ -1836,9 +1947,7 @@ function renderPythonLiterals(value) {
       continue;
     }
     candidates.push(rendered);
-    const separator = previous
-      ? projectedValue.slice(previous.end, match.index)
-      : "";
+    const separator = previous ? projectedValue.slice(previous.end, match.index) : "";
     const projectedSeparator = separator
       .replace(/\\(?:\r\n|[\r\n])/g, "")
       .replace(/[()]/g, "");
@@ -1935,8 +2044,7 @@ function renderStaticRawTemplateLiteral(literal) {
 
 function maskTypeScriptTypeAliases(value) {
   const masked = value.split("");
-  const aliasPattern =
-    /\btype\s+[A-Za-z_$][\w$]*(?:\s*<[^=;\r\n]*>)?\s*=/g;
+  const aliasPattern = /\btype\s+[A-Za-z_$][\w$]*(?:\s*<[^=;\r\n]*>)?\s*=/g;
   for (const alias of value.matchAll(aliasPattern)) {
     const start = alias.index ?? 0;
     const prefix = value.slice(0, start).trimEnd();
@@ -1953,6 +2061,77 @@ function maskTypeScriptTypeAliases(value) {
       if (!/[\r\n]/u.test(masked[index])) masked[index] = " ";
   }
   return masked.join("");
+}
+
+function scanStaticConcatCall(value, start, receiver) {
+  let cursor = skipJavascriptTrivia(value, start);
+  if (value[cursor] !== ".") return null;
+  cursor = skipJavascriptTrivia(value, cursor + 1);
+  if (!/^concat\b/u.test(value.slice(cursor))) return null;
+  cursor = skipJavascriptTrivia(value, cursor + "concat".length);
+  if (value[cursor] !== "(") return null;
+  let argumentStart = cursor + 1;
+  let parentheses = 0;
+  const argumentsRendered = [];
+  cursor = argumentStart;
+  while (cursor < value.length) {
+    if (value.startsWith("/*", cursor) || value.startsWith("//", cursor)) {
+      cursor = skipJavascriptTrivia(value, cursor);
+      continue;
+    }
+    if (['"', "'", "`"].includes(value[cursor])) {
+      const literal = scanJavascriptLiteral(value, cursor);
+      if (!literal) return null;
+      cursor = literal.end;
+      continue;
+    }
+    if (value[cursor] === "/" && javascriptRegexCanStart(value, cursor)) {
+      const end = scanJavascriptRegex(value, cursor);
+      if (end !== null) {
+        cursor = end;
+        continue;
+      }
+    }
+    if (value[cursor] === "(") parentheses += 1;
+    else if (value[cursor] === ")") {
+      if (parentheses > 0) parentheses -= 1;
+      else {
+        const argument = value.slice(argumentStart, cursor).trim();
+        if (argument) {
+          const rendered = renderConstantJavascriptExpression(argument);
+          if (rendered === null) return null;
+          argumentsRendered.push(rendered);
+        }
+        return {
+          end: cursor + 1,
+          rendered: receiver + argumentsRendered.join(""),
+        };
+      }
+    } else if (value[cursor] === "," && parentheses === 0) {
+      const rendered = renderConstantJavascriptExpression(
+        value.slice(argumentStart, cursor),
+      );
+      if (rendered === null) return null;
+      argumentsRendered.push(rendered);
+      argumentStart = cursor + 1;
+    }
+    cursor += 1;
+  }
+  return null;
+}
+
+function renderStaticConcatChain(value, start, receiver) {
+  let cursor = start;
+  let rendered = receiver;
+  let matched = false;
+  while (true) {
+    const call = scanStaticConcatCall(value, cursor, rendered);
+    if (!call) break;
+    matched = true;
+    rendered = call.rendered;
+    cursor = call.end;
+  }
+  return matched ? rendered : null;
 }
 
 function renderJavascriptLiterals(value) {
@@ -1993,7 +2172,11 @@ function renderJavascriptLiterals(value) {
     }
     const stringRawTag =
       literal.literal.startsWith("`") &&
-      /String\s*\.\s*raw\s*$/u.test(value.slice(0, index));
+      /String\s*\.\s*raw\s*$/u.test(
+        value
+          .slice(0, index)
+          .replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*/g, " "),
+      );
     const renderedLiteral = stringRawTag
       ? renderStaticRawTemplateLiteral(literal.literal)
       : renderStaticLiteral(literal.literal);
@@ -2004,6 +2187,12 @@ function renderJavascriptLiterals(value) {
       continue;
     }
     candidates.push(renderedLiteral);
+    const concatenatedCall = renderStaticConcatChain(
+      value,
+      literal.end,
+      renderedLiteral,
+    );
+    if (concatenatedCall !== null) candidates.push(concatenatedCall);
     if (
       previous &&
       /^\s*\+\s*$/.test(
@@ -2033,9 +2222,7 @@ function renderedSourceCandidates(value, relativePath) {
       )
     : value;
   if (markupSourceExtensions.has(extension)) {
-    const executableMarkup = maskMarkupRcdataBodies(
-      stripMarkupComments(visibleValue),
-    );
+    const executableMarkup = maskMarkupRcdataBodies(stripMarkupComments(visibleValue));
     candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(visibleValue)));
     candidates.push(...renderMarkupAttributeValues(executableMarkup));
     candidates.push(...renderEmbeddedCssContent(executableMarkup));
@@ -2159,9 +2346,7 @@ const probeSecondWord = phrase(97, 112, 112, 114, 111, 118, 97, 108);
 const compactOrganizationalProbe = phrase(115, 105, 103, 110, 111, 102, 102);
 const spacedOrganizationalProbe = phrase(115, 105, 103, 110, 32, 111, 102, 102);
 const fullwidthCompactProbe = [...compactOrganizationalProbe]
-  .map((character) =>
-    String.fromCodePoint((character.codePointAt(0) ?? 0) + 0xfee0),
-  )
+  .map((character) => String.fromCodePoint((character.codePointAt(0) ?? 0) + 0xfee0))
   .join("");
 for (const [label, source, relativePath, target] of [
   [
@@ -2236,17 +2421,13 @@ for (const [label, source, relativePath, target] of [
   ],
   [
     "grouped_constant_template_literal_chain",
-    "`" +
-      probeFirstWord +
-      ' ${((/* split */ " " + ""))}' +
-      probeSecondWord +
-      "`",
+    "`" + probeFirstWord + ' ${((/* split */ " " + ""))}' + probeSecondWord + "`",
     "probe.js",
     encodedPhraseProbe,
   ],
   [
     "nested_constant_template_literal",
-    "`" + probeFirstWord + ' ${(``)}' + probeSecondWord + "`",
+    "`" + probeFirstWord + " ${(``)}" + probeSecondWord + "`",
     "probe.js",
     encodedPhraseProbe,
   ],
@@ -2258,11 +2439,7 @@ for (const [label, source, relativePath, target] of [
   ],
   [
     "quoted_interpolation_comment_is_not_an_operand",
-    "`" +
-      probeFirstWord +
-      ' ${" " /* "hidden" */ + ""}' +
-      probeSecondWord +
-      "`",
+    "`" + probeFirstWord + ' ${" " /* "hidden" */ + ""}' + probeSecondWord + "`",
     "probe.js",
     encodedPhraseProbe,
   ],
@@ -2339,6 +2516,12 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "css_escaped_content_property",
+    `.status::after { con\\74 ent: "${probeFirstWord}\\20 ${probeSecondWord}"; }`,
+    "probe.css",
+    encodedPhraseProbe,
+  ],
+  [
     "css_string_declaration_terminator",
     `.status::after { content: "x;${probeFirstWord}\\20 ${probeSecondWord}"; }`,
     "probe.css",
@@ -2395,6 +2578,14 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "inline_bracket_inner_html_literal_chain",
+    `<div id="out"></div><script>` +
+      `out["innerHTML"] = ` +
+      `"${probeFirstWord}" + "&#32;${probeSecondWord}";</script>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
     "visible_submit_input_value",
     `<input type="submit" value="${probeFirstWord} ${probeSecondWord}">`,
     "probe.html",
@@ -2431,17 +2622,24 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "standalone_svg_cdata_text",
+    `<svg><text>${probeFirstWord}<![CDATA[ ${probeSecondWord}]]></text></svg>`,
+    "probe.svg",
+    encodedPhraseProbe,
+  ],
+  [
+    "xhtml_element_boundary",
+    `<p>${probeFirstWord}<span> ${probeSecondWord}</span></p>`,
+    "probe.xhtml",
+    encodedPhraseProbe,
+  ],
+  [
     "default_ignorable_variation_selector",
     `${compactOrganizationalProbe.slice(0, 4)}${String.fromCodePoint(0xfe0f)}${compactOrganizationalProbe.slice(4)}`,
     "probe.html",
     compactOrganizationalProbe,
   ],
-  [
-    "nfkc_fullwidth",
-    fullwidthCompactProbe,
-    "probe.html",
-    compactOrganizationalProbe,
-  ],
+  ["nfkc_fullwidth", fullwidthCompactProbe, "probe.html", compactOrganizationalProbe],
   [
     "jsx_whitespace_expression",
     `<span>${probeFirstWord}</span>{' '}<span>${probeSecondWord}</span>`,
@@ -2487,6 +2685,12 @@ for (const [label, source, relativePath, target] of [
   [
     "python_static_f_string",
     `message = f"${probeFirstWord}\\x20${probeSecondWord}"`,
+    "probe.py",
+    encodedPhraseProbe,
+  ],
+  [
+    "python_named_unicode_escape",
+    `message = "${probeFirstWord}\\N{SPACE}${probeSecondWord}"`,
     "probe.py",
     encodedPhraseProbe,
   ],
@@ -2567,6 +2771,12 @@ for (const [label, source, relativePath, target] of [
     "scss_static_generated_content_interpolation",
     `.status::after { content: "${probeFirstWord} #{''}${probeSecondWord}"; }`,
     "probe.scss",
+    encodedPhraseProbe,
+  ],
+  [
+    "javascript_static_string_concat_call",
+    `const label = "${probeFirstWord}".concat(" ${probeSecondWord}");`,
+    "probe.js",
     encodedPhraseProbe,
   ],
 ]) {
@@ -2692,14 +2902,15 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
     `<p>{"${probeFirstWord} "}{separator}${probeSecondWord}</p>`,
     "probe.jsx",
   ],
-  [
-    "markdown_code_entity",
-    `\`${probeFirstWord}&#32;${probeSecondWord}\``,
-    "probe.md",
-  ],
+  ["markdown_code_entity", `\`${probeFirstWord}&#32;${probeSecondWord}\``, "probe.md"],
   [
     "markdown_indented_code_entity",
     `    ${probeFirstWord}&#32;${probeSecondWord}`,
+    "probe.md",
+  ],
+  [
+    "markdown_longer_closing_fence",
+    `\`\`\`\n${probeFirstWord}&#32;${probeSecondWord}\n\`\`\`\``,
     "probe.md",
   ],
   [
@@ -2709,8 +2920,19 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
   ],
   [
     "typescript_template_literal_type",
-    `type Label = \`${probeFirstWord} ${"${\"\"}"}${probeSecondWord}\`;`,
+    `type Label = \`${probeFirstWord} ${'${""}'}${probeSecondWord}\`;`,
     "probe.ts",
+  ],
+  [
+    "inline_html_assignment_spelling_inside_string",
+    `<script>const example = ".innerHTML = '${probeFirstWord}' + ` +
+      `'&#32;${probeSecondWord}';";</script>`,
+    "probe.html",
+  ],
+  [
+    "string_raw_tag_with_comment",
+    `String/* note */.raw\`${probeFirstWord}\\u0020${probeSecondWord}\``,
+    "probe.js",
   ],
   [
     "string_raw_escape",
@@ -2878,8 +3100,10 @@ function scanLanguage() {
   for (const entry of repositoryPaths()) {
     const data = readRepositoryEntry(entry);
     if (data === null) continue;
-    const normalizedCandidates = decodeRepositoryTexts(data, entry.relativePath).flatMap(
-      (text) =>
+    const normalizedCandidates = decodeRepositoryTexts(
+      data,
+      entry.relativePath,
+    ).flatMap((text) =>
       [text, ...renderedSourceCandidates(text, entry.relativePath)].map((candidate) =>
         normalizeLanguage(candidate),
       ),
