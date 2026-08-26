@@ -629,6 +629,7 @@ function replaceJsxWhitespaceExpressions(value) {
 function stripMarkupNodes(value) {
   return value
     .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
     .replace(/<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*?)?\s*\/?>/gs, " ");
 }
 
@@ -929,6 +930,12 @@ for (const [label, source, relativePath, target] of [
   [
     "embedded_css_generated_content_escape",
     `<style>.status::after { content: "${probeFirstWord}\\20 ${probeSecondWord}"; }</style>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "non_rendered_element_body",
+    `<span>${probeFirstWord} </span><script>ignored()</script><span>${probeSecondWord}</span>`,
     "probe.html",
     encodedPhraseProbe,
   ],
