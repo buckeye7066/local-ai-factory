@@ -403,6 +403,8 @@ const literalSourceExtensions = new Set([
   ".json",
   ".mjs",
   ".mts",
+  ".py",
+  ".pyw",
   ".svelte",
   ".ts",
   ".tsx",
@@ -584,6 +586,36 @@ function renderCssContent(value) {
   return candidates;
 }
 
+function renderEmbeddedCssContent(value) {
+  const candidates = [];
+  const stylePattern =
+    /<style(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*>([\s\S]*?)<\/style\s*>/gi;
+  for (const match of value.matchAll(stylePattern)) {
+    candidates.push(...renderCssContent(match[1]));
+  }
+  return candidates;
+}
+
+function renderMarkupAttributeValues(value) {
+  const candidates = [];
+  const tagPattern =
+    /<[A-Za-z][A-Za-z0-9:-]*(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*\/?>/gs;
+  const attributePattern =
+    /(?:^|\s)[^\s"'=<>`]+\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+  for (const tag of value.matchAll(tagPattern)) {
+    for (const attribute of tag[0].matchAll(attributePattern)) {
+      candidates.push(
+        decodeHtmlCharacterReferences(attribute[1] ?? attribute[2] ?? attribute[3]),
+      );
+    }
+  }
+  return candidates;
+}
+
+function stripJsxComments(value) {
+  return value.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, "");
+}
+
 function replaceJsxWhitespaceExpressions(value) {
   return value.replace(
     /\{\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\}/gs,
@@ -616,20 +648,102 @@ function renderMarkdown(value) {
     .replace(/!?\[([^\]]+)\]/g, (match, label) =>
       referenceIds.has(normalizeLanguage(label)) ? label : match,
     )
-    .replace(/[*~`]+/g, "");
+    .replace(/(`+)([\s\S]*?)\1/g, "$2")
+    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
+    .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, "$1")
+    .replace(/__(?=\S)([\s\S]*?\S)__/g, "$1")
+    .replace(/\*(?=\S)([^*\r\n]*?\S)\*/g, "$1")
+    .replace(/_(?=\S)([^_\r\n]*?\S)_/g, "$1");
+}
+
+function renderPythonString(literal) {
+  const prefixMatch = /^([rRuUbBfF]{0,2})("""|'''|"|')/.exec(literal);
+  if (!prefixMatch) return literal;
+  const prefix = prefixMatch[1].toLowerCase();
+  const delimiter = prefixMatch[2];
+  const body = literal.slice(prefixMatch[0].length, -delimiter.length);
+  if (prefix.includes("r")) return body;
+  return `"${body.replace(/"/g, '\\"')}"`
+    .slice(1, -1)
+    .replace(
+      /\\u\{([0-9A-Fa-f]{1,6})\}|\\U([0-9A-Fa-f]{8})|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\([0-7]{1,3})|\\(?:\r\n|[\n\r])|\\([abtnvfr"'\\])/g,
+      (
+        escape,
+        bracedUnicode,
+        longUnicode,
+        fixedUnicode,
+        hexadecimal,
+        octal,
+        simple,
+      ) => {
+        const encoded = bracedUnicode ?? longUnicode ?? fixedUnicode ?? hexadecimal;
+        if (encoded !== undefined) {
+          const codePoint = Number.parseInt(encoded, 16);
+          if (codePoint <= 0x10ffff && !(codePoint >= 0xd800 && codePoint <= 0xdfff))
+            return String.fromCodePoint(codePoint);
+          return "\ufffd";
+        }
+        if (octal !== undefined) return String.fromCodePoint(Number.parseInt(octal, 8));
+        if (simple !== undefined)
+          return (
+            {
+              a: "\u0007",
+              b: "\b",
+              t: "\t",
+              n: "\n",
+              v: "\v",
+              f: "\f",
+              r: "\r",
+              '"': '"',
+              "'": "'",
+              "\\": "\\",
+            }[simple] ?? simple
+          );
+        return "";
+      },
+    );
+}
+
+function renderPythonLiterals(value) {
+  const candidates = [];
+  const literalPattern =
+    /[rRuUbBfF]{0,2}(?:"""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g;
+  let previous = null;
+  let chain = null;
+  for (const match of value.matchAll(literalPattern)) {
+    const rendered = renderPythonString(match[0]);
+    candidates.push(rendered);
+    const separator = previous ? value.slice(previous.end, match.index) : "";
+    if (previous && /^(?:(?:[ \t\f]+)|(?:#[^\r\n]*$)|(?:\\\r?\n))*$/.test(separator)) {
+      chain = (chain ?? previous.rendered) + rendered;
+      candidates.push(chain);
+    } else {
+      chain = null;
+    }
+    previous = {
+      end: (match.index ?? 0) + match[0].length,
+      rendered,
+    };
+  }
+  return candidates;
 }
 
 function renderedSourceCandidates(value, relativePath) {
   const extension = sourceExtension(relativePath);
   const candidates = [];
   const visibleValue = markupSourceExtensions.has(extension)
-    ? replaceJsxWhitespaceExpressions(value)
+    ? stripJsxComments(replaceJsxWhitespaceExpressions(value))
     : value;
-  if (markupSourceExtensions.has(extension))
+  if (markupSourceExtensions.has(extension)) {
     candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(visibleValue)));
+    candidates.push(...renderMarkupAttributeValues(visibleValue));
+    candidates.push(...renderEmbeddedCssContent(visibleValue));
+  }
   if (markdownSourceExtensions.has(extension))
     candidates.push(decodeHtmlCharacterReferences(renderMarkdown(visibleValue)));
   if (cssSourceExtensions.has(extension)) candidates.push(...renderCssContent(value));
+  if (extension === ".py" || extension === ".pyw")
+    candidates.push(...renderPythonLiterals(value));
   if (!literalSourceExtensions.has(extension)) return candidates;
 
   const literalPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gs;
@@ -783,6 +897,12 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "html_encoded_attribute",
+    `<input aria-label="${probeFirstWord}&#32;${probeSecondWord}">`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
     "html_comment",
     `<p>${phrase(115, 105, 103, 110)}<!-- split -->${phrase(111, 102, 102)}</p>`,
     "probe.html",
@@ -807,9 +927,27 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "embedded_css_generated_content_escape",
+    `<style>.status::after { content: "${probeFirstWord}\\20 ${probeSecondWord}"; }</style>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
     "jsx_whitespace_expression",
     `<span>${probeFirstWord}</span>{' '}<span>${probeSecondWord}</span>`,
     "probe.jsx",
+    encodedPhraseProbe,
+  ],
+  [
+    "jsx_comment_expression",
+    `<span>${probeFirstWord}</span>{/* split */}<span> ${probeSecondWord}</span>`,
+    "probe.jsx",
+    encodedPhraseProbe,
+  ],
+  [
+    "python_implicit_literal_concatenation",
+    `message = ("${probeFirstWord} " "${probeSecondWord}")`,
+    "probe.py",
     encodedPhraseProbe,
   ],
 ]) {
@@ -819,6 +957,27 @@ for (const [label, source, relativePath, target] of [
     )
   ) {
     errors.push(`release_language_policy_self_test:${label}_not_detected`);
+  }
+}
+
+for (const [label, source, relativePath] of [
+  [
+    "markdown_unmatched_delimiter",
+    `${probeFirstWord} * ${probeSecondWord}`,
+    "probe.md",
+  ],
+  [
+    "python_separate_statements",
+    `first = "${probeFirstWord} "\nsecond = "${probeSecondWord}"`,
+    "probe.py",
+  ],
+]) {
+  if (
+    renderedSourceCandidates(source, relativePath).some((candidate) =>
+      containsLanguagePhrase(normalizeLanguage(candidate), encodedPhraseProbe),
+    )
+  ) {
+    errors.push(`release_language_policy_self_test:${label}_false_positive`);
   }
 }
 
