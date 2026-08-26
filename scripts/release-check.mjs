@@ -513,6 +513,7 @@ const markupSourceExtensions = new Set([
 ]);
 const jsxSourceExtensions = new Set([".jsx", ".mdx", ".tsx"]);
 const markdownSourceExtensions = new Set([".md", ".mdx"]);
+const typescriptSourceExtensions = new Set([".cts", ".mts", ".ts", ".tsx"]);
 
 let namedHtmlCharacterReferences = new Map();
 let legacyHtmlCharacterReferenceNames = [];
@@ -810,7 +811,14 @@ function decodeCssString(literal) {
     );
 }
 
-function renderCssContent(value) {
+function renderStaticSassString(literal) {
+  return decodeCssString(literal).replace(
+    /#\{\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\}/gs,
+    (interpolation, staticLiteral) => decodeCssString(staticLiteral),
+  );
+}
+
+function renderCssContent(value, extension = "") {
   const candidates = [];
   const withoutComments = stripCssComments(value);
   const stringPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/gs;
@@ -827,7 +835,9 @@ function renderCssContent(value) {
           )
         )
           continue;
-        const rendered = decodeCssString(literal[0]);
+        const rendered = extension === ".sass" || extension === ".scss"
+          ? renderStaticSassString(literal[0])
+          : decodeCssString(literal[0]);
         candidates.push(rendered);
         const start = literal.index ?? 0;
         chain =
@@ -1068,23 +1078,36 @@ function renderEmbeddedCssContent(value) {
   return candidates;
 }
 
+const exposedMarkupAttributeNames = new Set([
+  "alt",
+  "aria-description",
+  "aria-label",
+  "aria-placeholder",
+  "aria-roledescription",
+  "aria-valuetext",
+  "placeholder",
+  "title",
+]);
+const nonTextualInputValueTypes = new Set([
+  "checkbox",
+  "color",
+  "file",
+  "hidden",
+  "image",
+  "password",
+  "radio",
+  "range",
+]);
+const labeledOptionElements = new Set(["option", "optgroup"]);
+
 function renderMarkupAttributeValues(value) {
   const candidates = [];
-  const exposedAttributeNames = new Set([
-    "alt",
-    "aria-description",
-    "aria-label",
-    "aria-placeholder",
-    "aria-roledescription",
-    "aria-valuetext",
-    "placeholder",
-    "title",
-  ]);
   const tagPattern =
     /<([A-Za-z][A-Za-z0-9:-]*)(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*\/?>/gs;
   const attributePattern =
     /(?:^|\s)([^\s"'=<>`]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
   for (const tag of value.matchAll(tagPattern)) {
+    const tagName = tag[1].toLowerCase();
     const attributes = [...tag[0].matchAll(attributePattern)].map((attribute) => ({
       name: attribute[1].toLowerCase(),
       value: decodeHtmlCharacterReferences(
@@ -1098,10 +1121,17 @@ function renderMarkupAttributeValues(value) {
       .toLowerCase();
     for (const attribute of attributes) {
       const exposedInputValue =
-        tag[1].toLowerCase() === "input" &&
+        tagName === "input" &&
         attribute.name === "value" &&
-        new Set(["button", "reset", "submit"]).has(inputType ?? "");
-      if (!exposedAttributeNames.has(attribute.name) && !exposedInputValue) continue;
+        !nonTextualInputValueTypes.has(inputType ?? "text");
+      const exposedOptionLabel =
+        labeledOptionElements.has(tagName) && attribute.name === "label";
+      if (
+        !exposedMarkupAttributeNames.has(attribute.name) &&
+        !exposedInputValue &&
+        !exposedOptionLabel
+      )
+        continue;
       candidates.push(attribute.value);
     }
   }
@@ -1113,6 +1143,12 @@ function maskMarkupRcdataBodies(value) {
     /(<(textarea|title)\b(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*>)([\s\S]*?)(<\/\2\s*>)/gi,
     (segment, opening, tag, body, closing) =>
       opening + body.replace(/[^\r\n]/g, " ") + closing,
+  );
+}
+
+function stripMarkupComments(value) {
+  return value.replace(/<!--[\s\S]*?-->/g, (comment) =>
+    comment.replace(/[^\r\n]/g, " "),
   );
 }
 
@@ -1208,7 +1244,7 @@ function javascriptExpressionEnd(value, start) {
 }
 
 function renderHtmlFragmentCandidates(value) {
-  const executableMarkup = maskMarkupRcdataBodies(value);
+  const executableMarkup = maskMarkupRcdataBodies(stripMarkupComments(value));
   return [
     decodeHtmlCharacterReferences(stripMarkupNodes(value)),
     ...renderMarkupAttributeValues(executableMarkup),
@@ -1336,6 +1372,44 @@ function isLikelyJsxChildExpression(value, start, end) {
     /^(?:<|\{)/u.test(after);
 }
 
+function unwrapStaticJavascriptGrouping(expression) {
+  let unwrapped = expression
+    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*/g, " ")
+    .trim();
+  while (unwrapped.startsWith("(")) {
+    let depth = 0;
+    let closing = -1;
+    for (let index = 0; index < unwrapped.length; index += 1) {
+      if (['"', "'", "`"].includes(unwrapped[index])) {
+        const literal = scanJavascriptLiteral(unwrapped, index);
+        if (!literal) return unwrapped;
+        index = literal.end - 1;
+        continue;
+      }
+      if (unwrapped[index] === "(") depth += 1;
+      else if (unwrapped[index] === ")" && --depth === 0) {
+        closing = index;
+        break;
+      }
+    }
+    if (closing !== unwrapped.length - 1) break;
+    unwrapped = unwrapped.slice(1, -1).trim();
+  }
+  return unwrapped;
+}
+
+function renderStaticJsxChildExpression(expression) {
+  const rendered = renderConstantJavascriptExpression(expression);
+  if (rendered !== null) return rendered;
+  const unwrapped = unwrapStaticJavascriptGrouping(expression);
+  if (/^(?:false|null|true|undefined)$/u.test(unwrapped)) return "";
+  if (
+    /^(?:\(\s*)*(?:false|null|undefined)(?:\s*\))*\s*&&/u.test(unwrapped)
+  )
+    return "";
+  return null;
+}
+
 function replaceStaticJsxExpressions(value) {
   let projected = "";
   let cursor = 0;
@@ -1351,9 +1425,7 @@ function replaceStaticJsxExpressions(value) {
       projected += value.slice(start);
       break;
     }
-    const expression = renderConstantJavascriptExpression(
-      value.slice(start + 1, end),
-    );
+    const expression = renderStaticJsxChildExpression(value.slice(start + 1, end));
     const original = value.slice(start, end + 1);
     projected +=
       expression !== null && isLikelyJsxChildExpression(value, start, end)
@@ -1397,6 +1469,30 @@ function normalizeMarkdownReferenceLabel(value) {
   return value.trim().replace(/\s+/gu, " ").toUpperCase().toLowerCase();
 }
 
+function renderMarkdownLinkTitles(value) {
+  let projected = value.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r\n|[\r\n])[\s\S]*?^ {0,3}\1[ \t]*$/gm,
+    "",
+  );
+  projected = projected
+    .replace(/(`+)([^\r\n]*?)\1/g, "")
+    .replace(/^(?: {4}|\t)[^\r\n]*(?:\r\n|[\r\n]|$)/gm, "");
+  const candidates = [];
+  const inlineTitle =
+    /!?\[[^\]\r\n]*\]\(\s*(?:<[^>\r\n]*>|[^\s)\r\n]+)[ \t]+(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\(([^()\r\n]*)\))\s*\)/g;
+  for (const match of projected.matchAll(inlineTitle))
+    candidates.push(
+      decodeHtmlCharacterReferences(match[1] ?? match[2] ?? match[3]),
+    );
+  const definitionTitle =
+    /^ {0,3}\[[^\]\r\n]+\]:[ \t]+(?:<[^>\r\n]*>|\S+)[ \t]+(?:"([^"\r\n]*)"|'([^'\r\n]*)'|\(([^()\r\n]*)\))[ \t]*$/gm;
+  for (const match of projected.matchAll(definitionTitle))
+    candidates.push(
+      decodeHtmlCharacterReferences(match[1] ?? match[2] ?? match[3]),
+    );
+  return candidates;
+}
+
 function renderMarkdown(value) {
   const codeSegments = [];
   const shield = (segment) => {
@@ -1406,6 +1502,10 @@ function renderMarkdown(value) {
   };
   let shielded = value.replace(
     /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r\n|[\r\n])[\s\S]*?^ {0,3}\1[ \t]*$/gm,
+    (segment) => shield(segment),
+  );
+  shielded = shielded.replace(
+    /^(?: {4}|\t)[^\r\n]*(?:\r\n|[\r\n]|$)/gm,
     (segment) => shield(segment),
   );
   shielded = shielded.replace(/(`+)([^\r\n]*?)\1/g, (segment) => shield(segment));
@@ -1484,7 +1584,7 @@ function decodePythonStringBody(body) {
 }
 
 function scanPythonLiteral(value, start) {
-  const prefix = /^[rRuUbB]{0,2}/.exec(value.slice(start))?.[0] ?? "";
+  const prefix = /^[rRuUbBfF]{0,2}/.exec(value.slice(start))?.[0] ?? "";
   const delimiterStart = start + prefix.length;
   const delimiter = value.startsWith('"""', delimiterStart)
     ? '"""'
@@ -1705,6 +1805,22 @@ function maskPythonComments(value) {
   return projected;
 }
 
+function pythonGroupingDepthAt(value, position) {
+  const grouping = [];
+  let index = 0;
+  while (index < position) {
+    const literal = scanPythonLiteral(value, index);
+    if (literal) {
+      index = literal.end;
+      continue;
+    }
+    if ("([{".includes(value[index])) grouping.push(value[index]);
+    else if (")]}".includes(value[index])) grouping.pop();
+    index += 1;
+  }
+  return grouping.length;
+}
+
 function renderPythonLiterals(value) {
   const candidates = [];
   const projectedValue = maskPythonComments(value);
@@ -1730,6 +1846,8 @@ function renderPythonLiterals(value) {
       previous &&
       (/^[ \t\f]*$/.test(projectedSeparator) ||
         (separator.includes("\\") && /^\s*$/.test(projectedSeparator)) ||
+        (pythonGroupingDepthAt(projectedValue, previous.end) > 0 &&
+          /^\s*$/.test(projectedSeparator)) ||
         /^\s*\+\s*$/.test(projectedSeparator))
     ) {
       chain = (chain ?? previous.rendered) + rendered;
@@ -1815,6 +1933,28 @@ function renderStaticRawTemplateLiteral(literal) {
   return rendered;
 }
 
+function maskTypeScriptTypeAliases(value) {
+  const masked = value.split("");
+  const aliasPattern =
+    /\btype\s+[A-Za-z_$][\w$]*(?:\s*<[^=;\r\n]*>)?\s*=/g;
+  for (const alias of value.matchAll(aliasPattern)) {
+    const start = alias.index ?? 0;
+    const prefix = value.slice(0, start).trimEnd();
+    if (
+      prefix &&
+      !/[;{}]$/u.test(prefix) &&
+      !/(?:^|\s)(?:declare|export)$/u.test(prefix)
+    )
+      continue;
+    const expressionStart = start + alias[0].length;
+    const end = javascriptExpressionEnd(value, expressionStart);
+    if (end >= value.length || value[end] !== ";") continue;
+    for (let index = start; index <= end; index += 1)
+      if (!/[\r\n]/u.test(masked[index])) masked[index] = " ";
+  }
+  return masked.join("");
+}
+
 function renderJavascriptLiterals(value) {
   const candidates = [];
   let previous = null;
@@ -1893,7 +2033,9 @@ function renderedSourceCandidates(value, relativePath) {
       )
     : value;
   if (markupSourceExtensions.has(extension)) {
-    const executableMarkup = maskMarkupRcdataBodies(visibleValue);
+    const executableMarkup = maskMarkupRcdataBodies(
+      stripMarkupComments(visibleValue),
+    );
     candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(visibleValue)));
     candidates.push(...renderMarkupAttributeValues(executableMarkup));
     candidates.push(...renderEmbeddedCssContent(executableMarkup));
@@ -1901,14 +2043,21 @@ function renderedSourceCandidates(value, relativePath) {
     candidates.push(...renderInlineEventHandlers(executableMarkup));
   }
   if (markdownSourceExtensions.has(extension))
-    candidates.push(renderMarkdown(visibleValue));
-  if (cssSourceExtensions.has(extension)) candidates.push(...renderCssContent(value));
+    candidates.push(
+      renderMarkdown(visibleValue),
+      ...renderMarkdownLinkTitles(visibleValue),
+    );
+  if (cssSourceExtensions.has(extension))
+    candidates.push(...renderCssContent(value, extension));
   if (extension === ".py" || extension === ".pyw") {
     candidates.push(...renderPythonLiterals(value));
     return candidates;
   }
   if (!literalSourceExtensions.has(extension)) return candidates;
-  candidates.push(...renderJavascriptLiterals(value));
+  const javascriptValue = typescriptSourceExtensions.has(extension)
+    ? maskTypeScriptTypeAliases(value)
+    : value;
+  candidates.push(...renderJavascriptLiterals(javascriptValue));
   return candidates;
 }
 
@@ -2258,6 +2407,18 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "visible_default_text_input_encoded_value",
+    `<input value="${probeFirstWord}&#32;${probeSecondWord}">`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "visible_option_label_encoded_value",
+    `<select><option label="${probeFirstWord}&#32;${probeSecondWord}">x</option></select>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
     "rcdata_visible_text",
     `<textarea>${probeFirstWord} ${probeSecondWord}</textarea>`,
     "probe.html",
@@ -2312,6 +2473,12 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "jsx_statically_false_logical_child",
+    `<p>${probeFirstWord} {false && "unused"}${probeSecondWord}</p>`,
+    "probe.jsx",
+    encodedPhraseProbe,
+  ],
+  [
     "python_implicit_literal_concatenation",
     `message = ("${probeFirstWord} " "${probeSecondWord}")`,
     "probe.py",
@@ -2328,6 +2495,12 @@ for (const [label, source, relativePath, target] of [
     `message = f"${compactOrganizationalProbe.slice(0, 2)}{''}${compactOrganizationalProbe.slice(2)}"`,
     "probe.py",
     compactOrganizationalProbe,
+  ],
+  [
+    "python_nested_static_f_string",
+    `message = f"${probeFirstWord} {f''}${probeSecondWord}"`,
+    "probe.py",
+    encodedPhraseProbe,
   ],
   [
     "python_static_f_string_conversion",
@@ -2354,6 +2527,12 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "python_grouped_newline_implicit_concatenation",
+    `message = ("${probeFirstWord} "\n  "${probeSecondWord}")`,
+    "probe.py",
+    encodedPhraseProbe,
+  ],
+  [
     "markdown_visible_named_entity",
     `${probeFirstWord}&nbsp;${probeSecondWord}`,
     "probe.md",
@@ -2362,6 +2541,12 @@ for (const [label, source, relativePath, target] of [
   [
     "markdown_unicode_case_folded_reference",
     `${probeFirstWord} [${probeSecondWord}][ς]\n\n[Σ]: https://example.test`,
+    "probe.md",
+    encodedPhraseProbe,
+  ],
+  [
+    "markdown_inline_link_title",
+    `[help](https://example.test "${probeFirstWord}&#32;${probeSecondWord}")`,
     "probe.md",
     encodedPhraseProbe,
   ],
@@ -2376,6 +2561,12 @@ for (const [label, source, relativePath, target] of [
     `@supports (display: grid) { ` +
       `.status::after { content: "${probeFirstWord}\\20 ${probeSecondWord}"; } }`,
     "probe.css",
+    encodedPhraseProbe,
+  ],
+  [
+    "scss_static_generated_content_interpolation",
+    `.status::after { content: "${probeFirstWord} #{''}${probeSecondWord}"; }`,
+    "probe.scss",
     encodedPhraseProbe,
   ],
 ]) {
@@ -2502,14 +2693,24 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
     "probe.jsx",
   ],
   [
-    "non_visible_text_input_value",
-    `<input type="text" value="${probeFirstWord} ${probeSecondWord}">`,
-    "probe.html",
-  ],
-  [
     "markdown_code_entity",
     `\`${probeFirstWord}&#32;${probeSecondWord}\``,
     "probe.md",
+  ],
+  [
+    "markdown_indented_code_entity",
+    `    ${probeFirstWord}&#32;${probeSecondWord}`,
+    "probe.md",
+  ],
+  [
+    "commented_markup_attribute",
+    `<!-- <img alt="${probeFirstWord}&#32;${probeSecondWord}"> -->`,
+    "probe.html",
+  ],
+  [
+    "typescript_template_literal_type",
+    `type Label = \`${probeFirstWord} ${"${\"\"}"}${probeSecondWord}\`;`,
+    "probe.ts",
   ],
   [
     "string_raw_escape",
