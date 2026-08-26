@@ -367,14 +367,17 @@ function decodeUtf32(data, littleEndian, offset = 0) {
 }
 
 function decodeUtf16Be(data, offset = 0) {
-  if ((data.length - offset) % 2 !== 0) return null;
-  const swapped = Buffer.allocUnsafe(data.length - offset);
-  for (let index = offset; index < data.length; index += 2) {
+  const completeLength = data.length - ((data.length - offset) % 2);
+  const swapped = Buffer.allocUnsafe(completeLength - offset);
+  for (let index = offset; index < completeLength; index += 2) {
     const target = index - offset;
     swapped[target] = data[index + 1];
     swapped[target + 1] = data[index];
   }
-  return swapped.toString("utf16le");
+  return (
+    swapped.toString("utf16le") +
+    (completeLength === data.length ? "" : "\ufffd")
+  );
 }
 
 function looksLikeText(value) {
@@ -814,7 +817,8 @@ function renderCssContent(value) {
   for (const declaration of cssContentDeclarationValues(withoutComments)) {
     for (const branch of splitCssAlternativeContent(declaration)) {
       const urlRanges = cssUrlArgumentRanges(branch);
-      let combined = "";
+      let chain = "";
+      let previousEnd = null;
       for (const literal of branch.matchAll(stringPattern)) {
         if (
           urlRanges.some(
@@ -825,9 +829,14 @@ function renderCssContent(value) {
           continue;
         const rendered = decodeCssString(literal[0]);
         candidates.push(rendered);
-        combined += rendered;
+        const start = literal.index ?? 0;
+        chain =
+          previousEnd !== null && /^\s*$/u.test(branch.slice(previousEnd, start))
+            ? chain + rendered
+            : rendered;
+        if (chain !== rendered) candidates.push(chain);
+        previousEnd = start + literal[0].length;
       }
-      if (combined) candidates.push(combined);
     }
   }
   return candidates;
@@ -890,6 +899,9 @@ function cssUrlArgumentRanges(value) {
 
 function* cssContentDeclarationValues(value) {
   let index = 0;
+  let statementStart = 0;
+  let parentheses = 0;
+  const blockKinds = [];
   while (index < value.length) {
     if (value[index] === '"' || value[index] === "'") {
       const quote = value[index];
@@ -904,8 +916,43 @@ function* cssContentDeclarationValues(value) {
       }
       continue;
     }
+    if (value[index] === "(") {
+      parentheses += 1;
+      index += 1;
+      continue;
+    }
+    if (value[index] === ")" && parentheses > 0) {
+      parentheses -= 1;
+      index += 1;
+      continue;
+    }
+    if (value[index] === "{" && parentheses === 0) {
+      const header = value.slice(statementStart, index).trimStart();
+      blockKinds.push(header.startsWith("@") ? "at-rule" : "style-rule");
+      statementStart = index + 1;
+      index += 1;
+      continue;
+    }
+    if (value[index] === "}" && parentheses === 0) {
+      blockKinds.pop();
+      statementStart = index + 1;
+      index += 1;
+      continue;
+    }
+    if (value[index] === ";" && parentheses === 0) {
+      statementStart = index + 1;
+      index += 1;
+      continue;
+    }
     if (value.slice(index, index + 7).toLowerCase() !== "content") {
       index += 1;
+      continue;
+    }
+    if (
+      blockKinds.at(-1) !== "style-rule" ||
+      value.slice(statementStart, index).trim() !== ""
+    ) {
+      index += 7;
       continue;
     }
     const before = value[index - 1] ?? "";
@@ -927,7 +974,7 @@ function* cssContentDeclarationValues(value) {
     cursor = start;
     let quote = null;
     let escaped = false;
-    let parentheses = 0;
+    let valueParentheses = 0;
     while (cursor < value.length) {
       const character = value[cursor];
       if (quote !== null) {
@@ -941,14 +988,20 @@ function* cssContentDeclarationValues(value) {
       else if (character === "\\") {
         cursor += 2;
         continue;
-      } else if (character === "(") parentheses += 1;
-      else if (character === ")" && parentheses > 0) parentheses -= 1;
-      else if ((character === ";" || character === "}") && parentheses === 0)
+      } else if (character === "(") valueParentheses += 1;
+      else if (character === ")" && valueParentheses > 0)
+        valueParentheses -= 1;
+      else if (
+        (character === ";" || character === "}") &&
+        valueParentheses === 0
+      )
         break;
       cursor += 1;
     }
     yield value.slice(start, cursor);
+    if (value[cursor] === "}") blockKinds.pop();
     index = cursor + 1;
+    statementStart = index;
   }
 }
 
@@ -1106,7 +1159,73 @@ function renderInlineExecutableScripts(value) {
       .toLowerCase()
       .split(";", 1)[0]
       .trim();
-    if (executableTypes.has(type)) candidates.push(...renderJavascriptLiterals(script[2]));
+    if (executableTypes.has(type)) {
+      candidates.push(...renderJavascriptLiterals(script[2]));
+      candidates.push(...renderInlineHtmlAssignments(script[2]));
+    }
+  }
+  return candidates;
+}
+
+function javascriptExpressionEnd(value, start) {
+  let parentheses = 0;
+  let brackets = 0;
+  let braces = 0;
+  let index = start;
+  while (index < value.length) {
+    if (value.startsWith("/*", index)) {
+      const end = value.indexOf("*/", index + 2);
+      index = end < 0 ? value.length : end + 2;
+      continue;
+    }
+    if (value.startsWith("//", index)) {
+      const end = /[\r\n\u2028\u2029]/u.exec(value.slice(index + 2));
+      index = end ? index + 2 + (end.index ?? 0) + end[0].length : value.length;
+      continue;
+    }
+    if (['"', "'", "`"].includes(value[index])) {
+      const literal = scanJavascriptLiteral(value, index);
+      if (!literal) return value.length;
+      index = literal.end;
+      continue;
+    }
+    if (value[index] === "(") parentheses += 1;
+    else if (value[index] === ")" && parentheses > 0) parentheses -= 1;
+    else if (value[index] === "[") brackets += 1;
+    else if (value[index] === "]" && brackets > 0) brackets -= 1;
+    else if (value[index] === "{") braces += 1;
+    else if (value[index] === "}" && braces > 0) braces -= 1;
+    else if (
+      value[index] === ";" &&
+      parentheses === 0 &&
+      brackets === 0 &&
+      braces === 0
+    )
+      return index;
+    index += 1;
+  }
+  return value.length;
+}
+
+function renderHtmlFragmentCandidates(value) {
+  const executableMarkup = maskMarkupRcdataBodies(value);
+  return [
+    decodeHtmlCharacterReferences(stripMarkupNodes(value)),
+    ...renderMarkupAttributeValues(executableMarkup),
+    ...renderEmbeddedCssContent(executableMarkup),
+    ...renderInlineEventHandlers(executableMarkup),
+  ];
+}
+
+function renderInlineHtmlAssignments(value) {
+  const candidates = [];
+  const assignmentPattern = /\.(?:innerHTML|outerHTML)\s*=\s*/g;
+  for (const assignment of value.matchAll(assignmentPattern)) {
+    const start = (assignment.index ?? 0) + assignment[0].length;
+    const end = javascriptExpressionEnd(value, start);
+    const rendered = renderConstantJavascriptExpression(value.slice(start, end));
+    if (rendered !== null)
+      candidates.push(...renderHtmlFragmentCandidates(rendered));
   }
   return candidates;
 }
@@ -1275,7 +1394,7 @@ function stripMarkupNodes(value) {
 }
 
 function normalizeMarkdownReferenceLabel(value) {
-  return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("und");
+  return value.trim().replace(/\s+/gu, " ").toUpperCase().toLowerCase();
 }
 
 function renderMarkdown(value) {
@@ -1866,6 +1985,18 @@ for (const [label, data] of [
     errors.push(`release_language_policy_self_test:${label}_not_detected`);
   }
 }
+const truncatedUtf16BeProbe = Buffer.concat([
+  Buffer.from([0xfe, 0xff]),
+  encodeUtf16Be(encodedPhraseProbe),
+  Buffer.from([0]),
+]);
+if (
+  !decodeRepositoryTexts(truncatedUtf16BeProbe, "probe.html").some((decoded) =>
+    containsLanguagePhrase(normalizeLanguage(decoded), encodedPhraseProbe),
+  )
+) {
+  errors.push("release_language_policy_self_test:truncated_utf16be_not_detected");
+}
 const replacementHeavyBinaryProbe = Buffer.concat([
   Buffer.alloc(128, 0xff),
   Buffer.from(encodedPhraseProbe, "utf8"),
@@ -2107,6 +2238,14 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "inline_inner_html_literal_chain",
+    `<div id="out"></div><script>` +
+      `document.getElementById("out").innerHTML = ` +
+      `"${probeFirstWord}" + "&#32;${probeSecondWord}";</script>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
     "visible_submit_input_value",
     `<input type="submit" value="${probeFirstWord} ${probeSecondWord}">`,
     "probe.html",
@@ -2221,8 +2360,21 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "markdown_unicode_case_folded_reference",
+    `${probeFirstWord} [${probeSecondWord}][ς]\n\n[Σ]: https://example.test`,
+    "probe.md",
+    encodedPhraseProbe,
+  ],
+  [
     "css_url_alternative_text",
     `.status::after { content: url("icon.svg") / "${probeFirstWord} ${probeSecondWord}"; }`,
+    "probe.css",
+    encodedPhraseProbe,
+  ],
+  [
+    "css_rule_nested_in_supports",
+    `@supports (display: grid) { ` +
+      `.status::after { content: "${probeFirstWord}\\20 ${probeSecondWord}"; } }`,
     "probe.css",
     encodedPhraseProbe,
   ],
@@ -2315,6 +2467,18 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
   [
     "css_url_resource_value",
     `.status::after { content: url("${probeFirstWord} ${probeSecondWord}"); }`,
+    "probe.css",
+  ],
+  [
+    "css_supports_condition",
+    `@supports (content: "${probeFirstWord}\\20 ${probeSecondWord}") { .x { display: block; } }`,
+    "probe.css",
+  ],
+  [
+    "css_non_string_content_component",
+    `.x { counter-reset: item 7 } ` +
+      `.x::after { content: "${probeFirstWord} " ` +
+      `counter(item) "${probeSecondWord}"; }`,
     "probe.css",
   ],
   [
