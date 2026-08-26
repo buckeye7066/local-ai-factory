@@ -64,6 +64,7 @@ const required = [
   ["provider_timeout_regression", "src/server/__tests__/providerAbort.test.ts"],
   ["anthropic_provider", "src/server/providers/anthropicProvider.ts"],
   ["openai_provider", "src/server/providers/openaiProvider.ts"],
+  ["html_named_references", "scripts/html-named-character-references.json"],
   ["package", "package.json"],
 ];
 
@@ -100,14 +101,7 @@ for (const forbidden of [
   }
 }
 
-const excludedDirectories = new Set([
-  ".factory",
-  ".git",
-  "coverage",
-  "dist",
-  "node_modules",
-  "workspaces",
-]);
+const excludedDirectories = new Set([".git"]);
 const phrase = (...codePoints) => String.fromCodePoint(...codePoints);
 const prohibitedLanguage = [
   ["organizational_gate", phrase(115, 105, 103, 110, 32, 111, 102, 102)],
@@ -386,11 +380,60 @@ function looksLikeText(value) {
   return controls <= controlLimit && replacements <= replacementLimit;
 }
 
-function uniqueTextCandidates(candidates) {
-  return [...new Set(candidates.filter((candidate) => looksLikeText(candidate)))];
+function uniqueTextCandidates(candidates, retainedCandidates = []) {
+  return [
+    ...new Set([
+      ...retainedCandidates.filter((candidate) => candidate !== null),
+      ...candidates.filter((candidate) => looksLikeText(candidate)),
+    ]),
+  ];
 }
 
-function decodeRepositoryTexts(data) {
+const binarySourceExtensions = new Set([
+  ".7z",
+  ".a",
+  ".avi",
+  ".bmp",
+  ".bz2",
+  ".class",
+  ".dll",
+  ".dylib",
+  ".eot",
+  ".exe",
+  ".flac",
+  ".gif",
+  ".gz",
+  ".ico",
+  ".jar",
+  ".jpeg",
+  ".jpg",
+  ".m4a",
+  ".mov",
+  ".mp3",
+  ".mp4",
+  ".o",
+  ".ogg",
+  ".otf",
+  ".pdf",
+  ".png",
+  ".so",
+  ".tar",
+  ".tgz",
+  ".ttf",
+  ".wav",
+  ".webm",
+  ".webp",
+  ".woff",
+  ".woff2",
+  ".xz",
+  ".zip",
+]);
+
+function shouldRetainUtf8(relativePath) {
+  return Boolean(relativePath) && !binarySourceExtensions.has(sourceExtension(relativePath));
+}
+
+function decodeRepositoryTexts(data, relativePath = "") {
   if (
     data.length >= 4 &&
     data[0] === 0xff &&
@@ -411,8 +454,10 @@ function decodeRepositoryTexts(data) {
     return uniqueTextCandidates([data.subarray(2).toString("utf16le")]);
   if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff)
     return uniqueTextCandidates([decodeUtf16Be(data, 2)]);
-  const candidates = [data.toString("utf8")];
-  if (!data.includes(0)) return uniqueTextCandidates(candidates);
+  const utf8 = data.toString("utf8");
+  const candidates = [utf8];
+  const retainedUtf8 = shouldRetainUtf8(relativePath) ? [utf8] : [];
+  if (!data.includes(0)) return uniqueTextCandidates(candidates, retainedUtf8);
 
   if (data.length % 4 === 0) {
     candidates.push(decodeUtf32(data, true), decodeUtf32(data, false));
@@ -423,7 +468,7 @@ function decodeRepositoryTexts(data) {
   // Without a BOM, several byte orders can decode to printable Unicode. Scan
   // every plausible interpretation so a wrong-endian candidate cannot hide a
   // prohibited phrase in the correct interpretation.
-  return uniqueTextCandidates(candidates);
+  return uniqueTextCandidates(candidates, retainedUtf8);
 }
 
 const literalSourceExtensions = new Set([
@@ -453,43 +498,21 @@ const markupSourceExtensions = new Set([
 ]);
 const markdownSourceExtensions = new Set([".md", ".mdx"]);
 
-const namedHtmlCharacterReferences = new Map([
-  ["Tab", "\t"],
-  ["NewLine", "\n"],
-  ["nbsp", "\u00a0"],
-  ["NonBreakingSpace", "\u00a0"],
-  ["ensp", "\u2002"],
-  ["emsp", "\u2003"],
-  ["emsp13", "\u2004"],
-  ["emsp14", "\u2005"],
-  ["numsp", "\u2007"],
-  ["puncsp", "\u2008"],
-  ["thinsp", "\u2009"],
-  ["ThinSpace", "\u2009"],
-  ["hairsp", "\u200a"],
-  ["VeryThinSpace", "\u200a"],
-  ["MediumSpace", "\u205f"],
-  ["ThickSpace", "\u205f\u200a"],
-  ["NegativeVeryThinSpace", "\u200b"],
-  ["NegativeThinSpace", "\u200b"],
-  ["NegativeMediumSpace", "\u200b"],
-  ["NegativeThickSpace", "\u200b"],
-  ["ZeroWidthSpace", "\u200b"],
-  ["NoBreak", "\u2060"],
-  ["zwnj", "\u200c"],
-  ["zwj", "\u200d"],
-  ["lrm", "\u200e"],
-  ["rlm", "\u200f"],
-  ["amp", "&"],
-  ["AMP", "&"],
-  ["apos", "'"],
-  ["gt", ">"],
-  ["GT", ">"],
-  ["lt", "<"],
-  ["LT", "<"],
-  ["quot", '"'],
-  ["QUOT", '"'],
-]);
+let namedHtmlCharacterReferences = new Map();
+const namedHtmlReferenceData = readSelectedRepositoryPath(
+  "scripts/html-named-character-references.json",
+);
+if (namedHtmlReferenceData !== null) {
+  try {
+    namedHtmlCharacterReferences = new Map(
+      Object.entries(JSON.parse(namedHtmlReferenceData.toString("utf8"))),
+    );
+  } catch (error) {
+    errors.push(
+      `invalid_html_named_references:${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
 
 const semicolonOptionalHtmlReferences = new Map(
   ["amp", "AMP", "gt", "GT", "lt", "LT", "nbsp", "quot", "QUOT"].map((name) => [
@@ -623,15 +646,38 @@ function renderCssContent(value) {
   const declarationPattern = /\bcontent\s*:\s*([^;}]+)/gi;
   const stringPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/gs;
   for (const declaration of withoutComments.matchAll(declarationPattern)) {
-    let combined = "";
-    for (const literal of declaration[1].matchAll(stringPattern)) {
-      const rendered = decodeCssString(literal[0]);
-      candidates.push(rendered);
-      combined += rendered;
+    for (const branch of splitCssAlternativeContent(declaration[1])) {
+      let combined = "";
+      for (const literal of branch.matchAll(stringPattern)) {
+        const rendered = decodeCssString(literal[0]);
+        candidates.push(rendered);
+        combined += rendered;
+      }
+      if (combined) candidates.push(combined);
     }
-    if (combined) candidates.push(combined);
   }
   return candidates;
+}
+
+function splitCssAlternativeContent(value) {
+  let quote = null;
+  let escaped = false;
+  let parentheses = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote !== null) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+    else if (character === "(") parentheses += 1;
+    else if (character === ")" && parentheses > 0) parentheses -= 1;
+    else if (character === "/" && parentheses === 0)
+      return [value.slice(0, index), value.slice(index + 1)];
+  }
+  return [value];
 }
 
 function renderEmbeddedCssContent(value) {
@@ -646,16 +692,52 @@ function renderEmbeddedCssContent(value) {
 
 function renderMarkupAttributeValues(value) {
   const candidates = [];
+  const exposedAttributeNames = new Set([
+    "alt",
+    "aria-description",
+    "aria-label",
+    "aria-placeholder",
+    "aria-roledescription",
+    "aria-valuetext",
+    "placeholder",
+    "title",
+  ]);
   const tagPattern =
     /<[A-Za-z][A-Za-z0-9:-]*(?:\s+(?:"[^"]*"|'[^']*'|[^'">])*)?\s*\/?>/gs;
   const attributePattern =
-    /(?:^|\s)[^\s"'=<>`]+\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+    /(?:^|\s)([^\s"'=<>`]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
   for (const tag of value.matchAll(tagPattern)) {
     for (const attribute of tag[0].matchAll(attributePattern)) {
+      if (!exposedAttributeNames.has(attribute[1].toLowerCase())) continue;
       candidates.push(
-        decodeHtmlCharacterReferences(attribute[1] ?? attribute[2] ?? attribute[3]),
+        decodeHtmlCharacterReferences(attribute[2] ?? attribute[3] ?? attribute[4]),
       );
     }
+  }
+  return candidates;
+}
+
+function renderInlineExecutableScripts(value) {
+  const candidates = [];
+  const scriptPattern = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+  const executableTypes = new Set([
+    "",
+    "application/ecmascript",
+    "application/javascript",
+    "module",
+    "text/ecmascript",
+    "text/javascript",
+  ]);
+  for (const script of value.matchAll(scriptPattern)) {
+    const typeMatch = /(?:^|\s)type\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(
+      script[1],
+    );
+    const type = (typeMatch?.[1] ?? typeMatch?.[2] ?? typeMatch?.[3] ?? "")
+      .trim()
+      .toLowerCase()
+      .split(";", 1)[0]
+      .trim();
+    if (executableTypes.has(type)) candidates.push(...renderJavascriptLiterals(script[2]));
   }
   return candidates;
 }
@@ -682,13 +764,27 @@ function stripMarkupNodes(value) {
 }
 
 function renderMarkdown(value) {
+  const codeSegments = [];
+  const shield = (segment) => {
+    const placeholder = `\u0000MARKDOWNCODE${codeSegments.length}\u0000`;
+    codeSegments.push([placeholder, segment]);
+    return placeholder;
+  };
+  let shielded = value.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r\n|[\r\n])[\s\S]*?^ {0,3}\1[ \t]*$/gm,
+    (segment) => shield(segment),
+  );
+  shielded = shielded.replace(/(`+)([^\r\n]*?)\1/g, (segment) => shield(segment));
   const referenceIds = new Set(
-    [...value.matchAll(/^\s{0,3}\[([^\]]+)\]:\s+\S+.*$/gm)].map((match) =>
+    [...shielded.matchAll(/^\s{0,3}\[([^\]]+)\]:\s+\S+.*$/gm)].map((match) =>
       normalizeLanguage(match[1]),
     ),
   );
-  const withoutDefinitions = value.replace(/^\s{0,3}\[[^\]]+\]:\s+\S+.*$/gm, "");
-  return stripMarkupNodes(withoutDefinitions)
+  const withoutDefinitions = shielded.replace(
+    /^\s{0,3}\[[^\]]+\]:\s+\S+.*$/gm,
+    "",
+  );
+  let rendered = stripMarkupNodes(withoutDefinitions)
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/!?\[([^\]]+)\]\[([^\]]*)\]/g, (match, label, reference) =>
@@ -697,12 +793,14 @@ function renderMarkdown(value) {
     .replace(/!?\[([^\]]+)\]/g, (match, label) =>
       referenceIds.has(normalizeLanguage(label)) ? label : match,
     )
-    .replace(/(`+)([\s\S]*?)\1/g, "$2")
     .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "$1")
     .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, "$1")
     .replace(/__(?=\S)([\s\S]*?\S)__/g, "$1")
     .replace(/\*(?=\S)([^*\r\n]*?\S)\*/g, "$1")
     .replace(/_(?=\S)([^_\r\n]*?\S)_/g, "$1");
+  for (const [placeholder, segment] of codeSegments)
+    rendered = rendered.replaceAll(placeholder, segment);
+  return rendered;
 }
 
 function renderPythonString(literal) {
@@ -777,24 +875,8 @@ function renderPythonLiterals(value) {
   return candidates;
 }
 
-function renderedSourceCandidates(value, relativePath) {
-  const extension = sourceExtension(relativePath);
+function renderJavascriptLiterals(value) {
   const candidates = [];
-  const visibleValue = markupSourceExtensions.has(extension)
-    ? stripJsxComments(replaceJsxWhitespaceExpressions(value))
-    : value;
-  if (markupSourceExtensions.has(extension)) {
-    candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(visibleValue)));
-    candidates.push(...renderMarkupAttributeValues(visibleValue));
-    candidates.push(...renderEmbeddedCssContent(visibleValue));
-  }
-  if (markdownSourceExtensions.has(extension))
-    candidates.push(decodeHtmlCharacterReferences(renderMarkdown(visibleValue)));
-  if (cssSourceExtensions.has(extension)) candidates.push(...renderCssContent(value));
-  if (extension === ".py" || extension === ".pyw")
-    candidates.push(...renderPythonLiterals(value));
-  if (!literalSourceExtensions.has(extension)) return candidates;
-
   const literalPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/gs;
   let previous = null;
   let chain = null;
@@ -816,6 +898,30 @@ function renderedSourceCandidates(value, relativePath) {
     }
     previous = { literal: match[0], end: (match.index ?? 0) + match[0].length };
   }
+  return candidates;
+}
+
+function renderedSourceCandidates(value, relativePath) {
+  const extension = sourceExtension(relativePath);
+  const candidates = [];
+  const visibleValue = markupSourceExtensions.has(extension)
+    ? stripJsxComments(replaceJsxWhitespaceExpressions(value))
+    : value;
+  if (markupSourceExtensions.has(extension)) {
+    candidates.push(decodeHtmlCharacterReferences(stripMarkupNodes(visibleValue)));
+    candidates.push(...renderMarkupAttributeValues(visibleValue));
+    candidates.push(...renderEmbeddedCssContent(visibleValue));
+    candidates.push(...renderInlineExecutableScripts(visibleValue));
+  }
+  if (markdownSourceExtensions.has(extension))
+    candidates.push(decodeHtmlCharacterReferences(renderMarkdown(visibleValue)));
+  if (cssSourceExtensions.has(extension)) candidates.push(...renderCssContent(value));
+  if (extension === ".py" || extension === ".pyw") {
+    candidates.push(...renderPythonLiterals(value));
+    return candidates;
+  }
+  if (!literalSourceExtensions.has(extension)) return candidates;
+  candidates.push(...renderJavascriptLiterals(value));
   return candidates;
 }
 
@@ -903,6 +1009,7 @@ if (decodeRepositoryTexts(replacementHeavyBinaryProbe).length !== 0) {
 const probeFirstWord = phrase(109, 97, 110, 117, 97, 108);
 const probeSecondWord = phrase(97, 112, 112, 114, 111, 118, 97, 108);
 const compactOrganizationalProbe = phrase(115, 105, 103, 110, 111, 102, 102);
+const spacedOrganizationalProbe = phrase(115, 105, 103, 110, 32, 111, 102, 102);
 const fullwidthCompactProbe = [...compactOrganizationalProbe]
   .map((character) =>
     String.fromCodePoint((character.codePointAt(0) ?? 0) + 0xfee0),
@@ -986,6 +1093,12 @@ for (const [label, source, relativePath, target] of [
     encodedPhraseProbe,
   ],
   [
+    "html_default_ignorable_named_entity",
+    `${compactOrganizationalProbe.slice(0, 4)}&InvisibleTimes;${compactOrganizationalProbe.slice(4)}`,
+    "probe.html",
+    compactOrganizationalProbe,
+  ],
+  [
     "html_legacy_entity_without_semicolon",
     `<span>${probeFirstWord}&nbsp ${probeSecondWord}</span>`,
     "probe.html",
@@ -1030,6 +1143,12 @@ for (const [label, source, relativePath, target] of [
   [
     "non_rendered_element_body",
     `<span>${probeFirstWord} </span><script>ignored()</script><span>${probeSecondWord}</span>`,
+    "probe.html",
+    encodedPhraseProbe,
+  ],
+  [
+    "inline_script_visible_text_assignment",
+    `<span id="copy"></span><script>document.querySelector("#copy").textContent = "${probeFirstWord}" + "\\u0020${probeSecondWord}";</script>`,
     "probe.html",
     encodedPhraseProbe,
   ],
@@ -1107,6 +1226,33 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
     "probe.js",
     compactOrganizationalProbe,
   ],
+  [
+    "python_raw_string_identity_escape",
+    `r"${compactOrganizationalProbe.slice(0, 2)}\\${compactOrganizationalProbe.slice(2)}"`,
+    "probe.py",
+    compactOrganizationalProbe,
+  ],
+  [
+    "machine_only_html_attribute",
+    `<div data-policy="${probeFirstWord}&#32;${probeSecondWord}"></div>`,
+    "probe.html",
+  ],
+  [
+    "markdown_code_span_markup",
+    "`<span>" +
+      compactOrganizationalProbe.slice(0, 4) +
+      "</span><span>" +
+      compactOrganizationalProbe.slice(4) +
+      "</span>`",
+    "probe.md",
+    spacedOrganizationalProbe,
+  ],
+  [
+    "css_alternative_content",
+    `.status::after { content: "${compactOrganizationalProbe.slice(0, 4)}" / "${compactOrganizationalProbe.slice(4)}"; }`,
+    "probe.css",
+    compactOrganizationalProbe,
+  ],
 ]) {
   if (
     renderedSourceCandidates(source, relativePath).some((candidate) =>
@@ -1115,6 +1261,25 @@ for (const [label, source, relativePath, target = encodedPhraseProbe] of [
   ) {
     errors.push(`release_language_policy_self_test:${label}_false_positive`);
   }
+}
+
+const malformedKnownTextProbe = Buffer.concat([
+  Buffer.from(encodedPhraseProbe, "utf8"),
+  Buffer.alloc(4, 0xff),
+]);
+if (
+  !decodeRepositoryTexts(malformedKnownTextProbe, "probe.html").some((decoded) =>
+    containsLanguagePhrase(normalizeLanguage(decoded), encodedPhraseProbe),
+  )
+) {
+  errors.push("release_language_policy_self_test:malformed_known_utf8_not_detected");
+}
+
+for (const trackedOutputDirectory of [".factory", "coverage", "dist", "workspaces"]) {
+  if (excludedDirectories.has(trackedOutputDirectory))
+    errors.push(
+      `release_language_policy_self_test:tracked_output_excluded:${trackedOutputDirectory}`,
+    );
 }
 
 const nulInterruptedUtf8Probe = Buffer.concat([
@@ -1243,7 +1408,8 @@ function scanLanguage() {
   for (const entry of repositoryPaths()) {
     const data = readRepositoryEntry(entry);
     if (data === null) continue;
-    const normalizedCandidates = decodeRepositoryTexts(data).flatMap((text) =>
+    const normalizedCandidates = decodeRepositoryTexts(data, entry.relativePath).flatMap(
+      (text) =>
       [text, ...renderedSourceCandidates(text, entry.relativePath)].map((candidate) =>
         normalizeLanguage(candidate),
       ),
