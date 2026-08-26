@@ -276,10 +276,41 @@ const prohibitedLanguage = [
 ];
 
 function normalizeLanguage(value) {
-  return value
+  return [...value.normalize("NFKC")]
+    .filter((character) => !isDefaultIgnorable(character))
+    .join("")
     .toLowerCase()
-    .replace(/\p{Cf}+/gu, "")
     .replace(/[-_\s]+/g, " ");
+}
+
+const defaultIgnorableRanges = [
+  [0x00ad, 0x00ad],
+  [0x034f, 0x034f],
+  [0x061c, 0x061c],
+  [0x115f, 0x1160],
+  [0x17b4, 0x17b5],
+  [0x180b, 0x180f],
+  [0x200b, 0x200f],
+  [0x202a, 0x202e],
+  [0x2060, 0x206f],
+  [0x3164, 0x3164],
+  [0xfe00, 0xfe0f],
+  [0xfeff, 0xfeff],
+  [0xffa0, 0xffa0],
+  [0xfff0, 0xfff8],
+  [0x1bca0, 0x1bca3],
+  [0x1d173, 0x1d17a],
+  [0xe0000, 0xe0fff],
+];
+
+function isDefaultIgnorable(character) {
+  const codePoint = character.codePointAt(0) ?? 0;
+  return (
+    /\p{Cf}/u.test(character) ||
+    defaultIgnorableRanges.some(
+      ([first, last]) => first <= codePoint && codePoint <= last,
+    )
+  );
 }
 
 function isWordCharacter(value) {
@@ -504,7 +535,7 @@ function unquoteStaticLiteral(literal) {
   return literal
     .slice(1, -1)
     .replace(
-      /\\u\{([0-9A-Fa-f]{1,6})\}|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\(?:\r\n|[\n\r])|\\([0btnvfr"'`\\])/g,
+      /\\u\{(0*[0-9A-Fa-f]{1,6})\}|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\(?:\r\n|[\n\r\u2028\u2029])|\\([0btnvfr"'`\\])/g,
       (escape, bracedUnicode, fixedUnicode, hexadecimal, simple) => {
         if (bracedUnicode !== undefined) {
           const codePoint = Number.parseInt(bracedUnicode, 16);
@@ -753,7 +784,14 @@ function renderedSourceCandidates(value, relativePath) {
   for (const match of value.matchAll(literalPattern)) {
     const renderedLiteral = renderStaticLiteral(match[0]);
     candidates.push(renderedLiteral);
-    if (previous && /^\s*\+\s*$/.test(value.slice(previous.end, match.index))) {
+    if (
+      previous &&
+      /^\s*\+\s*$/.test(
+        value
+          .slice(previous.end, match.index)
+          .replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g, ""),
+      )
+    ) {
       chain = (chain ?? renderStaticLiteral(previous.literal)) + renderedLiteral;
       candidates.push(chain);
     } else {
@@ -848,6 +886,11 @@ if (decodeRepositoryTexts(replacementHeavyBinaryProbe).length !== 0) {
 const probeFirstWord = phrase(109, 97, 110, 117, 97, 108);
 const probeSecondWord = phrase(97, 112, 112, 114, 111, 118, 97, 108);
 const compactOrganizationalProbe = phrase(115, 105, 103, 110, 111, 102, 102);
+const fullwidthCompactProbe = [...compactOrganizationalProbe]
+  .map((character) =>
+    String.fromCodePoint((character.codePointAt(0) ?? 0) + 0xfee0),
+  )
+  .join("");
 for (const [label, source, relativePath, target] of [
   [
     "jsx_boundary",
@@ -866,6 +909,24 @@ for (const [label, source, relativePath, target] of [
     `"${probeFirstWord}" + "\\u0020" + "${probeSecondWord}"`,
     "probe.js",
     encodedPhraseProbe,
+  ],
+  [
+    "padded_braced_unicode_escape",
+    `"\\u{0000073}${compactOrganizationalProbe.slice(1)}"`,
+    "probe.js",
+    compactOrganizationalProbe,
+  ],
+  [
+    "ecmascript_line_separator_continuation",
+    `"${compactOrganizationalProbe.slice(0, 4)}\\${String.fromCodePoint(0x2028)}${compactOrganizationalProbe.slice(4)}"`,
+    "probe.js",
+    compactOrganizationalProbe,
+  ],
+  [
+    "commented_string_concatenation",
+    `"${compactOrganizationalProbe.slice(0, 2)}" /* split */ + "${compactOrganizationalProbe.slice(2, 4)}" /* split */ + "${compactOrganizationalProbe.slice(4)}"`,
+    "probe.js",
+    compactOrganizationalProbe,
   ],
   [
     "constant_template_interpolation",
@@ -938,6 +999,18 @@ for (const [label, source, relativePath, target] of [
     `<span>${probeFirstWord} </span><script>ignored()</script><span>${probeSecondWord}</span>`,
     "probe.html",
     encodedPhraseProbe,
+  ],
+  [
+    "default_ignorable_variation_selector",
+    `${compactOrganizationalProbe.slice(0, 4)}${String.fromCodePoint(0xfe0f)}${compactOrganizationalProbe.slice(4)}`,
+    "probe.html",
+    compactOrganizationalProbe,
+  ],
+  [
+    "nfkc_fullwidth",
+    fullwidthCompactProbe,
+    "probe.html",
+    compactOrganizationalProbe,
   ],
   [
     "jsx_whitespace_expression",
