@@ -43,8 +43,6 @@ export interface ConcurrentBuildResult {
   empties: string[];
 }
 
-
-
 export async function buildFilesConcurrently(
   /** The resilient default provider (e.g. the free->paid failover chain), used
    *  whenever concurrency isn't applicable — preserves that resilience instead
@@ -72,7 +70,13 @@ export async function buildFilesConcurrently(
       research,
       additionalSources,
     );
-    return { build, tasksByProvider: {}, usedConcurrency: false, failures: [], empties: [] };
+    return {
+      build,
+      tasksByProvider: {},
+      usedConcurrency: false,
+      failures: [],
+      empties: [],
+    };
   }
 
   // PER-TASK dispatch (owner order 2026-08-16: fix known weaknesses before

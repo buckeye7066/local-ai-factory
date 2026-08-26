@@ -47,9 +47,7 @@ export interface RemovedOptionRejection {
  * that no longer exists, and answering it with a silent success would leave the
  * caller believing Factory Deck honoured an option it does not have.
  */
-export function findRemovedRunOption(
-  options: unknown,
-): RemovedOptionRejection | null {
+export function findRemovedRunOption(options: unknown): RemovedOptionRejection | null {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     return null;
   }

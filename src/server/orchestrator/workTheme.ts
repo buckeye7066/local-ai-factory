@@ -25,13 +25,27 @@ import type {
  */
 
 const PURPOSE_VISION_HINTS = [
-  "screenshot", "screen shot", "user interface", " ui ", "visual", "image", "photo",
-  "render", "pixel", "layout", "ocr", "diagram", "video frame", "camera",
+  "screenshot",
+  "screen shot",
+  "user interface",
+  " ui ",
+  "visual",
+  "image",
+  "photo",
+  "render",
+  "pixel",
+  "layout",
+  "ocr",
+  "diagram",
+  "video frame",
+  "camera",
 ];
 
 /** Does the program's purpose involve looking at pictures? Narrow on purpose. */
 export function purposeNeedsVision(text: string): boolean {
-  const low = ` ${String(text || "").toLowerCase().replace(/\s+/g, " ")} `;
+  const low = ` ${String(text || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")} `;
   return PURPOSE_VISION_HINTS.some((h) => low.includes(h));
 }
 
@@ -107,11 +121,12 @@ export function createWorkTheme(input: {
   const theme = app
     ? `${app}: ${idea || "deliver working, purpose-aligned product behavior"}`
     : idea || "deliver working, purpose-aligned product behavior";
-  const issue =
-    String(input.issue || `stage=${stage}; stay on this program's open blocker`)
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 500);
+  const issue = String(
+    input.issue || `stage=${stage}; stay on this program's open blocker`,
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
   return normalizeTheme({
     theme,
     issue,

@@ -1,10 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
-import {
-  isJavascriptTestPath,
-  isPythonTestPath,
-} from "./testPaths.js";
+import { isJavascriptTestPath, isPythonTestPath } from "./testPaths.js";
 
 /**
  * commandRunner.ts — conservative command execution for UNTRUSTED generated
@@ -102,11 +99,7 @@ function isAllowedPython(args: string[]): boolean {
   ) {
     return true;
   }
-  if (
-    module === "unittest" &&
-    args.length === 3 &&
-    args[2] === "discover"
-  ) {
+  if (module === "unittest" && args.length === 3 && args[2] === "discover") {
     return true;
   }
   // Dependency installation is deliberately narrow: only a requirements file

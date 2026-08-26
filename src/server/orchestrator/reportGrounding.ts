@@ -110,7 +110,10 @@ export function groundFinalReport(input: GroundReportInput): FinalReport {
   const needsDefang = testStatus !== "passing";
   const defang = (text: string): string =>
     needsDefang
-      ? text.replace(SUCCESS_CLAIM, (m) => `${m} [UNSUPPORTED — testStatus=${testStatus}]`)
+      ? text.replace(
+          SUCCESS_CLAIM,
+          (m) => `${m} [UNSUPPORTED — testStatus=${testStatus}]`,
+        )
       : text;
 
   // "What was built" is a FACT the orchestrator holds, not a model opinion.

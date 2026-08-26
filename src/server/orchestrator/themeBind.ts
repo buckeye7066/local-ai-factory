@@ -3,11 +3,7 @@
  * runFactory.ts (large). startRun schedules executeRun on a promise chain that
  * inherits AsyncLocalStorage when created inside withWorkTheme.
  */
-import {
-  createWorkTheme,
-  withWorkTheme,
-  type WorkTheme,
-} from "./workTheme.js";
+import { createWorkTheme, withWorkTheme, type WorkTheme } from "./workTheme.js";
 
 const THEME_CONSTRAINTS = [
   "Never treat node_modules/, dist/, build/, .next/, out/, or coverage/ as the fix target — edit the source that produced them.",

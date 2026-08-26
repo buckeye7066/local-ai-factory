@@ -56,10 +56,8 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Prettier check changed source files
-        env:
-          LINT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: pnpm lint:changed
+      - name: Prettier check complete source tree
+        run: pnpm lint
 
       - name: Full unit test suite
         run: pnpm test

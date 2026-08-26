@@ -2,10 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  findUnwiredNewFiles,
-  unwiredCaveat,
-} from "../workspace/unwiredFiles.js";
+import { findUnwiredNewFiles, unwiredCaveat } from "../workspace/unwiredFiles.js";
 
 const workspaces: string[] = [];
 function workspace(): string {
@@ -29,7 +26,11 @@ describe("findUnwiredNewFiles", () => {
     const ws = workspace();
     // Pre-existing app with a router that does NOT know the new pages.
     write(ws, "src/App.jsx", "import Funding from './pages/FundingOpportunities';\n");
-    write(ws, "src/pages/FundingOpportunities.jsx", "function OpportunityCard() {}\nexport default 1;\n");
+    write(
+      ws,
+      "src/pages/FundingOpportunities.jsx",
+      "function OpportunityCard() {}\nexport default 1;\n",
+    );
     // Generated: a page wired to nothing, a component wired to nothing, and a
     // generated test importing them (self-wiring — must NOT count as evidence).
     const generated = [
@@ -69,9 +70,7 @@ describe("findUnwiredNewFiles", () => {
     const ws = workspace();
     write(ws, "src/index.js", "import './app.js';\n");
     write(ws, "src/app.js", "export default 1;\n");
-    expect(
-      findUnwiredNewFiles(ws, ["src/index.js", "src/app.js"]),
-    ).toEqual([]);
+    expect(findUnwiredNewFiles(ws, ["src/index.js", "src/app.js"])).toEqual([]);
   });
 
   it.each(["cts", "mts"])("reports an unwired generated .%s module", (ext) => {
@@ -87,9 +86,7 @@ describe("findUnwiredNewFiles", () => {
     write(ws, `src/router.${ext}`, "import './features/Fresh';\n");
     write(ws, "src/unrelated.js", "export const x = 1;\n");
     write(ws, "src/features/Fresh.mts", "export const Fresh = 1;\n");
-    expect(
-      findUnwiredNewFiles(ws, ["src/features/Fresh.mts"]),
-    ).toEqual([]);
+    expect(findUnwiredNewFiles(ws, ["src/features/Fresh.mts"])).toEqual([]);
   });
 
   it("uses a modified host entrypoint as the root of transitive generated wiring", () => {
@@ -99,10 +96,7 @@ describe("findUnwiredNewFiles", () => {
     write(ws, "src/pages/Fresh.mts", "import './ProfileForm'; export default 1;\n");
     write(ws, "src/pages/ProfileForm.tsx", "export default 1;\n");
     expect(
-      findUnwiredNewFiles(ws, [
-        "src/pages/Fresh.mts",
-        "src/pages/ProfileForm.tsx",
-      ]),
+      findUnwiredNewFiles(ws, ["src/pages/Fresh.mts", "src/pages/ProfileForm.tsx"]),
     ).toEqual([]);
   });
 

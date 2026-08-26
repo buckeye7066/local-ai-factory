@@ -261,8 +261,8 @@ export function SettingsPage({ health }: { health: Health | null }) {
                   </Badge>
                 ) : (
                   <Badge tone="amber" className="text-right">
-                    BLOCKED — ALLOW_UNTRUSTED_SCRIPTS=0, so installs, builds and
-                    tests are refused
+                    BLOCKED — ALLOW_UNTRUSTED_SCRIPTS=0, so installs, builds and tests
+                    are refused
                   </Badge>
                 )}
               </div>

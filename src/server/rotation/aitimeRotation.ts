@@ -161,12 +161,28 @@ export interface CatalogRoute {
 }
 
 const FAMILY_PATTERNS: Array<[string, string]> = [
-  ["claude", "anthropic"], ["gpt-oss", "gpt-oss"], ["gpt-", "openai"], ["o1", "openai"],
-  ["o3", "openai"], ["o4", "openai"], ["gemma", "gemma"], ["gemini", "gemini"],
-  ["qwen", "qwen"], ["llama", "llama"], ["mistral", "mistral"], ["mixtral", "mistral"],
-  ["codestral", "mistral"], ["deepseek", "deepseek"], ["phi", "phi"], ["grok", "xai"],
-  ["glimmer", "muse"], ["muse", "muse"], ["kimi", "kimi"], ["glm", "glm"],
-  ["nemotron", "nvidia"], ["command", "cohere"],
+  ["claude", "anthropic"],
+  ["gpt-oss", "gpt-oss"],
+  ["gpt-", "openai"],
+  ["o1", "openai"],
+  ["o3", "openai"],
+  ["o4", "openai"],
+  ["gemma", "gemma"],
+  ["gemini", "gemini"],
+  ["qwen", "qwen"],
+  ["llama", "llama"],
+  ["mistral", "mistral"],
+  ["mixtral", "mistral"],
+  ["codestral", "mistral"],
+  ["deepseek", "deepseek"],
+  ["phi", "phi"],
+  ["grok", "xai"],
+  ["glimmer", "muse"],
+  ["muse", "muse"],
+  ["kimi", "kimi"],
+  ["glm", "glm"],
+  ["nemotron", "nvidia"],
+  ["command", "cohere"],
 ];
 
 /**
@@ -175,7 +191,11 @@ const FAMILY_PATTERNS: Array<[string, string]> = [
  * "openrouter/qwen/qwen3.6-27b" and "ollama/qwen3-coder:30b" both say "qwen".
  */
 export function modelFamily(modelId: string): string {
-  const seg = String(modelId || "").toLowerCase().split("/").pop() ?? "";
+  const seg =
+    String(modelId || "")
+      .toLowerCase()
+      .split("/")
+      .pop() ?? "";
   for (const [needle, fam] of FAMILY_PATTERNS) if (seg.includes(needle)) return fam;
   return seg.split(":")[0].split("-")[0] || "unknown";
 }
@@ -215,10 +235,13 @@ function routeFromJson(raw: Record<string, unknown>): CatalogRoute {
     // Older catalogs have neither field; that is "unknown", not empty-on-
     // purpose, and pickInTier treats it as such.
     capabilities: Array.isArray(raw["capabilities"])
-      ? (raw["capabilities"] as unknown[]).filter((c): c is string => typeof c === "string")
+      ? (raw["capabilities"] as unknown[]).filter(
+          (c): c is string => typeof c === "string",
+        )
       : [],
     capabilities_source:
-      raw["capabilities_source"] === "measured" || raw["capabilities_source"] === "declared"
+      raw["capabilities_source"] === "measured" ||
+      raw["capabilities_source"] === "declared"
         ? raw["capabilities_source"]
         : "",
   };
@@ -318,7 +341,12 @@ export interface QualityEntry {
 }
 
 export type QualitySignal = "verified" | "rejected" | "noop" | "build_failed";
-export const QUALITY_SIGNALS: readonly QualitySignal[] = ["verified", "rejected", "noop", "build_failed"];
+export const QUALITY_SIGNALS: readonly QualitySignal[] = [
+  "verified",
+  "rejected",
+  "noop",
+  "build_failed",
+];
 export const QUALITY_MIN_ATTEMPTS = 5;
 export const QUALITY_FLOOR = 0.25;
 export const QUALITY_COOLDOWN_S = 1800;
@@ -332,18 +360,33 @@ export const QUALITY_COOLDOWN_S = 1800;
 export function yieldOf(entry: Partial<QualityEntry> | undefined): number {
   const v = Number(entry?.verified ?? 0);
   const attempts =
-    v + Number(entry?.rejected ?? 0) + Number(entry?.noop ?? 0) + Number(entry?.build_failed ?? 0);
+    v +
+    Number(entry?.rejected ?? 0) +
+    Number(entry?.noop ?? 0) +
+    Number(entry?.build_failed ?? 0);
   return (v + 1) / (attempts + 2);
 }
 
-function routeYield(state: RotationState, route: CatalogRoute, purpose: string): number {
+function routeYield(
+  state: RotationState,
+  route: CatalogRoute,
+  purpose: string,
+): number {
   const q = state.quality?.[route.id] ?? {};
   const entry = q[purpose || "*"] ?? (purpose ? q["*"] : undefined);
   return yieldOf(entry);
 }
 
 function emptyState(): RotationState {
-  return { schema: SCHEMA, cursor: {}, pools: {}, cooldowns: {}, strikes: {}, pin: {}, quality: {} };
+  return {
+    schema: SCHEMA,
+    cursor: {},
+    pools: {},
+    cooldowns: {},
+    strikes: {},
+    pin: {},
+    quality: {},
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -594,7 +637,14 @@ export class Rotator {
       const start = TIER_CHAIN.indexOf(requested);
       for (let i = start; i < TIER_CHAIN.length; i++) {
         const candidateTier = TIER_CHAIN[i];
-        const picked = this.pickInTier(candidateTier, allowPaid, state, now, reasons, opts.intent);
+        const picked = this.pickInTier(
+          candidateTier,
+          allowPaid,
+          state,
+          now,
+          reasons,
+          opts.intent,
+        );
         if (!picked) continue;
         picked.requestedTier = requested;
         if (i > start) picked.demotedFrom = requested;
@@ -712,8 +762,12 @@ export class Rotator {
       if (cooling(state, `route:${route.id}`, now)) continue;
       // Chronically off-purpose for THIS program (see reportQuality): skipped
       // here, for this purpose only, with the reason visible.
-      if (intent?.purpose && cooling(state, `route:${route.id}@${intent.purpose}`, now)) {
-        reasons[route.pool] ??= `${route.id} cooled down: low yield for '${intent.purpose}'`;
+      if (
+        intent?.purpose &&
+        cooling(state, `route:${route.id}@${intent.purpose}`, now)
+      ) {
+        reasons[route.pool] ??=
+          `${route.id} cooled down: low yield for '${intent.purpose}'`;
         continue;
       }
       // PURPOSE FIT, before pool selection. A route whose capability list is
@@ -724,7 +778,8 @@ export class Rotator {
       if (needs.length > 0 && route.capabilities.length > 0) {
         const missing = needs.filter((n) => !route.capabilities.includes(n));
         if (missing.length > 0) {
-          reasons[route.pool] ??= `lacks ${missing.join(",")} for role ${intent?.role ?? "?"}`;
+          reasons[route.pool] ??=
+            `lacks ${missing.join(",")} for role ${intent?.role ?? "?"}`;
           continue;
         }
       }
@@ -734,7 +789,9 @@ export class Rotator {
 
     let familyNote = "";
     if (intent?.avoidFamily) {
-      const others = candidates.filter((r) => modelFamily(r.model) !== intent.avoidFamily);
+      const others = candidates.filter(
+        (r) => modelFamily(r.model) !== intent.avoidFamily,
+      );
       if (others.length > 0) candidates = others;
       else
         familyNote =
@@ -862,14 +919,21 @@ export class Rotator {
     purpose = "",
     now: number = Date.now() / 1000,
   ): Promise<string | null> {
-    const sig = (QUALITY_SIGNALS as readonly string[]).includes(signal) ? signal : "other";
+    const sig = (QUALITY_SIGNALS as readonly string[]).includes(signal)
+      ? signal
+      : "other";
     const key = purpose || "*";
     let note: string | null = null;
     await this.store.update((state) => {
       const q = (state.quality ??= {});
       const perRoute = (q[route.id] ??= {});
       const entry = (perRoute[key] ??= {
-        verified: 0, rejected: 0, noop: 0, build_failed: 0, other: 0, last_at: 0,
+        verified: 0,
+        rejected: 0,
+        noop: 0,
+        build_failed: 0,
+        other: 0,
+        last_at: 0,
       });
       (entry as unknown as Record<string, number>)[sig] =
         ((entry as unknown as Record<string, number>)[sig] ?? 0) + 1;

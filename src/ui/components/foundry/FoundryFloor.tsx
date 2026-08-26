@@ -740,8 +740,8 @@ export function FoundryFloor() {
                 </div>
                 <p className="p-4 text-[11px] leading-5 text-plant-paint/70">
                   Every bay writes its result to a hash-chained ledger. A bay cannot
-                  overwrite the Crucible&apos;s findings, and no bay certifies its own
-                  release.
+                  overwrite the Crucible&apos;s findings, and no bay treats its own
+                  output as proof of readiness.
                 </p>
               </SteelPanel>
             </div>

@@ -70,7 +70,11 @@ export class QuotaFailoverProvider implements LLMProvider {
     } catch (err) {
       if (!isQuotaRefusal(err)) throw err;
       for (const alt of this.usable()) {
-        this.onFailover(this.primary.name, alt.name, String((err as Error)?.message ?? err));
+        this.onFailover(
+          this.primary.name,
+          alt.name,
+          String((err as Error)?.message ?? err),
+        );
         try {
           return await alt.generateText(input);
         } catch (inner) {
@@ -87,7 +91,11 @@ export class QuotaFailoverProvider implements LLMProvider {
     } catch (err) {
       if (!isQuotaRefusal(err)) throw err;
       for (const alt of this.usable()) {
-        this.onFailover(this.primary.name, alt.name, String((err as Error)?.message ?? err));
+        this.onFailover(
+          this.primary.name,
+          alt.name,
+          String((err as Error)?.message ?? err),
+        );
         try {
           return await alt.generateJson<T>(input);
         } catch (inner) {

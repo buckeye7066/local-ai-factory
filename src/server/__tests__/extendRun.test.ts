@@ -8,7 +8,11 @@ import { loadConfig, loadSecrets } from "../config.js";
 
 const cleanupPaths: string[] = [];
 afterAll(async () => {
-  await Promise.all(cleanupPaths.map((p) => rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })));
+  await Promise.all(
+    cleanupPaths.map((p) =>
+      rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }),
+    ),
+  );
 });
 
 async function makeExistingRepo(): Promise<string> {

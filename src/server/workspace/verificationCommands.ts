@@ -263,7 +263,7 @@ function hasPlaywrightConfig(workspacePath: string): boolean {
 
 /**
  * Baseline trust signal. The orchestrator captures this before generated writes;
- * an extend run may not self-author the harness that certifies its own UI.
+ * an extend run may not self-author the harness used to prove its own UI.
  */
 export function hasPlaywrightHarness(workspacePath: string): boolean {
   const deps = dependencies(readPackage(workspacePath));

@@ -14,9 +14,10 @@ jobs:
   factory-deck:
     name: Factory Deck — IPlay planning (execution safety-held)
     if: github.ref == 'refs/heads/main'
-    # Configure this environment with required reviewers, a main-only branch
-    # policy, and the two PAID_PRODUCTION_* secrets before enabling the job.
-    environment: paid-production-main
+    # A dedicated environment isolates the two PAID_PRODUCTION_* secrets from
+    # every other workflow job. The job-level main condition is the branch
+    # boundary; this environment must not carry a person-based deployment rule.
+    environment: paid-production-main-automated
     runs-on: windows-latest
     timeout-minutes: 360
 

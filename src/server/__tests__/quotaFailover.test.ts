@@ -19,13 +19,15 @@ function fake(
     isConfigured: () => configured,
     async generateText() {
       p.calls += 1;
-      if (behavior === "quota") throw new Error("429 You have no credits remaining. Add funds");
+      if (behavior === "quota")
+        throw new Error("429 You have no credits remaining. Add funds");
       if (behavior === "badRequest") throw new Error("400 invalid model parameter");
       return { text: `served by ${name}`, provider: name };
     },
     async generateJson<T>() {
       p.calls += 1;
-      if (behavior === "quota") throw new Error("insufficient_quota: exceeded your current quota");
+      if (behavior === "quota")
+        throw new Error("insufficient_quota: exceeded your current quota");
       if (behavior === "badRequest") throw new Error("400 unknown field");
       return { served: name } as unknown as T;
     },
@@ -37,7 +39,11 @@ describe("isQuotaRefusal", () => {
   it("recognizes the real refusals seen in production", () => {
     expect(isQuotaRefusal(new Error("429 You have no credits remaining."))).toBe(true);
     expect(isQuotaRefusal(new Error("insufficient_quota"))).toBe(true);
-    expect(isQuotaRefusal(new Error("Your credit balance is too low to access the Anthropic API"))).toBe(true);
+    expect(
+      isQuotaRefusal(
+        new Error("Your credit balance is too low to access the Anthropic API"),
+      ),
+    ).toBe(true);
   });
   it("does NOT treat a real bad request as a quota problem", () => {
     expect(isQuotaRefusal(new Error("400 invalid model parameter"))).toBe(false);
@@ -63,7 +69,9 @@ describe("QuotaFailoverProvider", () => {
     const primary = fake("openai", "badRequest");
     const alt = fake("anthropic", "ok");
     const p = new QuotaFailoverProvider(primary, [alt]);
-    await expect(p.generateText({ prompt: "x" } as never)).rejects.toThrow(/invalid model/);
+    await expect(p.generateText({ prompt: "x" } as never)).rejects.toThrow(
+      /invalid model/,
+    );
     expect(alt.calls).toBe(0);
   });
 

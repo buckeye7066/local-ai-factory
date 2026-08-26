@@ -1,9 +1,5 @@
 import * as ts from "typescript";
-import type {
-  FileBuild,
-  ProductSpec,
-  TestPlan,
-} from "../../shared/schemas.js";
+import type { FileBuild, ProductSpec, TestPlan } from "../../shared/schemas.js";
 import { normalizeTestPath } from "../workspace/testPaths.js";
 
 const UI_SOURCE = /\.(?:jsx|tsx|vue|svelte|html|css|scss|sass|less)$/i;
@@ -81,11 +77,11 @@ function containsExpectCall(node: ts.Node): ts.CallExpression | null {
 function isPrimitiveLiteral(node: ts.Expression | undefined): boolean {
   return Boolean(
     node &&
-      (ts.isStringLiteralLike(node) ||
-        ts.isNumericLiteral(node) ||
-        node.kind === ts.SyntaxKind.TrueKeyword ||
-        node.kind === ts.SyntaxKind.FalseKeyword ||
-        node.kind === ts.SyntaxKind.NullKeyword),
+    (ts.isStringLiteralLike(node) ||
+      ts.isNumericLiteral(node) ||
+      node.kind === ts.SyntaxKind.TrueKeyword ||
+      node.kind === ts.SyntaxKind.FalseKeyword ||
+      node.kind === ts.SyntaxKind.NullKeyword),
   );
 }
 
@@ -208,11 +204,7 @@ function analyzeJavascript(source: string): FileEvidence {
       if ((base === "test" || base === "it") && (mode === "skip" || mode === "todo")) {
         skippedOrTodo = true;
       }
-      if (
-        (base === "test" || base === "it") &&
-        mode !== "skip" &&
-        mode !== "todo"
-      ) {
+      if ((base === "test" || base === "it") && mode !== "skip" && mode !== "todo") {
         const title = node.arguments[0];
         const callback = node.arguments[1];
         if (
@@ -263,8 +255,7 @@ function analyzePython(source: string): FileEvidence {
     }
     const meaningfulAssertion = body.some(
       (entry) =>
-        /^\s*assert\s+/.test(entry) &&
-        !/^\s*assert\s+(?:True|1)(?:\s|$)/.test(entry),
+        /^\s*assert\s+/.test(entry) && !/^\s*assert\s+(?:True|1)(?:\s|$)/.test(entry),
     );
     tests.set(match[1]!, {
       name: match[1]!,
@@ -280,9 +271,7 @@ function analyzePython(source: string): FileEvidence {
 }
 
 function analyzeFile(path: string, source: string): FileEvidence {
-  return /\.py$/i.test(path)
-    ? analyzePython(source)
-    : analyzeJavascript(source);
+  return /\.py$/i.test(path) ? analyzePython(source) : analyzeJavascript(source);
 }
 
 export function acceptanceRequirements(
@@ -358,7 +347,9 @@ export function assessGeneratedTests(
   if (!coverage.length) {
     errors.push("test plan has no machine-readable requirement coverage");
   }
-  const known = new Map(requirements.map((requirement) => [requirement.id, requirement]));
+  const known = new Map(
+    requirements.map((requirement) => [requirement.id, requirement]),
+  );
   for (const item of coverage) {
     const requirement = known.get(item.requirementId);
     if (!requirement) {
@@ -386,16 +377,24 @@ export function assessGeneratedTests(
         errors.push(`${item.requirementId}: browser coverage is not a Playwright test`);
       }
       if (!test.gotoApp || test.forbiddenBrowserFixture) {
-        errors.push(`${item.requirementId}: browser test does not navigate to the real app`);
+        errors.push(
+          `${item.requirementId}: browser test does not navigate to the real app`,
+        );
       }
       if (requirement.browserRequired && !test.interaction) {
-        errors.push(`${item.requirementId}: browser test performs no real user interaction`);
+        errors.push(
+          `${item.requirementId}: browser test performs no real user interaction`,
+        );
       }
       if (RELOAD.test(requirement.text) && !test.reload) {
-        errors.push(`${item.requirementId}: persistence coverage requires page.reload()`);
+        errors.push(
+          `${item.requirementId}: persistence coverage requires page.reload()`,
+        );
       }
     } else if (requirement.browserRequired) {
-      errors.push(`${item.requirementId}: interactive UI requirement must use browser coverage`);
+      errors.push(
+        `${item.requirementId}: interactive UI requirement must use browser coverage`,
+      );
     }
   }
   for (const requirement of requirements) {
@@ -403,10 +402,7 @@ export function assessGeneratedTests(
       errors.push(`${requirement.id}: acceptance requirement has no mapped test`);
     }
   }
-  if (
-    uiAcceptanceRequired &&
-    !coverage.some((item) => item.kind === "browser")
-  ) {
+  if (uiAcceptanceRequired && !coverage.some((item) => item.kind === "browser")) {
     errors.push("UI source changed but no mapped Playwright browser journey exists");
   }
 
@@ -437,7 +433,9 @@ export function assessExecutedCoverage(
         entry.directEvidenceValid === true,
     );
     if (!evidence) {
-      errors.push(`${item.requirementId}: mapped test file did not produce valid direct runner evidence`);
+      errors.push(
+        `${item.requirementId}: mapped test file did not produce valid direct runner evidence`,
+      );
       continue;
     }
     if (!(evidence.passedTestNames ?? []).includes(item.testName)) {

@@ -74,8 +74,7 @@ export function applyEdits(original: string, rawEdits: FileEdit[]): EditOutcome 
     if (addedOpenComments !== addedCloseComments) {
       return {
         ok: false,
-        reason:
-          `edit ${i + 1}: unbalanced block-comment delimiters can disable unrelated code`,
+        reason: `edit ${i + 1}: unbalanced block-comment delimiters can disable unrelated code`,
       };
     }
     // A `*/` appearing before its matching `/*` in the replacement text would
@@ -88,7 +87,10 @@ export function applyEdits(original: string, rawEdits: FileEdit[]): EditOutcome 
         openDepth++;
         ci++;
       } else if (edit.replace[ci] === "*" && edit.replace[ci + 1] === "/") {
-        if (openDepth === 0) { orphanedClose = true; break; }
+        if (openDepth === 0) {
+          orphanedClose = true;
+          break;
+        }
         openDepth--;
         ci++;
       }
@@ -96,8 +98,7 @@ export function applyEdits(original: string, rawEdits: FileEdit[]): EditOutcome 
     if (orphanedClose) {
       return {
         ok: false,
-        reason:
-          `edit ${i + 1}: replacement closes a block comment that was not opened within the replacement — this would disable code outside the edited region`,
+        reason: `edit ${i + 1}: replacement closes a block comment that was not opened within the replacement — this would disable code outside the edited region`,
       };
     }
 
@@ -173,7 +174,8 @@ export function resolveGeneratedWrite(
       return {
         contents: null,
         edited: false,
-        reason: "edits were supplied for a file that does not exist yet — send full contents",
+        reason:
+          "edits were supplied for a file that does not exist yet — send full contents",
       };
     }
     // An EMPTY new file is refused for the same reason an empty replacement

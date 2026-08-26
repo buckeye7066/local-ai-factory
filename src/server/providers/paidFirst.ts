@@ -38,7 +38,9 @@ export class PaidFirstOneRoundProvider implements LLMProvider {
   }
 
   private reason(err: unknown): string {
-    return String((err as Error)?.message ?? err).replace(/\s+/g, " ").slice(0, 160);
+    return String((err as Error)?.message ?? err)
+      .replace(/\s+/g, " ")
+      .slice(0, 160);
   }
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
@@ -56,11 +58,15 @@ export class PaidFirstOneRoundProvider implements LLMProvider {
   async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
     try {
       const out = await this.paid.generateJson(input);
-      this.log(`paid first: ${this.paid.name} served ${input.schemaName} (one round, budget-gated).`);
+      this.log(
+        `paid first: ${this.paid.name} served ${input.schemaName} (one round, budget-gated).`,
+      );
       return out;
     } catch (err) {
       if (err instanceof ProviderAbortError) throw err;
-      this.log(`paid first: ${this.paid.name} fell to free for ${input.schemaName} after ${this.reason(err)}`);
+      this.log(
+        `paid first: ${this.paid.name} fell to free for ${input.schemaName} after ${this.reason(err)}`,
+      );
       return this.free.generateJson(input);
     }
   }

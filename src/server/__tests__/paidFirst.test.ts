@@ -4,7 +4,10 @@ import { PaidFirstOneRoundProvider } from "../providers/paidFirst.js";
 import { ProviderAbortError } from "../providers/types.js";
 import type { LLMProvider } from "../../shared/types.js";
 
-function fake(name: "anthropic" | "free", behaviour: () => unknown): LLMProvider & { calls: number } {
+function fake(
+  name: "anthropic" | "free",
+  behaviour: () => unknown,
+): LLMProvider & { calls: number } {
   const p = {
     name,
     calls: 0,
@@ -22,7 +25,12 @@ function fake(name: "anthropic" | "free", behaviour: () => unknown): LLMProvider
   return p as unknown as LLMProvider & { calls: number };
 }
 
-const json = { system: "s", prompt: "p", schema: z.object({ ok: z.boolean() }), schemaName: "Probe" };
+const json = {
+  system: "s",
+  prompt: "p",
+  schema: z.object({ ok: z.boolean() }),
+  schemaName: "Probe",
+};
 
 describe("auto mode critical stage: paid first, ONE round, then free", () => {
   it("serves from paid when the single paid attempt succeeds; free is never called", async () => {
@@ -46,7 +54,9 @@ describe("auto mode critical stage: paid first, ONE round, then free", () => {
     expect(await p.generateJson(json)).toEqual({ ok: true });
     expect(paid.calls).toBe(1);
     expect(free.calls).toBe(1);
-    expect(lines.join("\n")).toMatch(/fell to free for Probe after paid rescue budget exhausted/);
+    expect(lines.join("\n")).toMatch(
+      /fell to free for Probe after paid rescue budget exhausted/,
+    );
     // The next CALL gets its own single paid round again (one round per call).
     await p.generateJson(json);
     expect(paid.calls).toBe(2);

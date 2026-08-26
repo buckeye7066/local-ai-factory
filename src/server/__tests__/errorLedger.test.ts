@@ -46,12 +46,20 @@ describe("error ledger — deterministic signature table", () => {
     expect(missing.suggestion).toMatch(/GEMINI_API_KEY/);
     expect(missing.suggestion).toMatch(/\.fcc[\\/]\.env/);
 
-    expect(classifyErrorMessage("reasoning-only reply, no answer text").suggestion).toMatch(/maxTokens/);
-    expect(classifyErrorMessage("route ollama/qwen3-coder:30b failed: model not found").suggestion).toMatch(
-      /ollama pull qwen3-coder:30b/,
+    expect(
+      classifyErrorMessage("reasoning-only reply, no answer text").suggestion,
+    ).toMatch(/maxTokens/);
+    expect(
+      classifyErrorMessage("route ollama/qwen3-coder:30b failed: model not found")
+        .suggestion,
+    ).toMatch(/ollama pull qwen3-coder:30b/);
+    expect(
+      classifyErrorMessage("Run failed: model call budget of 100 exhausted")
+        .classification,
+    ).toBe("budget");
+    expect(classifyErrorMessage("fetch failed: ETIMEDOUT").suggestion).toMatch(
+      /retry/i,
     );
-    expect(classifyErrorMessage("Run failed: model call budget of 100 exhausted").classification).toBe("budget");
-    expect(classifyErrorMessage("fetch failed: ETIMEDOUT").suggestion).toMatch(/retry/i);
     // Builder write refusals seen on the resumed IPlay run (08:02).
     const empty = classifyErrorMessage(
       "WRITE REFUSED: web/client/src/pages/Landing.tsx — empty contents for a new file — nothing to write",
@@ -63,27 +71,33 @@ describe("error ledger — deterministic signature table", () => {
     );
     expect(unseen.classification).toBe("deck-defect");
     expect(unseen.suggestion).toMatch(/resume/i);
-    expect(classifyErrorMessage("Run failed: Builder write incomplete: 10 required file(s) were refused.").suggestion).toMatch(
-      /WRITE REFUSED/,
-    );
+    expect(
+      classifyErrorMessage(
+        "Run failed: Builder write incomplete: 10 required file(s) were refused.",
+      ).suggestion,
+    ).toMatch(/WRITE REFUSED/);
     // envFailure signatures are reused verbatim.
-    expect(classifyErrorMessage("Error: Could not locate the bindings file.").classification).toBe("environment");
+    expect(
+      classifyErrorMessage("Error: Could not locate the bindings file.").classification,
+    ).toBe("environment");
   });
 
   it("names the route and the program file when the text carries them", () => {
-    expect(routeIdFrom("route openrouter/nvidia/nemotron-3-ultra-550b-a55b:free HTTP 429")).toBe(
-      "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    );
-    expect(programFileFrom("FAILED iplay/test_scenes.py::test_plan - AssertionError")).toBe(
-      "iplay/test_scenes.py",
-    );
+    expect(
+      routeIdFrom("route openrouter/nvidia/nemotron-3-ultra-550b-a55b:free HTTP 429"),
+    ).toBe("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free");
+    expect(
+      programFileFrom("FAILED iplay/test_scenes.py::test_plan - AssertionError"),
+    ).toBe("iplay/test_scenes.py");
   });
 
   it("resolves a deck-side failure to file:line and the source line", () => {
     const err = new Error("boom");
     const frame = deckFrameFrom(err.stack);
     expect(frame).not.toBeNull();
-    expect(frame!.file).toMatch(/src[\\/]server[\\/]__tests__[\\/]errorLedger\.test\.ts$/);
+    expect(frame!.file).toMatch(
+      /src[\\/]server[\\/]__tests__[\\/]errorLedger\.test\.ts$/,
+    );
     expect(frame!.line).toBeGreaterThan(0);
     expect(frame!.sourceLine).toContain('new Error("boom")');
   });
@@ -103,7 +117,8 @@ describe("ErrorLedger — record, classify, persist, render", () => {
 
     const program = ledger.record({
       stage: "qa_critic",
-      message: "`python -m pytest -q` exited 1: FAILED iplay/test_scenes.py::test_tiling - AssertionError",
+      message:
+        "`python -m pytest -q` exited 1: FAILED iplay/test_scenes.py::test_tiling - AssertionError",
       command: "python -m pytest -q",
       exitCode: 1,
     });
@@ -129,7 +144,8 @@ describe("ErrorLedger — record, classify, persist, render", () => {
     const ledger = new ErrorLedger("11111111-2222-3333-4444-555555555555");
     const entry = ledger.record({
       stage: "builder",
-      message: "Run failed: route openai_api/gpt-realtime-1.5 HTTP 404: This is not a chat model",
+      message:
+        "Run failed: route openai_api/gpt-realtime-1.5 HTTP 404: This is not a chat model",
       error: new Error("This is not a chat model"),
     });
     expect(entry.code.kind).toBe("route");
@@ -166,10 +182,22 @@ describe("ErrorLedger — record, classify, persist, render", () => {
         "[rotate] generateJson: a/b failed (route a/b HTTP 503: overloaded); rotating to the next pool [1/24].",
       ),
     ).toBe(true);
-    expect(ErrorLedger.isErrorLogLine("info", "[route] generateJson: free attempt 1/3 failed (x); retrying")).toBe(true);
-    expect(ErrorLedger.isErrorLogLine("info", "[rotate] generateJson: a/b [free-tier/frontier] as author")).toBe(false);
+    expect(
+      ErrorLedger.isErrorLogLine(
+        "info",
+        "[route] generateJson: free attempt 1/3 failed (x); retrying",
+      ),
+    ).toBe(true);
+    expect(
+      ErrorLedger.isErrorLogLine(
+        "info",
+        "[rotate] generateJson: a/b [free-tier/frontier] as author",
+      ),
+    ).toBe(false);
     expect(ErrorLedger.isErrorLogLine("error", "anything")).toBe(true);
-    expect(ErrorLedger.isErrorLogLine("warning", "Provider switched on resume")).toBe(false);
+    expect(ErrorLedger.isErrorLogLine("warning", "Provider switched on resume")).toBe(
+      false,
+    );
     expect(ErrorLedger.isErrorLogLine("warning", "WIRING SCAN FAILED: x")).toBe(true);
   });
 
@@ -177,7 +205,11 @@ describe("ErrorLedger — record, classify, persist, render", () => {
     const runId = "11111111-2222-3333-4444-555555555555";
     const ledger = new ErrorLedger(runId);
     expect(ledger.summaryLine()).toBe("[errors] none");
-    ledger.record({ stage: "intake", message: "Run failed: boom", error: new Error("boom") });
+    ledger.record({
+      stage: "intake",
+      message: "Run failed: boom",
+      error: new Error("boom"),
+    });
     const file = ledger.writeFile();
     expect(file).toBe(errorLedgerPath(runId));
     expect(file.startsWith(dataDir)).toBe(true);
@@ -188,7 +220,10 @@ describe("ErrorLedger — record, classify, persist, render", () => {
 
   it("asks a model ONLY for unexplained entries and labels the answer unverified", async () => {
     const ledger = new ErrorLedger("11111111-2222-3333-4444-555555555555");
-    const known = ledger.record({ stage: "builder", message: "route a/b failed (HTTP 429)" });
+    const known = ledger.record({
+      stage: "builder",
+      message: "route a/b failed (HTTP 429)",
+    });
     const unknown = ledger.record({
       stage: "builder",
       message: "Run failed: weird",
@@ -201,13 +236,19 @@ describe("ErrorLedger — record, classify, persist, render", () => {
       generateText: async () => ({ text: "", provider: "stub" as const }),
       generateJson: async (input: { prompt: string }) => {
         calls.push(input);
-        return { suggestions: [{ id: unknown.id, fix: "Guard the plan before reading tasks." }] };
+        return {
+          suggestions: [
+            { id: unknown.id, fix: "Guard the plan before reading tasks." },
+          ],
+        };
       },
     } as unknown as LLMProvider;
     expect(await ledger.suggestWithModel(provider)).toBe(1);
     expect(calls).toHaveLength(1);
     expect(String((calls[0] as { prompt: string }).prompt)).not.toContain(known.id);
-    expect(unknown.suggestion).toBe("model suggestion, unverified: Guard the plan before reading tasks.");
+    expect(unknown.suggestion).toBe(
+      "model suggestion, unverified: Guard the plan before reading tasks.",
+    );
     expect(unknown.suggestionSource).toBe("model");
     expect(known.suggestionSource).toBe("signature");
     // Nothing left to ask: no second call.
@@ -219,7 +260,8 @@ describe("ErrorLedger — record, classify, persist, render", () => {
     const ledger = new ErrorLedger("11111111-2222-3333-4444-555555555555");
     ledger.record({
       stage: "architect",
-      message: "route gemini/deep-research-preview-04-2026 HTTP 400: This model only supports Interactions API.",
+      message:
+        "route gemini/deep-research-preview-04-2026 HTTP 400: This model only supports Interactions API.",
     });
     const lines = renderErrorLines(ledger.entries);
     expect(lines).toHaveLength(1);

@@ -137,7 +137,10 @@ describe("buildFilesConcurrently", () => {
 
 describe("no silent category loss (run f0077040 class)", () => {
   class EmptyForCategory extends FakeBuilderProvider {
-    constructor(name: "free" | "anthropic" | "openai", readonly emptyCategory: string) {
+    constructor(
+      name: "free" | "anthropic" | "openai",
+      readonly emptyCategory: string,
+    ) {
       super(name);
     }
     override async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
@@ -158,13 +161,23 @@ describe("no silent category loss (run f0077040 class)", () => {
       manifestExcerpt: "{}",
       readmeExcerpt: "",
     };
-    const result = await buildFilesConcurrently(p1, [p1, p2], spec, arch, plan, existing);
+    const result = await buildFilesConcurrently(
+      p1,
+      [p1, p2],
+      spec,
+      arch,
+      plan,
+      existing,
+    );
     expect(result.failures.some((f) => f.id.includes("backend"))).toBe(true);
     expect(result.build.files.map((f) => f.path)).toEqual(["frontend.txt"]);
   });
 
   class FailForCategory extends FakeBuilderProvider {
-    constructor(name: "free" | "anthropic" | "openai", readonly failCategory: string) {
+    constructor(
+      name: "free" | "anthropic" | "openai",
+      readonly failCategory: string,
+    ) {
       super(name);
     }
     override async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
@@ -185,7 +198,14 @@ describe("no silent category loss (run f0077040 class)", () => {
       manifestExcerpt: "{}",
       readmeExcerpt: "",
     };
-    const result = await buildFilesConcurrently(p1, [p1, p2], spec, arch, plan, existing);
+    const result = await buildFilesConcurrently(
+      p1,
+      [p1, p2],
+      spec,
+      arch,
+      plan,
+      existing,
+    );
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].id).toContain("backend");
     expect(result.failures[0].reason).toMatch(/exploded on backend/);

@@ -392,8 +392,7 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
         deliveredAt: now,
       };
     }
-    const branch =
-      dest.branch ?? (await currentBranch(input.workspacePath)) ?? null;
+    const branch = dest.branch ?? (await currentBranch(input.workspacePath)) ?? null;
     if (!branch) {
       return {
         ...dest,
@@ -486,8 +485,7 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
         ...dest,
         branch,
         status: "failed",
-        detail:
-          `${verifiedCommit.detail} ${pushed.detail} ${trunkPlan.reason} NOT RELEASED: ${released.detail}`,
+        detail: `${verifiedCommit.detail} ${pushed.detail} ${trunkPlan.reason} NOT RELEASED: ${released.detail}`,
         url: compareUrlFor(remote, branch),
         commitSha: verifiedCommit.sha,
         branchPushed: true,

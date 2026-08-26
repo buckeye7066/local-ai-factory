@@ -712,4 +712,4 @@ IPlay is complete for this assignment only when a user can:
 11. Add or transform vocals through the authorized vocal-provider pathway.
 12. See honest provenance and confidence for inferred musical and physical choices.
 
-Continue until these capabilities are implemented, tested and supported by reproducible evidence. Do not substitute documentation, placeholders, generic avatar motion or self-certification for working behavior.
+Continue until these capabilities are implemented, tested and supported by reproducible evidence. Do not substitute documentation, placeholders, generic avatar motion or unsupported readiness claims for working behavior.

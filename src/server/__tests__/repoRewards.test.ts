@@ -59,7 +59,13 @@ describe("repoRewardsSearch", () => {
       calls.push(String(url));
       return jsonResponse({
         results: [
-          { repo: { fullName: "a/b", htmlUrl: "https://github.com/a/b", description: "d" } },
+          {
+            repo: {
+              fullName: "a/b",
+              htmlUrl: "https://github.com/a/b",
+              description: "d",
+            },
+          },
         ],
       });
     }) as unknown as typeof fetch;
@@ -82,7 +88,10 @@ describe("repoRewardsSearch", () => {
       });
     }) as unknown as typeof fetch;
 
-    const res = await repoRewardsSearch("q", { fetchImpl, env: {} as NodeJS.ProcessEnv });
+    const res = await repoRewardsSearch("q", {
+      fetchImpl,
+      env: {} as NodeJS.ProcessEnv,
+    });
     expect(res.endpoint).toMatch(/^https:\/\//);
     expect(res.results).toHaveLength(1);
   });
@@ -93,7 +102,10 @@ describe("repoRewardsSearch", () => {
       return jsonResponse({ error: "nope" }, 503);
     }) as unknown as typeof fetch;
 
-    const res = await repoRewardsSearch("q", { fetchImpl, env: {} as NodeJS.ProcessEnv });
+    const res = await repoRewardsSearch("q", {
+      fetchImpl,
+      env: {} as NodeJS.ProcessEnv,
+    });
     expect(res.results).toEqual([]);
     expect(res.endpoint).toBeNull();
     expect(res.unreachableReason).toMatch(/ECONNREFUSED/);
