@@ -555,11 +555,12 @@ function sourceExtension(relativePath) {
 }
 
 function unquoteStaticLiteral(literal) {
+  const allowsLegacyOctal = !literal.startsWith("`");
   return literal
     .slice(1, -1)
     .replace(
-      /\\u\{(0*[0-9A-Fa-f]{1,6})\}|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\(?:\r\n|[\n\r\u2028\u2029])|\\(0|[^\d\r\n\u2028\u2029])/g,
-      (escape, bracedUnicode, fixedUnicode, hexadecimal, simple) => {
+      /\\u\{(0*[0-9A-Fa-f]{1,6})\}|\\u([0-9A-Fa-f]{4})|\\x([0-9A-Fa-f]{2})|\\([0-3][0-7]{0,2}|[4-7][0-7]?)|\\(?:\r\n|[\n\r\u2028\u2029])|\\(0|[^\d\r\n\u2028\u2029])/g,
+      (escape, bracedUnicode, fixedUnicode, hexadecimal, octal, simple) => {
         if (bracedUnicode !== undefined) {
           const codePoint = Number.parseInt(bracedUnicode, 16);
           if (codePoint <= 0x10ffff && !(codePoint >= 0xd800 && codePoint <= 0xdfff))
@@ -570,6 +571,10 @@ function unquoteStaticLiteral(literal) {
           return String.fromCharCode(Number.parseInt(fixedUnicode, 16));
         if (hexadecimal !== undefined)
           return String.fromCharCode(Number.parseInt(hexadecimal, 16));
+        if (octal !== undefined)
+          return allowsLegacyOctal
+            ? String.fromCodePoint(Number.parseInt(octal, 8))
+            : escape;
         if (simple !== undefined)
           return (
             {
@@ -593,6 +598,8 @@ function unquoteStaticLiteral(literal) {
 
 const sourceTriviaPatternSource =
   String.raw`(?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*(?:\r\n|[\r\n\u2028\u2029]))*`;
+const sourceGroupingPatternSource =
+  String.raw`(?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*(?:\r\n|[\r\n\u2028\u2029])|[()])*`;
 const staticQuotedLiteralPatternSource =
   String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')`;
 const staticQuotedLiteralPattern = new RegExp(
@@ -600,7 +607,7 @@ const staticQuotedLiteralPattern = new RegExp(
   "gs",
 );
 const constantTemplateInterpolationPattern = new RegExp(
-  String.raw`(?<!\\)\$\{(${sourceTriviaPatternSource}${staticQuotedLiteralPatternSource}(?:${sourceTriviaPatternSource}\+${sourceTriviaPatternSource}${staticQuotedLiteralPatternSource})*${sourceTriviaPatternSource})\}`,
+  String.raw`(?<!\\)\$\{(${sourceGroupingPatternSource}${staticQuotedLiteralPatternSource}(?:${sourceGroupingPatternSource}\+${sourceGroupingPatternSource}${staticQuotedLiteralPatternSource})*${sourceGroupingPatternSource})\}`,
   "gs",
 );
 
@@ -888,7 +895,7 @@ function renderJavascriptLiterals(value) {
       /^\s*\+\s*$/.test(
         value
           .slice(previous.end, match.index)
-          .replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g, ""),
+          .replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n\u2028\u2029]*/g, ""),
       )
     ) {
       chain = (chain ?? renderStaticLiteral(previous.literal)) + renderedLiteral;
@@ -1053,6 +1060,18 @@ for (const [label, source, relativePath, target] of [
     compactOrganizationalProbe,
   ],
   [
+    "legacy_octal_escape",
+    `"\\163${compactOrganizationalProbe.slice(1)}"`,
+    "probe.js",
+    compactOrganizationalProbe,
+  ],
+  [
+    "line_separator_comment_terminator",
+    `"${compactOrganizationalProbe.slice(0, 2)}" // split${String.fromCodePoint(0x2028)} + "${compactOrganizationalProbe.slice(2, 4)}" + "${compactOrganizationalProbe.slice(4)}"`,
+    "probe.js",
+    compactOrganizationalProbe,
+  ],
+  [
     "commented_string_concatenation",
     `"${compactOrganizationalProbe.slice(0, 2)}" /* split */ + "${compactOrganizationalProbe.slice(2, 4)}" /* split */ + "${compactOrganizationalProbe.slice(4)}"`,
     "probe.js",
@@ -1069,6 +1088,16 @@ for (const [label, source, relativePath, target] of [
     "`" +
       probeFirstWord +
       ' ${/* split */ " " /* split */ + ""}' +
+      probeSecondWord +
+      "`",
+    "probe.js",
+    encodedPhraseProbe,
+  ],
+  [
+    "grouped_constant_template_literal_chain",
+    "`" +
+      probeFirstWord +
+      ' ${((/* split */ " " + ""))}' +
       probeSecondWord +
       "`",
     "probe.js",
