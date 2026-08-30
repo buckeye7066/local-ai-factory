@@ -22,26 +22,12 @@ import { ProviderAbortError } from "./types.js";
 import { safeErrorMessage } from "../errors.js";
 
 /**
- * failoverProvider.ts — FREE primary, paid rescue, automatic return to free.
+ * failoverProvider.ts — FREE primary, one paid rescue, automatic return to free.
  *
- * The escalation order is free -> paid Anthropic -> paid OpenAI, and every hop
- * is loud: the trigger, the measurement that caused it, who took over, and
- * what it cost all reach the run log and /api/health.
- *
- * Three rules keep the paid tier from becoming the primary by accident:
- *
- *  - Only a proven STALL escalates. Backpressure (429/503/model-loading/cold
- *    start) is "alive, come back shortly" and retries patiently on free,
- *    forever-ish, without ever touching a paid provider.
- *
- *  - The post-stall hold is a monotonic timestamp, not a flag. When it lapses
- *    the very next call goes back to free with no explicit recovery step, so a
- *    single stall can never pin the deck to a paid provider.
- *
- *  - When paid is unavailable — no key, or a budget cap reached — the deck
- *    does NOT fail. It goes back to waiting on free. The owner's purpose is
- *    keeping the free route running; refusing to spend must degrade to
- *    patience, not to an error.
+ * Credit Guard changes the paid side of the historical chain deliberately:
+ * one logical request may reach at most ONE paid provider. If that provider
+ * errors or its output fails acceptance, the request stops with evidence. It
+ * never rolls into a second billable provider and compounds the loss.
  */
 
 export interface FailoverConfig {
@@ -59,21 +45,11 @@ export interface FailoverConfig {
 
 export type RouteLogger = (kind: "info" | "warn", message: string) => void;
 
-/**
- * What the chain needs from its $0 primary. Satisfied by FreeProvider (the
- * FCC proxy route) and by RotatingProvider (pool-first rotation across every
- * $0 route in the AI Time catalog, FCC included).
- */
 export interface FreePrimary extends LLMProvider {
   resetTransport(): void;
 }
 
 export class FailoverProvider implements LLMProvider {
-  /**
-   * Reported identity is the PRIMARY route, which is what the run record and
-   * the deck should show. Who actually served each call is tracked in the
-   * route snapshot and logged per hop.
-   */
   readonly name: ProviderName = "free";
 
   constructor(
@@ -100,12 +76,6 @@ export class FailoverProvider implements LLMProvider {
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  /**
-   * Run one logical model call through the chain.
-   *
-   * `invoke` is applied to whichever provider ends up serving, so text and
-   * JSON calls share one policy rather than drifting apart.
-   */
   private async execute<T>(
     label: string,
     invoke: (p: LLMProvider) => Promise<T>,
@@ -113,18 +83,14 @@ export class FailoverProvider implements LLMProvider {
     const paid = this.paidTiers();
     const freeUsable = this.free.isConfigured();
 
-    // No free route configured at all: this deck is paid-only by explicit
-    // configuration, so run the paid chain (still budget-capped).
     if (!freeUsable) {
       return this.runPaid(label, invoke, new Error("free route not configured"));
     }
 
-    // Under a post-stall hold, prefer paid — but only if paying is actually
-    // allowed. Otherwise fall through and keep waiting on free.
     if (isHoldActive() && paid.length > 0 && canPayNow().ok) {
       this.log(
         "warn",
-        `[route] ${label}: free route is under a post-stall hold; serving from the paid rescue tier. ` +
+        `[route] ${label}: free route is under a post-stall hold; one paid rescue may serve this request. ` +
           `Free will be re-probed automatically when the hold lapses.`,
       );
       return this.runPaid(label, invoke, new Error("free route under post-stall hold"));
@@ -142,17 +108,9 @@ export class FailoverProvider implements LLMProvider {
       } catch (err) {
         lastErr = err;
 
-        // A deliberate abort (deadline/cancel) is never a free-route retry
-        // candidate and must never trigger paid rescue.
         if (err instanceof ProviderAbortError) throw err;
-
-        // An operator PINNED a rotation target that cannot serve. Retrying it
-        // cannot help, and a paid rescue would be exactly the silent
-        // substitution pinning exists to prevent: if the operator said Grok,
-        // either Grok runs or the run stops and says why.
         if (err instanceof PinUnavailable) throw err;
 
-        // ---- Alive, just busy. Wait. Never escalate. --------------------
         if (err instanceof FreeRouteBackpressureError) {
           backpressureRetries += 1;
           noteBackpressure(`${label}: ${safeErrorMessage(err)}`);
@@ -175,7 +133,6 @@ export class FailoverProvider implements LLMProvider {
           break;
         }
 
-        // ---- Proven wedge. Arm the hold, try to revive the backend, rescue.
         if (err instanceof FreeRouteStallError) {
           const m = err.measurement;
           armHold(
@@ -194,14 +151,10 @@ export class FailoverProvider implements LLMProvider {
                 m.elapsedMs / 1000,
               )}s.`,
           );
-          // Best-effort revive so the NEXT call can go back to free sooner.
           void ensureProxy(this.cfg.baseUrl, this.cfg.autoRestart).catch(() => {});
           break;
         }
 
-        // ---- Ordinary failure: empty output, bad JSON, transport blip. ---
-        // Cheap to retry on free, and no evidence the backend is wedged, so
-        // this must not arm the hold.
         attempt += 1;
         if (attempt < this.cfg.attempts) {
           this.log(
@@ -222,9 +175,9 @@ export class FailoverProvider implements LLMProvider {
   }
 
   /**
-   * The rescue tier. Refuses attempts past the in-process call limits or local
-   * estimated-USD admission guard, then hands work BACK to free rather than
-   * failing the run. Provider-native caps own hard actual-dollar enforcement.
+   * The rescue tier admits at most one paid provider for one logical request.
+   * Credit Guard inside that provider performs the reservation, validation,
+   * dispute receipt, duplicate block, and circuit break.
    */
   private async runPaid<T>(
     label: string,
@@ -235,15 +188,14 @@ export class FailoverProvider implements LLMProvider {
     const causeMsg = safeErrorMessage(cause);
 
     if (tiers.length === 0) {
-      // No paid key at all. Keep trying free — that is the whole point.
       this.log(
         "warn",
         `[route] ${label}: free route failed (${causeMsg.slice(0, 160)}) and no paid ` +
           `rescue key is configured. Retrying on FREE.`,
       );
-      return invoke(this.free).then((r) => {
+      return invoke(this.free).then((result) => {
         noteServed("free");
-        return r;
+        return result;
       });
     }
 
@@ -255,49 +207,43 @@ export class FailoverProvider implements LLMProvider {
         `[route] ${label}: PAID RESCUE REFUSED — ${budget.reason}. ` +
           `Falling back to the FREE route and waiting. No money will be spent.`,
       );
-      return invoke(this.free).then((r) => {
+      return invoke(this.free).then((result) => {
         noteServed("free");
-        return r;
+        return result;
       });
     }
 
-    let lastErr: unknown = cause;
-    for (const tier of tiers) {
-      const tierName = tier.name;
-      try {
-        noteFailover(tierName, `${label}: ${causeMsg.slice(0, 200)}`);
-        this.log(
-          "warn",
-          `[route] ${label}: PAYING — rescuing this call on ${tierName.toUpperCase()} ` +
-            `because the free route failed (${causeMsg.slice(0, 160)}). ` +
-            `The free proxy stays primary and will be re-probed automatically.`,
-        );
-        const result = await invoke(tier);
-        noteServed(tierName);
-        return result;
-      } catch (err) {
-        // The run's deadline lapsed or it was cancelled WHILE this paid call
-        // was in flight. That is a deliberate stop, not a paid-tier failure —
-        // do not try the next paid tier, and do not let the caller retry.
-        if (err instanceof ProviderAbortError) throw err;
-        lastErr = err;
-        this.log(
-          "warn",
-          `[route] ${label}: paid tier ${tierName} also failed ` +
-            `(${safeErrorMessage(err).slice(0, 160)}).`,
-        );
-      }
-    }
+    const tier = tiers[0];
+    const tierName = tier.name;
+    noteFailover(tierName, `${label}: ${causeMsg.slice(0, 200)}`);
+    this.log(
+      "warn",
+      `[route] ${label}: PAYING ONCE — rescuing this call on ${tierName.toUpperCase()} ` +
+        `because the free route failed (${causeMsg.slice(0, 160)}). ` +
+        `Credit Guard forbids a second paid-provider attempt if this one fails.`,
+    );
 
-    if (lastErr instanceof PaidBudgetExhaustedError) throw lastErr;
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+    try {
+      const result = await invoke(tier);
+      noteServed(tierName);
+      return result;
+    } catch (error) {
+      if (error instanceof ProviderAbortError) throw error;
+      this.log(
+        "warn",
+        `[route] ${label}: the single paid attempt on ${tierName} failed or was rejected ` +
+          `(${safeErrorMessage(error).slice(0, 160)}). Credit Guard stopped paid routing.`,
+      );
+      if (error instanceof PaidBudgetExhaustedError) throw error;
+      throw error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
-    return this.execute("generateText", (p) => p.generateText(input));
+    return this.execute("generateText", (provider) => provider.generateText(input));
   }
 
   async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
-    return this.execute("generateJson", (p) => p.generateJson(input));
+    return this.execute("generateJson", (provider) => provider.generateJson(input));
   }
 }
