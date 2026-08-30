@@ -44,6 +44,8 @@ jobs:
             "docs/purpose-contract.md",
             ".github/workflows/production-readiness.yml",
             "scripts/release-check.mjs",
+            "src/server/providers/creditGuard.ts",
+            "src/server/__tests__/creditGuard.test.ts",
             "src/server/__tests__/providerAbort.test.ts",
             "package.json"
           )
