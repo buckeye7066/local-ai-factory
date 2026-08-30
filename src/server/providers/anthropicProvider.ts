@@ -5,35 +5,30 @@ import type {
   GenerateTextResult,
   GenerateJsonInput,
 } from "../../shared/types.js";
-import { withRetry, extractJson, generateJsonWithRepair } from "./types.js";
+import { extractJson, generateJsonWithRepair } from "./types.js";
 import {
-  abandonPaidCall,
-  reservePaidCall,
-  settlePaidCall,
-  type PaidCallReservation,
-} from "./paidBudget.js";
+  evaluatePaidText,
+  runCreditGuardedPaidAttempt,
+  type CreditGuardUsage,
+} from "./creditGuard.js";
+
+/** Reports token usage for the local estimated-USD ledger and telemetry. */
+export type UsageSink = (usage: { inTokens: number; outTokens: number }) => void;
 
 /**
  * anthropicProvider.ts — Claude via the official SDK.
  *
- * The API key is captured in this closure only and never logged or returned.
- * JSON mode asks for strict JSON and validates with the caller's Zod schema.
+ * Every production call passes through Credit Guard. The SDK itself has zero
+ * automatic retries, and this provider performs one billable attempt only.
+ * Malformed, empty, refused, or schema-invalid output is recorded as disputed
+ * and is never purchased again under the same request fingerprint.
  */
-/** Reports token usage for the local estimated-USD ledger and telemetry. */
-export type UsageSink = (usage: { inTokens: number; outTokens: number }) => void;
-
 export class AnthropicProvider implements LLMProvider {
   readonly name = "anthropic" as const;
   readonly paidBudgetManaged: boolean;
   private client: Anthropic | null;
   private model: string;
   private onUsage: UsageSink;
-  /**
-   * Bounds every call this provider makes — the run's own deadline combined
-   * with its cancellation signal (see runFactory.ts). Without this, a hung
-   * `messages.create()` await was bounded only by the SDK's own default
-   * timeout, not by FACTORY_RUN_TIMEOUT_MS or a cancel request.
-   */
   private signal?: AbortSignal;
 
   constructor(
@@ -43,12 +38,15 @@ export class AnthropicProvider implements LLMProvider {
     signal?: AbortSignal,
     paidBudgetManaged = false,
   ) {
-    // Explicit apiKey AND baseURL. This is the PAID tier, and the free route
-    // sets ANTHROPIC_BASE_URL-shaped configuration elsewhere in this process;
-    // passing both explicitly makes the SDK ignore every credential env var so
-    // free-route settings can never leak into a billable call (and vice versa).
+    // Explicit key/base URL isolate the paid tier from free-route environment
+    // variables. maxRetries=0 prevents the SDK from quietly buying a second
+    // attempt behind Credit Guard's back.
     this.client = apiKey
-      ? new Anthropic({ apiKey, baseURL: "https://api.anthropic.com" })
+      ? new Anthropic({
+          apiKey,
+          baseURL: "https://api.anthropic.com",
+          maxRetries: 0,
+        })
       : null;
     this.model = model;
     this.onUsage = onUsage;
@@ -69,76 +67,58 @@ export class AnthropicProvider implements LLMProvider {
     return this.client;
   }
 
-  private reserve(
-    system: string,
-    prompt: string,
-    maxTokens: number,
-  ): PaidCallReservation | null {
-    return this.paidBudgetManaged
-      ? reservePaidCall(this.name, { system, prompt, maxTokens })
-      : null;
-  }
-
-  private recordUsage(
-    reservation: PaidCallReservation | null,
-    usage: { inTokens: number; outTokens: number },
-  ): void {
-    if (reservation) settlePaidCall(reservation, usage);
+  private noteUsage(usage: CreditGuardUsage): void {
     try {
       this.onUsage(usage);
     } catch {
-      // Telemetry/logging is non-billable bookkeeping. A sink failure after a
-      // successful response must never make withRetry buy the same answer again.
+      // Telemetry happens after the provider has answered. It must never turn
+      // into another paid attempt.
     }
-  }
-
-  private abandon(reservation: PaidCallReservation | null): void {
-    if (reservation) abandonPaidCall(reservation);
   }
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
-    const text = await withRetry(
-      "anthropic.generateText",
-      async () => {
-        // NOTE: no `temperature` — sampling params are rejected (400) on
-        // Claude Opus 4.7+/Sonnet 5/Fable 5, so omitting keeps this provider
-        // model-agnostic. input.temperature still applies to other providers.
-        // Streamed then accumulated: the SDK REFUSES large non-streaming
-        // requests ("streaming is strongly recommended for operations that
-        // may take longer than 10 minutes") - the first real epic's 16k-token
-        // planning call died on exactly that. finalMessage() returns the same
-        // Message shape, so nothing downstream changes.
-        const maxTokens = input.maxTokens ?? 4096;
-        const reservation = this.reserve(input.system, input.prompt, maxTokens);
-        let res;
-        try {
-          res = await client.messages
-            .stream(
-              {
-                model: this.model,
-                max_tokens: maxTokens,
-                system: input.system,
-                messages: [{ role: "user", content: input.prompt }],
-              },
-              { signal: this.signal },
-            )
-            .finalMessage();
-        } catch (error) {
-          this.abandon(reservation);
-          throw error;
-        }
-        this.recordUsage(reservation, {
-          inTokens: res.usage?.input_tokens ?? 0,
-          outTokens: res.usage?.output_tokens ?? 0,
-        });
-        return res.content
+    const maxTokens = input.maxTokens ?? 4096;
+    const text = await runCreditGuardedPaidAttempt({
+      provider: "anthropic",
+      model: this.model,
+      operation: "generateText",
+      system: input.system,
+      prompt: input.prompt,
+      maxTokens,
+      intent: input.intent,
+      managed: this.paidBudgetManaged,
+      call: async () => {
+        // Streamed because Anthropic refuses some long non-streaming requests.
+        // Credit Guard still sees exactly one SDK attempt.
+        const response = await client.messages
+          .stream(
+            {
+              model: this.model,
+              max_tokens: maxTokens,
+              system: input.system,
+              messages: [{ role: "user", content: input.prompt }],
+            },
+            { signal: this.signal },
+          )
+          .finalMessage();
+        const usage = {
+          inTokens: response.usage?.input_tokens ?? 0,
+          outTokens: response.usage?.output_tokens ?? 0,
+        };
+        this.noteUsage(usage);
+        const output = response.content
           .map((block) => (block.type === "text" ? block.text : ""))
           .join("");
+        return {
+          raw: output,
+          responseText: output,
+          providerRequestId: response.id ?? null,
+          usage,
+        };
       },
-      3,
-      this.signal,
-    );
+      evaluate: (output) => evaluatePaidText(output, input.intent),
+    });
     return { text, provider: "anthropic" };
   }
 
@@ -148,55 +128,69 @@ export class AnthropicProvider implements LLMProvider {
 
 You MUST respond with a single valid JSON object matching the "${input.schemaName}" shape.
 Do not include markdown fences, comments, shell commands, or any prose outside the JSON.
-If a field's value would naturally include setup/install instructions (e.g. npm commands),
-put that text INSIDE the appropriate JSON string field -- never emit it as bare text or a
-fenced code block outside the JSON object. Your entire response must be parseable by
-JSON.parse() as-is.`;
+If a field's value would naturally include setup/install instructions, put that text INSIDE
+the appropriate JSON string field. Your entire response must be parseable JSON.`;
 
-    const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> => {
-      // Streamed for the same reason as generateText - large max_tokens
-      // non-streaming calls are refused by the SDK outright.
-      const reservation = this.reserve(system, prompt, maxTokens);
-      let res;
-      try {
-        res = await client.messages
-          .stream(
-            {
-              model: this.model,
-              max_tokens: maxTokens,
-              system,
-              messages: [{ role: "user", content: prompt }],
-            },
-            { signal: this.signal },
-          )
-          .finalMessage();
-      } catch (error) {
-        this.abandon(reservation);
-        throw error;
-      }
-      this.recordUsage(reservation, {
-        inTokens: res.usage?.input_tokens ?? 0,
-        outTokens: res.usage?.output_tokens ?? 0,
+    const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> =>
+      runCreditGuardedPaidAttempt({
+        provider: "anthropic",
+        model: this.model,
+        operation: "generateJson",
+        system,
+        prompt,
+        maxTokens,
+        intent: input.intent,
+        managed: this.paidBudgetManaged,
+        call: async () => {
+          const response = await client.messages
+            .stream(
+              {
+                model: this.model,
+                max_tokens: maxTokens,
+                system,
+                messages: [{ role: "user", content: prompt }],
+              },
+              { signal: this.signal },
+            )
+            .finalMessage();
+          const usage = {
+            inTokens: response.usage?.input_tokens ?? 0,
+            outTokens: response.usage?.output_tokens ?? 0,
+          };
+          this.noteUsage(usage);
+          const output = response.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join("");
+          return {
+            raw: output,
+            responseText: output,
+            providerRequestId: response.id ?? null,
+            usage,
+          };
+        },
+        evaluate: (output) => {
+          const raw = extractJson(output);
+          const parsed = input.schema.safeParse(raw);
+          return {
+            ok: parsed.success,
+            value: raw,
+            reason: parsed.success
+              ? undefined
+              : `${input.schemaName} schema rejection: ${JSON.stringify(
+                  parsed.error.issues.slice(0, 12),
+                )}`,
+          };
+        },
+        returnRejectedValue: true,
       });
-      const text = res.content
-        .map((block) => (block.type === "text" ? block.text : ""))
-        .join("");
-      return extractJson(text);
-    };
 
-    // Two attempts: a frontier model rarely answers in prose, and every extra
-    // attempt here is billed. `withRetry` still wraps this for transport faults.
-    return withRetry(
-      "anthropic.generateJson",
-      () =>
-        generateJsonWithRepair({
-          input,
-          attempts: 2,
-          baseMaxTokens: input.maxTokens ?? 8192,
-          call: callOnce,
-        }),
-      3,
-      this.signal,
-    );
+    // Exactly one billable attempt. A bad paid response is evidence for a
+    // dispute, not permission to buy a repair response from the same provider.
+    return generateJsonWithRepair({
+      input,
+      attempts: 1,
+      baseMaxTokens: input.maxTokens ?? 8192,
+      call: callOnce,
+    });
   }
 }
