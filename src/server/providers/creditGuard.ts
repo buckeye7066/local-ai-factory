@@ -7,8 +7,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { CallIntent } from "../../shared/types.js";
 import type { ProviderName } from "../../shared/schemas.js";
+import type { CallIntent } from "../../shared/types.js";
 import { safeErrorMessage } from "../errors.js";
 import {
   abandonPaidCall,
@@ -18,28 +18,14 @@ import {
 } from "./paidBudget.js";
 
 /**
- * creditGuard.ts — an economic quality firewall around every production
- * Anthropic/OpenAI request made by Factory Deck or Purpose Foundry.
+ * Economic quality firewall around every production Anthropic/OpenAI request.
  *
- * What software can enforce:
- *  - no hidden SDK retries;
- *  - no repeated paid call for an identical request after a rejected result;
- *  - no paid-provider retry loop for malformed or schema-invalid output;
- *  - deterministic quality checks before an output is accepted locally;
- *  - an append-only receipt and a dispute packet for every rejected/error call;
- *  - provider circuit breaking after repeated rejected/error outcomes.
- *
- * What software cannot truthfully promise:
- *  - reversing a charge already posted by OpenAI or Anthropic. Their billing
- *    systems remain authoritative. A rejected attempt is recorded as disputed,
- *    never erased or relabelled as free. The generated packet preserves the
- *    request id, usage, hashes, and failure reason for a provider credit claim.
- *
- * Prompts and responses are never written to disk. Only hashes, byte counts,
- * request ids, token usage, intent metadata, and sanitized failure reasons are
- * persisted. This makes the ledger useful without turning it into a secret dump.
+ * It can prevent hidden retries, duplicate paid mistakes, chained paid
+ * fallbacks, and local acceptance of malformed output. It cannot reverse a
+ * charge already posted in a provider's external billing system. Rejected or
+ * uncertain attempts remain honestly accounted and receive a dispute packet.
+ * Prompts and responses are never persisted, only hashes and bounded metadata.
  */
-
 export type CreditGuardOutcome =
   | "accepted"
   | "disputed"
@@ -55,7 +41,7 @@ export interface CreditGuardCallResult<R> {
   raw: R;
   usage?: CreditGuardUsage;
   providerRequestId?: string | null;
-  /** Text used only to calculate a response hash and byte count. */
+  /** Used only to calculate a hash and byte count. Never persisted verbatim. */
   responseText?: string;
 }
 
@@ -73,15 +59,11 @@ export interface CreditGuardAttempt<R, T> {
   prompt: string;
   maxTokens: number;
   intent?: CallIntent;
-  /** False only for isolated unit seams. Production registry always passes true. */
+  /** False only for isolated test seams. Production registry passes true. */
   managed: boolean;
   call: () => Promise<CreditGuardCallResult<R>>;
   evaluate: (raw: R) => CreditGuardEvaluation<T>;
-  /**
-   * Schema-invalid JSON is returned to generateJsonWithRepair so its final
-   * Zod error remains precise. The paid providers use one attempt only, so this
-   * never authorizes another billable repair call.
-   */
+  /** Return rejected JSON to the one-attempt schema reporter, without retrying. */
   returnRejectedValue?: boolean;
 }
 
@@ -126,6 +108,7 @@ export interface CreditGuardStatus {
 
 const DAY_MS = 86_400_000;
 const TEN_MINUTES_MS = 600_000;
+const inFlightFingerprints = new Set<string>();
 
 function enabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = String(env.FACTORY_CREDIT_GUARD_ENABLED ?? "1")
@@ -158,10 +141,7 @@ function circuitWindowMs(env: NodeJS.ProcessEnv = process.env): number {
 }
 
 function circuitThreshold(env: NodeJS.ProcessEnv = process.env): number {
-  return nonNegativeInteger(
-    env.FACTORY_CREDIT_GUARD_CIRCUIT_THRESHOLD,
-    3,
-  );
+  return nonNegativeInteger(env.FACTORY_CREDIT_GUARD_CIRCUIT_THRESHOLD, 3);
 }
 
 function dataRoot(env: NodeJS.ProcessEnv = process.env): string {
@@ -195,7 +175,9 @@ function compactReason(value: unknown, fallback: string): string {
     .slice(0, 1000);
 }
 
-function intentSnapshot(intent: CallIntent | undefined): CreditGuardLedgerEntry["intent"] {
+function intentSnapshot(
+  intent: CallIntent | undefined,
+): CreditGuardLedgerEntry["intent"] {
   return {
     role: intent?.role ?? null,
     purpose: intent?.purpose?.slice(0, 160) ?? null,
@@ -235,15 +217,17 @@ function requestFingerprint(input: {
 function parseLedgerLine(line: string): CreditGuardLedgerEntry | null {
   try {
     const value = JSON.parse(line) as Partial<CreditGuardLedgerEntry>;
+    const validOutcome =
+      value.outcome === "accepted" ||
+      value.outcome === "disputed" ||
+      value.outcome === "provider-error" ||
+      value.outcome === "blocked";
     if (
       value.schema !== 1 ||
       typeof value.id !== "string" ||
       typeof value.ts !== "number" ||
       (value.provider !== "anthropic" && value.provider !== "openai") ||
-      (value.outcome !== "accepted" &&
-        value.outcome !== "disputed" &&
-        value.outcome !== "provider-error" &&
-        value.outcome !== "blocked") ||
+      !validOutcome ||
       typeof value.fingerprint !== "string"
     ) {
       return null;
@@ -254,19 +238,26 @@ function parseLedgerLine(line: string): CreditGuardLedgerEntry | null {
   }
 }
 
-function readLedger(env: NodeJS.ProcessEnv = process.env): CreditGuardLedgerEntry[] {
+function readLedger(
+  env: NodeJS.ProcessEnv = process.env,
+): CreditGuardLedgerEntry[] {
   const path = creditGuardLedgerPath(env);
   if (!existsSync(path)) return [];
   try {
-    return readFileSync(path, "utf8")
+    const lines = readFileSync(path, "utf8")
       .split(/\r?\n/)
-      .filter(Boolean)
-      .map(parseLedgerLine)
-      .filter((entry): entry is CreditGuardLedgerEntry => entry !== null);
-  } catch {
-    // A broken receipt ledger must fail closed at admission, not disappear.
+      .filter(Boolean);
+    const entries = lines.map(parseLedgerLine);
+    if (entries.some((entry) => entry === null)) {
+      throw new Error("Credit Guard ledger contains a malformed entry.");
+    }
+    return entries as CreditGuardLedgerEntry[];
+  } catch (error) {
     throw new CreditGuardCircuitOpenError(
-      "Credit Guard ledger is unreadable; paid calls are blocked until it is repaired.",
+      `Credit Guard ledger is unreadable; paid calls are blocked until it is repaired. ${compactReason(
+        error,
+        "",
+      )}`.trim(),
     );
   }
 }
@@ -314,7 +305,9 @@ function writeDisputePacket(
     },
     failureReason: entry.reason,
     billingReality:
-      "The provider may already have billed this attempt. Credit Guard blocked local acceptance/repetition and preserved evidence; only the provider can reverse its external charge.",
+      "The provider may already have billed this attempt. Credit Guard blocked " +
+      "local acceptance/repetition and preserved evidence; only the provider " +
+      "can reverse its external charge.",
   };
   writeFileSync(path, JSON.stringify(packet, null, 2), {
     encoding: "utf8",
@@ -376,7 +369,7 @@ function record(
   return entry;
 }
 
-function assertAdmissible(input: {
+interface AdmissionInput {
   provider: "anthropic" | "openai";
   model?: string;
   operation: "generateText" | "generateJson";
@@ -387,7 +380,29 @@ function assertAdmissible(input: {
   fingerprint: string;
   systemHash: string;
   promptHash: string;
-}): void {
+}
+
+function block(input: AdmissionInput, reason: string): never {
+  record(
+    createEntry({
+      id: randomUUID(),
+      ...input,
+      outcome: "blocked",
+      reason,
+    }),
+  );
+  throw new CreditGuardCircuitOpenError(reason);
+}
+
+function assertAdmissible(input: AdmissionInput): void {
+  if (inFlightFingerprints.has(input.fingerprint)) {
+    block(
+      input,
+      "An identical paid request is already in flight; refusing concurrent " +
+        "duplicate billing.",
+    );
+  }
+
   const entries = readLedger();
   const now = Date.now();
   const duplicateCutoff = now - duplicateBlockMs();
@@ -398,19 +413,12 @@ function assertAdmissible(input: {
       (entry.outcome === "disputed" || entry.outcome === "provider-error"),
   );
   if (duplicate) {
-    const reason =
+    block(
+      input,
       `Identical paid request was already rejected at ${new Date(
         duplicate.ts,
-      ).toISOString()} (${duplicate.outcome}); refusing to buy the same mistake twice.`;
-    record(
-      createEntry({
-        id: randomUUID(),
-        ...input,
-        outcome: "blocked",
-        reason,
-      }),
+      ).toISOString()} (${duplicate.outcome}); refusing to buy the same mistake twice.`,
     );
-    throw new CreditGuardCircuitOpenError(reason);
   }
 
   const threshold = circuitThreshold();
@@ -423,18 +431,12 @@ function assertAdmissible(input: {
       (entry.outcome === "disputed" || entry.outcome === "provider-error"),
   );
   if (recentFailures.length >= threshold) {
-    const reason =
-      `${input.provider} produced ${recentFailures.length} rejected/error paid attempt(s) ` +
-      `inside the Credit Guard circuit window; paid routing is paused instead of compounding the loss.`;
-    record(
-      createEntry({
-        id: randomUUID(),
-        ...input,
-        outcome: "blocked",
-        reason,
-      }),
+    block(
+      input,
+      `${input.provider} produced ${recentFailures.length} rejected/error paid ` +
+        "attempt(s) inside the Credit Guard circuit window; paid routing is " +
+        "paused instead of compounding the loss.",
     );
-    throw new CreditGuardCircuitOpenError(reason);
   }
 }
 
@@ -463,7 +465,11 @@ export function evaluatePaidText(
 ): CreditGuardEvaluation<string> {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) {
-    return { ok: false, value: text, reason: "Provider returned an empty response." };
+    return {
+      ok: false,
+      value: text,
+      reason: "Provider returned an empty response.",
+    };
   }
   if (/^(undefined|null|\[object Object\])$/i.test(trimmed)) {
     return {
@@ -501,13 +507,45 @@ export function evaluatePaidText(
   return { ok: true, value: text };
 }
 
-/**
- * Execute exactly one paid SDK attempt under Credit Guard.
- *
- * Production providers set managed=true. In isolated unit seams managed=false
- * preserves the same deterministic evaluation without touching the persistent
- * paid ledger or Credit Guard files.
- */
+function recordProviderFailure<R, T>(
+  id: string,
+  input: CreditGuardAttempt<R, T>,
+  hashes: ReturnType<typeof requestFingerprint>,
+  error: unknown,
+): void {
+  record(
+    createEntry({
+      id,
+      ...input,
+      ...hashes,
+      outcome: "provider-error",
+      reason: compactReason(error, "Provider request failed."),
+    }),
+  );
+}
+
+function recordDispute<R, T>(
+  id: string,
+  input: CreditGuardAttempt<R, T>,
+  hashes: ReturnType<typeof requestFingerprint>,
+  called: CreditGuardCallResult<R>,
+  reason: string,
+): void {
+  record(
+    createEntry({
+      id,
+      ...input,
+      ...hashes,
+      outcome: "disputed",
+      responseText: called.responseText,
+      providerRequestId: called.providerRequestId,
+      usage: called.usage,
+      reason,
+    }),
+  );
+}
+
+/** Execute exactly one paid SDK attempt under Credit Guard. */
 export async function runCreditGuardedPaidAttempt<R, T>(
   input: CreditGuardAttempt<R, T>,
 ): Promise<T> {
@@ -523,7 +561,9 @@ export async function runCreditGuardedPaidAttempt<R, T>(
   }
 
   const hashes = requestFingerprint(input);
-  assertAdmissible({ ...input, ...hashes });
+  const admission: AdmissionInput = { ...input, ...hashes };
+  assertAdmissible(admission);
+  inFlightFingerprints.add(hashes.fingerprint);
 
   const id = randomUUID();
   let reservation: PaidCallReservation | null = null;
@@ -533,90 +573,59 @@ export async function runCreditGuardedPaidAttempt<R, T>(
       prompt: input.prompt,
       maxTokens: input.maxTokens,
     });
-  } catch (error) {
-    // PaidBudget already explains why admission was refused. Do not create a
-    // dispute packet because no provider request occurred.
-    throw error;
-  }
 
-  let called: CreditGuardCallResult<R>;
-  try {
-    called = await input.call();
-  } catch (error) {
-    abandonPaidCall(reservation);
-    const reason = compactReason(error, "Provider request failed.");
-    record(
-      createEntry({
-        id,
-        ...input,
-        ...hashes,
-        outcome: "provider-error",
-        reason,
-      }),
-    );
-    throw error;
-  }
-
-  // Settle known provider usage before evaluation. A rejected result may still
-  // have been externally billed; keeping the real usage is honest accounting.
-  settlePaidCall(reservation, called.usage);
-
-  let evaluated: CreditGuardEvaluation<T>;
-  try {
-    evaluated = input.evaluate(called.raw);
-  } catch (error) {
-    const reason = compactReason(error, "Provider output could not be evaluated.");
-    record(
-      createEntry({
-        id,
-        ...input,
-        ...hashes,
-        outcome: "disputed",
-        responseText: called.responseText,
-        providerRequestId: called.providerRequestId,
-        usage: called.usage,
-        reason,
-      }),
-    );
-    throw new CreditGuardRejectedOutputError(reason, { cause: error });
-  }
-
-  if (!evaluated.ok) {
-    const reason = compactReason(
-      evaluated.reason,
-      "Provider output failed local acceptance.",
-    );
-    record(
-      createEntry({
-        id,
-        ...input,
-        ...hashes,
-        outcome: "disputed",
-        responseText: called.responseText,
-        providerRequestId: called.providerRequestId,
-        usage: called.usage,
-        reason,
-      }),
-    );
-    if (!input.returnRejectedValue) {
-      throw new CreditGuardRejectedOutputError(reason);
+    let called: CreditGuardCallResult<R>;
+    try {
+      called = await input.call();
+    } catch (error) {
+      abandonPaidCall(reservation);
+      recordProviderFailure(id, input, hashes, error);
+      throw error;
     }
-    return evaluated.value;
-  }
 
-  record(
-    createEntry({
-      id,
-      ...input,
-      ...hashes,
-      outcome: "accepted",
-      responseText: called.responseText,
-      providerRequestId: called.providerRequestId,
-      usage: called.usage,
-      reason: "Passed deterministic local acceptance.",
-    }),
-  );
-  return evaluated.value;
+    // A rejected result may still have been externally billed. Preserve usage.
+    settlePaidCall(reservation, called.usage);
+
+    let evaluated: CreditGuardEvaluation<T>;
+    try {
+      evaluated = input.evaluate(called.raw);
+    } catch (error) {
+      const reason = compactReason(
+        error,
+        "Provider output could not be evaluated.",
+      );
+      recordDispute(id, input, hashes, called, reason);
+      throw new CreditGuardRejectedOutputError(reason, { cause: error });
+    }
+
+    if (!evaluated.ok) {
+      const reason = compactReason(
+        evaluated.reason,
+        "Provider output failed local acceptance.",
+      );
+      recordDispute(id, input, hashes, called, reason);
+      if (!input.returnRejectedValue) {
+        throw new CreditGuardRejectedOutputError(reason);
+      }
+      return evaluated.value;
+    }
+
+    record(
+      createEntry({
+        id,
+        ...input,
+        ...hashes,
+        outcome: "accepted",
+        responseText: called.responseText,
+        providerRequestId: called.providerRequestId,
+        usage: called.usage,
+        reason: "Passed deterministic local acceptance.",
+      }),
+    );
+    return evaluated.value;
+  } finally {
+    inFlightFingerprints.delete(hashes.fingerprint);
+  }
 }
 
 export function creditGuardStatus(
@@ -630,12 +639,14 @@ export function creditGuardStatus(
     last24h: {
       accepted: recent.filter((entry) => entry.outcome === "accepted").length,
       disputed: recent.filter((entry) => entry.outcome === "disputed").length,
-      providerErrors: recent.filter((entry) => entry.outcome === "provider-error")
-        .length,
+      providerErrors: recent.filter(
+        (entry) => entry.outcome === "provider-error",
+      ).length,
       blocked: recent.filter((entry) => entry.outcome === "blocked").length,
     },
     openDisputes: entries.filter(
-      (entry) => entry.outcome === "disputed" || entry.outcome === "provider-error",
+      (entry) =>
+        entry.outcome === "disputed" || entry.outcome === "provider-error",
     ).length,
     ledgerPath: creditGuardLedgerPath(env),
     disputeDirectory: creditGuardDisputeDirectory(env),
