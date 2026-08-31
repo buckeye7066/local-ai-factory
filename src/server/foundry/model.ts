@@ -13,6 +13,11 @@ import {
 import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 import { RoutingModeSchema } from "../../shared/schemas.js";
+import {
+  normalizeFoundryStations,
+  requiredProductionStations,
+  UNMETERED_CHILD_STATIONS,
+} from "./readinessPolicy.js";
 
 export const StationIdSchema = z.enum([
   "factory-deck",
@@ -137,8 +142,10 @@ export const FoundryIntakeSchema = z
   .superRefine((intake, context) => {
     if (
       intake.routingMode === "paid" &&
-      intake.selectedStations.every(
-        (station) => station === "scout" || station === "flexfactor",
+      intake.selectedStations.every((station) =>
+        UNMETERED_CHILD_STATIONS.includes(
+          station as (typeof UNMETERED_CHILD_STATIONS)[number],
+        ),
       )
     ) {
       context.addIssue({
@@ -167,6 +174,8 @@ export const StationRunSchema = z.object({
   attempt: z.number().int().nonnegative(),
   summary: z.string(),
   artifacts: z.array(z.string()),
+  evidenceDigest: z.string().nullable().default(null),
+  revision: z.string().nullable().default(null),
   startedAt: z.number().nullable(),
   endedAt: z.number().nullable(),
 });
@@ -393,17 +402,8 @@ export class FoundryStore {
         return existing;
     }
     const now = Date.now();
-    const blockedUnmeteredStations = new Set<StationId>(
-      input.routingMode === "paid"
-        ? input.selectedStations.filter(
-            (station) => station === "scout" || station === "flexfactor",
-          )
-        : [],
-    );
     const selected = new Set(
-      input.selectedStations.filter(
-        (station) => !blockedUnmeteredStations.has(station),
-      ),
+      normalizeFoundryStations(input.selectedStations, input.routingMode),
     );
     const project: FoundryProject = {
       id: randomUUID(),
@@ -429,6 +429,8 @@ export class FoundryStore {
         attempt: 0,
         summary: "",
         artifacts: [],
+        evidenceDigest: null,
+        revision: null,
         startedAt: null,
         endedAt: null,
       })),
@@ -440,7 +442,15 @@ export class FoundryStore {
       source: project.source,
       constitution: project.constitution,
       routingMode: project.routingMode ?? "legacy-default",
-      blockedUnmeteredStations: [...blockedUnmeteredStations],
+      requiredProductionStations: requiredProductionStations(project.routingMode),
+      blockedUnmeteredStations:
+        project.routingMode === "paid"
+          ? input.selectedStations.filter((station) =>
+              UNMETERED_CHILD_STATIONS.includes(
+                station as (typeof UNMETERED_CHILD_STATIONS)[number],
+              ),
+            )
+          : [],
     });
     return project;
   }

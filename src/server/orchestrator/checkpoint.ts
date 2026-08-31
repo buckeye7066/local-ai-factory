@@ -15,6 +15,32 @@ import {
   TestPlanSchema,
 } from "../../shared/schemas.js";
 
+const PreReleaseBrainReviewSchema = z.object({
+  identity: z.enum(["sol", "fable", "opus"]),
+  provider: z.enum(["openai", "anthropic"]),
+  model: z.string().min(1),
+  evidenceDigest: z.string().min(1),
+  decision: z.enum(["ready", "not_ready"]),
+  purposeAligned: z.boolean(),
+  implementationComplete: z.boolean(),
+  technicallyReady: z.boolean(),
+  blockers: z.array(
+    z.object({
+      category: z.enum([
+        "purpose",
+        "implementation",
+        "verification",
+        "security",
+        "operations",
+        "delivery",
+        "usability",
+        "performance",
+      ]),
+      detail: z.string(),
+    }),
+  ),
+});
+
 /**
  * Private durable execution state. This is stored under .factory/checkpoints
  * and is never returned by the runs API. It contains the raw idea and raw model
@@ -77,6 +103,24 @@ export const FactoryCheckpointSchema = z.object({
             isTest: z.boolean().optional(),
             directTestPath: z.string().optional(),
             isBrowser: z.boolean().optional(),
+            hostPlatform: z
+              .enum([
+                "aix",
+                "android",
+                "darwin",
+                "freebsd",
+                "haiku",
+                "linux",
+                "openbsd",
+                "sunos",
+                "win32",
+                "cygwin",
+                "netbsd",
+              ])
+              .optional(),
+            verifiedTargets: z
+              .array(z.enum(["windows", "webkit", "macos", "ios", "android"]))
+              .optional(),
             runner: z.enum(["vitest", "jest", "playwright", "pytest"]).optional(),
             directEvidenceValid: z.boolean().optional(),
             passedCount: z.number().int().nonnegative().optional(),
@@ -105,6 +149,16 @@ export const FactoryCheckpointSchema = z.object({
   pendingRepair: RepairResultSchema.optional(),
   repairComplete: z.boolean().default(false),
   finalReport: FinalReportSchema.optional(),
+  /** Exact candidate-byte approval earned before any release/deploy side effect. */
+  preReleaseApproval: z
+    .object({
+      schema: z.literal("factory.pre-release-readiness.v1"),
+      evidenceDigest: z.string().min(1),
+      approved: z.boolean(),
+      reviews: z.array(PreReleaseBrainReviewSchema),
+      blockers: z.array(z.string()),
+    })
+    .optional(),
   updatedAt: z.number(),
 });
 

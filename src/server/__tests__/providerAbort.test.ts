@@ -266,9 +266,16 @@ describe("end-to-end: a hung paid Anthropic call is bounded by FACTORY_RUN_TIMEO
   it("marks the run failed (timed out) instead of hanging past the configured deadline", async () => {
     anthropicCreateCalls.length = 0;
     const config = {
-      ...loadConfig({ FACTORY_FREE_ENABLED: "0" } as NodeJS.ProcessEnv),
+      ...loadConfig({
+        FACTORY_FREE_ENABLED: "0",
+        FACTORY_SOL_MODEL: "gpt-5",
+        FACTORY_FABLE_OR_OPUS_MODEL: "claude-opus-4-1",
+      } as NodeJS.ProcessEnv),
     };
-    const secrets = loadSecrets({ ANTHROPIC_API_KEY: "sk-test" } as NodeJS.ProcessEnv);
+    const secrets = loadSecrets({
+      ANTHROPIC_API_KEY: "sk-test",
+      OPENAI_API_KEY: "sk-test-openai",
+    } as NodeJS.ProcessEnv);
 
     const run = startRun({
       idea: "Build a chore tracker",

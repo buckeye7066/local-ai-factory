@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, posix, relative, resolve } from "node:path";
-import type { AppConfig, AppSecrets } from "../config.js";
+import { readinessBrainFloor, type AppConfig, type AppSecrets } from "../config.js";
 import type {
   RunRecord,
   RunOptions,
@@ -26,9 +26,26 @@ import {
   ProviderAbortError,
 } from "../providers/index.js";
 import type { ProviderRegistry } from "../providers/index.js";
+import { createReadinessBrainProviders } from "../providers/readinessBrains.js";
+import {
+  artifactTreeDigest,
+  candidateReadinessFacts,
+  completePreReleaseReadiness,
+  finalizeProductionReadinessFromApproval,
+  productionReadinessDigest,
+  runWithPreReleaseApproval,
+  type ProductionReadinessFacts,
+  type PreReleaseReadinessApproval,
+} from "./completeProductionReadiness.js";
+import {
+  deterministicPreReleaseBlockers,
+  evaluateProductionReadiness,
+} from "./productionReadinessPolicy.js";
+import { recordReadinessEvaluation } from "../storage/readinessStore.js";
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
 import {
+  detectLanguage,
   readWorkspaceFile,
   safeResolve,
   writeWorkspaceFile,
@@ -51,6 +68,14 @@ import {
 } from "../workspace/unwiredFiles.js";
 import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { assessPhantomImports } from "../workspace/phantomImports.js";
+import {
+  assessPlatformCompatibility,
+  carryForwardPlatformEvidence,
+  enforceCompletionQa,
+  loadCompletionRepairContext,
+  platformStampForExecutedCommand,
+  scanCompletionGaps,
+} from "../workspace/completionEvidence.js";
 import { resolveGeneratedWrite } from "../workspace/applyEdits.js";
 import {
   inspectExplicitFiles,
@@ -339,6 +364,21 @@ function isPaidProvider(
   return name === "anthropic" || name === "openai";
 }
 
+function assertReadinessBrainFloor(config: AppConfig, secrets: AppSecrets): void {
+  const floor = readinessBrainFloor(config, secrets);
+  if (floor.configured) return;
+  const missing: string[] = [];
+  if (!floor.solConfigured) {
+    missing.push("OPENAI_API_KEY and FACTORY_SOL_MODEL");
+  }
+  if (!floor.fableOrOpusConfigured) {
+    missing.push(
+      "ANTHROPIC_API_KEY and FACTORY_FABLE_OR_OPUS_MODEL containing Fable or Opus",
+    );
+  }
+  throw new MissingProviderCredentialError(missing);
+}
+
 class StaleCheckpointSpecificationError extends Error {
   constructor(message: string) {
     super(message);
@@ -461,6 +501,7 @@ function createRecord(args: StartRunArgs): RunRecord {
   if (!demo && registry.availableLive().length === 0) {
     throw new MissingProviderCredentialError(registry.missingCredentialNames());
   }
+  if (!demo) assertReadinessBrainFloor(config, secrets);
 
   // Reject live requests that explicitly ask for offline providers.
   if (!demo) {
@@ -835,6 +876,7 @@ async function executeRun(
       repairLoops: 0,
       repairComplete: false,
       finalReport: undefined,
+      preReleaseApproval: undefined,
     });
     log("warning", `${reason}; discarded stale downstream planning state.`);
     await flush();
@@ -1864,12 +1906,21 @@ async function executeRun(
      */
     const verifyWorkspace = async (): Promise<void> => {
       commandOutput = "";
-      verification = { executed: [], incomplete: [], fileDigests: {} };
       testsExecuted = false;
       testExit = null;
       const intendedDigests = Object.fromEntries(
         [...files].map(([path, file]) => [path, sha256Text(file.contents)]),
       );
+      const carriedPlatformEvidence = carryForwardPlatformEvidence(
+        verification.executed,
+        verification.fileDigests,
+        intendedDigests,
+      );
+      verification = {
+        executed: carriedPlatformEvidence,
+        incomplete: [],
+        fileDigests: {},
+      };
       // Distinct from `testExit === null`: a timeout-killed suite legitimately
       // reports a null exit, so null cannot double as "nothing recorded yet".
       let verdict = freshTestVerdict();
@@ -1948,18 +1999,27 @@ async function executeRun(
                 parsedDirect === undefined
                   ? undefined
                   : res.exitCode === 0 && parsedDirect.valid;
+              const outputTail = `${res.stdout}\n${res.stderr}`;
+              const platformStamp = platformStampForExecutedCommand({
+                command: res.command,
+                exitCode: res.exitCode,
+                isBrowser: cmd.isBrowser ?? false,
+                directEvidenceValid,
+                outputTail,
+              });
               verification.executed.push({
                 command: res.command,
                 exitCode: res.exitCode,
                 isTest: cmd.isTest,
                 directTestPath: cmd.directTestPath,
                 isBrowser: cmd.isBrowser ?? false,
+                ...platformStamp,
                 runner: cmd.runner,
                 directEvidenceValid,
                 passedCount: parsedDirect?.passedCount,
                 skippedCount: parsedDirect?.skippedCount,
                 passedTestNames: parsedDirect?.passedTestNames,
-                outputTail: `${res.stdout}\n${res.stderr}`,
+                outputTail,
               });
               if (parsedDirect && !directEvidenceValid) {
                 verification.incomplete!.push({
@@ -2038,14 +2098,65 @@ async function executeRun(
         testExit,
       });
     };
+    const completionRepairPaths = new Set<string>();
     const fullBuild = (): FileBuild => ({
-      files: [...files.values()].map((file) => ({
-        path: file.path,
-        purpose: file.purpose,
-        contents: file.contents,
-        edits: [],
-      })),
+      files: [...files.values()]
+        .sort(
+          (left, right) =>
+            Number(completionRepairPaths.has(right.path)) -
+            Number(completionRepairPaths.has(left.path)),
+        )
+        .map((file) => ({
+          path: file.path,
+          purpose: file.purpose,
+          contents: file.contents,
+          edits: [],
+        })),
     });
+
+    // Existing-app completion repair scope. The deterministic scan used to
+    // name placeholders in untouched host files but the repair agent saw only
+    // files this run had already written, making the gate permanently
+    // unrepairable. Read the exact current bytes of only those gap-bearing
+    // product sources, make them first-class anchored-edit candidates, and
+    // persist their immutable host baselines before test generation or QA.
+    const initialCompletionGaps = scanCompletionGaps(workspacePath);
+    const completionContext = await loadCompletionRepairContext(
+      workspacePath,
+      initialCompletionGaps,
+    );
+    if (completionContext.refusals.length > 0) {
+      throw new Error(
+        `Cannot safely repair deterministic completion gaps: ${completionContext.refusals
+          .map((item) => `${item.path}: ${item.reason}`)
+          .join("; ")}.`,
+      );
+    }
+    for (const source of completionContext.files) {
+      const path = normalizeGeneratedPath(source.path);
+      completionRepairPaths.add(path);
+      if (files.has(path)) continue;
+      hostFileBaselines[path] = source.contents;
+      files.set(path, {
+        path,
+        purpose: source.purpose,
+        contents: source.contents,
+        language: detectLanguage(path),
+        size: Buffer.byteLength(source.contents, "utf8"),
+        status: "modified",
+      });
+    }
+    if (completionContext.files.length > 0) {
+      log(
+        "info",
+        `Loaded ${completionContext.files.length} existing gap-bearing product source file(s) in full for anchored repair and executable test generation.`,
+        "test_writer",
+      );
+      await checkpointNow({
+        files: [...files.values()],
+        hostFileBaselines: { ...hostFileBaselines },
+      });
+    }
 
     if (!checkpoint.testWriterComplete) {
       throwIfTimedOut(deadline, timeoutMs);
@@ -2106,6 +2217,29 @@ async function executeRun(
       await verifyWorkspace();
       await checkpointNow({ testWriterComplete: true });
     }
+    const hasCurrentHostEvidence = verification.executed.some(
+      (entry) => entry.hostPlatform === process.platform,
+    );
+    if (
+      !run.demo &&
+      restored !== undefined &&
+      checkpoint.testWriterComplete &&
+      !hasCurrentHostEvidence
+    ) {
+      log(
+        "info",
+        `Resume on ${process.platform}: executing the exact checkpointed tree and carrying forward only digest-matched evidence from other OS runners.`,
+        "test_writer",
+      );
+      resetStagesFrom("qa_critic");
+      await checkpointNow({
+        qa: undefined,
+        pendingRepair: undefined,
+        repairComplete: false,
+        finalReport: undefined,
+      });
+      await verifyWorkspace();
+    }
     if (!stageDone("test_writer")) {
       finishStage(run, "test_writer", "completed");
       await flush();
@@ -2119,11 +2253,12 @@ async function executeRun(
     const isExtendRun = ingestedWorkspacePath !== null;
     const withWiringGate = (report: QaReport): QaReport => {
       try {
-        return enforceWiredIntegration(
+        const wired = enforceWiredIntegration(
           report,
           findUnwiredNewFiles(workspacePath, generatedPathsForWiring(files.values())),
           isExtendRun,
         );
+        return enforceCompletionQa(wired, scanCompletionGaps(workspacePath));
       } catch (error) {
         if (!isExtendRun) return report;
         const detail = error instanceof Error ? error.message : String(error);
@@ -2540,29 +2675,247 @@ async function executeRun(
       return;
     }
 
+    const readinessKind = run.destination?.kind ?? "workspace-only";
+    const privateApp = checkpoint.options.publish === false;
+    const readinessPurposeProfile = spec.purposeProfile;
+    const wiringComplete = !(report.caveats ?? []).some((caveat) =>
+      /UNWIRED|WIRING SCAN/i.test(caveat),
+    );
+    const highOrCriticalIssues = qa.issues.filter((issue) =>
+      ["critical", "high"].includes(String(issue.severity).toLowerCase()),
+    ).length;
+    const candidateArtifactDigest = artifactTreeDigest(verification.fileDigests ?? {});
+    const readinessFactsFor = (
+      delivery: ProductionReadinessFacts["delivery"],
+      currentReceiptValid: boolean,
+    ): ProductionReadinessFacts => ({
+      appName: spec.appName,
+      purpose: {
+        stated: Boolean(args.idea.trim() && spec.appName.trim()),
+        grounded: readinessPurposeProfile
+          ? readinessPurposeProfile.grounding.grounded &&
+            readinessPurposeProfile.evidence.length > 0
+          : Boolean(args.idea.trim() && spec.acceptanceCriteria.length > 0),
+        goalsCovered: verifiedOutcome && (verification.incomplete?.length ?? 0) === 0,
+        acceptanceCriteria: spec.acceptanceCriteria.length,
+        acceptanceCriteriaExecuted: verifiedOutcome
+          ? spec.acceptanceCriteria.length
+          : 0,
+      },
+      technical: {
+        artifactDigest: candidateArtifactDigest,
+        qaPassed: qa.passed,
+        testsPassed: testStatus === "passing",
+        verificationComplete: (verification.incomplete?.length ?? 0) === 0,
+        digestReceiptValid: currentReceiptValid,
+        blockingWriteRefusals: blockingWriteRefusals.length,
+        wiringComplete,
+        highOrCriticalSecurityIssues: highOrCriticalIssues,
+        operationallyRunnable: verifiedOutcome && Boolean(report.howToRun?.trim()),
+        completionGaps: scanCompletionGaps(workspacePath).length,
+        platformCompatibility: assessPlatformCompatibility(
+          workspacePath,
+          verification.executed,
+        ),
+      },
+      delivery,
+      ownerExternalNotes: [
+        "Legal, regulatory, contractual, store-policy, and licensing decisions are owner-managed outside cyberland and were not evaluated.",
+      ],
+    });
+    const currentCandidateFacts = async (): Promise<ProductionReadinessFacts> => {
+      const currentReceipt = await verifyFileDigests(
+        workspacePath,
+        files.keys(),
+        verification.fileDigests,
+      );
+      return candidateReadinessFacts(
+        readinessFactsFor(
+          {
+            kind: readinessKind,
+            delivered: false,
+            releasedToTrunk: false,
+            liveVerified: false,
+            localArtifactVerified: false,
+          },
+          currentReceipt.ok,
+        ),
+      );
+    };
+
+    // TRUE PRE-RELEASE GATE. Both semantic reviewers decide over the exact
+    // candidate-byte digest before deliverRun can push a branch/fast-forward
+    // trunk, releaseRun can merge, or deployRun can publish anything.
+    let preReleaseApproval = checkpoint.preReleaseApproval as
+      | PreReleaseReadinessApproval
+      | undefined;
+    if (!run.demo) {
+      const candidateFacts = await currentCandidateFacts();
+      const candidateDigest = productionReadinessDigest(candidateFacts);
+      const deterministicBlockers = deterministicPreReleaseBlockers({
+        ...candidateFacts,
+        evidenceDigest: candidateDigest,
+      });
+      if (deterministicBlockers.length > 0) {
+        const blockedReceipt = evaluateProductionReadiness(
+          { ...candidateFacts, evidenceDigest: candidateDigest, reviews: [] },
+          { requireDelivery: false },
+        );
+        blockedReceipt.blockers = [
+          ...deterministicBlockers,
+          ...blockedReceipt.blockers,
+        ];
+        await recordReadinessEvaluation({
+          subjectType: "run",
+          subjectId: run.id,
+          evidenceDigest: candidateDigest,
+          reviews: [],
+          receipt: blockedReceipt,
+        });
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Production readiness blocked before release review: ${deterministicBlockers.join("; ")}`,
+        );
+        await appendAuditEvent({
+          type: "run.readiness.blocked",
+          runId: run.id,
+          detail: run.error,
+        });
+        log(
+          "warning",
+          `${run.error} No delivery, trunk, release, or deploy action ran.`,
+        );
+        await checkpointNow();
+        await flush();
+        return;
+      }
+
+      const restoredApproval = await runWithPreReleaseApproval(
+        preReleaseApproval,
+        candidateFacts,
+        async () => true,
+      );
+      if (!restoredApproval.executed) {
+        log(
+          "model_call",
+          "Mandatory pre-release review: launching independent Sol and Fable/Opus judgments on the same exact candidate-byte digest.",
+          "final_review",
+        );
+        const brainProviders = createReadinessBrainProviders(
+          config,
+          secrets,
+          (kind, message) =>
+            log(kind === "warn" ? "warning" : "info", message, "final_review"),
+          callSignal,
+        );
+        preReleaseApproval = await completePreReleaseReadiness({
+          facts: candidateFacts,
+          solProvider: countProvider(brainProviders.sol),
+          solModel: brainProviders.solModel,
+          secondProvider: countProvider(brainProviders.second),
+          secondIdentity: brainProviders.secondIdentity,
+          secondModel: brainProviders.secondModel,
+        });
+        await checkpointNow({ preReleaseApproval });
+      }
+      if (!preReleaseApproval?.approved) {
+        const reviews = preReleaseApproval?.reviews ?? [];
+        const blockedReceipt = evaluateProductionReadiness(
+          { ...candidateFacts, evidenceDigest: candidateDigest, reviews },
+          { requireDelivery: false },
+        );
+        blockedReceipt.blockers = [
+          ...(preReleaseApproval?.blockers ?? ["Pre-release approval is missing."]),
+          ...blockedReceipt.blockers,
+        ];
+        await recordReadinessEvaluation({
+          subjectType: "run",
+          subjectId: run.id,
+          evidenceDigest: candidateDigest,
+          reviews,
+          receipt: blockedReceipt,
+        });
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Production readiness blocked before release: ${blockedReceipt.blockers.join("; ")}`,
+        );
+        const blockedEvent = await appendAuditEvent({
+          type: "run.readiness.blocked",
+          runId: run.id,
+          detail: run.error,
+        });
+        await persistAttribution(testStatus, blockedEvent.seq);
+        log(
+          "warning",
+          `${run.error} No delivery, trunk, release, or deploy action ran.`,
+        );
+        await checkpointNow();
+        await flush();
+        return;
+      }
+      await appendAuditEvent({
+        type: "run.readiness.pre_release_approved",
+        runId: run.id,
+        detail: preReleaseApproval.evidenceDigest,
+      });
+      log(
+        "success",
+        `Mandatory pre-release readiness PASSED for exact candidate ${preReleaseApproval.evidenceDigest}.`,
+        "final_review",
+      );
+    }
+    const runApprovedSideEffect = async <T>(
+      effect: () => Promise<T>,
+    ): Promise<{ executed: boolean; value?: T; blockers: string[] }> =>
+      run.demo
+        ? { executed: true, value: await effect(), blockers: [] }
+        : runWithPreReleaseApproval(
+            preReleaseApproval,
+            await currentCandidateFacts(),
+            effect,
+          );
+
     /* Delivery — save the work where the owner said to save it. */
     // Runs only for a build that actually got here: a cancelled or failed run
     // never pushes. Delivery NEVER throws (see deliverRun), so a rejected push
     // downgrades the destination to "failed" with the exact git/gh error and
     // leaves the completed run completed — the code is built either way, and
     // claiming otherwise would be a lie in both directions.
+    let liveDeploymentVerified = false;
+
     if (run.destination) {
       log("info", `Saving the work to ${describeDestination(run.destination)}…`);
-      const delivered = await deliverRun({
-        destination: run.destination,
-        workspacePath,
-        filePaths: [...files.keys()],
-        runId: run.id,
-        appName: run.appName,
-        options: checkpoint.options,
-        verification: {
-          qaPassed: qa.passed,
-          testStatus,
-          writeRefusals: blockingWriteRefusals.length,
-          incompleteCommands: verification.incomplete?.length ?? 0,
-          fileDigests: verification.fileDigests ?? {},
-        },
-      });
+      const deliveryBoundary = await runApprovedSideEffect(() =>
+        deliverRun({
+          destination: run.destination!,
+          workspacePath,
+          filePaths: [...files.keys()],
+          runId: run.id,
+          appName: run.appName,
+          options: checkpoint.options,
+          verification: {
+            qaPassed: qa.passed,
+            testStatus,
+            writeRefusals: blockingWriteRefusals.length,
+            incompleteCommands: verification.incomplete?.length ?? 0,
+            fileDigests: verification.fileDigests ?? {},
+          },
+        }),
+      );
+      if (!deliveryBoundary.executed || !deliveryBoundary.value) {
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Pre-release authorization became stale before delivery: ${deliveryBoundary.blockers.join("; ")}. No delivery side effect ran.`,
+        );
+        log("warning", run.error);
+        await checkpointNow();
+        await flush();
+        return;
+      }
+      const delivered = deliveryBoundary.value;
       run.destination = {
         ...delivered,
         detail: delivered.detail == null ? null : redactSecrets(delivered.detail),
@@ -2658,17 +3011,31 @@ async function executeRun(
             "Delivery is paper-only (docs/tests/schema, no wired product change) — it will not auto-merge.",
           );
         }
-        const release = await releaseRun({
-          paperOnly,
-          repoUrl: delivered.target,
-          branch: delivered.branch,
-          runId: run.id,
-          appName: run.appName,
-          qaPassed: qa.passed,
-          testStatus,
-          verifiedCommitSha: delivered.commitSha!,
-          caveats: report.caveats ?? [],
-        });
+        const releaseBoundary = await runApprovedSideEffect(() =>
+          releaseRun({
+            paperOnly,
+            repoUrl: delivered.target,
+            branch: delivered.branch!,
+            runId: run.id,
+            appName: run.appName,
+            qaPassed: qa.passed,
+            testStatus,
+            verifiedCommitSha: delivered.commitSha!,
+            caveats: report.caveats ?? [],
+          }),
+        );
+        if (!releaseBoundary.executed || !releaseBoundary.value) {
+          run.status = "failed";
+          run.resumable = false;
+          run.error = redactSecrets(
+            `Pre-release authorization became stale before trunk release: ${releaseBoundary.blockers.join("; ")}. No release side effect ran.`,
+          );
+          log("warning", run.error);
+          await checkpointNow();
+          await flush();
+          return;
+        }
+        const release = releaseBoundary.value;
         /* THREE outcomes, reported as three — the mapping is `planReleaseOutcome`
          * in releasePlan.ts, not a judgement made here. "pending" is neither a
          * success nor a failure: the PR is open with auto-merge armed, so it
@@ -2758,11 +3125,25 @@ async function executeRun(
           );
         } else {
           log("info", "Deploy: putting the new app on a host (Railway/Vercel)…");
-          const dep = await deployRun({
-            workspacePath,
-            appName: run.appName,
-            runId: run.id,
-          });
+          const deployBoundary = await runApprovedSideEffect(() =>
+            deployRun({
+              workspacePath,
+              appName: run.appName,
+              runId: run.id,
+            }),
+          );
+          if (!deployBoundary.executed || !deployBoundary.value) {
+            run.status = "failed";
+            run.resumable = false;
+            run.error = redactSecrets(
+              `Pre-release authorization became stale before deploy: ${deployBoundary.blockers.join("; ")}. No deploy side effect ran.`,
+            );
+            log("warning", run.error);
+            await checkpointNow();
+            await flush();
+            return;
+          }
+          const dep = deployBoundary.value;
           log(
             dep.deployed && dep.verified ? "success" : "warning",
             dep.deployed && dep.verified
@@ -2790,6 +3171,8 @@ async function executeRun(
             await flush();
             return;
           }
+
+          liveDeploymentVerified = true;
 
           /* Store publish — owner order 2026-08-15: a production-ready app is
            * posted to the owner's app store on www.axiombiolabs.org too, and
@@ -2835,6 +3218,97 @@ async function executeRun(
           }
         }
       }
+    }
+
+    const deliveryCompleted = run.destination?.status === "delivered";
+    const finalReceipt = await verifyFileDigests(
+      workspacePath,
+      files.keys(),
+      verification.fileDigests,
+    );
+    const readinessFacts = readinessFactsFor(
+      {
+        kind: readinessKind,
+        delivered: deliveryCompleted,
+        releasedToTrunk:
+          readinessKind === "existing-repo"
+            ? Boolean(run.release?.released || run.destination?.releasedToTrunk)
+            : false,
+        liveVerified: liveDeploymentVerified,
+        localArtifactVerified:
+          finalReceipt.ok &&
+          deliveryCompleted &&
+          (readinessKind === "workspace-only" ||
+            (readinessKind === "new-repo" && privateApp)),
+      },
+      finalReceipt.ok,
+    );
+    const readinessDigest = productionReadinessDigest(readinessFacts);
+
+    if (run.demo) {
+      const demoReceipt = evaluateProductionReadiness({
+        ...readinessFacts,
+        evidenceDigest: readinessDigest,
+        reviews: [],
+      });
+      demoReceipt.blockers = [
+        "Demo/mock output cannot be production-ready.",
+        ...demoReceipt.blockers,
+      ];
+      await recordReadinessEvaluation({
+        subjectType: "run",
+        subjectId: run.id,
+        evidenceDigest: readinessDigest,
+        reviews: [],
+        receipt: demoReceipt,
+      });
+      log(
+        "warning",
+        "Simulation pipeline finished, but mandatory production readiness is blocked by design.",
+      );
+    } else {
+      const readiness = finalizeProductionReadinessFromApproval(
+        readinessFacts,
+        preReleaseApproval,
+      );
+      await recordReadinessEvaluation({
+        subjectType: "run",
+        subjectId: run.id,
+        evidenceDigest: readiness.receipt.evidenceDigest,
+        reviews: readiness.reviews,
+        receipt: readiness.receipt,
+      });
+      if (!readiness.receipt.ready) {
+        run.status = "failed";
+        run.resumable = false;
+        run.error = redactSecrets(
+          `Production readiness blocked: ${readiness.receipt.blockers.join("; ")}`,
+        );
+        const blockedEvent = await appendAuditEvent({
+          type: "run.readiness.blocked",
+          runId: run.id,
+          detail: run.error,
+        });
+        await persistAttribution(testStatus, blockedEvent.seq);
+        log("warning", run.error);
+        await checkpointNow();
+        await flush();
+        return;
+      }
+      run.finalReport = redactDeep({
+        ...report,
+        providerUsage: run.providerUsage,
+      });
+      await appendAuditEvent({
+        type: "run.readiness.ready",
+        runId: run.id,
+        detail: readiness.receipt.evidenceDigest,
+      });
+      log(
+        "success",
+        `Mandatory production readiness PASSED: exact pre-release candidate ${preReleaseApproval?.evidenceDigest} was independently approved before side effects, and deterministic delivery evidence finalized ${readiness.receipt.evidenceDigest}.`,
+        "final_review",
+      );
     }
 
     run.status = "completed";
@@ -3149,6 +3623,7 @@ async function prepareResume(
       if (registry.availableLive().length === 0) {
         throw new MissingProviderCredentialError(registry.missingCredentialNames());
       }
+      assertReadinessBrainFloor(config, secrets);
       const requested = [providers?.codeProvider, providers?.reviewProvider].filter(
         (name): name is ProviderName => Boolean(name),
       );

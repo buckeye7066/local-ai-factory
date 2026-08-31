@@ -3,6 +3,13 @@ import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { safeErrorMessage } from "../errors.js";
 import { RoutingModeSchema } from "../../shared/schemas.js";
+import { getConfig, getSecrets, readinessBrainFloor } from "../config.js";
+import { loadReadinessState } from "../storage/readinessStore.js";
+import {
+  evaluateFoundryCompletion,
+  requiredProductionStations,
+  type RequiredProductionStation,
+} from "./readinessPolicy.js";
 import { FoundryAdapters } from "./adapters.js";
 import {
   FoundryIntakeSchema,
@@ -32,15 +39,42 @@ const MarkdownImportSchema = z.object({
   routingMode: RoutingModeSchema.optional(),
 });
 
-function deriveProjectStatus(project: FoundryProject): FoundryProject["status"] {
+async function deriveProjectStatus(
+  project: FoundryProject,
+): Promise<FoundryProject["status"]> {
   const selected = project.stations.filter(
     (station) => station.status !== "not_selected",
   );
   if (selected.some((station) => station.status === "failed")) return "failed";
-  if (selected.some((station) => station.status === "needs_attention"))
+  if (selected.some((station) => station.status === "needs_attention")) {
     return "needs_attention";
-  if (selected.length && selected.every((station) => station.status === "completed"))
-    return "completed";
+  }
+  if (selected.length && selected.every((station) => station.status === "completed")) {
+    const readiness = await loadReadinessState(project.id);
+    const requiredStations = requiredProductionStations(project.routingMode);
+    return evaluateFoundryCompletion({
+      factoryReceipt: readiness?.receipt ?? null,
+      routingMode: project.routingMode,
+      stations: requiredStations.map((stationId) => {
+        const station = project.stations.find((item) => item.stationId === stationId);
+        return {
+          stationId,
+          status:
+            station?.status === "completed"
+              ? "completed"
+              : station?.status === "failed"
+                ? "failed"
+                : station?.status === "needs_attention"
+                  ? "needs_attention"
+                  : station?.status === "active"
+                    ? "active"
+                    : "queued",
+          evidenceDigest: station?.evidenceDigest ?? null,
+          revision: station?.revision ?? null,
+        };
+      }),
+    }).status;
+  }
   if (selected.some((station) => station.status === "active")) return "running";
   return "queued";
 }
@@ -118,6 +152,24 @@ export function createFoundryRouter(
     station.status = event.status;
     station.summary = event.summary;
     station.artifacts = event.artifacts;
+    const factoryStation = project.stations.find(
+      (item) => item.stationId === "factory-deck",
+    );
+    const requiredStation = requiredProductionStations(project.routingMode).includes(
+      stationId as RequiredProductionStation,
+    );
+    station.evidenceDigest =
+      typeof event.evidence.evidenceDigest === "string"
+        ? event.evidence.evidenceDigest
+        : event.status === "completed" && requiredStation
+          ? (factoryStation?.evidenceDigest ?? null)
+          : null;
+    station.revision =
+      typeof event.evidence.revision === "string"
+        ? event.evidence.revision
+        : event.status === "completed" && requiredStation
+          ? (factoryStation?.revision ?? null)
+          : null;
     if (event.status === "active" && previousStatus !== "active") {
       station.startedAt = Date.now();
       station.endedAt = null;
@@ -139,7 +191,7 @@ export function createFoundryRouter(
         next.attempt += 1;
       }
     }
-    project.status = deriveProjectStatus(project);
+    project.status = await deriveProjectStatus(project);
     await store.save(project);
     await store.appendEvidence(project.id, stationId, `station.${event.status}`, {
       summary: event.summary,
@@ -252,6 +304,21 @@ export function createFoundryRouter(
     }),
   );
 
+  router.get(
+    "/projects/:projectId/readiness",
+    asyncRoute(async (req, res) => {
+      const readiness = await loadReadinessState(String(req.params.projectId));
+      res.json(
+        readiness ?? {
+          status: "not_evaluated",
+          receipt: null,
+          blockers: ["Mandatory production readiness has not been evaluated."],
+          ownerExternalMatters: "owner-managed-outside-cyberland",
+        },
+      );
+    }),
+  );
+
   router.post(
     "/projects",
     asyncRoute(async (req, res) => {
@@ -295,6 +362,14 @@ export function createFoundryRouter(
       const project = await store.get(String(req.params.projectId));
       if (!project) {
         res.status(404).json({ error: "Purpose Foundry project not found." });
+        return;
+      }
+      const brainFloor = readinessBrainFloor(getConfig(), getSecrets());
+      if (!brainFloor.configured) {
+        res.status(409).json({
+          error:
+            "Purpose Foundry is blocked until OpenAI Sol and Anthropic Fable/Opus readiness brains are configured.",
+        });
         return;
       }
       if (

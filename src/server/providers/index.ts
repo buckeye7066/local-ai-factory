@@ -39,8 +39,9 @@ export { ProviderAbortError } from "./types.js";
 export const OFFLINE_PROVIDERS = new Set<ProviderName>(["mock", "stub"]);
 
 /**
- * Raised when a live (non-demo) run is requested with no usable live provider
- * at all — no free route AND no paid credentials.
+ * Raised when a provider-routing operation has no usable live build provider.
+ * The mandatory Sol plus Fable/Opus floor is enforced separately at non-demo
+ * run admission and receipt issuance; it must never erase the Free build route.
  */
 export class MissingProviderCredentialError extends Error {
   readonly missing: string[];
@@ -49,10 +50,10 @@ export class MissingProviderCredentialError extends Error {
       ? missing.join(", ")
       : "FACTORY_FREE_ENABLED, ANTHROPIC_API_KEY, OPENAI_API_KEY";
     super(
-      `Live factory run blocked: no usable provider. Missing: ${list}. ` +
-        `Start the free route ("Claude Code - FREE (Ollama)") or set a paid key. ` +
-        `There is no offline/mock fallback — a run with no real provider must ` +
-        `fail loudly rather than fabricate a result.`,
+      `Live factory operation blocked: required provider capability missing: ${list}. ` +
+        `Free and Paid build routing remain separate; mock/stub are never a live fallback. ` +
+        `Non-demo admission and production-readiness receipts additionally require ` +
+        `the independent Sol plus Fable/Opus brain floor.`,
     );
     this.name = "MissingProviderCredentialError";
     this.missing = missing;
@@ -73,9 +74,9 @@ export interface ProviderRegistry {
    */
   resolveLive(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
   available(): ProviderName[];
-  /** Every configured LIVE provider, free included. */
+  /** Every configured LIVE build provider, including the independent Free route. */
   availableLive(): ProviderName[];
-  /** Configured PAID providers only. */
+  /** Configured PAID build providers only. */
   availablePaid(): ProviderName[];
   missingCredentialNames(): string[];
 }
@@ -104,7 +105,6 @@ export function createProviderRegistry(
 ): ProviderRegistry {
   const mock = new MockProvider();
   const stub = new StubProvider("stub");
-
   // Every paid SDK call reserves admission before I/O. Its returned token
   // usage then replaces the in-flight estimate in the local ledger; provider
   // billing can include charges this estimate does not model.
@@ -218,8 +218,9 @@ export function createProviderRegistry(
 
   function missingCredentialNames(): string[] {
     const missing: string[] = [];
-    if (!free.isConfigured())
+    if (!free.isConfigured()) {
       missing.push("FACTORY_FREE_ENABLED / FACTORY_FREE_BASE_URL");
+    }
     if (!anthropic.isConfigured()) missing.push("ANTHROPIC_API_KEY");
     if (!openai.isConfigured()) missing.push("OPENAI_API_KEY");
     return missing;

@@ -22,6 +22,7 @@ const { MockProvider } = await import("../providers/mockProvider.js");
 const { verifyAuditChain, _resetAuditCursorForTests } =
   await import("../storage/auditLog.js");
 const { rollbackWorkspace } = await import("../workspace/cleanup.js");
+const { loadReadinessState } = await import("../storage/readinessStore.js");
 const { ProductSpecSchema, QaReportSchema } = await import("../../shared/schemas.js");
 
 beforeAll(async () => {
@@ -106,6 +107,16 @@ describe("mock end-to-end job (#242)", () => {
     expect(run.providerUsage.anthropic.calls).toBe(0);
     expect(run.providerUsage.openai.calls).toBe(0);
     expect(run.providerUsage.mock.calls).toBeGreaterThan(0);
+    expect(run.destination?.status).not.toBe("delivered");
+    expect(run.release?.released).not.toBe(true);
+
+    const readiness = await loadReadinessState(run.id);
+    expect(readiness?.status).toBe("blocked");
+    expect(readiness?.receipt?.ready).toBe(false);
+    expect(readiness?.reviews).toEqual([]);
+    expect(readiness?.blockers).toContain(
+      "Demo/mock output cannot be production-ready.",
+    );
 
     // Attribution (#244)
     expect(run.attribution).not.toBeNull();

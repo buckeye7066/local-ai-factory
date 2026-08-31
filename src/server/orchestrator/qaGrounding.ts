@@ -32,6 +32,10 @@ export interface ExecutedCommandResult {
   directTestPath?: string;
   /** True only for a browser-runner invocation. */
   isBrowser?: boolean;
+  /** OS that actually executed this command; durable across checkpoint resume. */
+  hostPlatform?: NodeJS.Platform;
+  /** Targets proven by this successful command/output at the runner boundary. */
+  verifiedTargets?: Array<"windows" | "webkit" | "macos" | "ios" | "android">;
   runner?: "vitest" | "jest" | "playwright" | "pytest";
   /** True only when the runner produced parseable, non-skipped passing evidence. */
   directEvidenceValid?: boolean;

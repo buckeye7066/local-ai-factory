@@ -1,8 +1,9 @@
-import { getConfig, getSecrets } from "../server/config.js";
+import { getConfig, getSecrets, readinessBrainFloor } from "../server/config.js";
 import {
   startRun,
   MissingProviderCredentialError,
 } from "../server/orchestrator/runFactory.js";
+import { loadReadinessState } from "../server/storage/readinessStore.js";
 import { getRun } from "../server/storage/runsStore.js";
 import type { RunOptions } from "../shared/schemas.js";
 
@@ -29,9 +30,9 @@ function parseArgs(argv: string[]): { idea: string } {
       `${COLORS.red}✘ ${named.join(", ")} ${named.length > 1 ? "were" : "was"} removed.${COLORS.reset}`,
     );
     console.error(
-      `${COLORS.dim}  Factory Deck has no demo, mock, simulate, or dry-run mode —\n` +
-        `  every run does real work against real providers. Start the FREE route\n` +
-        `  ("Claude Code - FREE (Ollama)") or set ANTHROPIC_API_KEY / OPENAI_API_KEY.${COLORS.reset}`,
+      `${COLORS.dim}  Factory Deck has no demo, mock, simulate, or dry-run mode.\n` +
+        `  Every run does real work. Configure the selected build tier plus both\n` +
+        `  mandatory production brains: OpenAI Sol and Anthropic Fable/Opus.${COLORS.reset}`,
     );
     process.exit(2);
   }
@@ -69,11 +70,28 @@ async function main() {
   const idea = parsedIdea || "Build a Bible reading habit tracker";
   const config = getConfig();
   const secrets = getSecrets();
+  const brainFloor = readinessBrainFloor(config, secrets);
 
   console.log(
     `${COLORS.cyan}▌ Factory Deck — Local AI Software Factory${COLORS.reset}`,
   );
-  console.log(`${COLORS.dim}  idea: ${idea}${COLORS.reset}\n`);
+  console.log(`${COLORS.dim}  idea: ${idea}${COLORS.reset}`);
+  console.log(
+    `${COLORS.dim}  readiness brains: Sol=${brainFloor.solModel}; ` +
+      `Fable/Opus=${brainFloor.fableOrOpusModel}${COLORS.reset}\n`,
+  );
+
+  if (!brainFloor.configured) {
+    console.error(
+      `${COLORS.red}✘ Mandatory production brain floor is not configured.${COLORS.reset}`,
+    );
+    console.error(
+      `${COLORS.dim}  Set OPENAI_API_KEY + FACTORY_SOL_MODEL and ANTHROPIC_API_KEY +\n` +
+        `  FACTORY_FABLE_OR_OPUS_MODEL. The Anthropic model id must contain\n` +
+        `  Fable or Opus. Free/helper models cannot issue readiness receipts.${COLORS.reset}`,
+    );
+    process.exit(1);
+  }
 
   const options: RunOptions = {};
   let started;
@@ -82,10 +100,6 @@ async function main() {
   } catch (err) {
     if (err instanceof MissingProviderCredentialError) {
       console.error(`${COLORS.red}✘ ${err.message}${COLORS.reset}`);
-      console.error(
-        `${COLORS.dim}  Start the FREE route ("Claude Code - FREE (Ollama)") or set a paid\n` +
-          `  ANTHROPIC_API_KEY / OPENAI_API_KEY. There is no offline fallback.${COLORS.reset}`,
-      );
       process.exit(1);
     }
     throw err;
@@ -102,14 +116,36 @@ async function main() {
     }
     if (run.status === "completed" || run.status === "failed") {
       if (run.status === "completed" && run.finalReport) {
+        const readiness = await loadReadinessState(run.id);
+        if (readiness?.status !== "ready" || readiness.receipt?.ready !== true) {
+          console.log(
+            `\n${COLORS.red}✘ Pipeline ended, but the app is NOT production-ready.${COLORS.reset}`,
+          );
+          for (const blocker of readiness?.blockers ?? [
+            "Mandatory readiness receipt is missing.",
+          ]) {
+            console.log(`    - ${blocker}`);
+          }
+          console.log(
+            `${COLORS.dim}  Owner-managed legal/external matters were not evaluated.${COLORS.reset}`,
+          );
+          process.exitCode = 1;
+          break;
+        }
+
         const r = run.finalReport;
-        console.log(`\n${COLORS.green}✔ ${r.appName}${COLORS.reset}`);
+        console.log(
+          `\n${COLORS.green}✔ ${r.appName} — PRODUCTION READY${COLORS.reset}`,
+        );
         console.log(`  ${r.summary}`);
         console.log(`\n  ${COLORS.cyan}How to run:${COLORS.reset} ${r.howToRun}`);
         console.log(
           `  ${COLORS.cyan}Tests:${COLORS.reset} ${r.testStatus}  ${COLORS.cyan}Repair loops:${COLORS.reset} ${r.repairLoops}`,
         );
         console.log(`  ${COLORS.cyan}Workspace:${COLORS.reset} ${r.workspacePath}`);
+        console.log(
+          `  ${COLORS.cyan}Readiness evidence:${COLORS.reset} ${readiness.evidenceDigest}`,
+        );
         if (r.caveats.length) {
           console.log(`\n  ${COLORS.yellow}Caveats:${COLORS.reset}`);
           r.caveats.forEach((c) => console.log(`    - ${c}`));
