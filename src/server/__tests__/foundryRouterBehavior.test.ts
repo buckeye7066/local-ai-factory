@@ -176,6 +176,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     const beforeRestart = await waitFor(
       async () => (await store.get(projectId))!,
       (p) =>
+ 
         completedBeforeRestart.every(
           (id) => p.stations.find((s) => s.stationId === id)?.status === "completed",
         ),
@@ -190,6 +191,16 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     expect(revisionBeforeRestart).toMatch(/^rev-[0-9a-f]{12}$/);
 
     // Restart with a fresh adapter instance. Its ledger now contains only post-restart calls.
+ 
+        Boolean(
+          p.stations.find(
+            (s) => s.stationId === "factory-deck" && s.status === "completed",
+          ),
+        ),
+      4000,
+    );
+    // Restart to prove no replay of already-completed stations.
+ 
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store = new FoundryStore(root);
     adapters = new TestFoundryAdapters(store);
@@ -198,11 +209,34 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     const afterRestart = await waitFor(
       async () => (await store.get(projectId))!,
       (p) =>
+ 
         completedBeforeRestart.every(
           (id) => p.stations.find((s) => s.stationId === id)?.status === "completed",
+ 
+        ["scout", "repo-rewards", "promo-pilot", "factory-deck", "flexfactor"].every(
+          (id) =>
+            p.stations.find((s) => s.stationId === (id as StationId))?.status ===
+            "completed",
+ 
         ),
       4000,
     );
+    // Assert Factory Deck digest/revision preserved across restart.
+    const factoryAfter = afterRestart.stations.find(
+      (s) => s.stationId === "factory-deck",
+    )!;
+    expect(factoryAfter.evidenceDigest).toBe(digestBeforeRestart);
+    expect(factoryAfter.revision).toBe(revisionBeforeRestart);
+    // Also assert no replay for already-completed stations by examining the adapter call ledger post-restart.
+    const callsAfterRestart = adapters.getCalls();
+    const noReplayIds = new Set<StationId>([
+      "scout",
+      "repo-rewards",
+      "promo-pilot",
+      "factory-deck",
+      "flexfactor",
+    ]);
+    expect(callsAfterRestart.every((c) => !noReplayIds.has(c.stationId))).toBe(true);
 
     for (const id of completedBeforeRestart) {
       expect(afterRestart.stations.find((s) => s.stationId === id)?.status).toBe("completed");
