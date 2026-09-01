@@ -98,7 +98,7 @@ export function sliceIdea(epic: EpicRecord, index: number): string {
     ...slice.acceptance.map((a) => `- ${a}`),
     ``,
     `Deliver working, wired product behavior or finished runtime-consumed product content only. ` +
-      `Documentation-only, test-only, placeholder-only, outline-only, generated-fallback, or sample-only output fails this slice. ` +
+      `Documentation-only or test-only output fails this slice; placeholder-only, outline-only, generated-fallback, or sample-only output also fails. ` +
       `For curriculum/coursework work, the slice is not complete until its assigned courses contain substantive instructional material, ` +
       `the assessments and answer keys supported by the target product, required pacing/metadata, and pass the repository's content validators.`,
   ].join("\n");
