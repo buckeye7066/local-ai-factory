@@ -20,6 +20,7 @@ import { FATAL_EXIT_CODE } from "../exitCodes.js";
 
 const policyPath = resolve(process.cwd(), "scripts", "lib", "RestartPolicy.ps1");
 const launcherPath = resolve(process.cwd(), "scripts", "start-factory.ps1");
+const commandLauncherPath = resolve(process.cwd(), "scripts", "start-factory.cmd");
 
 /** Windows PowerShell is what the .cmd launcher actually runs. */
 function powershellAvailable(): boolean {
