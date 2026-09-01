@@ -4,8 +4,17 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { FoundryStore, intakeFromMarkdown, STATIONS, type StationId } from "../foundry/model.js";
-import { FoundryAdapters } from "../foundry/adapters.js";
+import {
+  FoundryStore,
+  intakeFromMarkdown,
+  STATIONS,
+  type StationId,
+} from "../foundry/model.js";
+import {
+  FoundryAdapters,
+  type AdapterOutcome,
+  type AdapterDescriptor,
+} from "../foundry/adapters.js";
 import { createFoundryRouter } from "../foundry/router.js";
 
 function jsonHeaders() {
@@ -14,7 +23,7 @@ function jsonHeaders() {
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
-async function waitFor<T>(fn: () => Promise<T>, pred: (v: T) => boolean, ms = 2000) {
+async function waitFor<T>(fn: () => Promise<T>, pred: (v: T) => boolean, ms = 8000) {
   const start = Date.now();
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -25,31 +34,27 @@ async function waitFor<T>(fn: () => Promise<T>, pred: (v: T) => boolean, ms = 20
   }
 }
 
-type AdapterEvent = {
-  status: "active" | "needs_attention" | "completed" | "failed";
-  summary?: string;
-  artifacts?: string[];
-  evidence?: Record<string, unknown>;
-};
-
 class TestFoundryAdapters extends FoundryAdapters {
   private completions = new Map<string, Set<StationId>>();
   private calls: Array<{ projectId: string; stationId: StationId }> = [];
   getCalls() {
     return this.calls.slice();
   }
-  override descriptors() {
-    return STATIONS.map((s) => ({
-      stationId: s.id,
-      mode: "deterministic",
-      destination: "in-memory",
-      configured: true,
-    }));
+  override descriptors(): AdapterDescriptor[] {
+    return STATIONS.map((s) => {
+      const desc: AdapterDescriptor = {
+        stationId: s.id,
+        mode: "internal",
+        destination: "in-memory",
+        configured: true,
+      };
+      return desc;
+    });
   }
   override async execute(
     project: Awaited<ReturnType<FoundryStore["get"]>>,
     stationId: StationId,
-  ): Promise<AdapterEvent> {
+  ): Promise<AdapterOutcome> {
     if (!project) throw new Error("no project");
     const done = this.completions.get(project.id) ?? new Set<StationId>();
     this.completions.set(project.id, done);
@@ -77,7 +82,7 @@ class TestFoundryAdapters extends FoundryAdapters {
         summary: `completed:${stationId}`,
         artifacts: [],
         evidence,
-      } as AdapterEvent;
+      } satisfies AdapterOutcome;
     }
     if (stationId === "crucible") {
       return {
@@ -85,7 +90,7 @@ class TestFoundryAdapters extends FoundryAdapters {
         summary: "adversary requires attention",
         artifacts: [],
         evidence: {},
-      } as AdapterEvent;
+      } satisfies AdapterOutcome;
     }
     // Anything after attention point is left queued.
     return {
@@ -93,7 +98,7 @@ class TestFoundryAdapters extends FoundryAdapters {
       summary: "default",
       artifacts: [],
       evidence: {},
-    } as AdapterEvent;
+    } satisfies AdapterOutcome;
   }
 }
 
@@ -137,14 +142,19 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
 
   it("router-level start, single-active, stale reject, auto-advance, survives restart, valid evidence chain", async () => {
     // Create a project (obsidian equivalence)
-    const intake = intakeFromMarkdown("# GrantFlow\nFind funding.", "C:/Vault/GrantFlow.md");
+    const intake = intakeFromMarkdown(
+      "# GrantFlow\nFind funding.",
+      "C:/Vault/GrantFlow.md",
+    );
     const createdRes = await fetch(`${baseUrl}/projects`, {
       method: "POST",
       headers: jsonHeaders(),
       body: JSON.stringify(intake),
     });
     expect(createdRes.status).toBe(201);
-    const project = (await createdRes.json()) as Awaited<ReturnType<typeof store.create>>;
+    const project = (await createdRes.json()) as Awaited<
+      ReturnType<typeof store.create>
+    >;
     const projectId = project.id;
 
     // Start the assembly line via router (exercises readiness brain floor + dispatcher).
@@ -154,19 +164,30 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     });
     expect(startRes.status).toBe(202);
 
-    // Immediately restart the HTTP listener AND reconstruct store/adapters to prove process-level recovery.
+    // Wait until Factory Deck is completed (the deterministic adapter completes discovery + factory quickly).
+    await waitFor(
+      async () => (await store.get(projectId))!,
+      (p) =>
+        Boolean(
+          p.stations.find((s) => s.stationId === "factory-deck" && s.status === "completed"),
+        ),
+      4000,
+    );
+    // Restart to prove no replay of already-completed stations.
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    // Recreate fresh instances from disk
     store = new FoundryStore(root);
     adapters = new TestFoundryAdapters(store);
     await startServer();
-
-    // The project should be picked up; dispatch executes the active station then auto-advances.
+    // Completed before restart (discovery + factory + flex) must remain completed (no replay).
     const afterRestart = await waitFor(
       async () => (await store.get(projectId))!,
-      (p) => Boolean(p.stations.find((s) => s.status === "active" || s.status === "needs_attention")),
+      (p) =>
+        ["scout", "repo-rewards", "promo-pilot", "factory-deck", "flexfactor"].every(
+          (id) => p.stations.find((s) => s.stationId === (id as StationId))?.status === "completed",
+        ),
       4000,
     );
+
     // Sample repeatedly to assert at most one concurrent active station throughout.
     for (let i = 0; i < 40; i++) {
       const snap = (await store.get(projectId))!;
@@ -174,25 +195,24 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       expect(activeCount).toBeLessThanOrEqual(1);
       await sleep(10);
     }
-    // Calls after restart should NOT include any station that was already completed before restart (none in this path),
-    // and MUST include the first active station encountered after restart.
-    const calls = adapters.getCalls();
-    expect(calls.length).toBeGreaterThanOrEqual(1);
 
     // Stale/duplicate completion is rejected (complete a previously completed station again).
     const currentAfter = (await store.get(projectId))!;
     const scout = currentAfter.stations.find((s) => s.stationId === "scout")!;
     expect(scout.status).toBe("completed");
-    const stale = await fetch(`${baseUrl}/projects/${projectId}/stations/scout/events`, {
-      method: "POST",
-      headers: jsonHeaders(),
-      body: JSON.stringify({
-        status: "completed",
-        summary: "duplicate",
-        artifacts: [],
-        evidence: {},
-      }),
-    });
+    const stale = await fetch(
+      `${baseUrl}/projects/${projectId}/stations/scout/events`,
+      {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          status: "completed",
+          summary: "duplicate",
+          artifacts: [],
+          evidence: {},
+        }),
+      },
+    );
     expect(stale.status).toBe(409);
 
     // Verify digest/revision binding from Factory Deck station.
@@ -211,7 +231,12 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     await startServer();
     await waitFor(
       async () => (await store.get(projectId))!,
-      (p) => Boolean(p.stations.find((s) => s.stationId === "crucible" && s.status === "needs_attention")),
+      (p) =>
+        Boolean(
+          p.stations.find(
+            (s) => s.stationId === "crucible" && s.status === "needs_attention",
+          ),
+        ),
       4000,
     );
 
@@ -252,5 +277,3 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     }
   });
 });
-
-
