@@ -6,6 +6,70 @@
 $ErrorActionPreference = "Stop"
 Set-Location -Path (Split-Path -Parent $PSScriptRoot)  # repo root
 
+# --- Bootstrap. A desktop icon is the product entry point, so it must repair
+# ordinary checkout/dependency drift instead of requiring a terminal session.
+$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+if ($null -eq $node) {
+    throw "Factory Deck needs Node.js 20 or newer, but node.exe is not available on PATH."
+}
+$nodeMajor = [int]((& node --version).TrimStart("v").Split(".")[0])
+if ($nodeMajor -lt 20) {
+    throw "Factory Deck needs Node.js 20 or newer; this computer has $(& node --version)."
+}
+
+$pnpm = Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue
+if ($null -eq $pnpm) {
+    $corepack = Get-Command corepack -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -ne $corepack) {
+        Write-Host "pnpm is missing - repairing it through Corepack..." -ForegroundColor Yellow
+        & corepack enable
+        if ($LASTEXITCODE -eq 0) {
+            $pnpm = Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue
+        }
+    }
+}
+if ($null -eq $pnpm) {
+    throw "Factory Deck could not find or activate pnpm 10.17.0."
+}
+
+# Fast-forward a clean main checkout. Never overwrite local work; a dirty tree
+# stays untouched and launches exactly as-is.
+$git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue
+if ($null -ne $git -and (Test-Path ".git")) {
+    $branch = (& git branch --show-current 2>$null).Trim()
+    $trackedChanges = @(& git status --porcelain --untracked-files=no 2>$null)
+    if ($branch -eq "main" -and $trackedChanges.Count -eq 0) {
+        Write-Host "Checking for Factory Deck updates..." -ForegroundColor DarkGray
+        & git pull --ff-only --quiet origin main
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Update check could not complete; continuing with the installed revision." -ForegroundColor Yellow
+        }
+    } elseif ($trackedChanges.Count -gt 0) {
+        Write-Host "Local source changes detected; automatic update skipped without overwriting them." -ForegroundColor Yellow
+    }
+}
+
+# Repair missing or stale dependencies. pnpm's module manifest is the durable
+# installation marker and must be at least as new as both dependency manifests.
+$moduleMarker = "node_modules\.modules.yaml"
+$needInstall = -not (Test-Path $moduleMarker)
+if (-not $needInstall) {
+    $installedAt = (Get-Item $moduleMarker).LastWriteTimeUtc
+    foreach ($manifest in @("package.json", "pnpm-lock.yaml")) {
+        if ((Get-Item $manifest).LastWriteTimeUtc -gt $installedAt) {
+            $needInstall = $true
+            break
+        }
+    }
+}
+if ($needInstall) {
+    Write-Host "Factory Deck dependencies are missing or stale - repairing them..." -ForegroundColor Yellow
+    & pnpm install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) {
+        throw "Factory Deck dependency repair failed (pnpm exit $LASTEXITCODE)."
+    }
+}
+
 $backendHost = "127.0.0.1"
 $backendPort = 5179
 $backendUrl = "http://${backendHost}:${backendPort}"
