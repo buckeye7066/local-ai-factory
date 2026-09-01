@@ -158,35 +158,68 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     const projectId = project.id;
 
     // Start the assembly line via router (exercises readiness brain floor + dispatcher).
-    let startRes = await fetch(`${baseUrl}/projects/${projectId}/start`, {
+    const startRes = await fetch(`${baseUrl}/projects/${projectId}/start`, {
       method: "POST",
       headers: jsonHeaders(),
     });
     expect(startRes.status).toBe(202);
 
-    // Wait until Factory Deck is completed (the deterministic adapter completes discovery + factory quickly).
-    await waitFor(
+    const completedBeforeRestart: StationId[] = [
+      "scout",
+      "repo-rewards",
+      "promo-pilot",
+      "factory-deck",
+      "flexfactor",
+    ];
+
+    // Wait until every deterministic pre-Crucible station is durably completed.
+    const beforeRestart = await waitFor(
       async () => (await store.get(projectId))!,
       (p) =>
-        Boolean(
-          p.stations.find((s) => s.stationId === "factory-deck" && s.status === "completed"),
+        completedBeforeRestart.every(
+          (id) => p.stations.find((s) => s.stationId === id)?.status === "completed",
         ),
       4000,
     );
-    // Restart to prove no replay of already-completed stations.
+    const factoryBeforeRestart = beforeRestart.stations.find(
+      (s) => s.stationId === "factory-deck",
+    )!;
+    const digestBeforeRestart = factoryBeforeRestart.evidenceDigest;
+    const revisionBeforeRestart = factoryBeforeRestart.revision;
+    expect(digestBeforeRestart).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(revisionBeforeRestart).toMatch(/^rev-[0-9a-f]{12}$/);
+
+    // Restart with a fresh adapter instance. Its ledger now contains only post-restart calls.
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store = new FoundryStore(root);
     adapters = new TestFoundryAdapters(store);
     await startServer();
-    // Completed before restart (discovery + factory + flex) must remain completed (no replay).
+
     const afterRestart = await waitFor(
       async () => (await store.get(projectId))!,
       (p) =>
-        ["scout", "repo-rewards", "promo-pilot", "factory-deck", "flexfactor"].every(
-          (id) => p.stations.find((s) => s.stationId === (id as StationId))?.status === "completed",
+        completedBeforeRestart.every(
+          (id) => p.stations.find((s) => s.stationId === id)?.status === "completed",
         ),
       4000,
     );
+
+    for (const id of completedBeforeRestart) {
+      expect(afterRestart.stations.find((s) => s.stationId === id)?.status).toBe("completed");
+    }
+    const replayedCompletedStations = adapters
+      .getCalls()
+      .filter(
+        (call) =>
+          call.projectId === projectId && completedBeforeRestart.includes(call.stationId),
+      );
+    expect(replayedCompletedStations).toEqual([]);
+
+    const factoryAfterRestart = afterRestart.stations.find(
+      (s) => s.stationId === "factory-deck",
+    )!;
+    expect(factoryAfterRestart.evidenceDigest).toBe(digestBeforeRestart);
+    expect(factoryAfterRestart.revision).toBe(revisionBeforeRestart);
 
     // Sample repeatedly to assert at most one concurrent active station throughout.
     for (let i = 0; i < 40; i++) {
@@ -215,16 +248,12 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     );
     expect(stale.status).toBe(409);
 
-    // Verify digest/revision binding from Factory Deck station.
-    const factory = (await store.get(projectId))!.stations.find(
-      (s) => s.stationId === "factory-deck",
-    )!;
-    // Recompute the deterministic digest and revision and assert exact binding.
+    // Verify digest/revision binding from the persisted Factory Deck station.
     const expectedHex = createHash("sha256")
       .update(JSON.stringify({ projectId, files: ["a.txt", "b.txt"], bytes: 42 }))
       .digest("hex");
-    expect(factory.evidenceDigest).toBe(`sha256:${expectedHex}`);
-    expect(factory.revision).toBe(`rev-${expectedHex.slice(0, 12)}`);
+    expect(factoryAfterRestart.evidenceDigest).toBe(`sha256:${expectedHex}`);
+    expect(factoryAfterRestart.revision).toBe(`rev-${expectedHex.slice(0, 12)}`);
 
     // At this point Crucible should be active; restart the server and prove dispatcher runs:
     await new Promise<void>((resolve) => server.close(() => resolve()));
