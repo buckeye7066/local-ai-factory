@@ -134,7 +134,7 @@ interface BenchTable {
   byTag: Map<string, BenchEntry>;
 }
 
-let benchCache: { mtimeMs: number; table: BenchTable } | null = null;
+let benchCache: { file: string; mtimeMs: number; table: BenchTable } | null = null;
 
 function localBenchPath(): string {
   const base =
@@ -158,7 +158,10 @@ function localBench(): BenchTable | null {
   } catch {
     return null;
   }
-  if (benchCache && benchCache.mtimeMs === mtimeMs) return benchCache.table;
+  // Cache must be scoped by BOTH path and mtime — tests and multi-run processes
+  // switch AITIME_STATE_DIR frequently, and different files can share an mtime.
+  if (benchCache && benchCache.file === file && benchCache.mtimeMs === mtimeMs)
+    return benchCache.table;
   try {
     const raw = JSON.parse(fs.readFileSync(file, "utf8")) as {
       slow_tok_per_s?: number;
@@ -169,7 +172,7 @@ function localBench(): BenchTable | null {
       if (e && typeof e.tag === "string") byTag.set(e.tag.toLowerCase(), e);
     }
     const table = { floor: Number(raw.slow_tok_per_s) || 5, byTag };
-    benchCache = { mtimeMs, table };
+    benchCache = { file, mtimeMs, table };
     return table;
   } catch {
     return null;
