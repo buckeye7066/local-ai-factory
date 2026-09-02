@@ -130,17 +130,14 @@ describe("Purpose Foundry intake UI", () => {
     ).toBe(true);
 
     fireEvent.change(await screen.findByLabelText("Job name"), {
-      target: { value: "Paid core job" },
+      target: { value: "Unified core job" },
     });
     fireEvent.change(screen.getByLabelText("What this job is for"), {
       target: { value: "Build and verify the core product" },
     });
-    fireEvent.change(
-      screen.getByLabelText("Purpose Foundry provider routing"),
-      {
-        target: { value: "paid" },
-      },
-    );
+    expect(
+      screen.getByLabelText("Purpose Foundry model routing"),
+    ).toHaveTextContent(/Strongest configured paid model/i);
     const promoPilot = await screen.findByLabelText("Include promo-pilot");
     expect((promoPilot as HTMLInputElement).disabled).toBe(false);
     fireEvent.click(promoPilot);
@@ -157,9 +154,9 @@ describe("Purpose Foundry intake UI", () => {
 
     await waitFor(() => expect(posted.current).not.toBeNull());
     expect(posted.current).toMatchObject({
-      name: "Paid core job",
+      name: "Unified core job",
       purpose: "Build and verify the core product",
-      routingMode: "paid",
+      routingMode: "auto",
       selectedStations: ["promo-pilot"],
     });
     expect(posted.current?.selectedStations).not.toContain("factory-deck");
@@ -173,7 +170,7 @@ describe("Purpose Foundry intake UI", () => {
     fireEvent.click(screen.getByRole("button", { name: /Take in note/i }));
     await waitFor(() => expect(obsidianPosted).not.toBeNull());
     expect(obsidianPosted).toMatchObject({
-      routingMode: "paid",
+      routingMode: "auto",
       selectedStations: ["promo-pilot"],
     });
   });
