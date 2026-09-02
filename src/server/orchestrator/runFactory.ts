@@ -2815,13 +2815,14 @@ async function executeRun(
           (kind, message) =>
             log(kind === "warn" ? "warning" : "info", message, "final_review"),
           callSignal,
+          countProvider,
         );
         preReleaseApproval = await completePreReleaseReadiness({
           facts: candidateFacts,
-          leadProvider: countProvider(brainProviders.lead.provider),
+          leadProvider: brainProviders.lead.provider,
           leadProviderName: brainProviders.lead.currentProvider,
           leadModel: brainProviders.lead.currentModel,
-          challengerProvider: countProvider(brainProviders.challenger.provider),
+          challengerProvider: brainProviders.challenger.provider,
           challengerProviderName: brainProviders.challenger.currentProvider,
           challengerModel: brainProviders.challenger.currentModel,
         });
