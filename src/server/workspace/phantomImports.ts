@@ -110,10 +110,7 @@ function flowScannerInertRanges(source: string, relPath: string): SourceRange[] 
   return ranges;
 }
 
-function maskSourceRanges(
-  source: string,
-  ranges: readonly SourceRange[],
-): string {
+function maskSourceRanges(source: string, ranges: readonly SourceRange[]): string {
   const characters = [...source];
   for (const range of ranges) {
     for (let index = range.start; index < range.end; index += 1) {
@@ -138,10 +135,7 @@ function flowTypeofImportSpecifiers(
   // a line comment without parser-directed rescans. Mask parser-recognized
   // template, regex, and JSX ranges first while preserving byte positions, so
   // one fixture cannot hide or fabricate a later real Flow declaration.
-  const scanSource = maskSourceRanges(
-    source,
-    flowScannerInertRanges(source, relPath),
-  );
+  const scanSource = maskSourceRanges(source, flowScannerInertRanges(source, relPath));
   const scanner = ts.createScanner(
     ts.ScriptTarget.Latest,
     true,
