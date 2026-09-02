@@ -195,11 +195,9 @@ function currentSpecPurpose(spec: ProductSpec): string {
 }
 
 function explicitPurposeChange(texts: string[]): boolean {
-  return texts.some((text) =>
-    /\b(?:change|replace|redefine|pivot|repurpose)\b[\s\S]{0,80}\b(?:purpose|mission|audience|product)\b/i.test(
-      text,
-    ),
-  );
+  const pattern =
+    /\b(?:(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b[\s\S]{0,80}\b(?:purpose|mission|audience|product)|(?:purpose|mission|audience|product)\b[\s\S]{0,80}\b(?:change|replace|redefine|pivot|repurpose|retarget|shift))\b/i;
+  return texts.some((text) => pattern.test(text));
 }
 
 function digestGoalContract(
@@ -241,26 +239,29 @@ export function createGoalContract(input: {
     input.idea,
     ...partitioned.activeGoals,
   ]);
-  const purpose = input.purposeProfile
-    ? input.purposeProfile.purpose.text
-    : previous && !purposeChanged
-      ? previous.goalContract.purpose
+  const preservePriorPurpose = Boolean(previous && !purposeChanged);
+  // Once an owner has accepted a mission, a fresh model inference from the
+  // same repository may not silently replace it. Repository evidence is the
+  // source of truth only for the first run (or an explicit repurpose).
+  const purpose = preservePriorPurpose
+    ? previous!.goalContract.purpose
+    : input.purposeProfile
+      ? input.purposeProfile.purpose.text
       : currentSpecPurpose(input.spec);
-  const purposeSource: GoalContract["purposeSource"] = input.purposeProfile
-    ? "repository"
-    : previous && !purposeChanged
-      ? "project-memory"
+  const purposeSource: GoalContract["purposeSource"] = preservePriorPurpose
+    ? "project-memory"
+    : input.purposeProfile
+      ? "repository"
       : "current-spec";
-  const previousUsers =
-    previous && !purposeChanged ? previous.goalContract.targetUsers : [];
-  const targetUsers = unique(
-    [
-      ...previousUsers,
-      ...(input.purposeProfile?.intendedUsers.map((claim) => claim.text) ?? []),
-      input.spec.targetUser,
-    ],
-    20,
-  );
+  const targetUsers = preservePriorPurpose
+    ? previous!.goalContract.targetUsers
+    : unique(
+        [
+          ...(input.purposeProfile?.intendedUsers.map((claim) => claim.text) ?? []),
+          input.spec.targetUser,
+        ],
+        20,
+      );
   const priorResearch = unique(
     [...history]
       .reverse()
