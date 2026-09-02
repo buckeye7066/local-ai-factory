@@ -790,14 +790,14 @@ async function executeRun(
   const hasAuthoredDownstream = (): boolean =>
     Boolean(
       checkpoint.build ||
-      checkpoint.files.length > 0 ||
-      checkpoint.testPlan ||
-      checkpoint.testWriterComplete ||
-      checkpoint.verification ||
-      checkpoint.qa ||
-      checkpoint.pendingRepair ||
-      checkpoint.repairComplete ||
-      checkpoint.finalReport,
+        checkpoint.files.length > 0 ||
+        checkpoint.testPlan ||
+        checkpoint.testWriterComplete ||
+        checkpoint.verification ||
+        checkpoint.qa ||
+        checkpoint.pendingRepair ||
+        checkpoint.repairComplete ||
+        checkpoint.finalReport,
     );
 
   /**
@@ -2839,7 +2839,8 @@ async function executeRun(
     // candidate-byte digest before deliverRun can push a branch/fast-forward
     // trunk, releaseRun can merge, or deployRun can publish anything.
     let preReleaseApproval = checkpoint.preReleaseApproval as
-      PreReleaseReadinessApproval | undefined;
+      | PreReleaseReadinessApproval
+      | undefined;
     if (!run.demo) {
       const candidateFacts = await currentCandidateFacts();
       const candidateDigest = productionReadinessDigest(candidateFacts);
