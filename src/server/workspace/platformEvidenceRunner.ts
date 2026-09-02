@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, readlink } from "node:fs/promises";
+import { lstat, readdir, readFile, readlink } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
 import { parseDirectTestEvidence } from "../orchestrator/directTestEvidence.js";
@@ -40,8 +40,29 @@ type CheckpointExecutedCommand = NonNullable<
 
 export type PlatformArtifactSnapshot = Record<string, string>;
 
-/** Mirrors the workflow artifact: node_modules is the only workspace exclusion. */
-const ARTIFACT_EXCLUDED_DIRS = new Set(["node_modules"]);
+/** Runtime-only outputs excluded from the preserved cloud artifact as well. */
+const ARTIFACT_EXCLUDED_DIRS = new Set([
+  "node_modules",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".hypothesis",
+  ".tox",
+  ".nox",
+  ".nyc_output",
+  "coverage",
+  "playwright-report",
+  "test-results",
+]);
+const ARTIFACT_EXCLUDED_FILES = [/^\.coverage(?:\..+)?$/, /^.+\.(?:pyc|pyo)$/];
+
+function isExcludedArtifactEntry(path: string, name: string): boolean {
+  return (
+    path.split("/").some((part) => ARTIFACT_EXCLUDED_DIRS.has(part)) ||
+    ARTIFACT_EXCLUDED_FILES.some((pattern) => pattern.test(name))
+  );
+}
 
 export async function capturePlatformArtifactSnapshot(
   workspacePath: string,
@@ -57,6 +78,7 @@ export async function capturePlatformArtifactSnapshot(
       if (entry.isDirectory() && ARTIFACT_EXCLUDED_DIRS.has(entry.name)) continue;
       const absolute = join(directory, entry.name);
       const path = relative(workspacePath, absolute).replace(/\\/g, "/");
+      if (isExcludedArtifactEntry(path, entry.name)) continue;
       if (entry.isDirectory()) {
         pending.push(absolute);
       } else if (entry.isSymbolicLink()) {
@@ -64,9 +86,11 @@ export async function capturePlatformArtifactSnapshot(
           .update(`symlink\0${await readlink(absolute)}`)
           .digest("hex");
       } else if (entry.isFile()) {
-        snapshot[path] = createHash("sha256")
+        const mode = (await lstat(absolute)).mode & 0o777;
+        const digest = createHash("sha256")
           .update(await readFile(absolute))
           .digest("hex");
+        snapshot[path] = `file:${mode.toString(8)}:${digest}`;
       }
     }
   }
@@ -95,7 +119,14 @@ export function successfulPlatformCommandEvidence(
   const outputTail = `${result.stdout}\n${result.stderr}`.slice(-32_768);
   const parsedDirect =
     command.directTestPath && command.runner
-      ? parseDirectTestEvidence(command.runner, result.stdout, result.stderr)
+      ? (() => {
+          if (result.stdoutTruncated || result.stderrTruncated) {
+            throw new Error(
+              `${hostPlatform} direct ${command.runner} evidence exceeded the structured-output capture limit.`,
+            );
+          }
+          return parseDirectTestEvidence(command.runner, result.stdout, result.stderr);
+        })()
       : undefined;
   const directEvidenceValid = parsedDirect?.valid;
   if (parsedDirect && !parsedDirect.valid) {
@@ -290,6 +321,9 @@ export async function recordCurrentPlatformEvidence(
         ),
         allowScriptExecution: input.allowScriptExecution,
         timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
+        ...(command.directTestPath
+          ? { maxCapturedOutputBytes: 32 * 1024 * 1024 }
+          : {}),
       },
     );
     const outputTail = `${result.stdout}\n${result.stderr}`.slice(-32_768);
