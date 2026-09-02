@@ -23,6 +23,13 @@ const health: Health = {
   freeModel: "free-model",
   anthropicConfigured: true,
   openaiConfigured: true,
+  mandatoryProductionReadiness: true,
+  readinessBrainFloorConfigured: true,
+  solConfigured: true,
+  fableOrOpusConfigured: true,
+  solModel: "gpt",
+  fableOrOpusModel: "claude",
+  ownerExternalMatters: "owner-managed-outside-cyberland",
   providersAvailable: ["free", "anthropic", "openai"],
   modelLadder: ["anthropic", "openai", "free"],
   anthropicModel: "claude",
@@ -41,6 +48,27 @@ afterEach(() => {
 });
 
 describe("automatic model ladder UI wiring", () => {
+  it("warns when the mandatory brain floor is missing despite a live free rung", () => {
+    render(
+      <NewRunHero
+        health={{
+          ...health,
+          anthropicConfigured: false,
+          openaiConfigured: false,
+          readinessBrainFloorConfigured: false,
+          solConfigured: false,
+          fableOrOpusConfigured: false,
+          modelLadder: ["free"],
+          providersAvailable: ["free"],
+        }}
+        starting={false}
+        onStart={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/Production admission requires both/i)).toBeTruthy();
+  });
+
   it("shows one ordered ladder and sends only automatic routing", async () => {
     vi.mocked(api.startClarify).mockResolvedValue({
       sessionId: "session-1",
