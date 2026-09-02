@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   FoundryAdapters,
   createFoundryTierProvider,
+  defaultProcessRunner,
   repoRewardsQuery,
   repoSourceFromTarget,
 } from "../foundry/adapters.js";
@@ -262,6 +263,16 @@ describe("Purpose Foundry", () => {
         configured: true,
         destination: "http://127.0.0.1:4000",
       });
+
+      delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL;
+      const project = await store.create(
+        intakeFromMarkdown(
+          "# Publisher guard\nPublish only through an explicitly configured service.",
+        ),
+      );
+      await expect(
+        new FoundryAdapters(store).execute(project, "app-store-publisher"),
+      ).rejects.toThrow(/not configured.*no request was sent/i);
     } finally {
       if (previous === undefined)
         delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL;
@@ -340,6 +351,30 @@ describe("Purpose Foundry", () => {
       if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = previousOpenAiKey;
     }
+  });
+
+  it("returns ordinary nonzero exits from the real process runner", async () => {
+    const result = await defaultProcessRunner(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write('partial output'); process.stderr.write('failure detail'); process.exit(7)",
+      ],
+      { timeoutMs: 30_000 },
+    );
+
+    expect(result).toEqual({
+      stdout: "partial output",
+      stderr: "failure detail",
+      exitCode: 7,
+    });
+    await expect(
+      defaultProcessRunner(
+        `missing-foundry-process-${Date.now()}`,
+        [],
+        { timeoutMs: 1_000 },
+      ),
+    ).rejects.toThrow(/could not be launched/i);
   });
 
   it("fails closed before launching an unmetered Paid FlexFactor child", async () => {
