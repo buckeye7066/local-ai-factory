@@ -65,7 +65,10 @@ import {
   capturePlatformArtifactSnapshot,
   checkpointOutputTail,
   changedPlatformArtifactPaths,
+  changedPreExistingPlatformArtifactPaths,
+  createDisposableVerificationWorkspace,
   removeAddedPlatformArtifacts,
+  removeDisposableVerificationWorkspace,
 } from "../workspace/platformEvidenceRunner.js";
 import {
   generatedTestsForVerification,
@@ -2047,141 +2050,192 @@ async function executeRun(
       // cancellation must never let a changed workspace become the next seal.
       verification.platformArtifactSnapshot = artifactBeforeVerification;
       await checkpointNow({ verification });
-      const commandReceipt = await withVerificationReceipt(
-        workspacePath,
-        files.keys(),
-        intendedDigests,
-        async () => {
-          for (const cmd of verificationPlan.commands) {
-            throwIfCancelled(run.id);
-            throwIfTimedOut(deadline, timeoutMs);
-            const res = await runCommand(
-              { bin: cmd.bin, args: cmd.args, cwd: workspacePath },
-              {
-                workspaceRoot: config.workspaceRoot,
-                // Explicit opt-in only; the command runner is not an OS sandbox.
-                allowScriptExecution: config.allowUntrustedScripts,
-                // Force-kill an in-flight child if the run is cancelled mid-command.
-                shouldCancel: () => isCancelRequested(run.id),
-                // REAL suites need real time. The runner's 120s default silently
-                // guaranteed failure for any mature repository: GrantFlow's full
-                // `npm test` (lint + typecheck + build + unit) takes ~20 minutes
-                // in its own CI, so run d687f5fd's verification could NEVER have
-                // passed regardless of code quality — the timeout kill then left
-                // a Windows zombie grandchild holding the pipes for 19 more
-                // minutes. Installs get 15 minutes; test commands get 45.
-                timeoutMs: cmd.isTest ? 45 * 60_000 : 15 * 60_000,
-                ...(cmd.directTestPath
-                  ? { maxCapturedOutputBytes: 32 * 1024 * 1024 }
-                  : {}),
-              },
+      const disposableVerification =
+        checkpoint.options.mode === "extend" &&
+        checkpoint.options.repoSource?.inPlace === true
+          ? await createDisposableVerificationWorkspace(workspacePath)
+          : null;
+      const verificationWorkspacePath =
+        disposableVerification?.workspacePath ?? workspacePath;
+      const verificationWorkspaceRoot =
+        disposableVerification?.root ?? config.workspaceRoot;
+      const { commandReceipt, artifactChanges, ownerWorkspaceChanges } =
+        await (async () => {
+          if (disposableVerification) {
+            const copiedArtifact = await capturePlatformArtifactSnapshot(
+              verificationWorkspacePath,
             );
-            log(
-              "command_run",
-              res.executed
-                ? `Ran: ${res.command} (exit ${res.exitCode})`
-                : (res.reason ?? res.command),
+            const copyChanges = changedPlatformArtifactPaths(
+              artifactBeforeVerification,
+              copiedArtifact,
             );
-            if (res.executed) {
-              commandOutput = appendCheckpointCommandOutput(
-                commandOutput,
-                res.command,
-                res.stdout,
-                res.stderr,
+            if (copyChanges.length > 0) {
+              throw new Error(
+                `Disposable verification copy differs from the candidate: ${copyChanges
+                  .slice(0, 20)
+                  .join(", ")}.`,
               );
-              const parsedDirect =
-                cmd.directTestPath && cmd.runner
-                  ? res.stdoutTruncated || res.stderrTruncated
-                    ? {
-                        valid: false,
-                        passedCount: 0,
-                        skippedCount: 0,
-                        passedTestNames: [],
-                        reason: `direct ${cmd.runner} evidence exceeded the structured-output capture limit`,
-                      }
-                    : parseDirectTestEvidence(cmd.runner, res.stdout, res.stderr)
-                  : undefined;
-              const directEvidenceValid =
-                parsedDirect === undefined
-                  ? undefined
-                  : res.exitCode === 0 && parsedDirect.valid;
-              // Direct reporters may need a large in-memory buffer for JSON
-              // parsing, but the durable checkpoint has a strict 32 KiB field.
-              const outputTail = checkpointOutputTail(res.stdout, res.stderr);
-              const platformStamp = platformStampForExecutedCommand({
-                command: res.command,
-                exitCode: res.exitCode,
-                isBrowser: cmd.isBrowser ?? false,
-                directEvidenceValid,
-                outputTail,
-              });
-              verification.executed.push({
-                command: res.command,
-                exitCode: res.exitCode,
-                isTest: cmd.isTest,
-                directTestPath: cmd.directTestPath,
-                isBrowser: cmd.isBrowser ?? false,
-                ...platformStamp,
-                runner: cmd.runner,
-                directEvidenceValid,
-                passedCount: parsedDirect?.passedCount,
-                skippedCount: parsedDirect?.skippedCount,
-                passedTestNames: parsedDirect?.passedTestNames,
-                outputTail,
-              });
-              if (parsedDirect && !directEvidenceValid) {
-                verification.incomplete!.push({
-                  command: res.command,
-                  reason:
-                    parsedDirect.reason ??
-                    `direct ${cmd.runner} test did not exit successfully`,
-                });
-              }
-              if (cmd.isTest) {
-                testsExecuted = true;
-                // A RED TEST SIGNAL IS STICKY. The old condition was
-                //   `res.exitCode !== 0 || testExit === null`
-                // which used `testExit === null` to mean "no result yet" — but a
-                // test suite KILLED by the 45-minute timeout also closes with
-                // exitCode `null` (SIGKILL, executed: true). So a timed-out suite
-                // set testExit = null, and the very next passing test command
-                // matched `testExit === null` and overwrote it with 0 — turning a
-                // killed suite into testStatus "passing".
-                //
-                // Track "have we recorded any test result yet" separately from the
-                // exit value, and never let a clean 0 replace a non-zero-or-null
-                // result that was already observed.
-                verdict = foldTestExit(verdict, res.exitCode);
-                testExit = verdict.testExit;
-              }
-            } else {
-              verification.incomplete!.push({
-                command: res.command,
-                reason: res.reason ?? "required verification command did not execute",
-              });
             }
           }
-        },
-      ).finally(async () => {
-        const artifactAfterCommands =
-          await capturePlatformArtifactSnapshot(workspacePath);
-        await removeAddedPlatformArtifacts(
-          workspacePath,
-          artifactBeforeVerification,
-          artifactAfterCommands,
-        );
-      });
-      const cleanedArtifact = await capturePlatformArtifactSnapshot(workspacePath);
-      const artifactChanges = changedPlatformArtifactPaths(
-        artifactBeforeVerification,
-        cleanedArtifact,
-      );
+          const commandReceipt = await withVerificationReceipt(
+            workspacePath,
+            files.keys(),
+            intendedDigests,
+            async () => {
+              for (const cmd of verificationPlan.commands) {
+                throwIfCancelled(run.id);
+                throwIfTimedOut(deadline, timeoutMs);
+                const res = await runCommand(
+                  { bin: cmd.bin, args: cmd.args, cwd: verificationWorkspacePath },
+                  {
+                    workspaceRoot: verificationWorkspaceRoot,
+                    // Explicit opt-in only; the command runner is not an OS sandbox.
+                    allowScriptExecution: config.allowUntrustedScripts,
+                    // Force-kill an in-flight child if the run is cancelled mid-command.
+                    shouldCancel: () => isCancelRequested(run.id),
+                    // REAL suites need real time. The runner's 120s default silently
+                    // guaranteed failure for any mature repository: GrantFlow's full
+                    // `npm test` (lint + typecheck + build + unit) takes ~20 minutes
+                    // in its own CI, so run d687f5fd's verification could NEVER have
+                    // passed regardless of code quality — the timeout kill then left
+                    // a Windows zombie grandchild holding the pipes for 19 more
+                    // minutes. Installs get 15 minutes; test commands get 45.
+                    timeoutMs: cmd.isTest ? 45 * 60_000 : 15 * 60_000,
+                    ...(cmd.directTestPath
+                      ? { maxCapturedOutputBytes: 32 * 1024 * 1024 }
+                      : {}),
+                  },
+                );
+                log(
+                  "command_run",
+                  res.executed
+                    ? `Ran: ${res.command} (exit ${res.exitCode})`
+                    : (res.reason ?? res.command),
+                );
+                if (res.executed) {
+                  commandOutput = appendCheckpointCommandOutput(
+                    commandOutput,
+                    res.command,
+                    res.stdout,
+                    res.stderr,
+                  );
+                  const parsedDirect =
+                    cmd.directTestPath && cmd.runner
+                      ? res.stdoutTruncated || res.stderrTruncated
+                        ? {
+                            valid: false,
+                            passedCount: 0,
+                            skippedCount: 0,
+                            passedTestNames: [],
+                            reason: `direct ${cmd.runner} evidence exceeded the structured-output capture limit`,
+                          }
+                        : parseDirectTestEvidence(cmd.runner, res.stdout, res.stderr)
+                      : undefined;
+                  const directEvidenceValid =
+                    parsedDirect === undefined
+                      ? undefined
+                      : res.exitCode === 0 && parsedDirect.valid;
+                  // Direct reporters may need a large in-memory buffer for JSON
+                  // parsing, but the durable checkpoint has a strict 32 KiB field.
+                  const outputTail = checkpointOutputTail(res.stdout, res.stderr);
+                  const platformStamp = platformStampForExecutedCommand({
+                    command: res.command,
+                    exitCode: res.exitCode,
+                    isBrowser: cmd.isBrowser ?? false,
+                    directEvidenceValid,
+                    outputTail,
+                  });
+                  verification.executed.push({
+                    command: res.command,
+                    exitCode: res.exitCode,
+                    isTest: cmd.isTest,
+                    directTestPath: cmd.directTestPath,
+                    isBrowser: cmd.isBrowser ?? false,
+                    ...platformStamp,
+                    runner: cmd.runner,
+                    directEvidenceValid,
+                    passedCount: parsedDirect?.passedCount,
+                    skippedCount: parsedDirect?.skippedCount,
+                    passedTestNames: parsedDirect?.passedTestNames,
+                    outputTail,
+                  });
+                  if (parsedDirect && !directEvidenceValid) {
+                    verification.incomplete!.push({
+                      command: res.command,
+                      reason:
+                        parsedDirect.reason ??
+                        `direct ${cmd.runner} test did not exit successfully`,
+                    });
+                  }
+                  if (cmd.isTest) {
+                    testsExecuted = true;
+                    // A RED TEST SIGNAL IS STICKY. The old condition was
+                    //   `res.exitCode !== 0 || testExit === null`
+                    // which used `testExit === null` to mean "no result yet" — but a
+                    // test suite KILLED by the 45-minute timeout also closes with
+                    // exitCode `null` (SIGKILL, executed: true). So a timed-out suite
+                    // set testExit = null, and the very next passing test command
+                    // matched `testExit === null` and overwrote it with 0 — turning a
+                    // killed suite into testStatus "passing".
+                    //
+                    // Track "have we recorded any test result yet" separately from the
+                    // exit value, and never let a clean 0 replace a non-zero-or-null
+                    // result that was already observed.
+                    verdict = foldTestExit(verdict, res.exitCode);
+                    testExit = verdict.testExit;
+                  }
+                } else {
+                  verification.incomplete!.push({
+                    command: res.command,
+                    reason:
+                      res.reason ?? "required verification command did not execute",
+                  });
+                }
+              }
+            },
+          ).finally(async () => {
+            const artifactAfterCommands = await capturePlatformArtifactSnapshot(
+              verificationWorkspacePath,
+            );
+            await removeAddedPlatformArtifacts(
+              verificationWorkspacePath,
+              artifactBeforeVerification,
+              artifactAfterCommands,
+            );
+          });
+          const cleanedArtifact = await capturePlatformArtifactSnapshot(
+            verificationWorkspacePath,
+          );
+          const artifactChanges = changedPlatformArtifactPaths(
+            artifactBeforeVerification,
+            cleanedArtifact,
+          );
+          const ownerWorkspaceChanges = disposableVerification
+            ? changedPreExistingPlatformArtifactPaths(
+                artifactBeforeVerification,
+                await capturePlatformArtifactSnapshot(workspacePath),
+              )
+            : [];
+          return { commandReceipt, artifactChanges, ownerWorkspaceChanges };
+        })().finally(async () => {
+          if (disposableVerification) {
+            await removeDisposableVerificationWorkspace(disposableVerification);
+          }
+        });
       if (artifactChanges.length > 0) {
         verification.incomplete!.push({
           command: "verification artifact",
           reason:
             "verification commands changed pre-existing candidate paths: " +
             artifactChanges.slice(0, 20).join(", "),
+        });
+      }
+      if (ownerWorkspaceChanges.length > 0) {
+        verification.incomplete!.push({
+          command: "verification source workspace",
+          reason:
+            "the in-place repository changed while its disposable copy was verified: " +
+            ownerWorkspaceChanges.slice(0, 20).join(", "),
         });
       }
       verification.platformArtifactSnapshot = artifactBeforeVerification;

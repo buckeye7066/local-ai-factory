@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, readdir, readlink, rm } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { cp, lstat, mkdir, mkdtemp, readdir, readlink, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
 import { parseDirectTestEvidence } from "../orchestrator/directTestEvidence.js";
 import { platformEvidenceBlockersFromRunError } from "../orchestrator/platformEvidenceHold.js";
@@ -66,6 +67,61 @@ function isExcludedArtifactEntry(path: string, name: string): boolean {
     path.split("/").some((part) => ARTIFACT_EXCLUDED_DIRS.has(part)) ||
     ARTIFACT_EXCLUDED_FILES.some((pattern) => pattern.test(name))
   );
+}
+
+export type DisposableVerificationWorkspace = {
+  root: string;
+  workspacePath: string;
+};
+
+function pathWithin(root: string, candidate: string): boolean {
+  const rel = relative(resolve(root), resolve(candidate));
+  return (
+    rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
+  );
+}
+
+/**
+ * Copy a candidate into a unique, throwaway execution root. Runtime caches are
+ * rebuilt there and no cleanup operation ever targets the owner's workspace.
+ */
+export async function createDisposableVerificationWorkspace(
+  sourceWorkspacePath: string,
+  parentRoot = tmpdir(),
+): Promise<DisposableVerificationWorkspace> {
+  const source = resolve(sourceWorkspacePath);
+  const parent = resolve(parentRoot);
+  if (pathWithin(source, parent)) {
+    throw new Error("Disposable verification root must be outside the candidate.");
+  }
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(join(parent, "factory-verification-"));
+  const workspacePath = join(root, "candidate");
+  try {
+    await cp(source, workspacePath, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      verbatimSymlinks: true,
+      filter: (path) => {
+        const candidatePath = relative(source, path).replace(/\\/g, "/");
+        return (
+          candidatePath === "" ||
+          !isExcludedArtifactEntry(candidatePath, basename(candidatePath))
+        );
+      },
+    });
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  }
+  return { root, workspacePath };
+}
+
+export async function removeDisposableVerificationWorkspace(
+  workspace: DisposableVerificationWorkspace,
+): Promise<void> {
+  await rm(workspace.root, { recursive: true, force: true });
 }
 
 export function platformArtifactFileFingerprint(
@@ -134,6 +190,17 @@ export function changedPlatformArtifactPaths(
   return [...new Set([...Object.keys(before), ...Object.keys(after)])]
     .filter((path) => comparable(before[path]) !== comparable(after[path]))
     .sort();
+}
+
+/** Ignore concurrent additions while still detecting mutation or deletion. */
+export function changedPreExistingPlatformArtifactPaths(
+  before: PlatformArtifactSnapshot,
+  after: PlatformArtifactSnapshot,
+  options: { compareExecutableIntent?: boolean } = {},
+): string[] {
+  return changedPlatformArtifactPaths(before, after, options).filter((path) =>
+    Object.prototype.hasOwnProperty.call(before, path),
+  );
 }
 
 export function addedPlatformArtifactPaths(
@@ -380,6 +447,7 @@ export async function recordCurrentPlatformEvidence(
   input: {
     runId?: string;
     workspaceRoot?: string;
+    sandboxRoot?: string;
     hostPlatform?: NodeJS.Platform;
     /** Explicit approval to execute model-authored install/build/test code. */
     allowScriptExecution?: boolean;
@@ -402,6 +470,8 @@ export async function recordCurrentPlatformEvidence(
     );
   }
   const held = await validatePlatformEvidenceHold(input);
+  const heldRun = await getRunForExecution(held.runId);
+  if (!heldRun) throw new Error("The held Factory run disappeared before proof.");
   const expected = held.checkpoint.verification!.fileDigests!;
   const paths = Object.keys(expected);
   const before = await verifyFileDigests(held.workspacePath, paths, expected);
@@ -431,115 +501,156 @@ export async function recordCurrentPlatformEvidence(
     );
   }
 
-  const generatedTests = generatedTestsForVerification(held.checkpoint.files);
-  const plan = verificationPlanForWorkspace(held.workspacePath, { generatedTests });
-  if (plan.incomplete.length > 0 || plan.commands.length === 0) {
-    throw new Error(
-      `Cross-platform verification plan is incomplete: ${
-        plan.incomplete.map((item) => `${item.command}: ${item.reason}`).join("; ") ||
-        "no executable commands"
-      }.`,
+  const disposable = await createDisposableVerificationWorkspace(
+    held.workspacePath,
+    input.sandboxRoot,
+  );
+  try {
+    const copiedArtifact = await capturePlatformArtifactSnapshot(
+      disposable.workspacePath,
     );
-  }
-
-  const executed: CheckpointExecutedCommand[] = [];
-  for (const command of plan.commands) {
-    const result = await runCommand(
-      { bin: command.bin, args: command.args, cwd: held.workspacePath },
-      {
-        workspaceRoot: resolve(
-          input.workspaceRoot ??
-            process.env.WORKSPACE_ROOT ??
-            join(process.cwd(), "workspaces"),
-        ),
-        allowScriptExecution: input.allowScriptExecution,
-        timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
-        ...(command.directTestPath ? { maxCapturedOutputBytes: 32 * 1024 * 1024 } : {}),
-      },
-    );
-    const outputTail = checkpointOutputTail(result.stdout, result.stderr);
-    if (!result.executed || result.exitCode !== 0) {
+    const copyChanges = changedPlatformArtifactPaths(sealedArtifact, copiedArtifact, {
+      compareExecutableIntent: hostPlatform !== "win32",
+    });
+    if (copyChanges.length > 0) {
       throw new Error(
-        `${hostPlatform} verification failed for \`${result.command}\`: ${
-          result.reason ?? `exit ${String(result.exitCode)}`
-        }. ${outputTail.slice(-2_000)}`,
+        `Disposable ${hostPlatform} candidate differs from the sealed artifact: ${copyChanges
+          .slice(0, 20)
+          .join(", ")}.`,
       );
     }
-    executed.push(successfulPlatformCommandEvidence(command, result, hostPlatform));
-  }
-  if (!executed.some((entry) => entry.directEvidenceValid === true)) {
-    throw new Error(
-      `${hostPlatform} proof produced no structured, passing, non-skipped direct-test evidence.`,
-    );
-  }
-  const missingDirectEvidence = missingDirectPlatformEvidencePaths(
-    generatedTests.map((test) => test.path),
-    executed,
-    hostPlatform,
-  );
-  if (missingDirectEvidence.length > 0) {
-    throw new Error(
-      `${hostPlatform} proof did not produce current structured evidence for every generated test: ${missingDirectEvidence.join(
-        ", ",
-      )}.`,
-    );
-  }
 
-  const after = await verifyFileDigests(held.workspacePath, paths, expected);
-  if (!after.ok) {
-    throw new Error(
-      `Candidate bytes changed during ${hostPlatform} verification: ${after.reason ?? "unknown mismatch"}.`,
-    );
-  }
+    const generatedTests = generatedTestsForVerification(held.checkpoint.files);
+    const plan = verificationPlanForWorkspace(disposable.workspacePath, {
+      generatedTests,
+    });
+    if (plan.incomplete.length > 0 || plan.commands.length === 0) {
+      throw new Error(
+        `Cross-platform verification plan is incomplete: ${
+          plan.incomplete.map((item) => `${item.command}: ${item.reason}`).join("; ") ||
+          "no executable commands"
+        }.`,
+      );
+    }
 
-  const artifactAfterCommands = await capturePlatformArtifactSnapshot(
-    held.workspacePath,
-  );
-  await removeAddedPlatformArtifacts(
-    held.workspacePath,
-    sealedArtifact,
-    artifactAfterCommands,
-  );
-  const artifactAfter = await capturePlatformArtifactSnapshot(held.workspacePath);
-  const artifactChanges = changedPlatformArtifactPaths(sealedArtifact, artifactAfter, {
-    compareExecutableIntent: hostPlatform !== "win32",
-  });
-  if (artifactChanges.length > 0) {
-    throw new Error(
-      `Candidate artifact changed during ${hostPlatform} verification outside node_modules: ${artifactChanges
-        .slice(0, 20)
-        .join(", ")}.`,
+    const executed: CheckpointExecutedCommand[] = [];
+    for (const command of plan.commands) {
+      const result = await runCommand(
+        { bin: command.bin, args: command.args, cwd: disposable.workspacePath },
+        {
+          workspaceRoot: disposable.root,
+          allowScriptExecution: input.allowScriptExecution,
+          timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
+          ...(command.directTestPath
+            ? { maxCapturedOutputBytes: 32 * 1024 * 1024 }
+            : {}),
+        },
+      );
+      const outputTail = checkpointOutputTail(result.stdout, result.stderr);
+      if (!result.executed || result.exitCode !== 0) {
+        throw new Error(
+          `${hostPlatform} verification failed for \`${result.command}\`: ${
+            result.reason ?? `exit ${String(result.exitCode)}`
+          }. ${outputTail.slice(-2_000)}`,
+        );
+      }
+      executed.push(successfulPlatformCommandEvidence(command, result, hostPlatform));
+    }
+    if (!executed.some((entry) => entry.directEvidenceValid === true)) {
+      throw new Error(
+        `${hostPlatform} proof produced no structured, passing, non-skipped direct-test evidence.`,
+      );
+    }
+    const missingDirectEvidence = missingDirectPlatformEvidencePaths(
+      generatedTests.map((test) => test.path),
+      executed,
+      hostPlatform,
     );
-  }
+    if (missingDirectEvidence.length > 0) {
+      throw new Error(
+        `${hostPlatform} proof did not produce current structured evidence for every generated test: ${missingDirectEvidence.join(
+          ", ",
+        )}.`,
+      );
+    }
 
-  const combinedEvidence = replaceHostPlatformEvidence(
-    held.checkpoint.verification!.executed,
-    hostPlatform,
-    executed,
-  );
-  const checkpoint: FactoryCheckpoint = {
-    ...held.checkpoint,
-    verification: {
-      ...held.checkpoint.verification!,
-      executed: combinedEvidence,
-    },
-    updatedAt: Date.now(),
-  };
-  const run = await getRunForExecution(held.runId);
-  if (!run) throw new Error("The held Factory run disappeared before evidence save.");
-  const compatibility = assessPlatformCompatibility(
-    held.workspacePath,
-    combinedEvidence,
-    hostPlatform,
-  );
-  run.resumable =
-    remainingPlatformEvidenceBlockers(held.blockers, compatibility).length === 0;
-  await saveRunCheckpoint(checkpoint);
-  await saveRun(run);
-  return {
-    runId: held.runId,
-    workspacePath: held.workspacePath,
-    hostPlatform,
-    commands: executed.map((entry) => entry.command),
-  };
+    const after = await verifyFileDigests(held.workspacePath, paths, expected);
+    if (!after.ok) {
+      throw new Error(
+        `Candidate bytes changed during ${hostPlatform} verification: ${after.reason ?? "unknown mismatch"}.`,
+      );
+    }
+
+    const artifactAfterCommands = await capturePlatformArtifactSnapshot(
+      disposable.workspacePath,
+    );
+    await removeAddedPlatformArtifacts(
+      disposable.workspacePath,
+      sealedArtifact,
+      artifactAfterCommands,
+    );
+    const artifactAfter = await capturePlatformArtifactSnapshot(
+      disposable.workspacePath,
+    );
+    const artifactChanges = changedPlatformArtifactPaths(
+      sealedArtifact,
+      artifactAfter,
+      {
+        compareExecutableIntent: hostPlatform !== "win32",
+      },
+    );
+    if (artifactChanges.length > 0) {
+      throw new Error(
+        `Candidate artifact changed during ${hostPlatform} verification outside node_modules: ${artifactChanges
+          .slice(0, 20)
+          .join(", ")}.`,
+      );
+    }
+    const protectedArtifactAfter = await capturePlatformArtifactSnapshot(
+      held.workspacePath,
+    );
+    const protectedChanges = changedPlatformArtifactPaths(
+      sealedArtifact,
+      protectedArtifactAfter,
+      { compareExecutableIntent: hostPlatform !== "win32" },
+    );
+    if (protectedChanges.length > 0) {
+      throw new Error(
+        `Protected candidate or proof transport changed during ${hostPlatform} verification: ${protectedChanges
+          .slice(0, 20)
+          .join(", ")}.`,
+      );
+    }
+
+    const combinedEvidence = replaceHostPlatformEvidence(
+      held.checkpoint.verification!.executed,
+      hostPlatform,
+      executed,
+    );
+    const checkpoint: FactoryCheckpoint = {
+      ...held.checkpoint,
+      verification: {
+        ...held.checkpoint.verification!,
+        executed: combinedEvidence,
+      },
+      updatedAt: Date.now(),
+    };
+    const compatibility = assessPlatformCompatibility(
+      held.workspacePath,
+      combinedEvidence,
+      hostPlatform,
+    );
+    heldRun.resumable =
+      remainingPlatformEvidenceBlockers(held.blockers, compatibility).length === 0;
+    await saveRunCheckpoint(checkpoint);
+    await saveRun(heldRun);
+    return {
+      runId: held.runId,
+      workspacePath: held.workspacePath,
+      hostPlatform,
+      commands: executed.map((entry) => entry.command),
+    };
+  } finally {
+    await removeDisposableVerificationWorkspace(disposable);
+  }
 }

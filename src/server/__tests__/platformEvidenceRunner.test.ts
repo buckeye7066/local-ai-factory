@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,10 +12,13 @@ import {
   capturePlatformArtifactSnapshot,
   checkpointOutputTail,
   changedPlatformArtifactPaths,
+  changedPreExistingPlatformArtifactPaths,
+  createDisposableVerificationWorkspace,
   MAX_CHECKPOINT_OUTPUT_TAIL_CHARS,
   missingDirectPlatformEvidencePaths,
   platformArtifactFileFingerprint,
   removeAddedPlatformArtifacts,
+  removeDisposableVerificationWorkspace,
   remainingPlatformEvidenceBlockers,
   successfulPlatformCommandEvidence,
 } from "../workspace/platformEvidenceRunner.js";
@@ -115,6 +118,39 @@ describe("platformEvidenceRunner", () => {
     await removeAddedPlatformArtifacts(root, before, afterCommands);
     const cleaned = await capturePlatformArtifactSnapshot(root);
     expect(changedPlatformArtifactPaths(before, cleaned)).toEqual(["src/app.ts"]);
+  });
+
+  it("runs cleanup in a disposable copy instead of deleting concurrent owner files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-platform-owner-"));
+    roots.push(root);
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(join(root, "src", "app.ts"), "export const value=1\n");
+    await mkdir(join(root, "node_modules", "dependency"), { recursive: true });
+    await writeFile(join(root, "node_modules", "dependency", "index.js"), "cache\n");
+    const sealed = await capturePlatformArtifactSnapshot(root);
+
+    const disposable = await createDisposableVerificationWorkspace(root);
+    roots.push(disposable.root);
+    expect(await capturePlatformArtifactSnapshot(disposable.workspacePath)).toEqual(
+      sealed,
+    );
+    await writeFile(join(root, "owner-note.txt"), "created during verification\n");
+    await writeFile(join(disposable.workspacePath, "runtime-output.json"), "{}\n");
+    await writeFile(
+      join(disposable.workspacePath, "src", "app.ts"),
+      "export const value=2\n",
+    );
+    const executed = await capturePlatformArtifactSnapshot(disposable.workspacePath);
+    await removeAddedPlatformArtifacts(disposable.workspacePath, sealed, executed);
+    const cleaned = await capturePlatformArtifactSnapshot(disposable.workspacePath);
+
+    expect(changedPlatformArtifactPaths(sealed, cleaned)).toEqual(["src/app.ts"]);
+    const ownerAfter = await capturePlatformArtifactSnapshot(root);
+    expect(changedPreExistingPlatformArtifactPaths(sealed, ownerAfter)).toEqual([]);
+    expect(await readFile(join(root, "owner-note.txt"), "utf8")).toBe(
+      "created during verification\n",
+    );
+    await removeDisposableVerificationWorkspace(disposable);
   });
 
   it("keeps POSIX mode intent in the seal while comparing portable Windows bytes", () => {

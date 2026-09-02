@@ -8,6 +8,7 @@ async function main(): Promise<void> {
   const mode = process.argv[2] ?? "record";
   const runId = process.env.FACTORY_RUN_ID?.trim() || undefined;
   const workspaceRoot = process.env.WORKSPACE_ROOT?.trim() || undefined;
+  const sandboxRoot = process.env.FACTORY_PLATFORM_SANDBOX_ROOT?.trim() || undefined;
 
   if (mode === "validate") {
     const held = await sealPlatformEvidenceHold({ runId, workspaceRoot });
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
   const proof = await recordCurrentPlatformEvidence({
     runId,
     workspaceRoot,
+    sandboxRoot,
     allowScriptExecution: getConfig().allowUntrustedScripts,
   });
   console.log(

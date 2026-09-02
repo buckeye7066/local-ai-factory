@@ -90,15 +90,28 @@ jobs:
         shell: bash
         run: |
           tar --create --file purpose-foundry-workspaces.tar \
+            --exclude='*/node_modules' \
             --exclude='*/node_modules/*' \
+            --exclude='*/__pycache__' \
             --exclude='*/__pycache__/*' \
+            --exclude='*/.pytest_cache' \
             --exclude='*/.pytest_cache/*' \
+            --exclude='*/.mypy_cache' \
             --exclude='*/.mypy_cache/*' \
+            --exclude='*/.ruff_cache' \
             --exclude='*/.ruff_cache/*' \
+            --exclude='*/.hypothesis' \
             --exclude='*/.hypothesis/*' \
+            --exclude='*/.tox' \
             --exclude='*/.tox/*' \
+            --exclude='*/.nox' \
             --exclude='*/.nox/*' \
+            --exclude='*/.nyc_output' \
             --exclude='*/.nyc_output/*' \
+            --exclude='*/.coverage' \
+            --exclude='*/.coverage.*' \
+            --exclude='*.pyc' \
+            --exclude='*.pyo' \
             workspaces
 
       - name: Preserve exact candidate
@@ -154,6 +167,7 @@ jobs:
         shell: pwsh
         env:
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
+          FACTORY_PLATFORM_SANDBOX_ROOT: "${{ runner.temp }}/factory-platform-${{ github.run_id }}-${{ github.run_attempt }}"
           ALLOW_UNTRUSTED_SCRIPTS: "true"
           CI: "true"
         run: pnpm exec tsx src/cli/factory-platform-proof.ts record
@@ -168,9 +182,7 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           path: |
-            purpose-foundry-seed-server.log
             .factory/**
-            purpose-foundry-workspaces.tar
 
   macos:
     name: Verify Purpose Foundry candidate on macOS
@@ -197,7 +209,13 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Restore Windows-verified candidate
+      - name: Restore immutable seed candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: purpose-foundry-seed-${{ github.run_id }}
+          path: .
+
+      - name: Restore Windows evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: purpose-foundry-windows-${{ github.run_id }}
@@ -211,6 +229,7 @@ jobs:
         shell: pwsh
         env:
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
+          FACTORY_PLATFORM_SANDBOX_ROOT: "${{ runner.temp }}/factory-platform-${{ github.run_id }}-${{ github.run_attempt }}"
           ALLOW_UNTRUSTED_SCRIPTS: "true"
           CI: "true"
         run: pnpm exec tsx src/cli/factory-platform-proof.ts record
@@ -225,9 +244,7 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           path: |
-            purpose-foundry-seed-server.log
             .factory/**
-            purpose-foundry-workspaces.tar
 
   verify:
     name: Purpose Foundry end-to-end production verification
@@ -254,7 +271,13 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Restore cross-platform candidate
+      - name: Restore immutable seed candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: purpose-foundry-seed-${{ github.run_id }}
+          path: .
+
+      - name: Restore cross-platform evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: purpose-foundry-macos-${{ github.run_id }}

@@ -63,15 +63,47 @@ describe("paid cloud workflow contract", () => {
       expect(workflow.match(/tar --extract --file/g)).toHaveLength(3);
       expect(workflow).not.toContain("--exclude='*/coverage/*'");
       expect(workflow).not.toContain("!workspaces/**/coverage/**");
+      for (const excluded of [
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".hypothesis",
+        ".tox",
+        ".nox",
+        ".nyc_output",
+      ]) {
+        expect(workflow).toContain(`--exclude='*/${excluded}'`);
+        expect(workflow).toContain(`--exclude='*/${excluded}/*'`);
+      }
+      for (const excluded of ["*/.coverage", "*/.coverage.*", "*.pyc", "*.pyo"]) {
+        expect(workflow).toContain(`--exclude='${excluded}'`);
+      }
 
       for (const [start, end] of [
         ["Preserve Windows evidence", "macos:"],
         ["Preserve macOS evidence", _name === "Factory Deck" ? "build:" : "verify:"],
       ]) {
         const upload = workflow.slice(workflow.indexOf(start), workflow.indexOf(end));
-        expect(upload).toContain(archive);
+        expect(upload).not.toContain(archive);
+        expect(upload).toContain(".factory/**");
         expect(upload).not.toContain("workspaces/**");
       }
+
+      const macRestore = workflow.slice(
+        workflow.indexOf(
+          "Restore immutable seed candidate",
+          workflow.indexOf("macos:"),
+        ),
+        workflow.indexOf("Materialize immutable candidate", workflow.indexOf("macos:")),
+      );
+      expect(macRestore).toContain(
+        `${_name === "Factory Deck" ? "factory-deck" : "purpose-foundry"}-seed-`,
+      );
+      expect(macRestore).toContain(
+        `${_name === "Factory Deck" ? "factory-deck" : "purpose-foundry"}-windows-`,
+      );
     },
   );
 
@@ -206,6 +238,8 @@ describe("paid cloud workflow contract", () => {
     );
     expect(windowsProof).not.toContain("API_KEY");
     expect(macosProof).not.toContain("API_KEY");
+    expect(windowsProof).toContain("FACTORY_PLATFORM_SANDBOX_ROOT:");
+    expect(macosProof).toContain("FACTORY_PLATFORM_SANDBOX_ROOT:");
   });
 
   it("resumes the same Purpose Foundry candidate after secret-free Windows and macOS proof", () => {
@@ -238,6 +272,8 @@ describe("paid cloud workflow contract", () => {
     );
     expect(windowsProof).not.toContain("API_KEY");
     expect(macosProof).not.toContain("API_KEY");
+    expect(windowsProof).toContain("FACTORY_PLATFORM_SANDBOX_ROOT:");
+    expect(macosProof).toContain("FACTORY_PLATFORM_SANDBOX_ROOT:");
   });
 
   it.each([

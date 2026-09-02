@@ -507,6 +507,7 @@ describe("verificationCommandsForWorkspace", () => {
             "const fixture = \"vi.mock('string-only')\";",
             "const template = `vi.spyOn(templateOnly, 'x')`;",
             "const pattern = /vi\\.fn\\(regexOnly\\)/;",
+            "if (condition) /vi\\.mock/.test(text);",
             "test('j', () => jest.fn());",
           ].join("\n"),
         },

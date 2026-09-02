@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import { normalizeSafeRelativePath, normalizeTestPath } from "./testPaths.js";
 
 export interface VerificationCommand {
@@ -404,194 +405,47 @@ function dependencies(pkg: Record<string, unknown> | null): Set<string> {
 
 type JavascriptRunner = "vitest" | "jest";
 
-type JavascriptToken = {
-  kind: "identifier" | "string" | "literal" | "punctuation";
-  value: string;
-};
-
-const REGEX_PREFIX_KEYWORDS = new Set([
-  "await",
-  "case",
-  "delete",
-  "do",
-  "else",
-  "in",
-  "instanceof",
-  "of",
-  "return",
-  "throw",
-  "typeof",
-  "void",
-  "yield",
-]);
-
-/**
- * Tokenize only the JavaScript surface needed to identify an actual runner.
- * Comments, fixture strings, template text, and regex literals never become
- * API tokens, so examples such as `"vi.mock()"` cannot override a real Jest
- * import. This is intentionally not a general JavaScript parser.
- */
-function javascriptRunnerTokens(source: string): JavascriptToken[] {
-  const tokens: JavascriptToken[] = [];
-  let index = 0;
-  let canStartRegex = true;
-  const push = (token: JavascriptToken) => {
-    tokens.push(token);
-    if (token.kind === "identifier") {
-      canStartRegex = REGEX_PREFIX_KEYWORDS.has(token.value);
-    } else if (token.kind === "string" || token.kind === "literal") {
-      canStartRegex = false;
-    } else {
-      canStartRegex = !/[\)\]\}]/.test(token.value);
-    }
-  };
-
-  while (index < source.length) {
-    const character = source[index]!;
-    const next = source[index + 1];
-    if (/\s/.test(character)) {
-      index += 1;
-      continue;
-    }
-    if (character === "/" && next === "/") {
-      index += 2;
-      while (index < source.length && !/[\r\n]/.test(source[index]!)) index += 1;
-      continue;
-    }
-    if (character === "/" && next === "*") {
-      index += 2;
-      while (
-        index < source.length &&
-        !(source[index] === "*" && source[index + 1] === "/")
-      ) {
-        index += 1;
-      }
-      index = Math.min(source.length, index + 2);
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      const quote = character;
-      let value = "";
-      index += 1;
-      while (index < source.length) {
-        const current = source[index]!;
-        if (current === "\\") {
-          if (index + 1 < source.length) value += source[index + 1]!;
-          index += 2;
-          continue;
-        }
-        if (current === quote) {
-          index += 1;
-          break;
-        }
-        value += current;
-        index += 1;
-      }
-      push({ kind: "string", value });
-      continue;
-    }
-    if (character === "`") {
-      index += 1;
-      while (index < source.length) {
-        if (source[index] === "\\") {
-          index += 2;
-        } else if (source[index] === "`") {
-          index += 1;
-          break;
-        } else {
-          index += 1;
-        }
-      }
-      push({ kind: "literal", value: "template" });
-      continue;
-    }
-    if (character === "/" && canStartRegex) {
-      let inCharacterClass = false;
-      index += 1;
-      while (index < source.length) {
-        const current = source[index]!;
-        if (current === "\\") {
-          index += 2;
-          continue;
-        }
-        if (current === "[") inCharacterClass = true;
-        if (current === "]") inCharacterClass = false;
-        index += 1;
-        if (current === "/" && !inCharacterClass) break;
-      }
-      while (index < source.length && /[A-Za-z]/.test(source[index]!)) index += 1;
-      push({ kind: "literal", value: "regex" });
-      continue;
-    }
-    if (/[A-Za-z_$]/.test(character)) {
-      const start = index;
-      index += 1;
-      while (index < source.length && /[A-Za-z0-9_$]/.test(source[index]!)) {
-        index += 1;
-      }
-      push({ kind: "identifier", value: source.slice(start, index) });
-      continue;
-    }
-    if (/[0-9]/.test(character)) {
-      const start = index;
-      index += 1;
-      while (index < source.length && /[A-Za-z0-9_.]/.test(source[index]!)) {
-        index += 1;
-      }
-      push({ kind: "literal", value: source.slice(start, index) });
-      continue;
-    }
-    index += 1;
-    push({ kind: "punctuation", value: character });
-  }
-  return tokens;
-}
-
 function runnerDeclaredByTest(contents: string): JavascriptRunner | "ambiguous" | null {
-  const tokens = javascriptRunnerTokens(contents);
+  const source = ts.createSourceFile(
+    "generated-test.tsx",
+    contents,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
   const modules = new Set<string>();
   let vitestApi = false;
   let jestApi = false;
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index]!;
-    const previous = tokens[index - 1];
-    const first = tokens[index + 1];
-    const second = tokens[index + 2];
-    if (
-      token.kind === "identifier" &&
-      (token.value === "require" || token.value === "import") &&
-      previous?.value !== "." &&
-      first?.value === "(" &&
-      second?.kind === "string"
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      modules.add(node.moduleSpecifier.text);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      node.moduleReference.expression &&
+      ts.isStringLiteralLike(node.moduleReference.expression)
     ) {
-      modules.add(second.value);
-    }
-    if (token.kind === "identifier" && token.value === "import") {
-      if (first?.kind === "string") modules.add(first.value);
-      for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
-        const candidate = tokens[cursor]!;
-        if (candidate.value === ";") break;
-        if (
-          candidate.kind === "identifier" &&
-          candidate.value === "from" &&
-          tokens[cursor + 1]?.kind === "string"
-        ) {
-          modules.add(tokens[cursor + 1]!.value);
-          break;
-        }
+      modules.add(node.moduleReference.expression.text);
+    } else if (ts.isCallExpression(node) && node.arguments.length === 1) {
+      const argument = node.arguments[0]!;
+      const directRequire =
+        ts.isIdentifier(node.expression) && node.expression.text === "require";
+      const dynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      if ((directRequire || dynamicImport) && ts.isStringLiteralLike(argument)) {
+        modules.add(argument.text);
       }
     }
     if (
-      token.kind === "identifier" &&
-      previous?.value !== "." &&
-      first?.value === "." &&
-      second?.kind === "identifier" &&
-      ["fn", "mock", "spyOn"].includes(second.value)
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      ["fn", "mock", "spyOn"].includes(node.name.text)
     ) {
-      if (token.value === "vi") vitestApi = true;
-      if (token.value === "jest") jestApi = true;
+      if (node.expression.text === "vi") vitestApi = true;
+      if (node.expression.text === "jest") jestApi = true;
     }
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
   const vitest = modules.has("vitest") || vitestApi;
   const jest = modules.has("@jest/globals") || jestApi;
   if (vitest && jest) return "ambiguous";
