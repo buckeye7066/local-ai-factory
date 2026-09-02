@@ -646,18 +646,11 @@ function candidateScore(
 export function buildDiscoveryQueries(spec: ProductSpec): string[] {
   const features = spec.coreFeatures.slice(0, 5);
   const primary = features[0] ?? spec.tagline;
-  const mission = (
-    spec.goalContract?.purpose ||
-    spec.tagline ||
-    primary
-  )
+  const mission = (spec.goalContract?.purpose || spec.tagline || primary)
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 220);
-  const activeOutcome = (
-    spec.goalContract?.activeGoals[0] ||
-    primary
-  )
+  const activeOutcome = (spec.goalContract?.activeGoals[0] || primary)
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 220);
