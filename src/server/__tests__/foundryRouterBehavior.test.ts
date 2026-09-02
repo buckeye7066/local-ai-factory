@@ -88,6 +88,23 @@ class TestFoundryAdapters extends FoundryAdapters {
         status: "completed",
         summary: `completed:${stationId}`,
         artifacts: [],
+        ...(stationId === "repo-rewards"
+          ? {
+              handoff: {
+                insights: ["Use the useful/repo validation pattern."],
+                sources: ["https://github.com/useful/repo"],
+                candidates: [
+                  {
+                    name: "useful/repo",
+                    url: "https://github.com/useful/repo",
+                    summary: "A maintained validation implementation.",
+                    license: "MIT",
+                    score: 91,
+                  },
+                ],
+              },
+            }
+          : {}),
         evidence,
       } satisfies AdapterOutcome;
     }
@@ -173,7 +190,13 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     const queued = project.stations
       .filter((station) => station.status === "queued")
       .map((station) => station.stationId);
-    expect(queued).toEqual(["promo-pilot", "factory-deck", "crucible", "watchtower"]);
+    expect(queued).toEqual([
+      "repo-rewards",
+      "promo-pilot",
+      "factory-deck",
+      "crucible",
+      "watchtower",
+    ]);
     expect(
       project.stations.find((station) => station.stationId === "scout")?.status,
     ).toBe("not_selected");
@@ -225,6 +248,15 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
           ?.status,
       ).toBe("completed");
     }
+    expect(
+      beforeRestart.stations.find((station) => station.stationId === "repo-rewards")
+        ?.handoff.candidates[0],
+    ).toMatchObject({
+      name: "useful/repo",
+      url: "https://github.com/useful/repo",
+      license: "MIT",
+      score: 91,
+    });
 
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store = new FoundryStore(root);
