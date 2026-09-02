@@ -163,13 +163,27 @@ function analyzeCallback(
     }
   };
 
+  // Nested declarations are not executable evidence on their own. An inline
+  // callback passed to a call the test awaits is part of that test's reachable
+  // control flow, so inspect it while still rejecting stored/deferred helpers.
+  const isAwaitedInlineCallback = (node: ts.Node): boolean => {
+    if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return false;
+    const call = node.parent;
+    return (
+      ts.isCallExpression(call) &&
+      call.arguments.some((argument) => argument === node) &&
+      ts.isAwaitExpression(call.parent)
+    );
+  };
+
   const visit = (node: ts.Node, root = false): void => {
     if (
       !root &&
       (ts.isArrowFunction(node) ||
         ts.isFunctionExpression(node) ||
         ts.isFunctionDeclaration(node) ||
-        ts.isMethodDeclaration(node))
+        ts.isMethodDeclaration(node)) &&
+      !isAwaitedInlineCallback(node)
     ) {
       return;
     }
