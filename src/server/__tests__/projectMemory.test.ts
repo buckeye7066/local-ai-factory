@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ProductSpecSchema, PurposeProfileSchema } from "../../shared/schemas.js";
+import { encodeStructuredGoalDirectives } from "../orchestrator/goalDirectives.js";
 import {
   assertGoalContractIntegrity,
   continuityFromMemory,
@@ -249,6 +250,81 @@ describe("durable project purpose memory", () => {
     );
   });
 
+  it("expands compact Foundry directives without exceeding the run goal budget", () => {
+    const targetUsers = Array.from(
+      { length: 50 },
+      (_, index) => `Audience ${index + 1}`,
+    );
+    const successCriteria = Array.from(
+      { length: 50 },
+      (_, index) => `Success criterion ${index + 1}`,
+    );
+    const constraints = Array.from(
+      { length: 50 },
+      (_, index) => `Constraint ${index + 1}`,
+    );
+    const nonGoals = Array.from({ length: 50 }, (_, index) => `Non-goal ${index + 1}`);
+    const goals = [
+      "Mission: Match people to verified public funding",
+      encodeStructuredGoalDirectives({
+        targetUsers,
+        activeGoals: successCriteria,
+        constraints,
+        nonGoals,
+      }),
+    ];
+    expect(goals.length).toBeLessThanOrEqual(50);
+
+    const contract = createGoalContract({
+      projectKey: "git:github.com/buckeye7066/grantflow",
+      runId: randomUUID(),
+      idea: "Deliver the complete Foundry constitution",
+      goals,
+      spec: spec(),
+      now: 4,
+    });
+    expect(contract.targetUsers).toEqual(targetUsers);
+    expect(contract.activeGoals).toEqual(successCriteria);
+    expect(contract.constraints).toEqual(constraints);
+    expect(contract.nonGoals).toEqual(nonGoals);
+  });
+
+  it("clips durable completion fields within their schema limits", async () => {
+    const projectKey = `test:${randomUUID()}`;
+    const runId = randomUUID();
+    const contract = createGoalContract({
+      projectKey,
+      runId,
+      idea: "Ship bounded completion memory",
+      goals: ["Ship bounded completion memory"],
+      spec: spec(),
+      now: 5,
+    });
+    const stamped = withGoalContract(spec(), contract);
+    await rememberProjectPlan({
+      projectKey,
+      runId,
+      goalContract: contract,
+      spec: stamped,
+      now: 5,
+    });
+    await rememberProjectCompletion({
+      projectKey,
+      runId,
+      goalContract: contract,
+      spec: stamped,
+      finalSummary: "s".repeat(20_001),
+      nextImprovements: ["n".repeat(2_001)],
+      revision: "bounded",
+      now: 6,
+    });
+    const entry = (await loadProjectMemory(projectKey))?.entries[0];
+    expect(entry?.finalSummary).toHaveLength(20_000);
+    expect(entry?.finalSummary.endsWith("…")).toBe(true);
+    expect(entry?.nextImprovements[0]).toHaveLength(2_000);
+    expect(entry?.nextImprovements[0]?.endsWith("…")).toBe(true);
+  });
+
   it("persists completed context and carries it into a later run", async () => {
     const projectKey = `test:${randomUUID()}`;
     const firstRun = randomUUID();
@@ -342,6 +418,17 @@ describe("durable project purpose memory", () => {
     });
     expect(terseProtection.purpose).toBe(firstContract.purpose);
 
+    const targetFirstProtection = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "No purpose change; improve export reliability",
+      goals: ["Improve export reliability"],
+      spec: spec("A fourth model-authored replacement that must be ignored"),
+      memory,
+      now: 31,
+    });
+    expect(targetFirstProtection.purpose).toBe(firstContract.purpose);
+
     const contrastedPivot = createGoalContract({
       projectKey,
       runId: randomUUID(),
@@ -365,6 +452,22 @@ describe("durable project purpose memory", () => {
     });
     expect(audienceUpdate.purpose).toBe(firstContract.purpose);
     expect(audienceUpdate.targetUsers).toEqual(["teachers"]);
+
+    const reaffirmedMission = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "Reaffirm the accepted mission and improve exports",
+      goals: [`Mission: ${firstContract.purpose}`, "Improve classroom exports"],
+      spec: spec("A model inference that must not replace the audience"),
+      purposeProfile: purposeProfile(
+        "A repository inference that must not replace the mission",
+        "randomly inferred audience",
+      ),
+      memory,
+      now: 33,
+    });
+    expect(reaffirmedMission.purpose).toBe(firstContract.purpose);
+    expect(reaffirmedMission.targetUsers).toEqual(firstContract.targetUsers);
 
     await rememberProjectPlan({
       projectKey,
@@ -494,5 +597,13 @@ describe("durable project purpose memory", () => {
     expect(completedStatus).toBeGreaterThan(-1);
     expect(terminalFlush).toBeGreaterThan(completedStatus);
     expect(memoryCompletion).toBeGreaterThan(terminalFlush);
+  });
+
+  it("never promotes a generated run UUID into a durable local project identity", () => {
+    const source = readFileSync("src/server/orchestrator/runFactory.ts", "utf8");
+    expect(source).toContain("localProjectId: checkpoint.options.idempotencyKey,");
+    expect(source).not.toContain(
+      "localProjectId: checkpoint.options.idempotencyKey ?? run.id",
+    );
   });
 });
