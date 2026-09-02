@@ -30,6 +30,7 @@ import {
   recordReadinessEvaluation,
 } from "../storage/readinessStore.js";
 import { withExtendPersistenceGoals } from "../orchestrator/composeExtendIdea.js";
+import { encodeStructuredGoalDirectives } from "../orchestrator/goalDirectives.js";
 import {
   repoNameProblem,
   RunOptionsSchema,
@@ -40,6 +41,8 @@ import {
   STATIONS,
   type FoundryProject,
   type FoundryStore,
+  type StationHandoff,
+  type StationHandoffCandidate,
   type StationId,
 } from "./model.js";
 
@@ -86,6 +89,7 @@ export type AdapterOutcome = {
   status: "completed" | "needs_attention" | "failed";
   summary: string;
   artifacts: string[];
+  handoff?: StationHandoff;
   evidence: Record<string, unknown>;
 };
 
@@ -671,14 +675,18 @@ export class FoundryAdapters {
         stationId: station.stationId,
         summary: station.summary,
         artifacts: station.artifacts,
+        handoff: station.handoff,
       }));
     const goals = [
-      project.constitution.purpose,
-      ...project.constitution.successCriteria.map(
-        (item) => `Success criterion: ${item}`,
-      ),
-      ...project.constitution.constraints.map((item) => `Constraint: ${item}`),
-      ...project.constitution.nonGoals.map((item) => `Non-goal: ${item}`),
+      `Mission: ${project.constitution.purpose}`,
+      encodeStructuredGoalDirectives({
+        targetUsers: project.constitution.targetUsers,
+        activeGoals: project.constitution.successCriteria.map(
+          (item) => `Success criterion: ${item}`,
+        ),
+        constraints: project.constitution.constraints,
+        nonGoals: project.constitution.nonGoals,
+      }),
       ...(upstreamEvidence.length
         ? [
             `Use these completed specialist handoffs as implementation evidence: ${JSON.stringify(upstreamEvidence)}`,
@@ -693,6 +701,7 @@ export class FoundryAdapters {
           ...(repoSource ? { repoSource } : {}),
           goals: extendGoals,
           pushToOrigin: true,
+          projectId: `purpose-foundry:${project.id}`,
           idempotencyKey: `purpose-foundry:${project.id}:factory-deck`,
         })
       : (() => {
@@ -710,6 +719,7 @@ export class FoundryAdapters {
               private: true,
               createRemote: !boolEnv("PURPOSE_FOUNDRY_LOCAL_ARTIFACT_ONLY"),
             },
+            projectId: `purpose-foundry:${project.id}`,
             idempotencyKey: `purpose-foundry:${project.id}:factory-deck`,
           });
         })();
@@ -974,25 +984,111 @@ export class FoundryAdapters {
       "repo-rewards.json",
       result,
     );
-    const rows = Array.isArray((result as { results?: unknown }).results)
-      ? (result as { results: Array<Record<string, unknown>> }).results
-      : null;
-    const count = rows?.length ?? null;
-    const topCandidates = (rows ?? []).slice(0, 5).map((row) => {
-      const repo =
-        row.repo && typeof row.repo === "object"
+    const resultObject =
+      result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+    if (!Array.isArray(resultObject.results)) {
+      throw new Error("RepoRewards response did not include a results array.");
+    }
+    const resultRows = resultObject.results;
+    const rows = resultRows.filter(
+      (row): row is Record<string, unknown> =>
+        Boolean(row) && typeof row === "object" && !Array.isArray(row),
+    );
+    const firstText = (values: unknown[], max: number): string | null => {
+      const value = values.find(
+        (item): item is string => typeof item === "string" && item.trim().length > 0,
+      );
+      return value ? value.trim().slice(0, max) : null;
+    };
+    const candidates: StationHandoffCandidate[] = rows.flatMap((row) => {
+      const nested =
+        row.repo && typeof row.repo === "object" && !Array.isArray(row.repo)
           ? (row.repo as Record<string, unknown>)
-          : row;
-      return {
-        fullName: typeof repo.fullName === "string" ? repo.fullName : null,
-        score: typeof row.finalScore === "number" ? row.finalScore : null,
-        license: typeof repo.licenseSpdx === "string" ? repo.licenseSpdx : null,
-      };
+          : {};
+      const nestedLicense =
+        nested.license &&
+        typeof nested.license === "object" &&
+        !Array.isArray(nested.license)
+          ? (nested.license as Record<string, unknown>)
+          : {};
+      const rowLicense =
+        row.license && typeof row.license === "object" && !Array.isArray(row.license)
+          ? (row.license as Record<string, unknown>)
+          : {};
+      const name = firstText(
+        [nested.fullName, nested.full_name, row.fullName, row.full_name, row.name],
+        500,
+      );
+      if (!name) return [];
+      const score =
+        typeof row.finalScore === "number" && Number.isFinite(row.finalScore)
+          ? row.finalScore
+          : typeof row.score === "number" && Number.isFinite(row.score)
+            ? row.score
+            : null;
+      return [
+        {
+          name,
+          url: firstText(
+            [
+              nested.htmlUrl,
+              nested.html_url,
+              nested.url,
+              row.htmlUrl,
+              row.html_url,
+              row.url,
+            ],
+            2_000,
+          ),
+          summary:
+            firstText(
+              [nested.description, row.reason, row.summary, row.description],
+              4_000,
+            ) ?? "",
+          license: firstText(
+            [
+              nested.licenseSpdx,
+              nested.license_spdx,
+              nestedLicense.spdxId,
+              nestedLicense.spdx_id,
+              nestedLicense.name,
+              typeof nested.license === "string" ? nested.license : null,
+              row.licenseSpdx,
+              row.license_spdx,
+              rowLicense.spdxId,
+              rowLicense.spdx_id,
+              rowLicense.name,
+              typeof row.license === "string" ? row.license : null,
+            ],
+            200,
+          ),
+          score,
+        },
+      ];
     });
+    const count = resultRows.length;
+    const topCandidates = candidates.slice(0, 10);
+    const handoff: StationHandoff = {
+      insights: [
+        `RepoRewards completed a purpose-bound search for ${project.name} and returned ${count} result(s).`,
+        ...topCandidates.map((candidate) =>
+          `${candidate.name}${candidate.score === null ? "" : ` (score ${candidate.score})`}: ${candidate.summary || "candidate repository for implementation review"}`.slice(
+            0,
+            4_000,
+          ),
+        ),
+      ],
+      sources: [
+        `${base}/api/search`,
+        ...topCandidates.flatMap((candidate) => (candidate.url ? [candidate.url] : [])),
+      ],
+      candidates: candidates.slice(0, 20),
+    };
     return {
       status: "completed",
-      summary: `Repo Rewards completed its search${count === null ? "" : ` and returned ${count} candidate(s)`}${topCandidates.length ? `; leading matches: ${topCandidates.map((item) => item.fullName || "unnamed").join(", ")}` : ""}.`,
+      summary: `Repo Rewards completed its purpose-bound search and returned ${count} candidate(s)${topCandidates.length ? `; leading matches: ${topCandidates.map((item) => item.name).join(", ")}` : ""}.`,
       artifacts: [artifact],
+      handoff,
       evidence: { query, resultCount: count, topCandidates },
     };
   }

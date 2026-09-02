@@ -12,9 +12,13 @@ import type { VerificationEvidence } from "../orchestrator/qaGrounding.js";
 const EVIDENCE_TAIL_CHARS = 1500;
 const FinalReportDraftSchema = FinalReportSchema.omit({
   purposeProfile: true,
+  goalContract: true,
   competitiveResearch: true,
 });
-type FinalReportDraft = Omit<FinalReport, "purposeProfile" | "competitiveResearch">;
+type FinalReportDraft = Omit<
+  FinalReport,
+  "purposeProfile" | "goalContract" | "competitiveResearch"
+>;
 
 /** Produces the final, user-facing report. */
 export async function finalReviewerAgent(
@@ -81,5 +85,6 @@ Return appName, summary, whatWasBuilt, howToRun, testStatus, repairLoops, caveat
     providerUsage: context.providerUsage,
     testStatus: context.testStatus,
     ...(spec.purposeProfile ? { purposeProfile: spec.purposeProfile } : {}),
+    ...(spec.goalContract ? { goalContract: spec.goalContract } : {}),
   };
 }

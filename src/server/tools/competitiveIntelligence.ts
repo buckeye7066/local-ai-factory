@@ -646,11 +646,20 @@ function candidateScore(
 export function buildDiscoveryQueries(spec: ProductSpec): string[] {
   const features = spec.coreFeatures.slice(0, 5);
   const primary = features[0] ?? spec.tagline;
+  const mission = (spec.goalContract?.purpose || spec.tagline || primary)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
+  const activeOutcome = (spec.goalContract?.activeGoals[0] || primary)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
   return [
-    `${spec.appName} competitors`,
-    `best ${primary} software for ${spec.targetUser}`,
-    `top alternatives to ${spec.appName}`,
-    `${spec.appName} alternatives open source GitHub`,
+    `${mission} software competitors`,
+    `best software for ${spec.targetUser} to ${activeOutcome}`,
+    `top alternatives for ${primary}`,
+    `${mission} open source GitHub`,
+    `${activeOutcome} open source GitHub implementation`,
     `${spec.targetUser} software open source GitHub`,
     ...features.map((feature) => `${feature} open source GitHub implementation`),
   ].slice(0, 10);

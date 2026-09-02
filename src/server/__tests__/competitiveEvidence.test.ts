@@ -6,6 +6,7 @@ import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
 import {
   assessRequiredCompetitiveEvidence,
   requiresCompetitiveEvidence,
+  requiresProductionCompetitiveEvidence,
   shouldAttemptResearch,
   summarizeCompetitiveEvidence,
   withCompetitiveAcceptanceCriteria,
@@ -39,6 +40,18 @@ function findings(productCount = 5): ResearchFindings {
           failed: 0,
           skipped: 0,
           resultCount: productCount,
+        },
+        {
+          name: "repo-rewards",
+          ok: true,
+          status: "empty",
+          detail: "one successful query with an honest empty result",
+          attempts: 1,
+          succeeded: 0,
+          empty: 1,
+          failed: 0,
+          skipped: 0,
+          resultCount: 0,
         },
       ],
       coverage: {
@@ -122,6 +135,36 @@ describe("comparative evidence gate", () => {
     ]) {
       expect(requiresCompetitiveEvidence([phrase]), phrase).toBe(false);
     }
+  });
+
+  it("requires current discovery on every non-demo production run", () => {
+    expect(requiresProductionCompetitiveEvidence(false, {})).toBe(true);
+    expect(requiresProductionCompetitiveEvidence(true, {})).toBe(false);
+    expect(requiresProductionCompetitiveEvidence(false, { VITEST: "true" })).toBe(
+      false,
+    );
+  });
+
+  it("requires a real RepoRewards attempt even when web competitors are complete", () => {
+    const missing = findings();
+    missing.competitiveAudit!.sources = missing.competitiveAudit!.sources.filter(
+      (source) => source.name !== "repo-rewards",
+    );
+    expect(assessRequiredCompetitiveEvidence(missing).reasons.join(" ")).toMatch(
+      /RepoRewards discovery evidence is missing/i,
+    );
+
+    const failed = findings();
+    const repoRewards = failed.competitiveAudit!.sources.find(
+      (source) => source.name === "repo-rewards",
+    )!;
+    repoRewards.status = "failed";
+    repoRewards.ok = false;
+    repoRewards.failed = 1;
+    repoRewards.empty = 0;
+    expect(assessRequiredCompetitiveEvidence(failed).reasons.join(" ")).toMatch(
+      /RepoRewards was not successfully queried/i,
+    );
   });
 
   it("requires five verified, compared, and selected product competitors", () => {

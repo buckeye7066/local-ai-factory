@@ -30,22 +30,54 @@ Idea or existing repository goal
   forever — see `src/server/orchestrator/repairLoop.ts`.
 - Every model call is metered against `MAX_MODEL_CALLS_PER_RUN` (a cost guard).
 
+### Durable purpose and cross-run memory
+
+Every live run is joined to a stable, credential-free project identity. A new
+GitHub project and every later extend run share the same canonical repository
+key, so the founding mission follows the app instead of the one-time creation
+request. Before the product spec is accepted, Factory Deck reconciles the current request with
+repository purpose evidence and prior project memory into one
+`factory.goal-contract.v1` object. That contract contains the purpose, target
+users, active goals, constraints, non-goals, prior run IDs, carried decisions,
+and prior research. Its SHA-256 digest is verified on resume, stamped into the
+product spec, converted into executable acceptance criteria, and shown in the
+final report.
+
+The bounded project-memory record survives successful checkpoint cleanup.
+Factory Deck writes the exact goal, spec, and competitive evidence before the
+task planner or builder may proceed, then records the delivered revision,
+summary, and next improvements at completion. Pre-build plans remain audit
+evidence, but only completed runs become authoritative continuity. A later run
+inherits that completed context; model wording cannot silently rename or
+repurpose the app. A purpose change is accepted only when the current request
+explicitly asks to change, redefine, pivot, replace, or repurpose the product
+mission or audience. Purpose Foundry also sends its constitution as explicit
+`Mission:` and `Audience:` directives, which become code-owned contract
+fields instead of model-authored prose.
+
 ### Autonomous competitive intelligence
 
 Live runs research beyond named dependencies. Before planning is finalized,
 Factory Deck:
 
-1. derives multiple discovery queries from the product specification;
-2. searches Firecrawl v2 first, with an honest DuckDuckGo fallback and explicit
-   source-health reporting;
+1. derives multiple discovery queries from the durable product mission,
+   target users, active goal, and feature set—not an invented app name;
+2. queries RepoRewards for ranked implementation candidates and searches
+   Firecrawl v2 with an honest DuckDuckGo fallback, recording source health;
 3. reserves separate capacity for real product competitors and requires five
-   verified products before a five-competitor claim is considered covered;
+   verified, evidence-linked products on every live production run;
 4. inspects open-source repository metadata, maintenance signals, file trees,
    and relevant source separately from product competitors;
 5. records deterministic license evidence and classifies reuse as direct-use,
    conditional-review, or reference-only; and
-6. produces an evidence-linked comparison and passes selected, legally allowed
-   advantages into planning and file generation.
+6. produces an evidence-linked comparison, converts every selected advantage
+   into an acceptance criterion, and passes concrete integration instructions,
+   reuse mode, and source URL into planning and file generation.
+
+RepoRewards and the five-product comparison are production gates. If discovery
+is disabled, RepoRewards is unreachable, or five verified/compared/selected
+product advantages cannot be established, the run stops before the planner or
+builder instead of pretending research occurred.
 
 Unknown, proprietary, or reciprocal licenses cannot be promoted to direct
 source reuse by a model response. Those candidates remain reference-only or
@@ -225,7 +257,7 @@ Double-clicking it launches `pnpm dev` and opens the UI in your browser.
 
 ## Purpose Foundry
 
-Purpose Foundry is the optional portfolio assembly-line mode. It coordinates Factory Deck, Scout a Program, Repo Rewards, PromoPilot, FlexFactor, The Crucible, App Store Publisher, and Watchtower through a durable station contract and hash-chained evidence ledger. Its internal model calls use the same single paid-first ladder; the FlexFactor child owns its own equivalent orchestrator instead of being pinned to a separate free or paid route. Every existing application remains independently launchable.
+Purpose Foundry is the optional portfolio assembly-line mode. Its default route now runs Repo Rewards first, persists a bounded typed handoff of insights, sources, and repository candidates, and supplies that handoff to Factory Deck before implementation. It then coordinates Factory Deck, The Crucible, and Watchtower as the mandatory production line; Scout a Program, PromoPilot, FlexFactor, and App Store Publisher remain selectable specialists. Every transition uses a durable station contract and hash-chained evidence ledger. Its internal model calls use the same single paid-first ladder; the FlexFactor child owns its own equivalent orchestrator instead of being pinned to a separate free or paid route. Every existing application remains independently launchable.
 
 Set `PURPOSE_FOUNDRY_OBSIDIAN_INBOX` to an Obsidian folder to ingest saved Markdown project notes automatically. Run `pnpm install:purpose-foundry-icon` once to create the separate **Purpose Foundry** desktop shortcut; the existing Factory Deck shortcut is unchanged. See [`docs/PURPOSE_FOUNDRY.md`](docs/PURPOSE_FOUNDRY.md).
 

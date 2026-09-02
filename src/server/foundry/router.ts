@@ -7,6 +7,7 @@ import { getConfig, getSecrets, readinessBrainFloor } from "../config.js";
 import { loadReadinessState } from "../storage/readinessStore.js";
 import {
   evaluateFoundryCompletion,
+  REQUIRED_DISCOVERY_STATIONS,
   requiredProductionStations,
   type RequiredProductionStation,
 } from "./readinessPolicy.js";
@@ -106,6 +107,107 @@ export function createFoundryRouter(
       await enqueueTransition(() => handler(req, res));
     });
 
+  const missingRequiredDiscovery = (project: FoundryProject) =>
+    REQUIRED_DISCOVERY_STATIONS.map((stationId) =>
+      project.stations.find((station) => station.stationId === stationId),
+    ).find(
+      (station) =>
+        station &&
+        (station.status !== "completed" ||
+          (station.stationId === "repo-rewards" &&
+            (station.handoff.insights.length === 0 ||
+              station.handoff.sources.length === 0))),
+    );
+
+  const stationIsDownstreamOf = (
+    project: FoundryProject,
+    stationId: z.infer<typeof StationIdSchema>,
+    prerequisiteId: z.infer<typeof StationIdSchema>,
+  ): boolean => {
+    const stationIndex = project.stations.findIndex(
+      (station) => station.stationId === stationId,
+    );
+    const prerequisiteIndex = project.stations.findIndex(
+      (station) => station.stationId === prerequisiteId,
+    );
+    return prerequisiteIndex >= 0 && stationIndex > prerequisiteIndex;
+  };
+
+  const missingDiscoveryBeforeStation = (
+    project: FoundryProject,
+    stationId: z.infer<typeof StationIdSchema>,
+  ): boolean => {
+    const missing = missingRequiredDiscovery(project);
+    return Boolean(
+      missing && stationIsDownstreamOf(project, stationId, missing.stationId),
+    );
+  };
+
+  const activateRequiredDiscovery = async (
+    project: FoundryProject,
+    resumeStationId?: z.infer<typeof StationIdSchema>,
+  ): Promise<boolean> => {
+    const discovery = missingRequiredDiscovery(project);
+    if (!discovery || project.status === "completed") return false;
+    if (
+      resumeStationId &&
+      !stationIsDownstreamOf(project, resumeStationId, discovery.stationId)
+    ) {
+      return false;
+    }
+    const activeOther = project.stations.find(
+      (station) =>
+        station.status === "active" && station.stationId !== discovery.stationId,
+    );
+    if (activeOther) {
+      if (!stationIsDownstreamOf(project, activeOther.stationId, discovery.stationId)) {
+        return false;
+      }
+      // A pre-policy restart may have a downstream adapter active even though
+      // mandatory discovery is absent. Requeue it before any dispatch so it
+      // cannot complete ahead of RepoRewards.
+      activeOther.status = "queued";
+      activeOther.startedAt = null;
+      activeOther.endedAt = null;
+    }
+    const resumeStation = resumeStationId
+      ? project.stations.find((station) => station.stationId === resumeStationId)
+      : undefined;
+    if (
+      resumeStation &&
+      resumeStation.stationId !== discovery.stationId &&
+      (resumeStation.status === "failed" || resumeStation.status === "needs_attention")
+    ) {
+      resumeStation.status = "queued";
+      resumeStation.endedAt = null;
+    }
+    if (discovery.status !== "active") {
+      if (discovery.status === "completed") {
+        discovery.summary = "";
+        discovery.artifacts = [];
+        discovery.handoff = { insights: [], sources: [], candidates: [] };
+        discovery.evidenceDigest = null;
+        discovery.revision = null;
+      }
+      discovery.status = "active";
+      discovery.attempt += 1;
+      discovery.startedAt = Date.now();
+      discovery.endedAt = null;
+    }
+    project.status = "running";
+    await store.save(FoundryProjectSchema.parse(project));
+    await store.appendEvidence(
+      project.id,
+      discovery.stationId,
+      "station.discovery-required",
+      {
+        attempt: discovery.attempt,
+        resumeStationId: resumeStationId ?? null,
+      },
+    );
+    return true;
+  };
+
   const applyStationEvent = async (
     projectId: string,
     stationId: z.infer<typeof StationIdSchema>,
@@ -122,9 +224,30 @@ export function createFoundryRouter(
       );
     }
     if (
+      stationId === "repo-rewards" &&
+      event.status === "completed" &&
+      (event.handoff.insights.length === 0 || event.handoff.sources.length === 0)
+    ) {
+      throw new FoundryRouteError(
+        409,
+        "RepoRewards completion requires a purpose-bound insight and queried source.",
+      );
+    }
+    if (
+      stationId !== "repo-rewards" &&
+      event.status === "completed" &&
+      missingDiscoveryBeforeStation(project, stationId)
+    ) {
+      throw new FoundryRouteError(
+        409,
+        "Mandatory RepoRewards discovery must complete with a typed handoff before a downstream station can complete.",
+      );
+    }
+    if (
       station.status === event.status &&
       station.summary === event.summary &&
-      JSON.stringify(station.artifacts) === JSON.stringify(event.artifacts)
+      JSON.stringify(station.artifacts) === JSON.stringify(event.artifacts) &&
+      JSON.stringify(station.handoff) === JSON.stringify(event.handoff)
     ) {
       return project;
     }
@@ -153,6 +276,7 @@ export function createFoundryRouter(
     station.status = event.status;
     station.summary = event.summary;
     station.artifacts = event.artifacts;
+    station.handoff = event.handoff;
     const factoryStation = project.stations.find(
       (item) => item.stationId === "factory-deck",
     );
@@ -197,6 +321,7 @@ export function createFoundryRouter(
     await store.appendEvidence(project.id, stationId, `station.${event.status}`, {
       summary: event.summary,
       artifacts: event.artifacts,
+      handoff: event.handoff,
       evidence: event.evidence,
     });
     return project;
@@ -204,7 +329,20 @@ export function createFoundryRouter(
 
   const dispatchActive = (projectId: string): void => {
     void (async () => {
-      const project = await store.get(projectId);
+      // This is the final dispatch boundary for startup recovery, automatic
+      // advancement, retries, and manual callbacks. Reconcile the mandatory
+      // discovery route here so no downstream adapter can bypass it.
+      const project = await enqueueTransition(async () => {
+        const current = await store.get(projectId);
+        const currentActive = current?.stations.find(
+          (station) => station.status === "active",
+        );
+        if (current && currentActive && currentActive.stationId !== "repo-rewards") {
+          await activateRequiredDiscovery(current, currentActive.stationId);
+          return (await store.get(projectId)) ?? current;
+        }
+        return current;
+      });
       const active = project?.stations.find((station) => station.status === "active");
       if (!project || !active) return;
       const key = `${projectId}:${active.stationId}`;
@@ -366,6 +504,14 @@ export function createFoundryRouter(
         res.status(404).json({ error: "Purpose Foundry project not found." });
         return;
       }
+      // Upgrade draft/queued legacy records to the current discovery policy
+      // before choosing the first station. Completed history is never rewritten.
+      if (project.status !== "completed") {
+        for (const stationId of REQUIRED_DISCOVERY_STATIONS) {
+          const station = project.stations.find((item) => item.stationId === stationId);
+          if (station?.status === "not_selected") station.status = "queued";
+        }
+      }
       const brainFloor = readinessBrainFloor(getConfig(), getSecrets());
       if (!brainFloor.configured) {
         res.status(409).json({
@@ -390,6 +536,15 @@ export function createFoundryRouter(
         return;
       }
       if (project.status === "failed" || project.status === "needs_attention") {
+        const retryStation = project.stations.find(
+          (station) =>
+            station.status === "failed" || station.status === "needs_attention",
+        );
+        if (await activateRequiredDiscovery(project, retryStation?.stationId)) {
+          res.status(202).json(project);
+          queueMicrotask(() => dispatchActive(project.id));
+          return;
+        }
         res.status(409).json({
           error:
             "Resume the failed or attention-required station instead of skipping it.",
@@ -432,12 +587,21 @@ export function createFoundryRouter(
           .json({ error: "That station is not selected for this project." });
         return;
       }
+      if (
+        stationId !== "repo-rewards" &&
+        (await activateRequiredDiscovery(project, stationId))
+      ) {
+        res.status(202).json(project);
+        queueMicrotask(() => dispatchActive(project.id));
+        return;
+      }
       let updated = project;
       if (station.status === "failed" || station.status === "needs_attention") {
         updated = await applyStationEvent(projectId, stationId, {
           status: "active",
           summary: "Adapter retry requested.",
           artifacts: station.artifacts,
+          handoff: station.handoff,
           evidence: { retry: true },
         });
       } else if (station.status !== "active") {

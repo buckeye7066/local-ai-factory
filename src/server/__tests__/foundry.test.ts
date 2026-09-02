@@ -15,6 +15,7 @@ import {
   EXTEND_PERSISTENCE_CONTRACT,
   withExtendPersistenceGoals,
 } from "../orchestrator/composeExtendIdea.js";
+import { encodeStructuredGoalDirectives } from "../orchestrator/goalDirectives.js";
 import { FoundryStore, STATIONS, intakeFromMarkdown } from "../foundry/model.js";
 import { loadConfig } from "../config.js";
 import type { ProviderRegistry } from "../providers/index.js";
@@ -82,14 +83,18 @@ describe("Purpose Foundry", () => {
 
       expect(project.routingMode).toBe("auto");
       expect((await store.get(project.id))?.routingMode).toBe("auto");
-      for (const stationId of ["factory-deck", "crucible", "watchtower"]) {
+      for (const stationId of [
+        "repo-rewards",
+        "factory-deck",
+        "crucible",
+        "watchtower",
+      ]) {
         expect(
           project.stations.find((station) => station.stationId === stationId)?.status,
         ).toBe("queued");
       }
       for (const stationId of [
         "scout",
-        "repo-rewards",
         "promo-pilot",
         "flexfactor",
         "app-store-publisher",
@@ -240,15 +245,32 @@ describe("Purpose Foundry", () => {
   it("forwards the resolved automatic ladder to Factory Deck's run API", async () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
+    const targetUsers = Array.from({ length: 50 }, (_, index) => `User ${index + 1}`);
+    const successCriteria = Array.from(
+      { length: 50 },
+      (_, index) => `Criterion ${index + 1}`,
+    );
+    const constraints = Array.from(
+      { length: 50 },
+      (_, index) => `Constraint ${index + 1}`,
+    );
+    const nonGoals = Array.from({ length: 50 }, (_, index) => `Non-goal ${index + 1}`);
     const project = await store.create({
       ...intakeFromMarkdown(
         "# Metered-Build\nBuild through Factory Deck.",
         "C:/Vault/Metered-Build.md",
       ),
+      targetUsers,
+      successCriteria,
+      constraints,
+      nonGoals,
       routingMode: "paid",
       selectedStations: ["factory-deck", "crucible"],
     });
-    const posted: Array<{ options?: Record<string, unknown> }> = [];
+    const posted: Array<{
+      idea?: string;
+      options?: { goals?: string[] } & Record<string, unknown>;
+    }> = [];
     const adapters = new FoundryAdapters(store, {
       config: () =>
         loadConfig({
@@ -259,7 +281,8 @@ describe("Purpose Foundry", () => {
       fetch: async (_url, init) => {
         posted.push(
           JSON.parse(String(init?.body)) as {
-            options?: Record<string, unknown>;
+            idea?: string;
+            options?: { goals?: string[] } & Record<string, unknown>;
           },
         );
         return new Response("{}", {
@@ -276,7 +299,20 @@ describe("Purpose Foundry", () => {
       routingMode: "auto",
       codeProvider: "openai",
       reviewProvider: "openai",
+      projectId: `purpose-foundry:${project.id}`,
     });
+    expect(posted[0]?.options?.goals).toContain(
+      `Mission: ${project.constitution.purpose}`,
+    );
+    expect(posted[0]?.options?.goals).toContain(
+      encodeStructuredGoalDirectives({
+        targetUsers,
+        activeGoals: successCriteria.map((item) => `Success criterion: ${item}`),
+        constraints,
+        nonGoals,
+      }),
+    );
+    expect(posted[0]?.options?.goals?.length).toBeLessThanOrEqual(50);
   });
 
   it("advertises App Store Publisher only with an explicit endpoint", async () => {
@@ -501,14 +537,18 @@ describe("Purpose Foundry", () => {
     ).toBeGreaterThan(
       project.stations.findIndex((station) => station.stationId === "promo-pilot"),
     );
-    for (const stationId of ["factory-deck", "crucible", "watchtower"]) {
+    for (const stationId of [
+      "repo-rewards",
+      "factory-deck",
+      "crucible",
+      "watchtower",
+    ]) {
       expect(
         project.stations.find((station) => station.stationId === stationId)?.status,
       ).toBe("queued");
     }
     for (const stationId of [
       "scout",
-      "repo-rewards",
       "promo-pilot",
       "flexfactor",
       "app-store-publisher",
@@ -642,10 +682,22 @@ describe("Purpose Foundry", () => {
     const adapters = new FoundryAdapters(store, {
       fetch: async (_url, init) => {
         posted = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify({ results: [{ name: "useful/repo" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                repo: {
+                  fullName: "useful/repo",
+                  license: { spdxId: "MIT", name: "MIT License" },
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       },
     });
     const outcome = await adapters.execute(project, "repo-rewards");
@@ -654,8 +706,29 @@ describe("Purpose Foundry", () => {
     expect(posted).toMatchObject({ lens: "best", sessionId: project.id });
     expect(repoRewardsQuery(project)).toContain("verified live opportunities");
     expect(outcome.artifacts[0]).toContain(join(project.id, "repo-rewards"));
+    expect(outcome.handoff).toMatchObject({
+      insights: expect.arrayContaining([
+        expect.stringContaining("purpose-bound search"),
+      ]),
+      candidates: [
+        {
+          name: "useful/repo",
+          url: null,
+          summary: "",
+          license: "MIT",
+          score: null,
+        },
+      ],
+    });
     expect(JSON.parse(await readFile(outcome.artifacts[0], "utf8"))).toEqual({
-      results: [{ name: "useful/repo" }],
+      results: [
+        {
+          repo: {
+            fullName: "useful/repo",
+            license: { spdxId: "MIT", name: "MIT License" },
+          },
+        },
+      ],
     });
     await expect(
       store.writeArtifact(project.id, "repo-rewards", "../escape.json", {}),
@@ -668,6 +741,44 @@ describe("Purpose Foundry", () => {
     await expect(
       store.writeArtifact(project.id, "watchtower", "health.json", {}),
     ).rejects.toThrow("escapes the Foundry data root");
+  });
+
+  it("rejects malformed RepoRewards success envelopes but accepts empty results", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown(
+        "# RepoShape\nRequire truthful repository discovery evidence.",
+        "C:/Vault/RepoShape.md",
+      ),
+    );
+    const malformed = new FoundryAdapters(store, {
+      fetch: async () =>
+        new Response(JSON.stringify({ error: "incompatible response" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await expect(malformed.execute(project, "repo-rewards")).rejects.toThrow(
+      /results array/i,
+    );
+
+    const empty = new FoundryAdapters(store, {
+      fetch: async () =>
+        new Response(JSON.stringify({ results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await expect(empty.execute(project, "repo-rewards")).resolves.toMatchObject({
+      status: "completed",
+      handoff: {
+        insights: [expect.stringContaining("returned 0 result")],
+        sources: [expect.stringContaining("/api/search")],
+        candidates: [],
+      },
+      evidence: { resultCount: 0 },
+    });
   });
 
   it("does not mistake an artifact filename for an App Store submission", async () => {

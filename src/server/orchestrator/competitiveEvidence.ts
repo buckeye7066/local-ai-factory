@@ -32,6 +32,18 @@ export function requiresCompetitiveEvidence(texts: Iterable<string>): boolean {
   );
 }
 
+/**
+ * Every real production run must collect current competitive evidence. Vitest
+ * integration fixtures remain hermetic; explicit comparative test cases still
+ * opt into the strict gate through requiresCompetitiveEvidence.
+ */
+export function requiresProductionCompetitiveEvidence(
+  demo: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !demo && env.VITEST !== "true";
+}
+
 function intersectsEvidence(rawUrls: string[], allowed: ReadonlySet<string>): boolean {
   return matchingEvidenceUrls(rawUrls, allowed).length > 0;
 }
@@ -135,6 +147,18 @@ export function assessRequiredCompetitiveEvidence(
   const productVerifiedCount = verifiedProducts.size;
   const reasons: string[] = [];
   if (!audit) reasons.push("competitive audit is missing");
+  const repoRewards = audit?.sources.find((source) => source.name === "repo-rewards");
+  if (!repoRewards) {
+    reasons.push("RepoRewards discovery evidence is missing");
+  } else if (
+    repoRewards.attempts < 1 ||
+    repoRewards.status === "failed" ||
+    repoRewards.status === "skipped"
+  ) {
+    reasons.push(
+      `RepoRewards was not successfully queried (status=${repoRewards.status}, attempts=${repoRewards.attempts})`,
+    );
+  }
   const generatedAt = Date.parse(audit?.generatedAt ?? "");
   if (!Number.isFinite(generatedAt)) {
     reasons.push("competitive evidence timestamp is missing or invalid");

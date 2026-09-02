@@ -5,6 +5,7 @@ import {
   FileBuildSchema,
   FileContentSchema,
   FinalReportSchema,
+  GoalContractSchema,
   PurposeProfileSchema,
   ProductSpecSchema,
   QaReportSchema,
@@ -53,6 +54,10 @@ export const FactoryCheckpointSchema = z.object({
   runId: RunIdSchema,
   idea: z.string(),
   options: RunOptionsSchema,
+  /** Stable identity joining separate runs for the same target project. */
+  projectKey: z.string().min(1).max(500).optional(),
+  /** Immutable mission and continuity contract stamped into every downstream spec. */
+  goalContract: GoalContractSchema.optional(),
   /** Repository-grounded standing purpose; extend runs carry it through planning. */
   purposeProfile: PurposeProfileSchema.optional(),
   spec: ProductSpecSchema.optional(),
