@@ -31,17 +31,17 @@ export { ProviderAbortError } from "./types.js";
  * Offline providers — deterministic fakes that never satisfy the live
  * purpose-contract journey.
  *
- * NOTE that "free" is deliberately NOT in this set. The free route runs real
- * models through the local FCC proxy; it really builds software, it just costs
- * nothing. Treating it as offline would be the same mistake as treating paid
- * as the only real tier.
+ * NOTE that "free" is deliberately NOT in this set. The final free/local rung
+ * runs real models through the FCC proxy; it really builds software, it just
+ * costs nothing.
  */
 export const OFFLINE_PROVIDERS = new Set<ProviderName>(["mock", "stub"]);
 
 /**
  * Raised when a provider-routing operation has no usable live build provider.
  * The mandatory Sol plus Fable/Opus floor is enforced separately at non-demo
- * run admission and receipt issuance; it must never erase the Free build route.
+ * run admission and receipt issuance; it must never erase the final free/local
+ * ladder rung.
  */
 export class MissingProviderCredentialError extends Error {
   readonly missing: string[];
@@ -51,7 +51,7 @@ export class MissingProviderCredentialError extends Error {
       : "FACTORY_FREE_ENABLED, ANTHROPIC_API_KEY, OPENAI_API_KEY";
     super(
       `Live factory operation blocked: required provider capability missing: ${list}. ` +
-        `Free and Paid build routing remain separate; mock/stub are never a live fallback. ` +
+        `Live work uses one paid-first model ladder with free/local last; mock/stub are never a live fallback. ` +
         `Non-demo admission and production-readiness receipts additionally require ` +
         `the independent Sol plus Fable/Opus brain floor.`,
     );
@@ -68,15 +68,14 @@ export interface ProviderRegistry {
    */
   resolve(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
   /**
-   * Legacy live resolve — never returns mock/stub. Owner-selected runs use the
-   * strict tier builder instead, because this compatibility resolver may hand
-   * back the historical free-to-paid failover chain.
+   * Legacy free-route diagnostic resolver — never returns mock/stub. Current
+   * Factory Deck and Purpose Foundry work uses the automatic ladder builder.
    */
   resolveLive(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
   available(): ProviderName[];
-  /** Every configured LIVE build provider, including the independent Free route. */
+  /** Every configured live ladder rung. */
   availableLive(): ProviderName[];
-  /** Configured PAID build providers only. */
+  /** Configured paid ladder rungs only. */
   availablePaid(): ProviderName[];
   missingCredentialNames(): string[];
 }
