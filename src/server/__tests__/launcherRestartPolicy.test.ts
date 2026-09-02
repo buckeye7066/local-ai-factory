@@ -165,10 +165,17 @@ describe("launcher wiring — the guard is actually used", () => {
 
   it("repairs a clean checkout and stale dependencies before launch", () => {
     const launcher = readFileSync(launcherPath, "utf8");
-    expect(launcher).toContain("git pull --ff-only --quiet origin main");
+    expect(launcher).toContain('"pull", "--ff-only", "--quiet", "origin", "main"');
     expect(launcher).toContain("git status --porcelain --untracked-files=no");
+    expect(launcher).toContain("$update.WaitForExit(15000)");
+    expect(launcher).toContain('$env:GIT_TERMINAL_PROMPT = "0"');
+    expect(launcher).toContain('$env:FACTORY_LAUNCHER_REEXEC = "1"');
     expect(launcher).toContain("node_modules\\.modules.yaml");
-    expect(launcher).toContain("pnpm install --frozen-lockfile");
+    expect(launcher).toContain("Invoke-Pnpm install --frozen-lockfile");
+    expect(launcher).not.toContain("corepack enable");
+    expect(launcher.indexOf("# --- 0. Idempotency guard")).toBeLessThan(
+      launcher.indexOf("Checking for Factory Deck updates"),
+    );
   });
 
   it("keeps startup errors visible when launched from the desktop icon", () => {
