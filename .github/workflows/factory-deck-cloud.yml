@@ -1,6 +1,9 @@
 name: factory-deck-cloud
 
 on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/factory-deck-cloud.yml]
   workflow_dispatch:
     inputs:
       idea:
@@ -18,7 +21,7 @@ concurrency:
 jobs:
   build:
     name: Factory Deck cloud build
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[factory-smoke]'))
     environment: paid-production-main-automated
     runs-on: windows-latest
     timeout-minutes: 360
@@ -53,7 +56,7 @@ jobs:
       - name: Build and verify application
         shell: pwsh
         env:
-          FACTORY_IDEA: ${{ inputs.idea }}
+          FACTORY_IDEA: ${{ inputs.idea || 'Build a minimal accessible single-page task checklist with add, complete, delete, persistence, and automated tests.' }}
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY }}
           OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY }}
           ANTHROPIC_MODEL: claude-opus-4-8
