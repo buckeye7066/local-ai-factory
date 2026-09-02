@@ -62,8 +62,8 @@ export function createFoundryTierProvider(
   config: AppConfig,
   role: "code" | "review" = "review",
 ): { routing: ResolvedRunRouting; provider: LLMProvider } {
-  // Omitted mode deliberately keeps the documented legacy/default inference;
-  // once resolved, the call is still strict Free or strict Paid.
+  // Legacy mode values are accepted at the boundary, then normalized to the
+  // same automatic ladder before any model call.
   const routing = selectRunRouting({ routingMode }, registry, config);
   const selected = role === "code" ? routing.codeProvider : routing.reviewProvider;
   return {
@@ -526,7 +526,7 @@ export class FoundryAdapters {
       crucible: {
         mode: "internal",
         configured: liveProviderConfigured,
-        destination: "independent adversarial review on the project's strict tier",
+        destination: "independent adversarial review on the shared automatic ladder",
       },
       "app-store-publisher": {
         mode: "http",
