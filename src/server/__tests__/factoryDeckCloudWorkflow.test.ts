@@ -26,12 +26,10 @@ describe("Factory Deck cloud workflow", () => {
     expect(workflow).toContain(
       'pnpm exec tsx src/cli/factory.ts "$env:FACTORY_IDEA"',
     );
-    expect(workflow).toContain(
-      "ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY }}",
-    );
-    expect(workflow).toContain(
-      "OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY }}",
-    );
+    expect(workflow).toContain("secrets.PAID_PRODUCTION_ANTHROPIC_KEY");
+    expect(workflow).toContain("secrets.ANTHROPIC_API_KEY");
+    expect(workflow).toContain("secrets.PAID_PRODUCTION_OPENAI_KEY");
+    expect(workflow).toContain("secrets.OPENAI_API_KEY");
     expect(workflow).toMatch(/FACTORY_SOL_MODEL:\s*\S+/);
     expect(workflow).toMatch(/FACTORY_FABLE_OR_OPUS_MODEL:\s*\S+/);
   });
