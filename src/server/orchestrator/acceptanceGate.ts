@@ -62,7 +62,9 @@ interface FileEvidence {
 }
 
 type JavascriptHelper =
-  ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration;
+  | ts.ArrowFunction
+  | ts.FunctionExpression
+  | ts.FunctionDeclaration;
 
 const PROMISE_CALLBACK_METHODS = new Set(["then", "catch", "finally"]);
 const SYNC_ITERATION_CALLBACK_METHODS = new Set([
@@ -114,19 +116,18 @@ function containsExpectCall(node: ts.Node): ts.CallExpression | null {
 function isPrimitiveLiteral(node: ts.Expression | undefined): boolean {
   return Boolean(
     node &&
-    (ts.isStringLiteralLike(node) ||
-      ts.isNumericLiteral(node) ||
-      node.kind === ts.SyntaxKind.TrueKeyword ||
-      node.kind === ts.SyntaxKind.FalseKeyword ||
-      node.kind === ts.SyntaxKind.NullKeyword),
+      (ts.isStringLiteralLike(node) ||
+        ts.isNumericLiteral(node) ||
+        node.kind === ts.SyntaxKind.TrueKeyword ||
+        node.kind === ts.SyntaxKind.FalseKeyword ||
+        node.kind === ts.SyntaxKind.NullKeyword),
   );
 }
 
 function isAsyncFunction(node: JavascriptHelper): boolean {
   return (
-    node.modifiers?.some(
-      (modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword,
-    ) === true
+    node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) ===
+    true
   );
 }
 
@@ -149,10 +150,7 @@ function helperDeclaredBy(
   ) {
     return statement;
   }
-  if (
-    !ts.isVariableStatement(statement) ||
-    statement.getStart() >= callPosition
-  ) {
+  if (!ts.isVariableStatement(statement) || statement.getStart() >= callPosition) {
     return null;
   }
   for (const declaration of statement.declarationList.declarations) {
@@ -180,11 +178,7 @@ function resolveVisibleHelper(
   while (current) {
     if (ts.isBlock(current) || ts.isSourceFile(current)) {
       for (let index = current.statements.length - 1; index >= 0; index -= 1) {
-        const helper = helperDeclaredBy(
-          current.statements[index]!,
-          name,
-          callPosition,
-        );
+        const helper = helperDeclaredBy(current.statements[index]!, name, callPosition);
         if (helper) return helper;
       }
     }
@@ -202,10 +196,8 @@ function expressionResultIsObserved(expression: ts.Expression): boolean {
   let current: ts.Node = expression;
   while (current.parent) {
     const parent = current.parent;
-    if (ts.isAwaitExpression(parent) && parent.expression === current)
-      return true;
-    if (ts.isReturnStatement(parent) && parent.expression === current)
-      return true;
+    if (ts.isAwaitExpression(parent) && parent.expression === current) return true;
+    if (ts.isReturnStatement(parent) && parent.expression === current) return true;
     if (ts.isArrowFunction(parent) && parent.body === current) return true;
     if (
       ts.isParenthesizedExpression(parent) ||
@@ -215,8 +207,7 @@ function expressionResultIsObserved(expression: ts.Expression): boolean {
       ts.isSatisfiesExpression(parent) ||
       ts.isArrayLiteralExpression(parent) ||
       ts.isConditionalExpression(parent) ||
-      (ts.isCallExpression(parent) &&
-        parent.arguments.some((arg) => arg === current))
+      (ts.isCallExpression(parent) && parent.arguments.some((arg) => arg === current))
     ) {
       current = parent;
       continue;
@@ -264,9 +255,7 @@ function callInvokesInlineCallback(
   call: ts.CallExpression,
   callback: ts.ArrowFunction | ts.FunctionExpression,
 ): boolean {
-  const parameterIndex = call.arguments.findIndex(
-    (argument) => argument === callback,
-  );
+  const parameterIndex = call.arguments.findIndex((argument) => argument === callback);
   if (parameterIndex < 0) return false;
   const name = expressionName(call.expression);
   if (name && PROMISE_CALLBACK_METHODS.has(name)) return true;
@@ -276,9 +265,7 @@ function callInvokesInlineCallback(
   }
   if (!ts.isIdentifier(call.expression)) return false;
   const helper = resolveVisibleHelper(call, call.expression.text);
-  return helper
-    ? helperInvokesParameter(helper, parameterIndex, callback)
-    : false;
+  return helper ? helperInvokesParameter(helper, parameterIndex, callback) : false;
 }
 
 function shortUnboundedRegexToken(pattern: string): string | null {
@@ -300,8 +287,7 @@ function shortUnboundedRegexToken(pattern: string): string | null {
     }
     if (inCharacterClass || !/[A-Za-z]/.test(char)) continue;
     let end = index + 1;
-    while (end < pattern.length && /[A-Za-z0-9_-]/.test(pattern[end]!))
-      end += 1;
+    while (end < pattern.length && /[A-Za-z0-9_-]/.test(pattern[end]!)) end += 1;
     const token = pattern.slice(index, end);
     const previous = pattern[index - 1] ?? "";
     const following = pattern[end] ?? "";
@@ -309,10 +295,8 @@ function shortUnboundedRegexToken(pattern: string): string | null {
     if (!partOfLongerToken && token.length >= 2 && token.length <= 4) {
       const left = pattern.slice(0, index);
       const right = pattern.slice(end);
-      const leftBounded =
-        left.endsWith("\\b") || /(?:\^|\\s[*+?]*)$/.test(left);
-      const rightBounded =
-        right.startsWith("\\b") || /^(?:\$|\\s[*+?]*)/.test(right);
+      const leftBounded = left.endsWith("\\b") || /(?:\^|\\s[*+?]*)$/.test(left);
+      const rightBounded = right.startsWith("\\b") || /^(?:\$|\\s[*+?]*)/.test(right);
       if (!leftBounded || !rightBounded) return token;
     }
     index = end - 1;
@@ -354,18 +338,10 @@ function brittleNegatedMatcher(call: ts.CallExpression): string | null {
     ts.isIdentifier(negated.expression.expression) &&
     negated.expression.expression.text === "expect";
   if (expectNegation) {
-    if (
-      matcher === "toContain" &&
-      expected &&
-      ts.isStringLiteralLike(expected)
-    ) {
+    if (matcher === "toContain" && expected && ts.isStringLiteralLike(expected)) {
       return brittleSubstring(expected.text);
     }
-    if (
-      matcher === "toMatch" &&
-      expected &&
-      ts.isRegularExpressionLiteral(expected)
-    ) {
+    if (matcher === "toMatch" && expected && ts.isRegularExpressionLiteral(expected)) {
       const literal = expected.getText();
       const finalSlash = literal.lastIndexOf("/");
       return brittleRegex(finalSlash > 0 ? literal.slice(1, finalSlash) : "");
@@ -420,8 +396,7 @@ function analyzeCallback(
 
     const expectCall = containsExpectCall(call.expression);
     if (name && ASSERT_METHOD.test(name) && expectCall) {
-      if (!isPrimitiveLiteral(expectCall.arguments[0]))
-        meaningfulAssertion = true;
+      if (!isPrimitiveLiteral(expectCall.arguments[0])) meaningfulAssertion = true;
       return;
     }
     if (name === "assert" && !isPrimitiveLiteral(call.arguments[0])) {
@@ -453,8 +428,7 @@ function analyzeCallback(
   // callback passed to a call the test awaits is part of that test's reachable
   // control flow, so inspect it while still rejecting stored/deferred helpers.
   const isAwaitedInlineCallback = (node: ts.Node): boolean => {
-    if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node))
-      return false;
+    if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return false;
     const call = node.parent;
     return (
       ts.isCallExpression(call) &&
@@ -564,17 +538,10 @@ function analyzeJavascript(source: string): FileEvidence {
         base = callee.expression.text;
         mode = callee.name.text;
       }
-      if (
-        (base === "test" || base === "it") &&
-        (mode === "skip" || mode === "todo")
-      ) {
+      if ((base === "test" || base === "it") && (mode === "skip" || mode === "todo")) {
         skippedOrTodo = true;
       }
-      if (
-        (base === "test" || base === "it") &&
-        mode !== "skip" &&
-        mode !== "todo"
-      ) {
+      if ((base === "test" || base === "it") && mode !== "skip" && mode !== "todo") {
         const title = node.arguments[0];
         const callback = node.arguments[1];
         if (
@@ -625,16 +592,14 @@ function analyzePython(source: string): FileEvidence {
     }
     const meaningfulAssertion = body.some(
       (entry) =>
-        /^\s*assert\s+/.test(entry) &&
-        !/^\s*assert\s+(?:True|1)(?:\s|$)/.test(entry),
+        /^\s*assert\s+/.test(entry) && !/^\s*assert\s+(?:True|1)(?:\s|$)/.test(entry),
     );
     const brittleAssertions: string[] = [];
     for (const entry of body) {
       const substring = /\bassert\s+(["'])(.*?)\1\s+not\s+in\b/.exec(entry);
       if (substring) {
         const issue = brittleSubstring(substring[2] ?? "");
-        if (issue && !brittleAssertions.includes(issue))
-          brittleAssertions.push(issue);
+        if (issue && !brittleAssertions.includes(issue)) brittleAssertions.push(issue);
       }
       const negativeRegex =
         /\bassert\s+(?:not\s+)?re\.(?:search|match|fullmatch)\(\s*r?(["'])(.*?)\1/.exec(
@@ -645,8 +610,7 @@ function analyzePython(source: string): FileEvidence {
         (/\bassert\s+not\s+/.test(entry) || /\bis\s+None\b/.test(entry))
       ) {
         const issue = brittleRegex(negativeRegex[2] ?? "");
-        if (issue && !brittleAssertions.includes(issue))
-          brittleAssertions.push(issue);
+        if (issue && !brittleAssertions.includes(issue)) brittleAssertions.push(issue);
       }
     }
     tests.set(match[1]!, {
@@ -664,9 +628,7 @@ function analyzePython(source: string): FileEvidence {
 }
 
 function analyzeFile(path: string, source: string): FileEvidence {
-  return /\.py$/i.test(path)
-    ? analyzePython(source)
-    : analyzeJavascript(source);
+  return /\.py$/i.test(path) ? analyzePython(source) : analyzeJavascript(source);
 }
 
 export function acceptanceRequirements(
@@ -727,23 +689,17 @@ export function assessGeneratedTests(
     const evidence = analyzeFile(path, file.contents);
     files.set(path, evidence);
     if (evidence.skippedOrTodo) {
-      errors.push(
-        `${file.path}: skipped or todo tests are not acceptance evidence`,
-      );
+      errors.push(`${file.path}: skipped or todo tests are not acceptance evidence`);
     }
     if (!evidence.tests.size) {
       errors.push(`${file.path}: no active named test was found`);
     }
-    if (
-      ![...evidence.tests.values()].some((test) => test.meaningfulAssertion)
-    ) {
+    if (![...evidence.tests.values()].some((test) => test.meaningfulAssertion)) {
       errors.push(`${file.path}: no meaningful executable assertion was found`);
     }
     for (const test of evidence.tests.values()) {
       for (const issue of test.brittleAssertions) {
-        errors.push(
-          `${file.path}: test ${JSON.stringify(test.name)} uses ${issue}`,
-        );
+        errors.push(`${file.path}: test ${JSON.stringify(test.name)} uses ${issue}`);
       }
     }
     if (evidence.browserImport) browserTestPaths.push(path);
@@ -766,9 +722,7 @@ export function assessGeneratedTests(
     const file = path ? files.get(path) : undefined;
     const test = file?.tests.get(item.testName);
     if (!path || !file) {
-      errors.push(
-        `${item.requirementId}: coverage path is not a generated test file`,
-      );
+      errors.push(`${item.requirementId}: coverage path is not a generated test file`);
       continue;
     }
     if (!test) {
@@ -778,15 +732,11 @@ export function assessGeneratedTests(
       continue;
     }
     if (!test.meaningfulAssertion) {
-      errors.push(
-        `${item.requirementId}: mapped test has no meaningful assertion`,
-      );
+      errors.push(`${item.requirementId}: mapped test has no meaningful assertion`);
     }
     if (item.kind === "browser") {
       if (!file.browserImport || !test.browser) {
-        errors.push(
-          `${item.requirementId}: browser coverage is not a Playwright test`,
-        );
+        errors.push(`${item.requirementId}: browser coverage is not a Playwright test`);
       }
       if (!test.gotoApp || test.forbiddenBrowserFixture) {
         errors.push(
@@ -811,18 +761,11 @@ export function assessGeneratedTests(
   }
   for (const requirement of requirements) {
     if (!coverage.some((item) => item.requirementId === requirement.id)) {
-      errors.push(
-        `${requirement.id}: acceptance requirement has no mapped test`,
-      );
+      errors.push(`${requirement.id}: acceptance requirement has no mapped test`);
     }
   }
-  if (
-    uiAcceptanceRequired &&
-    !coverage.some((item) => item.kind === "browser")
-  ) {
-    errors.push(
-      "UI source changed but no mapped Playwright browser journey exists",
-    );
+  if (uiAcceptanceRequired && !coverage.some((item) => item.kind === "browser")) {
+    errors.push("UI source changed but no mapped Playwright browser journey exists");
   }
 
   return {
