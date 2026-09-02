@@ -125,9 +125,7 @@ function registerLexicalBindings(
     } else if (ts.isVariableDeclaration(node)) {
       const list = ts.isVariableDeclarationList(node.parent) ? node.parent : null;
       const blockScoped = Boolean(list && list.flags & ts.NodeFlags.BlockScoped);
-      const scope = blockScoped
-        ? lexicalScopeFor(node)
-        : functionScopeFor(node);
+      const scope = blockScoped ? lexicalScopeFor(node) : functionScopeFor(node);
       for (const identifier of bindingIdentifiers(node.name)) add(scope, identifier);
     } else if (
       (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) &&
@@ -149,7 +147,11 @@ function resolveBinding(
   use: ts.Identifier,
   scopes: ReadonlyMap<ts.Node, ReadonlyMap<string, readonly ts.Identifier[]>>,
 ): ts.Identifier | null {
-  for (let current: ts.Node | undefined = use.parent; current; current = current.parent) {
+  for (
+    let current: ts.Node | undefined = use.parent;
+    current;
+    current = current.parent
+  ) {
     const declarations = scopes.get(current)?.get(use.text);
     if (declarations?.length) return declarations[0]!;
   }
@@ -327,7 +329,9 @@ export function assessWindowsProcessPortability(
         ) {
           issues.push({
             path: file.path,
-            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+            line:
+              sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line +
+              1,
             reason:
               `${method} directly launches a Windows .cmd/.bat wrapper without shell: true. ` +
               "Node reports spawn EINVAL for this on Windows. Invoke a real executable such as process.execPath, use a shell-aware command API, or deliberately enable the shell for that invocation.",
