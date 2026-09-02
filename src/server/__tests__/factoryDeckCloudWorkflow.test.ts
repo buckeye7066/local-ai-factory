@@ -10,6 +10,10 @@ const foundry = readFileSync(
   resolve(".github/workflows/purpose-foundry-cloud.yml"),
   "utf8",
 );
+const production = readFileSync(
+  resolve(".github/workflows/production-readiness.yml"),
+  "utf8",
+);
 const dockerfile = readFileSync(
   resolve("scripts/ci/verification-sandbox.Dockerfile"),
   "utf8",
@@ -26,6 +30,15 @@ describe("paid cloud workflow contract", () => {
     expect(workflow).not.toMatch(/^concurrency:/m);
     expect(workflow).toContain("timeout-minutes: 360");
     expect(workflow).toContain("if: always()");
+  });
+
+  it("does not cancel or credential production-readiness checkouts", () => {
+    expect(production).not.toMatch(/^concurrency:/m);
+    expect(production).toContain("persist-credentials: false");
+    expect(production).toContain("timeout-minutes: 60");
+    expect(production).toContain("pnpm typecheck");
+    expect(production).toContain("pnpm test");
+    expect(production).toContain("pnpm release:check");
   });
 
   it.each([
