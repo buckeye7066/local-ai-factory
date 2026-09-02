@@ -112,9 +112,11 @@ describe("paid cloud workflow contract", () => {
     expect(dockerfile).toContain(\n      "FROM node:20.19.5-bookworm-slim@sha256:9e70124bd00f47dd023e349cd587132ae61892acc0e47ed641416c3e18f401c3",\n    );
     for (const tool of [
       "build-essential",
+      "chromium",
       "git",
       "python3",
       "python3-pip",
+      "python3-pytest",
       "python-is-python3",
     ]) {
       expect(dockerfile).toContain(tool);
