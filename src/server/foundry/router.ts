@@ -107,6 +107,55 @@ export function createFoundryRouter(
       await enqueueTransition(() => handler(req, res));
     });
 
+  const activateRequiredDiscovery = async (
+    project: FoundryProject,
+    resumeStationId?: z.infer<typeof StationIdSchema>,
+  ): Promise<boolean> => {
+    const discovery = REQUIRED_DISCOVERY_STATIONS.map((stationId) =>
+      project.stations.find((station) => station.stationId === stationId),
+    ).find((station) => station && station.status !== "completed");
+    if (!discovery || project.status === "completed") return false;
+    const activeOther = project.stations.find(
+      (station) =>
+        station.status === "active" && station.stationId !== discovery.stationId,
+    );
+    if (activeOther) {
+      throw new FoundryRouteError(
+        409,
+        `Cannot start ${discovery.stationId} while ${activeOther.stationId} is active.`,
+      );
+    }
+    const resumeStation = resumeStationId
+      ? project.stations.find((station) => station.stationId === resumeStationId)
+      : undefined;
+    if (
+      resumeStation &&
+      resumeStation.stationId !== discovery.stationId &&
+      (resumeStation.status === "failed" || resumeStation.status === "needs_attention")
+    ) {
+      resumeStation.status = "queued";
+      resumeStation.endedAt = null;
+    }
+    if (discovery.status !== "active") {
+      discovery.status = "active";
+      discovery.attempt += 1;
+      discovery.startedAt = Date.now();
+      discovery.endedAt = null;
+    }
+    project.status = "running";
+    await store.save(FoundryProjectSchema.parse(project));
+    await store.appendEvidence(
+      project.id,
+      discovery.stationId,
+      "station.discovery-required",
+      {
+        attempt: discovery.attempt,
+        resumeStationId: resumeStationId ?? null,
+      },
+    );
+    return true;
+  };
+
   const applyStationEvent = async (
     projectId: string,
     stationId: z.infer<typeof StationIdSchema>,
@@ -120,6 +169,16 @@ export function createFoundryRouter(
       throw new FoundryRouteError(
         409,
         "That station is not selected for this project.",
+      );
+    }
+    if (
+      stationId === "repo-rewards" &&
+      event.status === "completed" &&
+      (event.handoff.insights.length === 0 || event.handoff.sources.length === 0)
+    ) {
+      throw new FoundryRouteError(
+        409,
+        "RepoRewards completion requires a purpose-bound insight and queried source.",
       );
     }
     if (
@@ -372,7 +431,7 @@ export function createFoundryRouter(
       }
       // Upgrade draft/queued legacy records to the current discovery policy
       // before choosing the first station. Completed history is never rewritten.
-      if (!["completed", "failed", "needs_attention"].includes(project.status)) {
+      if (project.status !== "completed") {
         for (const stationId of REQUIRED_DISCOVERY_STATIONS) {
           const station = project.stations.find((item) => item.stationId === stationId);
           if (station?.status === "not_selected") station.status = "queued";
@@ -402,6 +461,15 @@ export function createFoundryRouter(
         return;
       }
       if (project.status === "failed" || project.status === "needs_attention") {
+        const retryStation = project.stations.find(
+          (station) =>
+            station.status === "failed" || station.status === "needs_attention",
+        );
+        if (await activateRequiredDiscovery(project, retryStation?.stationId)) {
+          res.status(202).json(project);
+          queueMicrotask(() => dispatchActive(project.id));
+          return;
+        }
         res.status(409).json({
           error:
             "Resume the failed or attention-required station instead of skipping it.",
@@ -442,6 +510,14 @@ export function createFoundryRouter(
         res
           .status(409)
           .json({ error: "That station is not selected for this project." });
+        return;
+      }
+      if (
+        stationId !== "repo-rewards" &&
+        (await activateRequiredDiscovery(project, stationId))
+      ) {
+        res.status(202).json(project);
+        queueMicrotask(() => dispatchActive(project.id));
         return;
       }
       let updated = project;
