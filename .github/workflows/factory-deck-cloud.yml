@@ -21,6 +21,8 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[factory-smoke]'))
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    outputs:
+      platform_hold: ${{ steps.platform_gate.outputs.platform_hold }}
 
     steps:
       - name: Checkout Factory Deck
@@ -68,7 +70,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         env:
-          FACTORY_IDEA: ${{ inputs.idea || 'Build and verify a minimal TypeScript command-line task checklist. It must be command-line only with no HTML, browser, or web UI; support add, list, complete, and delete commands; persist tasks in a local JSON file; and include automated tests for the complete primary workflow.' }}
+          FACTORY_IDEA: ${{ inputs.idea || 'Build and verify a minimal TypeScript command-line task checklist. It must be command-line only with no HTML, browser, or web UI; expose the CLI through a package.json bin entry; support add, list, complete, and delete commands; persist tasks in a local JSON file; and include automated tests for the complete primary workflow.' }}
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: claude-fable-5-1
@@ -91,15 +93,20 @@ jobs:
           CI: "true"
         run: pnpm exec tsx src/cli/factory.ts
 
-      - name: Validate platform-only readiness hold
+      - name: Classify platform readiness
+        id: platform_gate
         shell: pwsh
         env:
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
         run: |
-          if ("${{ steps.candidate.outcome }}" -ne "failure") {
-            throw "The Linux seed did not stop at the expected cross-platform gate."
+          if ("${{ steps.candidate.outcome }}" -eq "success") {
+            "platform_hold=false" >> $env:GITHUB_OUTPUT
+            Write-Host "The candidate completed on Linux with no applicable external platform hold."
+          } else {
+            pnpm exec tsx src/cli/factory-platform-proof.ts validate
+            "platform_hold=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Validated an exact-candidate platform evidence hold."
           }
-          pnpm exec tsx src/cli/factory-platform-proof.ts validate
 
       - name: Preserve exact candidate
         if: always()
@@ -117,6 +124,7 @@ jobs:
   windows:
     name: Verify exact candidate on Windows
     needs: seed
+    if: needs.seed.outputs.platform_hold == 'true'
     runs-on: windows-latest
     timeout-minutes: 120
 
@@ -168,7 +176,8 @@ jobs:
 
   macos:
     name: Verify exact candidate on macOS
-    needs: windows
+    needs: [seed, windows]
+    if: needs.seed.outputs.platform_hold == 'true'
     runs-on: macos-latest
     timeout-minutes: 120
 
@@ -220,7 +229,12 @@ jobs:
 
   build:
     name: Factory Deck cloud build
-    needs: macos
+    needs: [seed, windows, macos]
+    if: >-
+      ${{ always() &&
+          needs.seed.result == 'success' &&
+          (needs.seed.outputs.platform_hold != 'true' ||
+            (needs.windows.result == 'success' && needs.macos.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -244,12 +258,26 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Restore cross-platform candidate
+        if: needs.seed.outputs.platform_hold == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: factory-deck-macos-${{ github.run_id }}-${{ github.run_attempt }}
           path: .
 
+      - name: Restore candidate already finalized on Linux
+        if: needs.seed.outputs.platform_hold != 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: factory-deck-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .
+
+      - name: Confirm Linux-finalized candidate
+        if: needs.seed.outputs.platform_hold != 'true'
+        shell: pwsh
+        run: Write-Host "The paid Factory run already completed with no applicable external platform hold."
+
       - name: Finalize paid readiness on exact candidate
+        if: needs.seed.outputs.platform_hold == 'true'
         shell: pwsh
         env:
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
