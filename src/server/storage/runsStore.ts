@@ -75,12 +75,7 @@ function isInside(parent: string, child: string): boolean {
 async function guardStoreDirs(): Promise<void> {
   const rootReal = await realpath(DATA_ROOT).catch(() => null);
   if (!rootReal) return; // nothing created yet — nothing can have escaped
-  for (const dir of [
-    STORE_DIR,
-    FILES_DIR,
-    CHECKPOINTS_DIR,
-    PROJECT_MEMORY_DIR,
-  ]) {
+  for (const dir of [STORE_DIR, FILES_DIR, CHECKPOINTS_DIR, PROJECT_MEMORY_DIR]) {
     const st = await lstat(dir).catch(() => null);
     if (!st) continue; // not created yet
     if (st.isSymbolicLink()) {
@@ -447,10 +442,7 @@ export async function deleteRunCheckpoint(id: string): Promise<void> {
 }
 
 /** Persist one bounded cross-run project memory record behind a hashed id. */
-export async function saveProjectMemoryJson(
-  id: string,
-  json: string,
-): Promise<void> {
+export async function saveProjectMemoryJson(id: string, json: string): Promise<void> {
   if (Buffer.byteLength(json, "utf8") > 2 * 1024 * 1024) {
     throw new Error("Refused: project memory exceeds 2 MB.");
   }
