@@ -6,70 +6,6 @@
 $ErrorActionPreference = "Stop"
 Set-Location -Path (Split-Path -Parent $PSScriptRoot)  # repo root
 
-# --- Bootstrap. A desktop icon is the product entry point, so it must repair
-# ordinary checkout/dependency drift instead of requiring a terminal session.
-$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
-if ($null -eq $node) {
-    throw "Factory Deck needs Node.js 20 or newer, but node.exe is not available on PATH."
-}
-$nodeMajor = [int]((& node --version).TrimStart("v").Split(".")[0])
-if ($nodeMajor -lt 20) {
-    throw "Factory Deck needs Node.js 20 or newer; this computer has $(& node --version)."
-}
-
-$pnpm = Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue
-if ($null -eq $pnpm) {
-    $corepack = Get-Command corepack -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -ne $corepack) {
-        Write-Host "pnpm is missing - repairing it through Corepack..." -ForegroundColor Yellow
-        & corepack enable
-        if ($LASTEXITCODE -eq 0) {
-            $pnpm = Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue
-        }
-    }
-}
-if ($null -eq $pnpm) {
-    throw "Factory Deck could not find or activate pnpm 10.17.0."
-}
-
-# Fast-forward a clean main checkout. Never overwrite local work; a dirty tree
-# stays untouched and launches exactly as-is.
-$git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue
-if ($null -ne $git -and (Test-Path ".git")) {
-    $branch = (& git branch --show-current 2>$null).Trim()
-    $trackedChanges = @(& git status --porcelain --untracked-files=no 2>$null)
-    if ($branch -eq "main" -and $trackedChanges.Count -eq 0) {
-        Write-Host "Checking for Factory Deck updates..." -ForegroundColor DarkGray
-        & git pull --ff-only --quiet origin main
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Update check could not complete; continuing with the installed revision." -ForegroundColor Yellow
-        }
-    } elseif ($trackedChanges.Count -gt 0) {
-        Write-Host "Local source changes detected; automatic update skipped without overwriting them." -ForegroundColor Yellow
-    }
-}
-
-# Repair missing or stale dependencies. pnpm's module manifest is the durable
-# installation marker and must be at least as new as both dependency manifests.
-$moduleMarker = "node_modules\.modules.yaml"
-$needInstall = -not (Test-Path $moduleMarker)
-if (-not $needInstall) {
-    $installedAt = (Get-Item $moduleMarker).LastWriteTimeUtc
-    foreach ($manifest in @("package.json", "pnpm-lock.yaml")) {
-        if ((Get-Item $manifest).LastWriteTimeUtc -gt $installedAt) {
-            $needInstall = $true
-            break
-        }
-    }
-}
-if ($needInstall) {
-    Write-Host "Factory Deck dependencies are missing or stale - repairing them..." -ForegroundColor Yellow
-    & pnpm install --frozen-lockfile
-    if ($LASTEXITCODE -ne 0) {
-        throw "Factory Deck dependency repair failed (pnpm exit $LASTEXITCODE)."
-    }
-}
-
 $backendHost = "127.0.0.1"
 $backendPort = 5179
 $backendUrl = "http://${backendHost}:${backendPort}"
@@ -137,6 +73,102 @@ if ($portBusy) {
     exit 1
 }
 
+# --- Bootstrap. The running-service guard above must happen before any source
+# or dependency mutation, so a second click only opens the existing revision.
+$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+if ($null -eq $node) {
+    throw "Factory Deck needs Node.js 20 or newer, but node.exe is not available on PATH."
+}
+$nodeMajor = [int]((& node --version).TrimStart("v").Split(".")[0])
+if ($nodeMajor -lt 20) {
+    throw "Factory Deck needs Node.js 20 or newer; this computer has $(& node --version)."
+}
+
+$script:PnpmMode = $null
+$script:PnpmExe = $null
+$pnpm = Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue
+if ($null -ne $pnpm) {
+    $script:PnpmMode = "direct"
+    $script:PnpmExe = $pnpm.Source
+} else {
+    $corepack = Get-Command corepack -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -ne $corepack) {
+        # Do not use corepack enable: a normal user cannot write shims beside a
+        # system-wide Node installation. Invoke the pinned manager directly.
+        $script:PnpmMode = "corepack"
+        $script:PnpmExe = $corepack.Source
+    }
+}
+if ($null -eq $script:PnpmMode) {
+    throw "Factory Deck could not find pnpm or Corepack for pinned pnpm 10.17.0."
+}
+function Invoke-Pnpm {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+    if ($script:PnpmMode -eq "direct") {
+        & $script:PnpmExe @Arguments
+    } else {
+        & $script:PnpmExe pnpm @Arguments
+    }
+}
+
+# Fast-forward only a clean main checkout. The update is non-interactive and
+# bounded, so an unreachable origin can never prevent the installed app opening.
+$git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue
+if ($null -ne $git -and (Test-Path ".git")) {
+    $branch = (& git branch --show-current 2>$null).Trim()
+    $trackedChanges = @(& git status --porcelain --untracked-files=no 2>$null)
+    if ($branch -eq "main" -and $trackedChanges.Count -eq 0) {
+        Write-Host "Checking for Factory Deck updates..." -ForegroundColor DarkGray
+        $beforeHead = (& git rev-parse HEAD 2>$null).Trim()
+        $previousPrompt = $env:GIT_TERMINAL_PROMPT
+        try {
+            $env:GIT_TERMINAL_PROMPT = "0"
+            $update = Start-Process -FilePath $git.Source -ArgumentList @(
+                "pull", "--ff-only", "--quiet", "origin", "main"
+            ) -NoNewWindow -PassThru
+            if (-not $update.WaitForExit(15000)) {
+                & taskkill.exe /PID $update.Id /T /F 2>$null | Out-Null
+                Write-Host "Update check timed out; continuing with the installed revision." -ForegroundColor Yellow
+            } elseif ($update.ExitCode -ne 0) {
+                Write-Host "Update check could not complete; continuing with the installed revision." -ForegroundColor Yellow
+            } else {
+                $afterHead = (& git rev-parse HEAD 2>$null).Trim()
+                if ($afterHead -and $afterHead -ne $beforeHead -and $env:FACTORY_LAUNCHER_REEXEC -ne "1") {
+                    Write-Host "Factory Deck updated - restarting through the updated launcher." -ForegroundColor Green
+                    $env:FACTORY_LAUNCHER_REEXEC = "1"
+                    & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath
+                    exit $LASTEXITCODE
+                }
+            }
+        } finally {
+            $env:GIT_TERMINAL_PROMPT = $previousPrompt
+        }
+    } elseif ($trackedChanges.Count -gt 0) {
+        Write-Host "Local source changes detected; automatic update skipped without overwriting them." -ForegroundColor Yellow
+    }
+}
+
+# Repair missing or stale dependencies. pnpm's module manifest is the durable
+# installation marker and must be at least as new as both dependency manifests.
+$moduleMarker = "node_modules\.modules.yaml"
+$needInstall = -not (Test-Path $moduleMarker)
+if (-not $needInstall) {
+    $installedAt = (Get-Item $moduleMarker).LastWriteTimeUtc
+    foreach ($manifest in @("package.json", "pnpm-lock.yaml")) {
+        if ((Get-Item $manifest).LastWriteTimeUtc -gt $installedAt) {
+            $needInstall = $true
+            break
+        }
+    }
+}
+if ($needInstall) {
+    Write-Host "Factory Deck dependencies are missing or stale - repairing them..." -ForegroundColor Yellow
+    Invoke-Pnpm install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) {
+        throw "Factory Deck dependency repair failed (pnpm exit $LASTEXITCODE)."
+    }
+}
+
 # --- 1. Rebuild the UI only when it is missing or stale. -------------------
 $needBuild = -not (Test-Path $distIndex)
 if (-not $needBuild) {
@@ -150,7 +182,7 @@ if (-not $needBuild) {
 }
 if ($needBuild) {
     Write-Host "UI build missing or stale - rebuilding (vite build)..." -ForegroundColor Yellow
-    & pnpm exec vite build
+    Invoke-Pnpm exec vite build
     if ($LASTEXITCODE -ne 0) {
         if (Test-Path $distIndex) {
             Write-Host "Build FAILED - starting with the previous UI build." -ForegroundColor Red
@@ -163,7 +195,7 @@ if ($needBuild) {
             # never opened. Same check as the production preflight + poller.
             Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", `
                 "for (`$i = 0; `$i -lt 240; `$i++) { try { `$r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 'http://localhost:5190/api/health'; if ((`$r.Content | ConvertFrom-Json).service -eq 'factory-deck') { Start-Process '$devLaunchUrl'; break } } catch { }; Start-Sleep -Milliseconds 250 }"
-            & pnpm dev
+            Invoke-Pnpm dev
             exit $LASTEXITCODE
         }
     }
