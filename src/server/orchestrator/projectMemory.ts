@@ -525,6 +525,9 @@ export async function rememberProjectPlan(input: {
 }): Promise<ProjectMemory> {
   const now = input.now ?? Date.now();
   return updateMemory(input.projectKey, (memory) => {
+    if (!goalContractMatchesProjectMemory(input.goalContract, memory)) {
+      throw new Error("Goal contract is stale because another project run completed.");
+    }
     const prior = memory.entries.find((entry) => entry.runId === input.runId);
     const entry = ProjectMemoryEntrySchema.parse({
       runId: input.runId,
@@ -563,6 +566,9 @@ export async function rememberProjectCompletion(input: {
 }): Promise<ProjectMemory> {
   const now = input.now ?? Date.now();
   return updateMemory(input.projectKey, (memory) => {
+    if (!goalContractMatchesProjectMemory(input.goalContract, memory)) {
+      throw new Error("Goal contract is stale because another project run completed.");
+    }
     const prior = memory.entries.find((entry) => entry.runId === input.runId);
     const entry = ProjectMemoryEntrySchema.parse({
       runId: input.runId,
