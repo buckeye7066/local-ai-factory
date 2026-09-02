@@ -144,6 +144,10 @@ describe("paid cloud workflow contract", () => {
       expect(dockerfile).toContain(tool);
     }
     expect(dockerfile).toContain("pnpm@10.17.0");
+    expect(dockerfile).not.toContain("pnpm@10.17.0 yarn@");
+    expect(dockerfile).toContain(
+      'test "$(yarn --version)" = "1.22.22"',
+    );
     expect(dockerfile).toContain("ENTRYPOINT []");
   });
 });
