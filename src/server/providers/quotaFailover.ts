@@ -5,6 +5,7 @@ import type {
   GenerateTextResult,
 } from "../../shared/types.js";
 import { PaidBudgetExhaustedError } from "./paidBudget.js";
+import { noteFailover, noteRoutePrimary, noteServed } from "./freeRoute.js";
 import { ProviderAbortError } from "./types.js";
 
 /**
@@ -93,6 +94,7 @@ export class QuotaFailoverProvider implements LLMProvider {
         return true;
       }),
     ];
+    noteRoutePrimary(primary.name);
   }
 
   isConfigured(): boolean {
@@ -114,6 +116,7 @@ export class QuotaFailoverProvider implements LLMProvider {
       try {
         const result = await invoke(provider);
         this.cursor = index;
+        noteServed(provider.name);
         return result;
       } catch (error) {
         if (error instanceof ProviderAbortError || !isModelExhaustion(error)) {
@@ -123,7 +126,9 @@ export class QuotaFailoverProvider implements LLMProvider {
         const nextIndex = this.nextConfigured(index);
         if (nextIndex === null) throw firstExhaustion;
         const next = this.providers[nextIndex]!;
-        this.onFailover(provider.name, next.name, errorText(error));
+        const reason = errorText(error);
+        noteFailover(next.name, reason, provider.name);
+        this.onFailover(provider.name, next.name, reason);
         this.cursor = nextIndex;
         index = nextIndex - 1;
       }
