@@ -31,13 +31,26 @@ describe("runIsReady", () => {
     expect(
       runIsReady({
         ...base,
-        destination: { ...base.destination!, kind: "workspace-only" },
+        destination: { ...base.destination!, status: "failed" },
       }),
     ).toBe(false);
+  });
+
+  it("recognizes a receipt-bound workspace-only artifact", () => {
     expect(
       runIsReady({
         ...base,
-        destination: { ...base.destination!, status: "failed" },
+        destination: { ...base.destination!, kind: "workspace-only" },
+      }),
+    ).toBe(true);
+    expect(
+      runIsReady({
+        ...base,
+        destination: {
+          ...base.destination!,
+          kind: "workspace-only",
+          commitSha: null,
+        },
       }),
     ).toBe(false);
   });
