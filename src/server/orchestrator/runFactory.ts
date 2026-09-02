@@ -3762,8 +3762,8 @@ async function failBackgroundRun(run: RunRecord, error: unknown): Promise<void> 
 export function startRun(args: StartRunArgs): RunRecord {
   const run = createRecord(args);
   putRunInMemory(run);
-  void appendAuditEvent({ type: "run.queued", runId: run.id });
-  void saveRun(run)
+  void appendAuditEvent({ type: "run.queued", runId: run.id })
+    .then(() => saveRun(run))
     .then(() => executeRun(run, args))
     .catch((error: unknown) => failBackgroundRun(run, error));
   return run;
