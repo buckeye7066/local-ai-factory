@@ -150,6 +150,9 @@ export function isAllowedNpxVerification(args: string[]): boolean {
     );
   }
   if (tool === "playwright") {
+    if (args.length === 4 && args[2] === "install" && args[3] === "chromium") {
+      return true;
+    }
     return (
       args.length === 5 &&
       args[2] === "test" &&
@@ -534,6 +537,7 @@ export async function runCommand(
         "npm",
         "yarn",
         "pip",
+        "playwright",
       ]) {
         mkdirSync(join(resolve(sandbox.stateRoot), directory), {
           recursive: true,
