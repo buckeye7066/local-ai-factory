@@ -783,7 +783,9 @@ export class FoundryAdapters {
     // the station shows WHAT failed and the suggested fix, not just "failed".
     const errorLedger = Array.isArray(run.errorLedger) ? run.errorLedger : [];
     const platformBlockers = platformEvidenceBlockersFromRunError(run.error);
-    if (run.status === "failed" && run.resumable === true && platformBlockers) {
+    // External platform holds remain visible to Foundry without advertising
+    // the ordinary same-host resume action that cannot satisfy them.
+    if (run.status === "failed" && platformBlockers) {
       return {
         status: "needs_attention",
         summary: `Factory Deck run ${run.id} is waiting for trusted cross-platform execution: ${platformBlockers.join("; ")}`,
