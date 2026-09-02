@@ -40,6 +40,8 @@ import {
   STATIONS,
   type FoundryProject,
   type FoundryStore,
+  type StationHandoff,
+  type StationHandoffCandidate,
   type StationId,
 } from "./model.js";
 
@@ -86,6 +88,7 @@ export type AdapterOutcome = {
   status: "completed" | "needs_attention" | "failed";
   summary: string;
   artifacts: string[];
+  handoff?: StationHandoff;
   evidence: Record<string, unknown>;
 };
 
@@ -671,6 +674,7 @@ export class FoundryAdapters {
         stationId: station.stationId,
         summary: station.summary,
         artifacts: station.artifacts,
+        handoff: station.handoff,
       }));
     const goals = [
       project.constitution.purpose,
@@ -974,25 +978,89 @@ export class FoundryAdapters {
       "repo-rewards.json",
       result,
     );
-    const rows = Array.isArray((result as { results?: unknown }).results)
-      ? (result as { results: Array<Record<string, unknown>> }).results
+    const resultRows = Array.isArray((result as { results?: unknown }).results)
+      ? (result as { results: unknown[] }).results
       : null;
-    const count = rows?.length ?? null;
-    const topCandidates = (rows ?? []).slice(0, 5).map((row) => {
-      const repo =
-        row.repo && typeof row.repo === "object"
+    const rows = (resultRows ?? []).filter(
+      (row): row is Record<string, unknown> =>
+        Boolean(row) && typeof row === "object" && !Array.isArray(row),
+    );
+    const firstText = (values: unknown[], max: number): string | null => {
+      const value = values.find(
+        (item): item is string => typeof item === "string" && item.trim().length > 0,
+      );
+      return value ? value.trim().slice(0, max) : null;
+    };
+    const candidates: StationHandoffCandidate[] = rows.flatMap((row) => {
+      const nested =
+        row.repo && typeof row.repo === "object" && !Array.isArray(row.repo)
           ? (row.repo as Record<string, unknown>)
-          : row;
-      return {
-        fullName: typeof repo.fullName === "string" ? repo.fullName : null,
-        score: typeof row.finalScore === "number" ? row.finalScore : null,
-        license: typeof repo.licenseSpdx === "string" ? repo.licenseSpdx : null,
-      };
+          : {};
+      const name = firstText(
+        [nested.fullName, nested.full_name, row.fullName, row.full_name, row.name],
+        500,
+      );
+      if (!name) return [];
+      const score =
+        typeof row.finalScore === "number" && Number.isFinite(row.finalScore)
+          ? row.finalScore
+          : typeof row.score === "number" && Number.isFinite(row.score)
+            ? row.score
+            : null;
+      return [
+        {
+          name,
+          url: firstText(
+            [
+              nested.htmlUrl,
+              nested.html_url,
+              nested.url,
+              row.htmlUrl,
+              row.html_url,
+              row.url,
+            ],
+            2_000,
+          ),
+          summary:
+            firstText(
+              [nested.description, row.reason, row.summary, row.description],
+              4_000,
+            ) ?? "",
+          license: firstText(
+            [
+              nested.licenseSpdx,
+              nested.license_spdx,
+              nested.license,
+              row.licenseSpdx,
+              row.license,
+            ],
+            200,
+          ),
+          score,
+        },
+      ];
     });
+    const count = resultRows?.length ?? null;
+    const topCandidates = candidates.slice(0, 10);
+    const handoff: StationHandoff = {
+      insights: [
+        `RepoRewards completed a purpose-bound search for ${project.name}${count === null ? "" : ` and returned ${count} result(s)`}.`,
+        ...topCandidates.map(
+          (candidate) =>
+            `${candidate.name}${candidate.score === null ? "" : ` (score ${candidate.score})`}: ${candidate.summary || "candidate repository for implementation review"}`,
+        ),
+      ],
+      sources: [
+        `${base}/api/search`,
+        ...topCandidates.flatMap((candidate) => (candidate.url ? [candidate.url] : [])),
+      ],
+      candidates: candidates.slice(0, 20),
+    };
     return {
       status: "completed",
-      summary: `Repo Rewards completed its search${count === null ? "" : ` and returned ${count} candidate(s)`}${topCandidates.length ? `; leading matches: ${topCandidates.map((item) => item.fullName || "unnamed").join(", ")}` : ""}.`,
+      summary: `Repo Rewards completed its purpose-bound search${count === null ? "" : ` and returned ${count} candidate(s)`}${topCandidates.length ? `; leading matches: ${topCandidates.map((item) => item.name).join(", ")}` : ""}.`,
       artifacts: [artifact],
+      handoff,
       evidence: { query, resultCount: count, topCandidates },
     };
   }
