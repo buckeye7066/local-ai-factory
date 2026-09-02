@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PRODUCTION_READINESS_POLICY,
   evaluateProductionReadiness,
+  readinessDeliveryKind,
   type ProductionReadinessEvidence,
   type ReadinessBrainReview,
 } from "../orchestrator/productionReadinessPolicy.js";
@@ -78,6 +79,21 @@ const evidence = (
 });
 
 describe("mandatory production-readiness policy", () => {
+  it("treats an explicitly local new repo as a verified workspace artifact", () => {
+    expect(
+      readinessDeliveryKind(
+        { kind: "new-repo" },
+        { newRepo: { name: "local-app", createRemote: false } },
+      ),
+    ).toBe("workspace-only");
+    expect(
+      readinessDeliveryKind(
+        { kind: "new-repo" },
+        { newRepo: { name: "hosted-app", createRemote: true } },
+      ),
+    ).toBe("new-repo");
+  });
+
   it("issues a receipt only for purpose-aligned, executed, delivered work approved by Sol and Opus/Fable", () => {
     const receipt = evaluateProductionReadiness(evidence());
     expect(receipt.ready).toBe(true);
