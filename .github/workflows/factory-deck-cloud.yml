@@ -1,0 +1,90 @@
+name: factory-deck-cloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      idea:
+        description: What should Factory Deck build?
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: factory-deck-cloud-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Factory Deck cloud build
+    if: github.ref == 'refs/heads/main'
+    environment: paid-production-main-automated
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Factory Deck
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "10.17.0"
+
+      - name: Install Factory Deck
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate production credentials
+        shell: pwsh
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY }}
+          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY }}
+        run: |
+          if (-not $env:ANTHROPIC_API_KEY) { throw "PAID_PRODUCTION_ANTHROPIC_KEY is not configured." }
+          if (-not $env:OPENAI_API_KEY) { throw "PAID_PRODUCTION_OPENAI_KEY is not configured." }
+          Write-Host "Production provider credentials are available (values not displayed)."
+
+      - name: Build and verify application
+        shell: pwsh
+        env:
+          FACTORY_IDEA: ${{ inputs.idea }}
+          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY }}
+          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY }}
+          ANTHROPIC_MODEL: claude-opus-4-8
+          OPENAI_MODEL: gpt-5.5
+          FACTORY_SOL_MODEL: gpt-5.5
+          FACTORY_FABLE_OR_OPUS_MODEL: claude-opus-4-8
+          FACTORY_FREE_ENABLED: "0"
+          DEFAULT_CODE_PROVIDER: anthropic
+          DEFAULT_REVIEW_PROVIDER: openai
+          # The GitHub-hosted runner is disposable. commandRunner strips Factory
+          # credentials from generated child processes; enabling this gate lets
+          # the isolated runner execute the generated project's verification.
+          ALLOW_UNTRUSTED_SCRIPTS: "true"
+          WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
+          FACTORY_RUN_TIMEOUT_MS: "21000000"
+          MAX_MODEL_CALLS_PER_RUN: "60"
+          MAX_REPAIR_LOOPS: "3"
+          FACTORY_PAID_RESCUES_PER_HOUR: "60"
+          FACTORY_PAID_RESCUES_PER_DAY: "60"
+          FACTORY_PAID_MAX_USD_PER_DAY: "35"
+          CI: "true"
+        run: pnpm exec tsx src/cli/factory.ts "$env:FACTORY_IDEA"
+
+      - name: Preserve Factory Deck result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: factory-deck-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            .factory/**
+            workspaces/**
