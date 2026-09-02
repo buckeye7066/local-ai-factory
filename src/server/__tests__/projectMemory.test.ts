@@ -90,6 +90,23 @@ describe("durable project purpose memory", () => {
       ),
     ).toBe("git:github.com/buckeye7066/grantflow");
 
+    const customPort = projectKeyForOptions({
+      mode: "extend",
+      repoSource: {
+        type: "git",
+        location: "https://git.example.test:8443/Org/GrantFlow.git",
+      },
+    });
+    const otherPort = projectKeyForOptions({
+      mode: "extend",
+      repoSource: {
+        type: "git",
+        location: "https://git.example.test:9443/Org/GrantFlow.git",
+      },
+    });
+    expect(customPort).toBe("git:git.example.test:8443/Org/GrantFlow");
+    expect(otherPort).not.toBe(customPort);
+
     const remote = projectKeyForOptions(
       {
         mode: "new",
@@ -126,6 +143,20 @@ describe("durable project purpose memory", () => {
     );
     expect(localNew).toMatch(/^new-local-sha256:[a-f0-9]{64}$/);
     expect(localNew).not.toContain("purpose-foundry");
+    expect(
+      projectKeyForOptions(
+        {
+          mode: "new",
+          newRepo: {
+            name: "GrantFlow",
+            owner: "Buckeye7066",
+            private: true,
+            createRemote: false,
+          },
+        },
+        { localProjectId: "purpose-foundry:project-1" },
+      ),
+    ).toBe(localNew);
 
     const workspaceOnly = projectKeyForOptions(
       { mode: "new", idempotencyKey: "workspace-job-1" },
@@ -187,6 +218,23 @@ describe("durable project purpose memory", () => {
     });
     expect(contract.activeGoals).not.toContain(
       "Mission: Match people to verified public funding",
+    );
+  });
+
+  it("binds every accepted RunOptions goal into the immutable contract", () => {
+    const goals = Array.from({ length: 50 }, (_, index) => `Deliver goal ${index + 1}`);
+    const contract = createGoalContract({
+      projectKey: "git:github.com/buckeye7066/grantflow",
+      runId: randomUUID(),
+      idea: "Deliver a complete improvement batch",
+      goals,
+      spec: spec(),
+      now: 3,
+    });
+    expect(contract.activeGoals).toEqual(goals);
+    expect(contract.activeGoals).toHaveLength(50);
+    expect(withGoalContract(spec(), contract).acceptanceCriteria).toContain(
+      "[GOAL-50] Deliver and directly verify: Deliver goal 50",
     );
   });
 
@@ -259,6 +307,18 @@ describe("durable project purpose memory", () => {
     });
     expect(protectedMission.purpose).toBe(firstContract.purpose);
     expect(protectedMission.purposeSource).toBe("project-memory");
+
+    const trailingProtection = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "Change export workflow without changing the product purpose",
+      goals: ["Improve export workflow"],
+      spec: spec("A second model-authored replacement that must be ignored"),
+      memory,
+      now: 31,
+    });
+    expect(trailingProtection.purpose).toBe(firstContract.purpose);
+    expect(trailingProtection.purposeSource).toBe("project-memory");
 
     const audienceUpdate = createGoalContract({
       projectKey,
