@@ -116,7 +116,10 @@ export function projectKeyForOptions(
   if (options.mode !== "extend" && options.newRepo?.name) {
     const owner = options.newRepo.owner ?? context.resolvedNewRepoOwner;
     if (owner) {
-      return `new:${owner.toLowerCase()}/${options.newRepo.name.toLowerCase()}`;
+      // Use the same canonical identity a later extend run derives from the
+      // created GitHub remote, so the founding mission is not stranded under
+      // a one-time "new" namespace.
+      return `git:github.com/${owner.toLowerCase()}/${options.newRepo.name.toLowerCase()}`;
     }
     if (options.newRepo.createRemote === false && context.localProjectId) {
       const localIdentity = createHash("sha256")
