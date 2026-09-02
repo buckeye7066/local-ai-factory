@@ -46,19 +46,19 @@ jobs:
       - name: Validate production credentials
         shell: pwsh
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY }}
-          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
         run: |
-          if (-not $env:ANTHROPIC_API_KEY) { throw "PAID_PRODUCTION_ANTHROPIC_KEY is not configured." }
-          if (-not $env:OPENAI_API_KEY) { throw "PAID_PRODUCTION_OPENAI_KEY is not configured." }
+          if (-not $env:ANTHROPIC_API_KEY) { throw "No Anthropic production credential is configured." }
+          if (-not $env:OPENAI_API_KEY) { throw "No OpenAI production credential is configured." }
           Write-Host "Production provider credentials are available (values not displayed)."
 
       - name: Build and verify application
         shell: pwsh
         env:
           FACTORY_IDEA: ${{ inputs.idea || 'Build a minimal accessible single-page task checklist with add, complete, delete, persistence, and automated tests.' }}
-          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY }}
-          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: claude-opus-4-8
           OPENAI_MODEL: gpt-5.5
           FACTORY_SOL_MODEL: gpt-5.5
