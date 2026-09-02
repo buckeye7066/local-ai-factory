@@ -1,3 +1,4 @@
+import type { RunDestination, RunOptions } from "../../shared/schemas.js";
 import {
   isReadinessEvidenceDigest,
   isSupportedFableOrOpusModel,
@@ -83,6 +84,16 @@ export type ProductionReadinessEvidence = {
    */
   ownerExternalNotes?: string[];
 };
+
+export function readinessDeliveryKind(
+  destination: Pick<RunDestination, "kind"> | null | undefined,
+  options: Pick<RunOptions, "newRepo">,
+): ProductionReadinessEvidence["delivery"]["kind"] {
+  const kind = destination?.kind ?? "workspace-only";
+  return kind === "new-repo" && options.newRepo?.createRemote === false
+    ? "workspace-only"
+    : kind;
+}
 
 export type ProductionReadinessReceipt = {
   schema: typeof PRODUCTION_READINESS_POLICY.version;
