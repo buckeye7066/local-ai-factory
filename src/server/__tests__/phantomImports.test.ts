@@ -1,4 +1,5 @@
-import { afterAll, describe, expect, it } from "vitest";
+stty -echo
+[0;32mroot [0m➜ [1;34m/workspace/scratch/6b76b1f4c715/local-ai-factory [0m$ > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > > import { afterAll, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,13 +60,12 @@ describe("importedPackages", () => {
     ]);
   });
 
-
   it("reads JSDoc and Flow type imports without matching fixtures or comments", () => {
     const src = [
       '/** @type {import("jsdoc-package").Thing} */',
       "const thing = null;",
       'import typeof FlowThing from "flow-package";',
-      'const fixture = \'import typeof Fake from "fixture-package";\';',
+      "const fixture = 'import typeof Fake from \"fixture-package\";';",
       '// import typeof Commented from "comment-package";',
     ].join(BR);
     expect(importedPackages(src, "src/example.js")).toEqual([
@@ -217,3 +217,4 @@ describe("assessPhantomImports (the SermonSmith failure, twice over)", () => {
     ).toBe(false);
   });
 });
+[0;32mroot [0m➜ [1;34m/workspace/scratch/6b76b1f4c715/local-ai-factory [0m$ 
