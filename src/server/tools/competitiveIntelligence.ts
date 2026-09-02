@@ -650,14 +650,27 @@ export function buildDiscoveryQueries(spec: ProductSpec): string[] {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 220);
+  // Product discovery needs several short, independent queries. A single long
+  // audience/outcome sentence was returning articles about implementation
+  // rather than official competitor pages and made the five-product gate
+  // depend on one search result surviving HTTP verification.
+  const productNeed = (spec.tagline || mission || primary)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 140);
+  const audience = (spec.goalContract?.targetUsers[0] || spec.targetUser)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100);
   const activeOutcome = (spec.goalContract?.activeGoals[0] || primary)
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 220);
   return [
     `${mission} software competitors`,
-    `best software for ${spec.targetUser} to ${activeOutcome}`,
-    `top alternatives for ${primary}`,
+    `best ${productNeed} apps for ${audience}`,
+    `top ${productNeed} software products`,
+    `${productNeed} alternative products`,
     `${mission} open source GitHub`,
     `${activeOutcome} open source GitHub implementation`,
     `${spec.targetUser} software open source GitHub`,
@@ -667,7 +680,10 @@ export function buildDiscoveryQueries(spec: ProductSpec): string[] {
 
 /** True for queries whose results are competitor PRODUCT pages, not code. */
 export function isCompetitorQuery(query: string): boolean {
-  return /(^|\s)competitors?(\s|$)|^best |^top alternatives/i.test(query);
+  return (
+    /(^|\s)competitors?(\s|$)|^best |^top /i.test(query) ||
+    /\balternative products?\b/i.test(query)
+  );
 }
 
 const NON_PRODUCT_HOSTS = new Set([
@@ -681,8 +697,14 @@ const NON_PRODUCT_HOSTS = new Set([
   "gitlab.com",
   "linkedin.com",
   "medium.com",
+  "npmjs.com",
   "reddit.com",
   "saasworthy.com",
+  "stackexchange.com",
+  "stackoverflow.com",
+  "dev.to",
+  "codemag.com",
+  "weeklyjs.io",
   "sourceforge.net",
   "wikipedia.org",
   "x.com",
