@@ -6,8 +6,7 @@ const failure = vi.hoisted(() => ({
 }));
 
 vi.mock("../storage/runsStore.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../storage/runsStore.js")>();
+  const actual = await importOriginal<typeof import("../storage/runsStore.js")>();
   return {
     ...actual,
     saveRun: vi.fn(async () => {
@@ -17,8 +16,7 @@ vi.mock("../storage/runsStore.js", async (importOriginal) => {
 });
 
 vi.mock("../storage/auditLog.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../storage/auditLog.js")>();
+  const actual = await importOriginal<typeof import("../storage/auditLog.js")>();
   return {
     ...actual,
     appendAuditEvent: vi.fn(async () => {
@@ -54,8 +52,8 @@ describe("Factory Deck background startup", () => {
     expect(run.logs.at(-1)?.kind).toBe("error");
     expect(run.logs.at(-1)?.message).toBe(run.error);
     expect(run.errorLedger).toHaveLength(1);
-    expect(run.errorLedger[0]?.message).toBe(run.error);
-    expect(run.errorLedger[0]?.message).not.toContain(
+    expect(run.errorLedger?.[0]?.message).toBe(run.error);
+    expect(run.errorLedger?.[0]?.message).not.toContain(
       "sk-test-startup-secret-0123456789",
     );
   });
@@ -73,6 +71,6 @@ describe("Factory Deck background startup", () => {
 
     expect(run.error).toContain("Run could not start or persist: audit unavailable");
     expect(run.errorLedger).toHaveLength(1);
-    expect(run.errorLedger[0]?.message).toBe(run.error);
+    expect(run.errorLedger?.[0]?.message).toBe(run.error);
   });
 });
