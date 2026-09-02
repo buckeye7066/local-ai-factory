@@ -37,6 +37,7 @@ const ASSERT_OBJECT_METHODS = new Set([
   "doesNotReject",
   "fail",
 ]);
+const ASYNC_ASSERT_OBJECT_METHODS = new Set(["rejects", "doesNotReject"]);
 
 export interface AcceptanceRequirement {
   id: string;
@@ -66,20 +67,10 @@ type JavascriptHelper =
   | ts.FunctionExpression
   | ts.FunctionDeclaration;
 
-const PROMISE_CALLBACK_METHODS = new Set(["then", "catch", "finally"]);
-const SYNC_ITERATION_CALLBACK_METHODS = new Set([
-  "forEach",
-  "map",
-  "flatMap",
-  "filter",
-  "some",
-  "every",
-  "find",
-  "findIndex",
-  "reduce",
-  "reduceRight",
-]);
-const KNOWN_ASYNC_CALLBACK_HELPERS = new Set(["act", "waitFor"]);
+type VisibleBinding =
+  | { kind: "helper"; helper: JavascriptHelper }
+  | { kind: "import"; module: string; imported: string }
+  | { kind: "other" };
 
 export interface GeneratedTestAssessment {
   ok: boolean;
@@ -138,53 +129,206 @@ function isGeneratorHelper(node: JavascriptHelper): boolean {
   );
 }
 
-function helperDeclaredBy(
-  statement: ts.Statement,
+function bindingNameContains(binding: ts.BindingName, name: string): boolean {
+  if (ts.isIdentifier(binding)) return binding.text === name;
+  return binding.elements.some(
+    (element) =>
+      !ts.isOmittedExpression(element) && bindingNameContains(element.name, name),
+  );
+}
+
+function importBinding(
+  statement: ts.ImportDeclaration,
   name: string,
-  callPosition: number,
-): JavascriptHelper | null {
-  if (
-    ts.isFunctionDeclaration(statement) &&
-    statement.name?.text === name &&
-    !isGeneratorHelper(statement)
-  ) {
-    return statement;
+): VisibleBinding | null {
+  if (!ts.isStringLiteral(statement.moduleSpecifier)) return null;
+  const module = statement.moduleSpecifier.text;
+  const clause = statement.importClause;
+  if (!clause) return null;
+  if (clause.name?.text === name) {
+    return { kind: "import", module, imported: "default" };
   }
-  if (!ts.isVariableStatement(statement) || statement.getStart() >= callPosition) {
-    return null;
+  const bindings = clause.namedBindings;
+  if (bindings && ts.isNamespaceImport(bindings) && bindings.name.text === name) {
+    return { kind: "import", module, imported: "*" };
   }
-  for (const declaration of statement.declarationList.declarations) {
-    if (
-      ts.isIdentifier(declaration.name) &&
-      declaration.name.text === name &&
-      declaration.initializer &&
-      (ts.isArrowFunction(declaration.initializer) ||
-        ts.isFunctionExpression(declaration.initializer)) &&
-      !isGeneratorHelper(declaration.initializer)
-    ) {
-      return declaration.initializer;
+  if (bindings && ts.isNamedImports(bindings)) {
+    const specifier = bindings.elements.find((element) => element.name.text === name);
+    if (specifier) {
+      return {
+        kind: "import",
+        module,
+        imported: specifier.propertyName?.text ?? specifier.name.text,
+      };
     }
   }
   return null;
 }
 
-/** Resolve the helper binding visible at a call site, nearest lexical scope first. */
-function resolveVisibleHelper(
+function statementBinding(
+  statement: ts.Statement,
+  name: string,
+  callPosition: number,
+  allowFollowingDeclarations: boolean,
+): VisibleBinding | null {
+  if (ts.isImportDeclaration(statement)) return importBinding(statement, name);
+  if (ts.isFunctionDeclaration(statement) && statement.name?.text === name) {
+    return isGeneratorHelper(statement)
+      ? { kind: "other" }
+      : { kind: "helper", helper: statement };
+  }
+  if (
+    (ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement)) &&
+    statement.name?.text === name
+  ) {
+    return { kind: "other" };
+  }
+  if (!ts.isVariableStatement(statement)) return null;
+  for (const declaration of statement.declarationList.declarations) {
+    if (!bindingNameContains(declaration.name, name)) continue;
+    const initializedBeforeCall =
+      allowFollowingDeclarations || declaration.getStart() < callPosition;
+    if (
+      initializedBeforeCall &&
+      ts.isIdentifier(declaration.name) &&
+      declaration.initializer &&
+      (ts.isArrowFunction(declaration.initializer) ||
+        ts.isFunctionExpression(declaration.initializer)) &&
+      !isGeneratorHelper(declaration.initializer)
+    ) {
+      return { kind: "helper", helper: declaration.initializer };
+    }
+    // A declaration that is not an initialized callable still shadows every
+    // outer helper (including declarations later in the same TDZ/var scope).
+    return { kind: "other" };
+  }
+  return null;
+}
+
+function statementsBinding(
+  statements: readonly ts.Statement[],
+  name: string,
+  callPosition: number,
+  allowFollowingDeclarations: boolean,
+): VisibleBinding | null {
+  const matches = statements
+    .map((statement) =>
+      statementBinding(statement, name, callPosition, allowFollowingDeclarations),
+    )
+    .filter((binding): binding is VisibleBinding => binding !== null);
+  // Duplicate runtime bindings are too ambiguous for static acceptance evidence.
+  return matches.length === 1
+    ? matches[0]!
+    : matches.length > 1
+      ? { kind: "other" }
+      : null;
+}
+
+function declarationListBinds(
+  list: ts.VariableDeclarationList | undefined,
+  name: string,
+): boolean {
+  return Boolean(
+    list?.declarations.some((declaration) =>
+      bindingNameContains(declaration.name, name),
+    ),
+  );
+}
+
+/** Resolve the binding visible at a call site, nearest lexical scope first. */
+function resolveVisibleBinding(
   call: ts.CallExpression,
   name: string,
-): JavascriptHelper | null {
+  executionRoot: JavascriptHelper,
+): VisibleBinding | null {
   const callPosition = call.getStart();
+  let allowFollowingDeclarations = false;
   let current: ts.Node | undefined = call.parent;
   while (current) {
     if (ts.isBlock(current) || ts.isSourceFile(current)) {
-      for (let index = current.statements.length - 1; index >= 0; index -= 1) {
-        const helper = helperDeclaredBy(current.statements[index]!, name, callPosition);
-        if (helper) return helper;
-      }
+      const binding = statementsBinding(
+        current.statements,
+        name,
+        callPosition,
+        allowFollowingDeclarations,
+      );
+      if (binding) return binding;
     }
+    if (ts.isCaseBlock(current)) {
+      const binding = statementsBinding(
+        current.clauses.flatMap((clause) => [...clause.statements]),
+        name,
+        callPosition,
+        allowFollowingDeclarations,
+      );
+      if (binding) return binding;
+    }
+    if (
+      (ts.isForStatement(current) ||
+        ts.isForInStatement(current) ||
+        ts.isForOfStatement(current)) &&
+      current.initializer &&
+      ts.isVariableDeclarationList(current.initializer) &&
+      declarationListBinds(current.initializer, name)
+    ) {
+      return { kind: "other" };
+    }
+    if (
+      ts.isCatchClause(current) &&
+      current.variableDeclaration &&
+      bindingNameContains(current.variableDeclaration.name, name)
+    ) {
+      return { kind: "other" };
+    }
+    if (
+      ts.isFunctionLike(current) &&
+      current.parameters.some((parameter) => bindingNameContains(parameter.name, name))
+    ) {
+      return { kind: "other" };
+    }
+    if (current === executionRoot) allowFollowingDeclarations = true;
     current = current.parent;
   }
   return null;
+}
+
+function importedCallbackHelper(binding: VisibleBinding, name: string): boolean {
+  if (binding.kind !== "import") return false;
+  const imported = binding.imported === "*" ? name : binding.imported;
+  if (imported === "waitFor") return /^@testing-library\//.test(binding.module);
+  if (imported !== "act") return false;
+  return (
+    binding.module === "react" ||
+    binding.module === "react-dom/test-utils" ||
+    binding.module === "react-test-renderer" ||
+    /^@testing-library\//.test(binding.module)
+  );
+}
+
+function verifiedAssertionBinding(
+  call: ts.CallExpression,
+  name: string,
+  executionRoot: JavascriptHelper,
+): boolean {
+  const binding = resolveVisibleBinding(call, name, executionRoot);
+  if (!binding) return name === "expect"; // Jest commonly provides global expect.
+  if (binding.kind !== "import") return false;
+  if (name === "expect") {
+    return (
+      binding.imported === "expect" &&
+      (binding.module === "vitest" ||
+        binding.module === "@playwright/test" ||
+        binding.module === "@jest/globals")
+    );
+  }
+  return (
+    name === "assert" &&
+    ((["node:assert", "node:assert/strict", "assert", "assert/strict"].includes(
+      binding.module,
+    ) &&
+      ["default", "*", "strict"].includes(binding.imported)) ||
+      (["vitest", "chai"].includes(binding.module) && binding.imported === "assert"))
+  );
 }
 
 /**
@@ -192,7 +336,24 @@ function resolveVisibleHelper(
  * recognizes `await Promise.all([helper()])` and concise returned helper calls
  * without treating a floating promise as executed evidence.
  */
-function expressionResultIsObserved(expression: ts.Expression): boolean {
+function isUnshadowedPromiseAll(
+  call: ts.CallExpression,
+  executionRoot: JavascriptHelper,
+): boolean {
+  return (
+    ts.isPropertyAccessExpression(call.expression) &&
+    ts.isIdentifier(call.expression.expression) &&
+    call.expression.expression.text === "Promise" &&
+    (call.expression.name.text === "all" ||
+      call.expression.name.text === "allSettled") &&
+    resolveVisibleBinding(call, "Promise", executionRoot) === null
+  );
+}
+
+function expressionResultIsObserved(
+  expression: ts.Expression,
+  executionRoot: JavascriptHelper,
+): boolean {
   let current: ts.Node = expression;
   while (current.parent) {
     const parent = current.parent;
@@ -204,15 +365,45 @@ function expressionResultIsObserved(expression: ts.Expression): boolean {
       ts.isAsExpression(parent) ||
       ts.isTypeAssertionExpression(parent) ||
       ts.isNonNullExpression(parent) ||
-      ts.isSatisfiesExpression(parent) ||
-      ts.isArrayLiteralExpression(parent) ||
-      ts.isConditionalExpression(parent) ||
-      (ts.isCallExpression(parent) && parent.arguments.some((arg) => arg === current))
+      ts.isSatisfiesExpression(parent)
     ) {
       current = parent;
       continue;
     }
+    if (
+      ts.isArrayLiteralExpression(parent) &&
+      ts.isCallExpression(parent.parent) &&
+      parent.parent.arguments.some((argument) => argument === parent) &&
+      isUnshadowedPromiseAll(parent.parent, executionRoot)
+    ) {
+      current = parent.parent;
+      continue;
+    }
     break;
+  }
+  return false;
+}
+
+function statementDefinitelyTerminates(statement: ts.Statement): boolean {
+  if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return true;
+  if (ts.isBlock(statement)) {
+    return statement.statements.some((child) => statementDefinitelyTerminates(child));
+  }
+  if (ts.isIfStatement(statement)) {
+    if (statement.expression.kind === ts.SyntaxKind.TrueKeyword) {
+      return statementDefinitelyTerminates(statement.thenStatement);
+    }
+    if (statement.expression.kind === ts.SyntaxKind.FalseKeyword) {
+      return Boolean(
+        statement.elseStatement &&
+          statementDefinitelyTerminates(statement.elseStatement),
+      );
+    }
+    return Boolean(
+      statement.elseStatement &&
+        statementDefinitelyTerminates(statement.thenStatement) &&
+        statementDefinitelyTerminates(statement.elseStatement),
+    );
   }
   return false;
 }
@@ -236,11 +427,36 @@ function helperInvokesParameter(
     ) {
       return;
     }
+    if (ts.isBlock(node)) {
+      for (const statement of node.statements) {
+        visit(statement);
+        if (statementDefinitelyTerminates(statement)) break;
+      }
+      return;
+    }
+    if (ts.isIfStatement(node)) {
+      if (node.expression.kind === ts.SyntaxKind.FalseKeyword) {
+        if (node.elseStatement) visit(node.elseStatement);
+        return;
+      }
+      if (node.expression.kind === ts.SyntaxKind.TrueKeyword) {
+        visit(node.thenStatement);
+        return;
+      }
+      // A callback invoked only on one runtime branch is not guaranteed evidence.
+      return;
+    }
+    if (
+      ts.isWhileStatement(node) &&
+      node.expression.kind === ts.SyntaxKind.FalseKeyword
+    ) {
+      return;
+    }
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
       node.expression.text === parameter.text &&
-      (!isAsyncFunction(callback) || expressionResultIsObserved(node))
+      (!isAsyncFunction(callback) || expressionResultIsObserved(node, helper))
     ) {
       invoked = true;
       return;
@@ -254,22 +470,86 @@ function helperInvokesParameter(
 function callInvokesInlineCallback(
   call: ts.CallExpression,
   callback: ts.ArrowFunction | ts.FunctionExpression,
+  executionRoot: JavascriptHelper,
 ): boolean {
   const parameterIndex = call.arguments.findIndex((argument) => argument === callback);
   if (parameterIndex < 0) return false;
-  const name = expressionName(call.expression);
-  if (name && PROMISE_CALLBACK_METHODS.has(name)) return true;
-  if (name && KNOWN_ASYNC_CALLBACK_HELPERS.has(name)) return true;
-  if (name && SYNC_ITERATION_CALLBACK_METHODS.has(name)) {
-    return !isAsyncFunction(callback);
+  if (ts.isIdentifier(call.expression)) {
+    const binding = resolveVisibleBinding(call, call.expression.text, executionRoot);
+    if (binding?.kind === "helper") {
+      return helperInvokesParameter(binding.helper, parameterIndex, callback);
+    }
+    return binding ? importedCallbackHelper(binding, call.expression.text) : false;
   }
-  if (!ts.isIdentifier(call.expression)) return false;
-  const helper = resolveVisibleHelper(call, call.expression.text);
-  return helper ? helperInvokesParameter(helper, parameterIndex, callback) : false;
+  if (
+    ts.isPropertyAccessExpression(call.expression) &&
+    ts.isIdentifier(call.expression.expression)
+  ) {
+    const binding = resolveVisibleBinding(
+      call,
+      call.expression.expression.text,
+      executionRoot,
+    );
+    return binding ? importedCallbackHelper(binding, call.expression.name.text) : false;
+  }
+  return false;
+}
+
+function hasTopLevelAlternation(pattern: string): boolean {
+  let depth = 0;
+  let inCharacterClass = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index]!;
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (char === "[") {
+      inCharacterClass = true;
+      continue;
+    }
+    if (char === "]") {
+      inCharacterClass = false;
+      continue;
+    }
+    if (inCharacterClass) continue;
+    if (char === "(") depth += 1;
+    else if (char === ")") depth = Math.max(0, depth - 1);
+    else if (char === "|" && depth === 0) return true;
+  }
+  return false;
+}
+
+function leftRegexBoundary(fragment: string): boolean {
+  return (
+    fragment.endsWith("\\b") ||
+    /(?:^|[^\\])\^$/.test(fragment) ||
+    /\\s[*+?]?$/.test(fragment) ||
+    /\(\?:\^\|\\s[*+?]?\)$/.test(fragment) ||
+    /\(\?:\\s[*+?]?\|\^\)$/.test(fragment)
+  );
+}
+
+function rightRegexBoundary(fragment: string): boolean {
+  return (
+    fragment.startsWith("\\b") ||
+    /^\$/.test(fragment) ||
+    /^\\s[*+?]?/.test(fragment) ||
+    /^\(\?:\\s[*+?]?\|\$\)/.test(fragment) ||
+    /^\(\?:\$\|\\s[*+?]?\)/.test(fragment)
+  );
 }
 
 function shortUnboundedRegexToken(pattern: string): string | null {
-  if (pattern.startsWith("^") && pattern.endsWith("$")) return null;
+  // Anchors protect the entire expression only when no top-level alternative
+  // can escape them (`^vite|next$` is not globally anchored).
+  if (
+    pattern.startsWith("^") &&
+    pattern.endsWith("$") &&
+    !hasTopLevelAlternation(pattern)
+  ) {
+    return null;
+  }
   let inCharacterClass = false;
   for (let index = 0; index < pattern.length; index += 1) {
     const char = pattern[index]!;
@@ -295,8 +575,8 @@ function shortUnboundedRegexToken(pattern: string): string | null {
     if (!partOfLongerToken && token.length >= 2 && token.length <= 4) {
       const left = pattern.slice(0, index);
       const right = pattern.slice(end);
-      const leftBounded = left.endsWith("\\b") || /(?:\^|\\s[*+?]*)$/.test(left);
-      const rightBounded = right.startsWith("\\b") || /^(?:\$|\\s[*+?]*)/.test(right);
+      const leftBounded = leftRegexBoundary(left);
+      const rightBounded = rightRegexBoundary(right);
       if (!leftBounded || !rightBounded) return token;
     }
     index = end - 1;
@@ -305,7 +585,11 @@ function shortUnboundedRegexToken(pattern: string): string | null {
 }
 
 function brittleSubstring(text: string): string | null {
-  return text.trim().length <= 4
+  const trimmed = text.trim();
+  const hasLeftBoundary = text.length > 0 && /[^A-Za-z0-9_-]/.test(text[0]!);
+  const hasRightBoundary =
+    text.length > 0 && /[^A-Za-z0-9_-]/.test(text[text.length - 1]!);
+  return trimmed.length <= 4 && !(hasLeftBoundary && hasRightBoundary)
     ? `brittle negated substring ${JSON.stringify(text)}; ` +
         "use a token-, line-, or structure-specific assertion"
     : null;
@@ -326,7 +610,10 @@ function brittleRegex(pattern: string): string | null {
  * test runner `vitest`. Require a specific token or line boundary instead of
  * letting a false positive send product repair after working source code.
  */
-function brittleNegatedMatcher(call: ts.CallExpression): string | null {
+function brittleNegatedMatcher(
+  call: ts.CallExpression,
+  executionRoot: JavascriptHelper,
+): string | null {
   if (!ts.isPropertyAccessExpression(call.expression)) return null;
   const matcher = call.expression.name.text;
   const negated = call.expression.expression;
@@ -350,7 +637,8 @@ function brittleNegatedMatcher(call: ts.CallExpression): string | null {
   if (
     matcher === "doesNotMatch" &&
     ts.isIdentifier(negated) &&
-    negated.text === "assert"
+    negated.text === "assert" &&
+    verifiedAssertionBinding(call, "assert", executionRoot)
   ) {
     const pattern = call.arguments[1];
     if (pattern && ts.isRegularExpressionLiteral(pattern)) {
@@ -372,8 +660,11 @@ function analyzeCallback(
   let reload = false;
   let forbiddenBrowserFixture = false;
 
-  const inspectCall = (call: ts.CallExpression): void => {
-    const brittle = brittleNegatedMatcher(call);
+  const inspectCall = (
+    call: ts.CallExpression,
+    executionRoot: JavascriptHelper,
+  ): void => {
+    const brittle = brittleNegatedMatcher(call, executionRoot);
     if (brittle && !brittleAssertions.includes(brittle)) {
       brittleAssertions.push(brittle);
     }
@@ -395,11 +686,23 @@ function analyzeCallback(
     if (name === "reload") reload = true;
 
     const expectCall = containsExpectCall(call.expression);
-    if (name && ASSERT_METHOD.test(name) && expectCall) {
+    if (
+      name &&
+      ASSERT_METHOD.test(name) &&
+      expectCall &&
+      verifiedAssertionBinding(expectCall, "expect", executionRoot) &&
+      (!/\.(?:resolves|rejects)\b/.test(call.expression.getText()) ||
+        expressionResultIsObserved(call, executionRoot))
+    ) {
       if (!isPrimitiveLiteral(expectCall.arguments[0])) meaningfulAssertion = true;
       return;
     }
-    if (name === "assert" && !isPrimitiveLiteral(call.arguments[0])) {
+    if (
+      name === "assert" &&
+      ts.isIdentifier(call.expression) &&
+      verifiedAssertionBinding(call, "assert", executionRoot) &&
+      !isPrimitiveLiteral(call.arguments[0])
+    ) {
       meaningfulAssertion = true;
       return;
     }
@@ -416,8 +719,11 @@ function analyzeCallback(
       ts.isPropertyAccessExpression(call.expression) &&
       ts.isIdentifier(call.expression.expression) &&
       call.expression.expression.text === "assert" &&
+      verifiedAssertionBinding(call, "assert", executionRoot) &&
       name &&
       ASSERT_OBJECT_METHODS.has(name) &&
+      (!ASYNC_ASSERT_OBJECT_METHODS.has(name) ||
+        expressionResultIsObserved(call, executionRoot)) &&
       !isPrimitiveLiteral(call.arguments[0])
     ) {
       meaningfulAssertion = true;
@@ -427,14 +733,17 @@ function analyzeCallback(
   // Nested declarations are not executable evidence on their own. An inline
   // callback passed to a call the test awaits is part of that test's reachable
   // control flow, so inspect it while still rejecting stored/deferred helpers.
-  const isAwaitedInlineCallback = (node: ts.Node): boolean => {
+  const isAwaitedInlineCallback = (
+    node: ts.Node,
+    executionRoot: JavascriptHelper,
+  ): boolean => {
     if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return false;
     const call = node.parent;
     return (
       ts.isCallExpression(call) &&
       call.arguments.some((argument) => argument === node) &&
-      expressionResultIsObserved(call) &&
-      callInvokesInlineCallback(call, node)
+      expressionResultIsObserved(call, executionRoot) &&
+      callInvokesInlineCallback(call, node, executionRoot)
     );
   };
 
@@ -444,55 +753,70 @@ function analyzeCallback(
   // returned so a floating promise cannot masquerade as executed acceptance.
   const activeHelpers = new Set<JavascriptHelper>();
 
-  const visit = (node: ts.Node, root = false): void => {
+  const visit = (
+    node: ts.Node,
+    root = false,
+    executionRoot: JavascriptHelper = callback,
+  ): void => {
     if (
       !root &&
       (ts.isArrowFunction(node) ||
         ts.isFunctionExpression(node) ||
         ts.isFunctionDeclaration(node) ||
         ts.isMethodDeclaration(node)) &&
-      !isAwaitedInlineCallback(node)
+      !isAwaitedInlineCallback(node, executionRoot)
     ) {
       return;
     }
     if (ts.isBlock(node)) {
       for (const statement of node.statements) {
-        visit(statement);
-        if (ts.isReturnStatement(statement)) break;
+        visit(statement, false, executionRoot);
+        if (statementDefinitelyTerminates(statement)) break;
       }
       return;
     }
     if (ts.isIfStatement(node)) {
       if (node.expression.kind === ts.SyntaxKind.FalseKeyword) {
-        if (node.elseStatement) visit(node.elseStatement);
+        if (node.elseStatement) visit(node.elseStatement, false, executionRoot);
         return;
       }
       if (node.expression.kind === ts.SyntaxKind.TrueKeyword) {
-        visit(node.thenStatement);
+        visit(node.thenStatement, false, executionRoot);
         return;
       }
-      visit(node.thenStatement);
-      if (node.elseStatement) visit(node.elseStatement);
+      visit(node.thenStatement, false, executionRoot);
+      if (node.elseStatement) visit(node.elseStatement, false, executionRoot);
+      return;
+    }
+    if (
+      ts.isWhileStatement(node) &&
+      node.expression.kind === ts.SyntaxKind.FalseKeyword
+    ) {
       return;
     }
     if (ts.isCallExpression(node)) {
-      inspectCall(node);
+      inspectCall(node, executionRoot);
       if (ts.isIdentifier(node.expression)) {
-        const helper = resolveVisibleHelper(node, node.expression.text);
+        const binding = resolveVisibleBinding(
+          node,
+          node.expression.text,
+          executionRoot,
+        );
+        const helper = binding?.kind === "helper" ? binding.helper : null;
         if (
           helper &&
           helper.body &&
           !activeHelpers.has(helper) &&
           !isGeneratorHelper(helper) &&
-          (!isAsyncFunction(helper) || expressionResultIsObserved(node))
+          (!isAsyncFunction(helper) || expressionResultIsObserved(node, executionRoot))
         ) {
           activeHelpers.add(helper);
-          visit(helper.body, true);
+          visit(helper.body, true, executionRoot);
           activeHelpers.delete(helper);
         }
       }
     }
-    ts.forEachChild(node, (child) => visit(child));
+    ts.forEachChild(node, (child) => visit(child, false, executionRoot));
   };
   visit(callback.body, true);
   return {
@@ -567,6 +891,71 @@ function analyzeJavascript(source: string): FileEvidence {
   return { browserImport, skippedOrTodo, tests };
 }
 
+function stripPythonComment(line: string): string {
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!;
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "#") return line.slice(0, index);
+  }
+  return line;
+}
+
+function pythonBracketDelta(line: string): number {
+  let delta = 0;
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!;
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "(" || char === "[" || char === "{") delta += 1;
+    if (char === ")" || char === "]" || char === "}") delta -= 1;
+  }
+  return delta;
+}
+
+function pythonLogicalStatements(lines: string[]): string[] {
+  const statements: string[] = [];
+  let current = "";
+  let depth = 0;
+  for (const raw of lines) {
+    const line = stripPythonComment(raw).trim();
+    if (!line) continue;
+    const continued = line.endsWith("\\");
+    const fragment = continued ? line.slice(0, -1).trimEnd() : line;
+    current = current ? `${current} ${fragment}` : fragment;
+    depth += pythonBracketDelta(fragment);
+    if (depth <= 0 && !continued) {
+      statements.push(current);
+      current = "";
+      depth = 0;
+    }
+  }
+  if (current) statements.push(current);
+  return statements;
+}
+
 function analyzePython(source: string): FileEvidence {
   const tests = new Map<string, TestEvidence>();
   const lines = source.split(/\r?\n/);
@@ -590,24 +979,25 @@ function analyzePython(source: string): FileEvidence {
       if (nextIndent <= indent) break;
       body.push(next);
     }
-    const meaningfulAssertion = body.some(
+    const statements = pythonLogicalStatements(body);
+    const meaningfulAssertion = statements.some(
       (entry) =>
-        /^\s*assert\s+/.test(entry) && !/^\s*assert\s+(?:True|1)(?:\s|$)/.test(entry),
+        /^assert\s+/.test(entry) && !/^assert\s+(?:True|1)(?:\s|$)/.test(entry),
     );
     const brittleAssertions: string[] = [];
-    for (const entry of body) {
-      const substring = /\bassert\s+(["'])(.*?)\1\s+not\s+in\b/.exec(entry);
+    for (const entry of statements) {
+      const substring = /^assert\s+(["'])(.*?)\1\s+not\s+in\b/.exec(entry);
       if (substring) {
         const issue = brittleSubstring(substring[2] ?? "");
         if (issue && !brittleAssertions.includes(issue)) brittleAssertions.push(issue);
       }
       const negativeRegex =
-        /\bassert\s+(?:not\s+)?re\.(?:search|match|fullmatch)\(\s*r?(["'])(.*?)\1/.exec(
+        /^assert\s+(?:not\s+)?re\.(?:search|match|fullmatch)\(\s*r?(["'])(.*?)\1/.exec(
           entry,
         );
       if (
         negativeRegex &&
-        (/\bassert\s+not\s+/.test(entry) || /\bis\s+None\b/.test(entry))
+        (/^assert\s+not\s+/.test(entry) || /\bis\s+None\b/.test(entry))
       ) {
         const issue = brittleRegex(negativeRegex[2] ?? "");
         if (issue && !brittleAssertions.includes(issue)) brittleAssertions.push(issue);
