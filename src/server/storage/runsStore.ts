@@ -16,6 +16,7 @@ import { z } from "zod";
 import type { RunRecord, RunSummary, FileContent } from "../../shared/schemas.js";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
 import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
+import { boundPassedTestNames } from "../orchestrator/directTestEvidence.js";
 import {
   RunRecordSchema,
   FileContentSchema,
@@ -421,7 +422,17 @@ export async function saveRunCheckpoint(checkpoint: FactoryCheckpoint): Promise<
   }
   await ensureDirs();
   const target = await safeStorePath(CHECKPOINTS_DIR, checkpoint.runId);
-  await writeFileContained(target, JSON.stringify(checkpoint));
+  const verification = checkpoint.verification
+    ? {
+        ...checkpoint.verification,
+        executed: checkpoint.verification.executed.map((entry) =>
+          entry.passedTestNames
+            ? { ...entry, passedTestNames: boundPassedTestNames(entry.passedTestNames) }
+            : entry,
+        ),
+      }
+    : undefined;
+  await writeFileContained(target, JSON.stringify({ ...checkpoint, verification }));
 }
 
 export async function getRunCheckpoint(id: string): Promise<FactoryCheckpoint | null> {

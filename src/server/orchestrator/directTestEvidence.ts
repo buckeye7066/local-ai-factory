@@ -8,6 +8,22 @@ export interface DirectTestEvidence {
   reason?: string;
 }
 
+export const MAX_PERSISTED_PASSED_TEST_NAMES = 256;
+export const MAX_PERSISTED_TEST_NAME_CHARS = 512;
+
+export function boundPassedTestNames(names: Iterable<string>): string[] {
+  const bounded: string[] = [];
+  const seen = new Set<string>();
+  for (const rawName of names) {
+    const name = rawName.trim().slice(0, MAX_PERSISTED_TEST_NAME_CHARS);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    bounded.push(name);
+    if (bounded.length === MAX_PERSISTED_PASSED_TEST_NAMES) break;
+  }
+  return bounded;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object"
     ? (value as Record<string, unknown>)
@@ -49,7 +65,7 @@ function finish(
   names: Iterable<string>,
   parseReason?: string,
 ): DirectTestEvidence {
-  const passedTestNames = [...new Set([...names].filter(Boolean))];
+  const passedTestNames = boundPassedTestNames(names);
   if (parseReason) {
     return {
       valid: false,

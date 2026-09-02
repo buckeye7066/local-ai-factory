@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseDirectTestEvidence } from "../orchestrator/directTestEvidence.js";
+import {
+  MAX_PERSISTED_PASSED_TEST_NAMES,
+  MAX_PERSISTED_TEST_NAME_CHARS,
+  parseDirectTestEvidence,
+} from "../orchestrator/directTestEvidence.js";
 
 describe("parseDirectTestEvidence", () => {
   it("accepts structured Vitest/Jest output and keeps exact passed titles", () => {
@@ -101,5 +105,32 @@ describe("parseDirectTestEvidence", () => {
       skippedCount: 0,
       passedTestNames: ["test_add"],
     });
+  });
+
+  it("bounds reporter-controlled test titles before they enter a checkpoint", () => {
+    const assertionResults = Array.from(
+      { length: MAX_PERSISTED_PASSED_TEST_NAMES + 50 },
+      (_, index) => ({
+        status: "passed",
+        title: `${index}:${"x".repeat(MAX_PERSISTED_TEST_NAME_CHARS + 100)}`,
+      }),
+    );
+    const parsed = parseDirectTestEvidence(
+      "vitest",
+      JSON.stringify({
+        numPassedTests: assertionResults.length,
+        numPendingTests: 0,
+        testResults: [{ assertionResults }],
+      }),
+      "",
+    );
+
+    expect(parsed.valid).toBe(true);
+    expect(parsed.passedTestNames).toHaveLength(MAX_PERSISTED_PASSED_TEST_NAMES);
+    expect(
+      parsed.passedTestNames.every(
+        (name) => name.length <= MAX_PERSISTED_TEST_NAME_CHARS,
+      ),
+    ).toBe(true);
   });
 });

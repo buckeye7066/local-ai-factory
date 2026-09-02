@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ResearchFindingsSchema } from "../agents/researchAgent.js";
+import { boundPassedTestNames } from "./directTestEvidence.js";
 import {
   ArchitectureSchema,
   FileBuildSchema,
@@ -157,7 +158,13 @@ export const FactoryCheckpointSchema = z.object({
             directEvidenceValid: z.boolean().optional(),
             passedCount: z.number().int().nonnegative().optional(),
             skippedCount: z.number().int().nonnegative().optional(),
-            passedTestNames: z.array(z.string()).optional(),
+            // Reporter output is parsed from a larger in-memory buffer, but
+            // only a bounded set of bounded titles may enter durable state.
+            // The transform also normalizes legacy oversized checkpoints.
+            passedTestNames: z
+              .array(z.string())
+              .transform(boundPassedTestNames)
+              .optional(),
             outputTail: z.string().max(32_768).default(""),
           }),
         )
@@ -174,7 +181,8 @@ export const FactoryCheckpointSchema = z.object({
       fileDigests: z.record(z.string()).optional(),
       /**
        * Complete candidate manifest sealed before cross-runner artifact transfer.
-       * Values bind file bytes plus executable intent, or symlink identity.
+       * Values bind directory presence, file bytes plus executable intent, or
+       * symlink identity.
        */
       platformArtifactSnapshot: z.record(z.string()).optional(),
     })

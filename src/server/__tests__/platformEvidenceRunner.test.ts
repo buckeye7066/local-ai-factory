@@ -92,10 +92,7 @@ describe("platformEvidenceRunner", () => {
 
     await removeAddedPlatformArtifacts(root, before, after);
     expect(
-      changedPlatformArtifactPaths(
-        before,
-        await capturePlatformArtifactSnapshot(root),
-      ),
+      changedPlatformArtifactPaths(before, await capturePlatformArtifactSnapshot(root)),
     ).toEqual(["empty-deliverable"]);
   });
 
