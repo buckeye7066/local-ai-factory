@@ -4,7 +4,6 @@ import type { StationId } from "./model.js";
 
 export const REQUIRED_PRODUCTION_STATIONS = Object.freeze([
   "factory-deck",
-  "flexfactor",
   "crucible",
   "watchtower",
 ] as const satisfies readonly StationId[]);
@@ -20,9 +19,7 @@ export type RequiredProductionStation = (typeof REQUIRED_PRODUCTION_STATIONS)[nu
 export function requiredProductionStations(
   _routingMode?: RoutingMode,
 ): RequiredProductionStation[] {
-  return REQUIRED_PRODUCTION_STATIONS.filter(
-    (station) => station !== "flexfactor",
-  );
+  return [...REQUIRED_PRODUCTION_STATIONS];
 }
 
 export function normalizeFoundryStations(
