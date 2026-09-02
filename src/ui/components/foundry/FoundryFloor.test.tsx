@@ -48,7 +48,7 @@ describe("Purpose Foundry intake UI", () => {
         stationId === "promo-pilot",
       destination: "test",
     }));
-    let posted: Record<string, unknown> | null = null;
+    const posted = { current: null as Record<string, unknown> | null };
     let obsidianPosted: Record<string, unknown> | null = null;
     let projects: unknown[] = [];
 
@@ -59,14 +59,17 @@ describe("Purpose Foundry intake UI", () => {
         if (url === "/api/foundry/stations") return json({ stations });
         if (url === "/api/foundry/adapters") return json({ adapters });
         if (url === "/api/foundry/projects" && init?.method === "POST") {
-          posted = JSON.parse(String(init.body)) as Record<string, unknown>;
+          posted.current = JSON.parse(String(init.body)) as Record<
+            string,
+            unknown
+          >;
           const created = {
             id: "c2b867ad-7be9-44cc-b660-145d409e6142",
-            name: posted.name,
+            name: posted.current.name,
             status: "draft",
-            routingMode: posted.routingMode,
+            routingMode: posted.current.routingMode,
             constitution: {
-              purpose: posted.purpose,
+              purpose: posted.current.purpose,
               targetUsers: [],
               successCriteria: [],
               constraints: [],
@@ -110,8 +113,12 @@ describe("Purpose Foundry intake UI", () => {
     render(<FoundryFloor />);
 
     expect(
-      screen.getByRole("button", { name: /Release to the line/i }),
-    ).toBeDisabled();
+      (
+        screen.getByRole("button", {
+          name: /Release to the line/i,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
 
     fireEvent.change(await screen.findByLabelText("Job name"), {
       target: { value: "Paid core job" },
@@ -123,21 +130,25 @@ describe("Purpose Foundry intake UI", () => {
       target: { value: "paid" },
     });
     const promoPilot = await screen.findByLabelText("Include promo-pilot");
-    expect(promoPilot).toBeEnabled();
+    expect((promoPilot as HTMLInputElement).disabled).toBe(false);
     fireEvent.click(promoPilot);
-    expect(screen.getByLabelText("Include scout")).toBeDisabled();
-    expect(screen.getByLabelText("Include flexfactor")).toBeDisabled();
+    expect(
+      (screen.getByLabelText("Include scout") as HTMLInputElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByLabelText("Include flexfactor") as HTMLInputElement).disabled,
+    ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /Release to the line/i }));
 
-    await waitFor(() => expect(posted).not.toBeNull());
-    expect(posted).toMatchObject({
+    await waitFor(() => expect(posted.current).not.toBeNull());
+    expect(posted.current).toMatchObject({
       name: "Paid core job",
       purpose: "Build and verify the core product",
       routingMode: "paid",
       selectedStations: ["promo-pilot"],
     });
-    expect(posted?.selectedStations).not.toContain("factory-deck");
-    expect(posted?.selectedStations).not.toContain("app-store-publisher");
+    expect(posted.current?.selectedStations).not.toContain("factory-deck");
+    expect(posted.current?.selectedStations).not.toContain("app-store-publisher");
 
     fireEvent.change(screen.getByLabelText("Obsidian note"), {
       target: { value: "# Obsidian job\nBuild the same product." },
