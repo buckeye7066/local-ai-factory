@@ -39,6 +39,7 @@ const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".facto
 const STORE_DIR = join(DATA_ROOT, "runs");
 const FILES_DIR = join(DATA_ROOT, "files");
 const CHECKPOINTS_DIR = join(DATA_ROOT, "checkpoints");
+const PROJECT_MEMORY_DIR = join(DATA_ROOT, "project-memory");
 
 const memory = new Map<string, RunRecord>();
 const fileContents = new Map<string, FileContent[]>();
@@ -47,6 +48,7 @@ async function ensureDirs() {
   await mkdir(STORE_DIR, { recursive: true });
   await mkdir(FILES_DIR, { recursive: true });
   await mkdir(CHECKPOINTS_DIR, { recursive: true });
+  await mkdir(PROJECT_MEMORY_DIR, { recursive: true });
 }
 
 /** True when `child`'s resolved path is `parent` or beneath it (lexical). */
@@ -73,7 +75,12 @@ function isInside(parent: string, child: string): boolean {
 async function guardStoreDirs(): Promise<void> {
   const rootReal = await realpath(DATA_ROOT).catch(() => null);
   if (!rootReal) return; // nothing created yet — nothing can have escaped
-  for (const dir of [STORE_DIR, FILES_DIR, CHECKPOINTS_DIR]) {
+  for (const dir of [
+    STORE_DIR,
+    FILES_DIR,
+    CHECKPOINTS_DIR,
+    PROJECT_MEMORY_DIR,
+  ]) {
     const st = await lstat(dir).catch(() => null);
     if (!st) continue; // not created yet
     if (st.isSymbolicLink()) {
@@ -119,6 +126,25 @@ async function safeStorePath(dir: string, id: string): Promise<string> {
     throw new Error(`Refused: run file is a symlink: ${p}`);
   }
   return p;
+}
+
+const PROJECT_MEMORY_ID = /^[a-f0-9]{64}$/;
+
+async function safeProjectMemoryPath(id: string): Promise<string> {
+  if (!PROJECT_MEMORY_ID.test(id)) {
+    throw new Error("Refused: invalid project-memory id.");
+  }
+  await guardStoreDirs();
+  const target = join(PROJECT_MEMORY_DIR, `${id}.json`);
+  const rel = relative(resolve(PROJECT_MEMORY_DIR), resolve(target));
+  if (rel.startsWith("..") || isAbsolute(rel) || rel.includes(sep)) {
+    throw new Error("Refused: project-memory id escapes its store.");
+  }
+  const info = await lstat(target).catch(() => null);
+  if (info?.isSymbolicLink()) {
+    throw new Error(`Refused: project-memory file is a symlink: ${target}`);
+  }
+  return target;
 }
 
 /** True when this platform can refuse to open a symlink at the final component. */
@@ -418,6 +444,29 @@ export async function deleteRunCheckpoint(id: string): Promise<void> {
   if (!isValidRunId(id)) return;
   await ensureDirs();
   await rm(await safeStorePath(CHECKPOINTS_DIR, id), { force: true });
+}
+
+/** Persist one bounded cross-run project memory record behind a hashed id. */
+export async function saveProjectMemoryJson(
+  id: string,
+  json: string,
+): Promise<void> {
+  if (Buffer.byteLength(json, "utf8") > 2 * 1024 * 1024) {
+    throw new Error("Refused: project memory exceeds 2 MB.");
+  }
+  await ensureDirs();
+  await writeFileContained(await safeProjectMemoryPath(id), json);
+}
+
+/** Load private project continuity; this store is never exposed by an API. */
+export async function loadProjectMemoryJson(id: string): Promise<string | null> {
+  try {
+    await ensureDirs();
+    return await readFile(await safeProjectMemoryPath(id), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 const FileContentListSchema = z.array(FileContentSchema);
