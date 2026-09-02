@@ -18,6 +18,10 @@ const dockerfile = readFileSync(
   resolve("scripts/ci/verification-sandbox.Dockerfile"),
   "utf8",
 );
+const foundrySmoke = readFileSync(
+  resolve("scripts/ci/run-purpose-foundry-smoke.mjs"),
+  "utf8",
+);
 
 describe("paid cloud workflow contract", () => {
   it.each([
@@ -106,6 +110,20 @@ describe("paid cloud workflow contract", () => {
     expect(foundry).toContain("purpose-foundry-server.log");
     expect(foundry).toContain(".factory/**");
     expect(foundry).toContain("workspaces/**");
+  });
+
+  it("uses greenfield proofs whose tests can be independently executed", () => {
+    expect(factory).toContain(
+      "command-line only with no HTML, browser, or web UI",
+    );
+    expect(foundrySmoke).toContain(
+      "Command-line only; do not generate HTML, browser, or web UI code.",
+    );
+    expect(foundrySmoke).toContain(
+      "Tasks persist in a local JSON file across separate CLI invocations.",
+    );
+    expect(factory).not.toContain("accessible single-page task checklist");
+    expect(foundrySmoke).not.toContain("minimal accessible task checklist");
   });
 
   it("builds a verifier image with Node, Python, native tools, and no entrypoint", () => {
