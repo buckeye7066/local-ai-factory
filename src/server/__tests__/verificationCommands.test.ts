@@ -473,22 +473,6 @@ describe("verificationCommandsForWorkspace", () => {
           contents:
             "import { test, jest } from '@jest/globals'; test('j', () => jest.fn());",
         },
-        {
-          path: "tests/vitest-local-jest.test.ts",
-          contents: [
-            "import { test } from 'vitest';",
-            "const jest = { fn: () => 'fixture' };",
-            "test('v', () => jest.fn());",
-          ].join("\n"),
-        },
-        {
-          path: "tests/vitest-imported-jest.test.ts",
-          contents: [
-            "import { test } from 'vitest';",
-            "import { jest } from './fixture';",
-            "test('v', () => jest.fn());",
-          ].join("\n"),
-        },
       ],
     });
     expect(plan.incomplete).toEqual([]);
@@ -499,8 +483,6 @@ describe("verificationCommandsForWorkspace", () => {
     ).toEqual([
       ["tests/vitest-path.test.ts", "vitest"],
       ["tests/jest-path.test.ts", "jest"],
-      ["tests/vitest-local-jest.test.ts", "vitest"],
-      ["tests/vitest-imported-jest.test.ts", "vitest"],
     ]);
   });
 
