@@ -310,6 +310,68 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     adapters.release("repo-rewards");
   });
 
+  it("migrates an active legacy restart with an empty RepoRewards handoff", async () => {
+    const project = await store.create(
+      intakeFromMarkdown(
+        "# LegacyRestart\nContinue an in-flight build after a server restart.",
+        "C:/Vault/LegacyRestart.md",
+      ),
+    );
+    const discovery = project.stations.find(
+      (station) => station.stationId === "repo-rewards",
+    )!;
+    const factory = project.stations.find(
+      (station) => station.stationId === "factory-deck",
+    )!;
+    discovery.status = "completed";
+    discovery.handoff = { insights: [], sources: [], candidates: [] };
+    discovery.endedAt = Date.now();
+    factory.status = "active";
+    factory.startedAt = Date.now();
+    factory.attempt = 1;
+    project.status = "running";
+    await store.save(project);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store = new FoundryStore(root);
+    adapters = new TestFoundryAdapters(store);
+    adapters.hold("repo-rewards");
+    await startServer();
+
+    await waitFor(
+      async () => adapters.getCalls(),
+      (calls) =>
+        calls.some(
+          (call) => call.projectId === project.id && call.stationId === "repo-rewards",
+        ),
+      4_000,
+    );
+    const migrated = (await store.get(project.id))!;
+    expect(
+      migrated.stations.find((station) => station.stationId === "repo-rewards")?.status,
+    ).toBe("active");
+    expect(
+      migrated.stations.find((station) => station.stationId === "factory-deck")?.status,
+    ).toBe("queued");
+    expect(
+      adapters
+        .getCalls()
+        .some(
+          (call) => call.projectId === project.id && call.stationId === "factory-deck",
+        ),
+    ).toBe(false);
+
+    adapters.release("repo-rewards");
+    await waitFor(
+      async () => adapters.getCalls(),
+      (calls) =>
+        calls.some(
+          (call) => call.projectId === project.id && call.stationId === "factory-deck",
+        ),
+      4_000,
+    );
+  });
+
   it("redispatches an in-flight station after restart without replay or concurrency", async () => {
     const intake = {
       ...intakeFromMarkdown("# GrantFlow\nFind funding.", "C:/Vault/GrantFlow.md"),
