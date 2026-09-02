@@ -6,7 +6,7 @@ const FABLE_OR_OPUS_MODEL_ID = /^(?:claude-)?(?:fable|opus)(?:[-.][a-z0-9]+)*$/i
  * Anchoring the complete identifier prevents strings such as `not-opus`,
  * `claude-haiku-opus-proxy`, or arbitrary aliases from masquerading as the
  * mandatory Anthropic production reviewer. Version suffixes remain allowed,
- * for example `claude-opus-4-8` and `claude-fable-v1`.
+ * for example `claude-fable-5-1` and `claude-fable-v1`.
  */
 export function isSupportedFableOrOpusModel(model: string): boolean {
   return FABLE_OR_OPUS_MODEL_ID.test(String(model || "").trim());

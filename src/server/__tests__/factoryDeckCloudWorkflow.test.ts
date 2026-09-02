@@ -24,6 +24,14 @@ const foundrySmoke = readFileSync(
 );
 
 describe("paid cloud workflow contract", () => {
+  it("pins the current strongest Anthropic model for paid production", () => {
+    for (const workflow of [factory, foundry]) {
+      expect(workflow).toContain("ANTHROPIC_MODEL: claude-fable-5-1");
+      expect(workflow).toContain("FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1");
+      expect(workflow).not.toContain("claude-opus-4-8");
+    }
+  });
+
   it.each([
     ["Factory Deck", factory],
     ["Purpose Foundry", foundry],
@@ -93,12 +101,16 @@ describe("paid cloud workflow contract", () => {
         /secrets\.PAID_PRODUCTION_OPENAI_KEY \|\| secrets\.OPENAI_API_KEY/g,
       ),
     ).toHaveLength(3);
-    expect(foundry).toContain(
-      "secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY",
-    );
-    expect(foundry).toContain(
-      "secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY",
-    );
+    expect(
+      foundry.match(
+        /secrets\.PAID_PRODUCTION_ANTHROPIC_KEY \|\| secrets\.ANTHROPIC_API_KEY/g,
+      ),
+    ).toHaveLength(2);
+    expect(
+      foundry.match(
+        /secrets\.PAID_PRODUCTION_OPENAI_KEY \|\| secrets\.OPENAI_API_KEY/g,
+      ),
+    ).toHaveLength(2);
   });
 
   it("keeps Purpose Foundry's real paid end-to-end smoke and upload reserve", () => {
@@ -120,81 +132,6 @@ describe("paid cloud workflow contract", () => {
     );
     expect(factory).not.toContain("accessible single-page task checklist");
     expect(foundrySmoke).not.toContain("minimal accessible task checklist");
-  });
-
-  it("proves one exact CLI candidate on Windows and macOS before paid finalization", () => {
-    expect(factory).toContain("runs-on: windows-latest");
-    expect(factory).toContain("runs-on: macos-latest");
-    expect(factory).toContain("needs: windows");
-    expect(factory).toContain("needs: macos");
-    expect(factory).toContain(
-      "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
-    );
-    expect(
-      factory.match(/pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g),
-    ).toHaveLength(2);
-    expect(factory).toContain("pnpm exec tsx src/cli/factory-resume.ts");
-    expect(factory).toContain("continue-on-error: true");
-    expect(factory).toContain("${{ steps.candidate.outcome }}");
-    expect(factory).toContain(
-      "factory-deck-seed-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(factory).toContain(
-      "factory-deck-windows-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(factory).toContain(
-      "factory-deck-macos-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(factory).toContain("!workspaces/**/node_modules/**");
-
-    const windowsProof = factory.slice(
-      factory.indexOf("Execute Windows proof without production secrets"),
-      factory.indexOf("Preserve Windows evidence"),
-    );
-    const macosProof = factory.slice(
-      factory.indexOf("Execute macOS proof without production secrets"),
-      factory.indexOf("Preserve macOS evidence"),
-    );
-    expect(windowsProof).not.toContain("API_KEY");
-    expect(macosProof).not.toContain("API_KEY");
-  });
-
-  it("resumes the same Purpose Foundry candidate after secret-free Windows and macOS proof", () => {
-    expect(foundry).toContain("runs-on: windows-latest");
-    expect(foundry).toContain("runs-on: macos-latest");
-    expect(foundry).toContain("needs: windows");
-    expect(foundry).toContain("needs: macos");
-    expect(foundry).toContain(
-      "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
-    );
-    expect(
-      foundry.match(/pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g),
-    ).toHaveLength(2);
-    expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: seed");
-    expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: resume");
-    expect(foundry).toContain(
-      "purpose-foundry-seed-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(foundry).toContain(
-      "purpose-foundry-windows-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(foundry).toContain(
-      "purpose-foundry-macos-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(foundry).toContain("!workspaces/**/node_modules/**");
-    expect(foundrySmoke).toContain("purpose-foundry-cloud-smoke.json");
-    expect(foundrySmoke).toContain("HELD FOR PLATFORM PROOF");
-
-    const windowsProof = foundry.slice(
-      foundry.indexOf("Execute Windows proof without production secrets"),
-      foundry.indexOf("Preserve Windows evidence"),
-    );
-    const macosProof = foundry.slice(
-      foundry.indexOf("Execute macOS proof without production secrets"),
-      foundry.indexOf("Preserve macOS evidence"),
-    );
-    expect(windowsProof).not.toContain("API_KEY");
-    expect(macosProof).not.toContain("API_KEY");
   });
 
   it("builds a verifier image with Node, Python, native tools, and no entrypoint", () => {

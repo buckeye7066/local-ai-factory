@@ -10,7 +10,7 @@ import {
 describe("config", () => {
   it("loads defaults when env is empty", () => {
     const cfg = loadConfig({});
-    expect(cfg.anthropicModel).toBe("claude-opus-4-8");
+    expect(cfg.anthropicModel).toBe("claude-fable-5-1");
     expect(cfg.openaiModel).toBe("gpt-5.5");
     expect(cfg.maxRepairLoops).toBe(3);
     expect(cfg.maxModelCallsPerRun).toBe(30);

@@ -19,7 +19,7 @@ the deck is what actually happened.
 
 | Rung       | Credential/setting     | Default model         |
 | ---------- | ---------------------- | --------------------- |
-| Anthropic  | `ANTHROPIC_API_KEY`    | `claude-opus-4-8`     |
+| Anthropic  | `ANTHROPIC_API_KEY`    | `claude-fable-5-1`     |
 | OpenAI     | `OPENAI_API_KEY`       | `gpt-5.5`             |
 | Free/local | `FACTORY_FREE_ENABLED` | `claude-sonnet-4-5`   |
 
