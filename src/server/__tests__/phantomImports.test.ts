@@ -73,6 +73,17 @@ describe("importedPackages", () => {
     ]);
   });
 
+  it("preserves UTF-16 offsets while masking syntax before a Flow import", () => {
+    const src = [
+      'const astral = "🚀";',
+      'const template = `🚀 import typeof Fake from "template-package"`;',
+      'const regex = /🚀 import typeof Fake from "regex-package"/;',
+      'const element = <div>🚀 import typeof Fake from "jsx-package"</div>;',
+      'import typeof RealType from "real-flow-package";',
+    ].join(BR);
+    expect(importedPackages(src, "src/example.jsx")).toEqual(["real-flow-package"]);
+  });
+
   it("reads JSDoc @import tags and masks template, regex, and JSX fixtures", () => {
     const src = [
       '/** @import {SomeType} from "jsdoc-tag-package" */',
