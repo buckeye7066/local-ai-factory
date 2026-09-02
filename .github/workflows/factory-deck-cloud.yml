@@ -16,14 +16,14 @@ permissions:
 
 concurrency:
   group: factory-deck-cloud-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     name: Factory Deck cloud build
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[factory-smoke]'))
     environment: paid-production-main-automated
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
