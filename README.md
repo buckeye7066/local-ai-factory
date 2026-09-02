@@ -32,8 +32,10 @@ Idea or existing repository goal
 
 ### Durable purpose and cross-run memory
 
-Every live run is joined to a stable, credential-free project identity. Before
-the product spec is accepted, Factory Deck reconciles the current request with
+Every live run is joined to a stable, credential-free project identity. A new
+GitHub project and every later extend run share the same canonical repository
+key, so the founding mission follows the app instead of the one-time creation
+request. Before the product spec is accepted, Factory Deck reconciles the current request with
 repository purpose evidence and prior project memory into one
 `factory.goal-contract.v1` object. That contract contains the purpose, target
 users, active goals, constraints, non-goals, prior run IDs, carried decisions,
