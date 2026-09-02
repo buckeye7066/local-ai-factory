@@ -51,14 +51,22 @@ describe("Purpose Foundry mandatory production path", () => {
     ]);
   });
 
-  it("retains the old free station set only for stored legacy records", () => {
-    expect(normalizeFoundryStations([], "free")).toEqual([
-      "factory-deck",
-      "flexfactor",
-      "crucible",
-      "watchtower",
-    ]);
-  });
+  it.each(["free", "paid"] as const)(
+    "normalizes legacy %s records to the same station policy",
+    (legacyMode) => {
+      expect(normalizeFoundryStations([], legacyMode)).toEqual([
+        "factory-deck",
+        "crucible",
+        "watchtower",
+      ]);
+      expect(normalizeFoundryStations(["flexfactor"], legacyMode)).toEqual([
+        "factory-deck",
+        "crucible",
+        "watchtower",
+        "flexfactor",
+      ]);
+    },
+  );
 
   it("does not confuse all station badges with a production-ready project", () => {
     const decision = evaluateFoundryCompletion({
