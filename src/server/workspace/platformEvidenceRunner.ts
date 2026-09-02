@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, readdir, readlink } from "node:fs/promises";
+import { lstat, readdir, readlink, rm } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
 import { parseDirectTestEvidence } from "../orchestrator/directTestEvidence.js";
@@ -61,103 +61,6 @@ const ARTIFACT_EXCLUDED_DIRS = new Set([
 ]);
 const ARTIFACT_EXCLUDED_FILES = [/^\.coverage(?:\..+)?$/, /^.+\.(?:pyc|pyo)$/];
 
-const RUNTIME_REPORT_ENTRIES: Record<string, ReadonlySet<string> | null> = {
-  coverage: new Set([
-    "clover.xml",
-    "cobertura-coverage.xml",
-    "coverage-final.json",
-    "lcov-report",
-    "lcov.info",
-  ]),
-  "playwright-report": new Set(["data", "index.html"]),
-  // Per-test directories are runner-generated and intentionally variable.
-  "test-results": null,
-};
-
-type RuntimeReportLocation = {
-  parentPath: string;
-  rootPath: string;
-};
-
-function runtimeReportLocation(path: string): RuntimeReportLocation | null {
-  const parts = path.split("/");
-  for (let index = 1; index < parts.length; index += 1) {
-    const parentName = parts[index - 1]!;
-    const entries = RUNTIME_REPORT_ENTRIES[parentName];
-    if (entries === undefined) continue;
-    const entryName = parts[index]!;
-    if (entries !== null && !entries.has(entryName)) continue;
-    return {
-      parentPath: parts.slice(0, index).join("/"),
-      rootPath: parts.slice(0, index + 1).join("/"),
-    };
-  }
-  return null;
-}
-
-function snapshotContainsRoot(
-  snapshot: PlatformArtifactSnapshot,
-  rootPath: string,
-): boolean {
-  return (
-    Object.prototype.hasOwnProperty.call(snapshot, rootPath) ||
-    Object.keys(snapshot).some((path) => path.startsWith(`${rootPath}/`))
-  );
-}
-
-export type RuntimeReportArtifacts = {
-  roots: string[];
-  parents: string[];
-};
-
-/**
- * Classify only report outputs first created by the verification invocation.
- * Existing report-named files remain ordinary candidate data and stay sealed.
- */
-export function runtimeReportArtifactsCreatedDuringVerification(
-  before: PlatformArtifactSnapshot,
-  after: PlatformArtifactSnapshot,
-): RuntimeReportArtifacts {
-  const roots = new Set<string>();
-  const parents = new Set<string>();
-  for (const path of Object.keys(after)) {
-    if (Object.prototype.hasOwnProperty.call(before, path)) continue;
-    const location = runtimeReportLocation(path);
-    if (!location) continue;
-    parents.add(location.parentPath);
-    if (!snapshotContainsRoot(before, location.parentPath)) {
-      roots.add(location.parentPath);
-    } else if (!snapshotContainsRoot(before, location.rootPath)) {
-      roots.add(location.rootPath);
-    } else {
-      roots.add(path);
-    }
-  }
-  return {
-    roots: [...roots].sort(),
-    parents: [...parents].sort(),
-  };
-}
-
-function normalizedArtifactRoots(paths: readonly string[]): string[] {
-  return [...new Set(paths.map((path) => {
-    const normalized = path.replace(/\\/g, "/");
-    if (
-      !normalized ||
-      normalized.startsWith("/") ||
-      normalized.endsWith("/") ||
-      normalized.split("/").some((part) => !part || part === "." || part === "..")
-    ) {
-      throw new Error(`Invalid artifact exclusion root: ${path}.`);
-    }
-    return normalized;
-  }))];
-}
-
-function isUnderArtifactRoot(path: string, root: string): boolean {
-  return path === root || path.startsWith(`${root}/`);
-}
-
 function isExcludedArtifactEntry(path: string, name: string): boolean {
   return (
     path.split("/").some((part) => ARTIFACT_EXCLUDED_DIRS.has(part)) ||
@@ -184,24 +87,10 @@ async function streamedPlatformArtifactFileFingerprint(
 
 export async function capturePlatformArtifactSnapshot(
   workspacePath: string,
-  options: {
-    excludePaths?: readonly string[];
-    runtimeReportParents?: readonly string[];
-    sealedSnapshot?: PlatformArtifactSnapshot;
-  } = {},
 ): Promise<PlatformArtifactSnapshot> {
   const snapshot: PlatformArtifactSnapshot = Object.create(
     null,
   ) as PlatformArtifactSnapshot;
-  const excludedRoots = normalizedArtifactRoots(options.excludePaths ?? []);
-  const runtimeReportParents = normalizedArtifactRoots(
-    options.runtimeReportParents ?? [],
-  );
-  if (runtimeReportParents.length > 0 && !options.sealedSnapshot) {
-    throw new Error(
-      "Runtime report filtering requires the immutable sealed snapshot.",
-    );
-  }
   const pending = [workspacePath];
   while (pending.length > 0) {
     const directory = pending.pop()!;
@@ -211,9 +100,6 @@ export async function capturePlatformArtifactSnapshot(
     for (const entry of entries) {
       const absolute = join(directory, entry.name);
       const path = relative(workspacePath, absolute).replace(/\\/g, "/");
-      if (excludedRoots.some((root) => isUnderArtifactRoot(path, root))) {
-        continue;
-      }
       if (entry.isDirectory() && ARTIFACT_EXCLUDED_DIRS.has(entry.name)) {
         continue;
       }
@@ -229,19 +115,6 @@ export async function capturePlatformArtifactSnapshot(
         snapshot[path] = await streamedPlatformArtifactFileFingerprint(absolute, mode);
       } else {
         throw new Error(`Unsupported candidate artifact entry: ${path}.`);
-      }
-    }
-  }
-  const sealedSnapshot = options.sealedSnapshot;
-  if (sealedSnapshot) {
-    for (const path of Object.keys(snapshot)) {
-      if (Object.prototype.hasOwnProperty.call(sealedSnapshot, path)) continue;
-      const location = runtimeReportLocation(path);
-      if (
-        location &&
-        runtimeReportParents.includes(location.parentPath)
-      ) {
-        delete snapshot[path];
       }
     }
   }
@@ -261,6 +134,29 @@ export function changedPlatformArtifactPaths(
   return [...new Set([...Object.keys(before), ...Object.keys(after)])]
     .filter((path) => comparable(before[path]) !== comparable(after[path]))
     .sort();
+}
+
+export function addedPlatformArtifactPaths(
+  before: PlatformArtifactSnapshot,
+  after: PlatformArtifactSnapshot,
+): string[] {
+  return Object.keys(after)
+    .filter((path) => !Object.prototype.hasOwnProperty.call(before, path))
+    .sort((left, right) => right.split("/").length - left.split("/").length);
+}
+
+/** Remove only entries proven to have been created by the current command pass. */
+export async function removeAddedPlatformArtifacts(
+  workspacePath: string,
+  before: PlatformArtifactSnapshot,
+  after: PlatformArtifactSnapshot,
+): Promise<void> {
+  for (const path of addedPlatformArtifactPaths(before, after)) {
+    await rm(join(workspacePath, ...path.split("/")), {
+      recursive: true,
+      force: true,
+    });
+  }
 }
 
 export function successfulPlatformCommandEvidence(
@@ -449,12 +345,25 @@ export async function sealPlatformEvidenceHold(
   } = {},
 ): Promise<PlatformEvidenceHold> {
   const held = await validatePlatformEvidenceHold(input);
-  const platformRuntimeOutputRoots =
-    held.checkpoint.verification!.platformRuntimeOutputRoots ?? [];
-  const platformArtifactSnapshot = await capturePlatformArtifactSnapshot(
-    held.workspacePath,
-    { excludePaths: platformRuntimeOutputRoots },
+  const platformArtifactSnapshot =
+    held.checkpoint.verification!.platformArtifactSnapshot;
+  if (!platformArtifactSnapshot || Object.keys(platformArtifactSnapshot).length === 0) {
+    throw new Error(
+      "Refused: the Factory run did not seal its candidate before verification.",
+    );
+  }
+  const currentArtifact = await capturePlatformArtifactSnapshot(held.workspacePath);
+  const artifactChanges = changedPlatformArtifactPaths(
+    platformArtifactSnapshot,
+    currentArtifact,
   );
+  if (artifactChanges.length > 0) {
+    throw new Error(
+      `Refused: the candidate changed after its pre-verification seal: ${artifactChanges
+        .slice(0, 20)
+        .join(", ")}.`,
+    );
+  }
   const checkpoint: FactoryCheckpoint = {
     ...held.checkpoint,
     verification: {
@@ -507,15 +416,7 @@ export async function recordCurrentPlatformEvidence(
       "Platform proof refused: the Linux seed did not seal a canonical candidate artifact before upload.",
     );
   }
-  const platformRuntimeOutputRoots =
-    held.checkpoint.verification!.platformRuntimeOutputRoots ?? [];
-  const platformRuntimeReportParents =
-    held.checkpoint.verification!.platformRuntimeReportParents ?? [];
-  const artifactBefore = await capturePlatformArtifactSnapshot(held.workspacePath, {
-    excludePaths: platformRuntimeOutputRoots,
-    runtimeReportParents: platformRuntimeReportParents,
-    sealedSnapshot: sealedArtifact,
-  });
+  const artifactBefore = await capturePlatformArtifactSnapshot(held.workspacePath);
   const transferChanges = changedPlatformArtifactPaths(sealedArtifact, artifactBefore, {
     // The immutable Linux-created tar remains the source of POSIX mode truth.
     // NTFS cannot faithfully materialize that bit, so Windows proves the same
@@ -591,11 +492,15 @@ export async function recordCurrentPlatformEvidence(
     );
   }
 
-  const artifactAfter = await capturePlatformArtifactSnapshot(held.workspacePath, {
-    excludePaths: platformRuntimeOutputRoots,
-    runtimeReportParents: platformRuntimeReportParents,
-    sealedSnapshot: sealedArtifact,
-  });
+  const artifactAfterCommands = await capturePlatformArtifactSnapshot(
+    held.workspacePath,
+  );
+  await removeAddedPlatformArtifacts(
+    held.workspacePath,
+    sealedArtifact,
+    artifactAfterCommands,
+  );
+  const artifactAfter = await capturePlatformArtifactSnapshot(held.workspacePath);
   const artifactChanges = changedPlatformArtifactPaths(sealedArtifact, artifactAfter, {
     compareExecutableIntent: hostPlatform !== "win32",
   });
