@@ -1,3 +1,5 @@
+import ts from "typescript";
+
 export type WindowsProcessPortabilityIssue = {
   path: string;
   line: number;
@@ -5,44 +7,222 @@ export type WindowsProcessPortabilityIssue = {
 };
 
 const JAVASCRIPT_OR_TYPESCRIPT = /\.[cm]?[jt]sx?$/i;
-const WINDOWS_SCRIPT = /["'`][^"'`\r\n]*\.(?:cmd|bat)["'`]/i;
-const WINDOWS_SCRIPT_VARIABLE =
-  /\b(?:const|let|var)\s+([$A-Z_a-z][$\w]*)\s*=\s*[^;\r\n]{0,500}["'`][^"'`\r\n]*\.(?:cmd|bat)["'`]/g;
-const DIRECT_CHILD_PROCESS_CALL =
-  /\b(execFile|spawn)(?:Sync|Async)?\s*\(\s*([^,\r\n]+)/g;
+const WINDOWS_SCRIPT = /\.(?:cmd|bat)$/i;
+const CHILD_PROCESS_MODULES = new Set(["child_process", "node:child_process"]);
+const UTIL_MODULES = new Set(["util", "node:util"]);
+const DIRECT_METHOD = /^(execFile|spawn)(?:Sync|Async)?$/;
 
-function callText(source: string, start: number): string {
-  const open = source.indexOf("(", start);
-  if (open < 0) return source.slice(start, start + 2_000);
-  let depth = 0;
-  let quote: '"' | "'" | "`" | null = null;
-  let escaped = false;
-  for (let index = open; index < Math.min(source.length, open + 8_000); index += 1) {
-    const character = source[index]!;
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'" || character === "`") {
-      quote = character;
-      continue;
-    }
-    if (character === "(") depth += 1;
-    if (character === ")") {
-      depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1);
-    }
+function scriptKind(path: string): ts.ScriptKind {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".tsx")) return ts.ScriptKind.TSX;
+  if (lower.endsWith(".jsx")) return ts.ScriptKind.JSX;
+  if (/\.[cm]?js$/.test(lower)) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
+}
+
+function unwrapTransparent(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isNonNullExpression(current)
+  ) {
+    current = current.expression;
   }
-  return source.slice(start, start + 8_000);
+  return current;
+}
+
+function stringModule(node: ts.Expression | undefined): string | null {
+  if (!node) return null;
+  const value = unwrapTransparent(node);
+  return ts.isStringLiteralLike(value) ? value.text : null;
+}
+
+function requireModule(expression: ts.Expression | undefined): string | null {
+  if (!expression) return null;
+  const value = unwrapTransparent(expression);
+  if (!ts.isCallExpression(value)) return null;
+  if (!ts.isIdentifier(value.expression) || value.expression.text !== "require") {
+    return null;
+  }
+  return stringModule(value.arguments[0]);
+}
+
+function importEqualsModule(declaration: ts.ImportEqualsDeclaration): string | null {
+  const reference = declaration.moduleReference;
+  return ts.isExternalModuleReference(reference)
+    ? stringModule(reference.expression)
+    : null;
+}
+
+function importedName(element: ts.ImportSpecifier | ts.BindingElement): string {
+  return (element.propertyName ?? element.name).getText();
+}
+
+function propertyName(name: ts.PropertyName): string | null {
+  if (
+    ts.isIdentifier(name) ||
+    ts.isStringLiteralLike(name) ||
+    ts.isNumericLiteral(name)
+  ) {
+    return name.text;
+  }
+  if (ts.isComputedPropertyName(name)) {
+    return stringModule(name.expression);
+  }
+  return null;
+}
+
+function directMethod(name: string): string | null {
+  return DIRECT_METHOD.test(name) ? name : null;
+}
+
+function bindingIdentifiers(name: ts.BindingName): ts.Identifier[] {
+  if (ts.isIdentifier(name)) return [name];
+  return name.elements.flatMap((element) =>
+    ts.isOmittedExpression(element) ? [] : bindingIdentifiers(element.name),
+  );
+}
+
+function nearestAncestor(
+  node: ts.Node,
+  predicate: (candidate: ts.Node) => boolean,
+): ts.Node | null {
+  for (let current = node.parent; current; current = current.parent) {
+    if (predicate(current)) return current;
+  }
+  return null;
+}
+
+function lexicalScopeFor(declaration: ts.Node): ts.Node | null {
+  return nearestAncestor(
+    declaration,
+    (node) =>
+      ts.isBlock(node) ||
+      ts.isSourceFile(node) ||
+      ts.isCaseBlock(node) ||
+      ts.isCatchClause(node) ||
+      ts.isForStatement(node) ||
+      ts.isForOfStatement(node) ||
+      ts.isForInStatement(node),
+  );
+}
+
+function functionScopeFor(declaration: ts.Node): ts.Node | null {
+  return nearestAncestor(
+    declaration,
+    (node) => ts.isFunctionLike(node) || ts.isSourceFile(node),
+  );
+}
+
+function registerLexicalBindings(
+  sourceFile: ts.SourceFile,
+): Map<ts.Node, Map<string, ts.Identifier[]>> {
+  const scopes = new Map<ts.Node, Map<string, ts.Identifier[]>>();
+  const add = (scope: ts.Node | null, identifier: ts.Identifier) => {
+    if (!scope) return;
+    let names = scopes.get(scope);
+    if (!names) {
+      names = new Map();
+      scopes.set(scope, names);
+    }
+    const declarations = names.get(identifier.text) ?? [];
+    declarations.push(identifier);
+    names.set(identifier.text, declarations);
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && node.importClause) {
+      const clause = node.importClause;
+      if (clause.name) add(sourceFile, clause.name);
+      const bindings = clause.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        add(sourceFile, bindings.name);
+      } else if (bindings) {
+        for (const element of bindings.elements) add(sourceFile, element.name);
+      }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      add(sourceFile, node.name);
+    } else if (ts.isParameter(node)) {
+      const scope = nearestAncestor(node, ts.isFunctionLike);
+      for (const identifier of bindingIdentifiers(node.name)) add(scope, identifier);
+    } else if (ts.isVariableDeclaration(node)) {
+      const list = ts.isVariableDeclarationList(node.parent) ? node.parent : null;
+      const blockScoped = Boolean(list && list.flags & ts.NodeFlags.BlockScoped);
+      const scope = blockScoped ? lexicalScopeFor(node) : functionScopeFor(node);
+      for (const identifier of bindingIdentifiers(node.name)) add(scope, identifier);
+    } else if (
+      (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) &&
+      node.name
+    ) {
+      add(lexicalScopeFor(node), node.name);
+    } else if (ts.isCatchClause(node) && node.variableDeclaration) {
+      for (const identifier of bindingIdentifiers(node.variableDeclaration.name)) {
+        add(node, identifier);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return scopes;
+}
+
+function resolveBinding(
+  use: ts.Identifier,
+  scopes: ReadonlyMap<ts.Node, ReadonlyMap<string, readonly ts.Identifier[]>>,
+): ts.Identifier | null {
+  for (
+    let current: ts.Node | undefined = use.parent;
+    current;
+    current = current.parent
+  ) {
+    const declarations = scopes.get(current)?.get(use.text);
+    if (declarations?.length) return declarations[0]!;
+  }
+  return null;
+}
+
+function hasShellTrue(call: ts.CallExpression): boolean {
+  return call.arguments.some((argument) => {
+    const value = unwrapTransparent(argument);
+    if (!ts.isObjectLiteralExpression(value)) return false;
+    let shellIsDefinitelyTrue = false;
+    for (const property of value.properties) {
+      if (ts.isSpreadAssignment(property)) {
+        // A later spread can replace shell. Stay fail-closed unless a later
+        // explicit property restores a literal true value.
+        shellIsDefinitelyTrue = false;
+        continue;
+      }
+      if (
+        ts.isPropertyAssignment(property) &&
+        propertyName(property.name) === "shell"
+      ) {
+        shellIsDefinitelyTrue =
+          unwrapTransparent(property.initializer).kind === ts.SyntaxKind.TrueKeyword;
+        continue;
+      }
+      if (
+        (ts.isShorthandPropertyAssignment(property) ||
+          ts.isMethodDeclaration(property) ||
+          ts.isGetAccessorDeclaration(property) ||
+          ts.isSetAccessorDeclaration(property)) &&
+        propertyName(property.name) === "shell"
+      ) {
+        shellIsDefinitelyTrue = false;
+      }
+    }
+    return shellIsDefinitelyTrue;
+  });
 }
 
 /**
  * Node cannot directly execute Windows batch wrappers through execFile/spawn.
- * The same generated test may pass on Linux with `npm` and fail on Windows
- * with `spawn EINVAL` after it selects `npm.cmd`; catch that before the exact
- * candidate is sealed and sent to trusted OS runners.
+ * Resolve real child_process bindings through lexical AST scopes, so aliases
+ * are covered while comments, fixtures, and shadowed same-named functions
+ * never become false portability blockers.
  */
 export function assessWindowsProcessPortability(
   files: Iterable<{ path: string; contents: string }>,
@@ -50,25 +230,289 @@ export function assessWindowsProcessPortability(
   const issues: WindowsProcessPortabilityIssue[] = [];
   for (const file of files) {
     if (!JAVASCRIPT_OR_TYPESCRIPT.test(file.path)) continue;
-    const scriptVariables = new Set<string>();
-    for (const match of file.contents.matchAll(WINDOWS_SCRIPT_VARIABLE)) {
-      if (match[1]) scriptVariables.add(match[1]);
-    }
-    for (const match of file.contents.matchAll(DIRECT_CHILD_PROCESS_CALL)) {
-      const firstArgument = match[2]?.trim() ?? "";
-      const selectsWindowsScript =
-        WINDOWS_SCRIPT.test(firstArgument) || scriptVariables.has(firstArgument);
-      if (!selectsWindowsScript) continue;
-      const invocation = callText(file.contents, match.index ?? 0);
-      if (/\bshell\s*:\s*true\b/.test(invocation)) continue;
-      issues.push({
-        path: file.path,
-        line: file.contents.slice(0, match.index ?? 0).split(/\r?\n/).length,
-        reason:
-          `${match[1]} directly launches a Windows .cmd/.bat wrapper without shell: true. ` +
-          "Node reports spawn EINVAL for this on Windows. Invoke a real executable such as process.execPath, use a shell-aware command API, or deliberately enable the shell for that invocation.",
-      });
-    }
+    const sourceFile = ts.createSourceFile(
+      file.path,
+      file.contents,
+      ts.ScriptTarget.Latest,
+      true,
+      scriptKind(file.path),
+    );
+    const scopes = registerLexicalBindings(sourceFile);
+    const methodBindings = new Map<ts.Identifier, string>();
+    const namespaceBindings = new Set<ts.Identifier>();
+    const promisifyBindings = new Set<ts.Identifier>();
+    const utilNamespaceBindings = new Set<ts.Identifier>();
+    const scriptBindings = new Set<ts.Identifier>();
+    const scriptPropertyBindings = new Map<ts.Identifier, Map<string, boolean>>();
+
+    const bindingFor = (identifier: ts.Identifier): ts.Identifier | null =>
+      resolveBinding(identifier, scopes);
+
+    const methodFromExpression = (expression: ts.Expression): string | null => {
+      const value = unwrapTransparent(expression);
+      if (ts.isIdentifier(value)) {
+        const binding = bindingFor(value);
+        return binding ? (methodBindings.get(binding) ?? null) : null;
+      }
+      if (!ts.isPropertyAccessExpression(value)) return null;
+      const method = directMethod(value.name.text);
+      if (!method) return null;
+      const receiver = unwrapTransparent(value.expression);
+      if (ts.isIdentifier(receiver)) {
+        const binding = bindingFor(receiver);
+        if (binding && namespaceBindings.has(binding)) return method;
+      }
+      const required = requireModule(receiver);
+      return required && CHILD_PROCESS_MODULES.has(required) ? method : null;
+    };
+
+    const isNamespaceExpression = (
+      expression: ts.Expression,
+      modules: ReadonlySet<string>,
+      bindings: ReadonlySet<ts.Identifier>,
+    ): boolean => {
+      const value = unwrapTransparent(expression);
+      const required = requireModule(value);
+      if (required && modules.has(required)) return true;
+      if (!ts.isIdentifier(value)) return false;
+      const binding = bindingFor(value);
+      return Boolean(binding && bindings.has(binding));
+    };
+
+    const isPromisifyExpression = (expression: ts.Expression): boolean => {
+      const value = unwrapTransparent(expression);
+      if (ts.isIdentifier(value)) {
+        const binding = bindingFor(value);
+        return Boolean(binding && promisifyBindings.has(binding));
+      }
+      if (!ts.isPropertyAccessExpression(value) || value.name.text !== "promisify") {
+        return false;
+      }
+      return isNamespaceExpression(
+        value.expression,
+        UTIL_MODULES,
+        utilNamespaceBindings,
+      );
+    };
+
+    const expressionContainsWindowsScript = (expression: ts.Expression): boolean => {
+      let found = false;
+      const visit = (node: ts.Node): void => {
+        if (found) return;
+        if (ts.isPropertyAccessExpression(node)) {
+          const receiver = unwrapTransparent(node.expression);
+          if (ts.isIdentifier(receiver)) {
+            const binding = bindingFor(receiver);
+            const properties = binding
+              ? scriptPropertyBindings.get(binding)
+              : undefined;
+            if (properties) {
+              found = properties.get(node.name.text) ?? false;
+              return;
+            }
+          }
+        }
+        if (ts.isElementAccessExpression(node)) {
+          const receiver = unwrapTransparent(node.expression);
+          const selected = stringModule(node.argumentExpression);
+          if (ts.isIdentifier(receiver) && selected !== null) {
+            const binding = bindingFor(receiver);
+            const properties = binding
+              ? scriptPropertyBindings.get(binding)
+              : undefined;
+            if (properties) {
+              found = properties.get(selected) ?? false;
+              return;
+            }
+          }
+        }
+        if (
+          (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) &&
+          WINDOWS_SCRIPT.test(node.text)
+        ) {
+          found = true;
+          return;
+        }
+        if (ts.isIdentifier(node)) {
+          const binding = bindingFor(node);
+          if (binding && scriptBindings.has(binding)) {
+            found = true;
+            return;
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(unwrapTransparent(expression));
+      return found;
+    };
+
+    const recordScriptProperties = (
+      binding: ts.Identifier,
+      expression: ts.Expression,
+    ): boolean => {
+      const value = unwrapTransparent(expression);
+      if (!ts.isObjectLiteralExpression(value)) return false;
+      const properties = new Map<string, boolean>();
+      for (const property of value.properties) {
+        if (ts.isSpreadAssignment(property)) {
+          const spread = unwrapTransparent(property.expression);
+          if (ts.isIdentifier(spread)) {
+            const spreadBinding = bindingFor(spread);
+            const inherited = spreadBinding
+              ? scriptPropertyBindings.get(spreadBinding)
+              : undefined;
+            if (inherited) {
+              for (const [name, isWindowsScript] of inherited) {
+                properties.set(name, isWindowsScript);
+              }
+            }
+          }
+          continue;
+        }
+        if (ts.isPropertyAssignment(property)) {
+          const name = propertyName(property.name);
+          if (name !== null) {
+            properties.set(name, expressionContainsWindowsScript(property.initializer));
+          }
+          continue;
+        }
+        if (ts.isShorthandPropertyAssignment(property)) {
+          properties.set(
+            property.name.text,
+            expressionContainsWindowsScript(property.name),
+          );
+        }
+      }
+      scriptPropertyBindings.set(binding, properties);
+      return true;
+    };
+
+    const collectSemantics = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node) && node.importClause) {
+        const module = stringModule(node.moduleSpecifier);
+        const clause = node.importClause;
+        if (module && CHILD_PROCESS_MODULES.has(module)) {
+          if (clause.name) namespaceBindings.add(clause.name);
+          const bindings = clause.namedBindings;
+          if (bindings && ts.isNamespaceImport(bindings)) {
+            namespaceBindings.add(bindings.name);
+          } else if (bindings) {
+            for (const element of bindings.elements) {
+              const method = directMethod(importedName(element));
+              if (method) methodBindings.set(element.name, method);
+            }
+          }
+        }
+        if (module && UTIL_MODULES.has(module)) {
+          if (clause.name) utilNamespaceBindings.add(clause.name);
+          const bindings = clause.namedBindings;
+          if (bindings && ts.isNamespaceImport(bindings)) {
+            utilNamespaceBindings.add(bindings.name);
+          } else if (bindings) {
+            for (const element of bindings.elements) {
+              if (importedName(element) === "promisify") {
+                promisifyBindings.add(element.name);
+              }
+            }
+          }
+        }
+      }
+
+      if (ts.isImportEqualsDeclaration(node)) {
+        const module = importEqualsModule(node);
+        if (module && CHILD_PROCESS_MODULES.has(module)) {
+          namespaceBindings.add(node.name);
+        }
+        if (module && UTIL_MODULES.has(module)) {
+          utilNamespaceBindings.add(node.name);
+        }
+      }
+
+      if (ts.isVariableDeclaration(node) && node.initializer) {
+        if (ts.isIdentifier(node.name)) {
+          const binding = node.name;
+          if (
+            isNamespaceExpression(
+              node.initializer,
+              CHILD_PROCESS_MODULES,
+              namespaceBindings,
+            )
+          ) {
+            namespaceBindings.add(binding);
+          }
+          if (
+            isNamespaceExpression(node.initializer, UTIL_MODULES, utilNamespaceBindings)
+          ) {
+            utilNamespaceBindings.add(binding);
+          }
+
+          const direct = methodFromExpression(node.initializer);
+          if (direct) methodBindings.set(binding, direct);
+
+          const initializer = unwrapTransparent(node.initializer);
+          if (ts.isCallExpression(initializer)) {
+            const callee = unwrapTransparent(initializer.expression);
+            if (isPromisifyExpression(callee)) {
+              const target = initializer.arguments[0];
+              if (target) {
+                const method = methodFromExpression(target);
+                if (method) methodBindings.set(binding, method);
+              }
+            }
+          }
+
+          if (
+            !recordScriptProperties(binding, node.initializer) &&
+            expressionContainsWindowsScript(node.initializer)
+          ) {
+            scriptBindings.add(binding);
+          }
+        } else {
+          if (
+            isNamespaceExpression(
+              node.initializer,
+              CHILD_PROCESS_MODULES,
+              namespaceBindings,
+            )
+          ) {
+            for (const element of node.name.elements) {
+              if (ts.isOmittedExpression(element) || !ts.isIdentifier(element.name)) {
+                continue;
+              }
+              const method = directMethod(importedName(element));
+              if (method) methodBindings.set(element.name, method);
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, collectSemantics);
+    };
+    collectSemantics(sourceFile);
+
+    const inspectCalls = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const method = methodFromExpression(node.expression);
+        const first = node.arguments[0];
+        if (
+          method &&
+          first &&
+          expressionContainsWindowsScript(first) &&
+          !hasShellTrue(node)
+        ) {
+          issues.push({
+            path: file.path,
+            line:
+              sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line +
+              1,
+            reason:
+              `${method} directly launches a Windows .cmd/.bat wrapper without shell: true. ` +
+              "Node reports spawn EINVAL for this on Windows. Invoke a real executable such as process.execPath, use a shell-aware command API, or deliberately enable the shell for that invocation.",
+          });
+        }
+      }
+      ts.forEachChild(node, inspectCalls);
+    };
+    inspectCalls(sourceFile);
   }
   return issues;
 }
