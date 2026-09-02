@@ -36,6 +36,7 @@ const stationEvidence = REQUIRED_PRODUCTION_STATIONS.map((stationId) => ({
 describe("Purpose Foundry mandatory production path", () => {
   it("cannot omit the automatic route's internal evidence line", () => {
     expect(normalizeFoundryStations(["promo-pilot"], "auto")).toEqual([
+      "repo-rewards",
       "factory-deck",
       "crucible",
       "watchtower",
@@ -45,6 +46,7 @@ describe("Purpose Foundry mandatory production path", () => {
 
   it("allows configured child orchestrators as optional automatic stations", () => {
     expect(normalizeFoundryStations(["scout", "flexfactor"], "auto")).toEqual([
+      "repo-rewards",
       "factory-deck",
       "crucible",
       "watchtower",
@@ -57,11 +59,13 @@ describe("Purpose Foundry mandatory production path", () => {
     "normalizes legacy %s records to the same station policy",
     (legacyMode) => {
       expect(normalizeFoundryStations([], legacyMode)).toEqual([
+        "repo-rewards",
         "factory-deck",
         "crucible",
         "watchtower",
       ]);
       expect(normalizeFoundryStations(["flexfactor"], legacyMode)).toEqual([
+        "repo-rewards",
         "factory-deck",
         "crucible",
         "watchtower",
