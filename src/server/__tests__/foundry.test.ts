@@ -299,6 +299,7 @@ describe("Purpose Foundry", () => {
       routingMode: "auto",
       codeProvider: "openai",
       reviewProvider: "openai",
+      projectId: `purpose-foundry:${project.id}`,
     });
     expect(posted[0]?.options?.goals).toContain(
       `Mission: ${project.constitution.purpose}`,
@@ -740,6 +741,44 @@ describe("Purpose Foundry", () => {
     await expect(
       store.writeArtifact(project.id, "watchtower", "health.json", {}),
     ).rejects.toThrow("escapes the Foundry data root");
+  });
+
+  it("rejects malformed RepoRewards success envelopes but accepts empty results", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown(
+        "# RepoShape\nRequire truthful repository discovery evidence.",
+        "C:/Vault/RepoShape.md",
+      ),
+    );
+    const malformed = new FoundryAdapters(store, {
+      fetch: async () =>
+        new Response(JSON.stringify({ error: "incompatible response" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await expect(malformed.execute(project, "repo-rewards")).rejects.toThrow(
+      /results array/i,
+    );
+
+    const empty = new FoundryAdapters(store, {
+      fetch: async () =>
+        new Response(JSON.stringify({ results: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await expect(empty.execute(project, "repo-rewards")).resolves.toMatchObject({
+      status: "completed",
+      handoff: {
+        insights: [expect.stringContaining("returned 0 result")],
+        sources: [expect.stringContaining("/api/search")],
+        candidates: [],
+      },
+      evidence: { resultCount: 0 },
+    });
   });
 
   it("does not mistake an artifact filename for an App Store submission", async () => {
