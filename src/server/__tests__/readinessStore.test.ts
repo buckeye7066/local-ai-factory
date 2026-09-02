@@ -30,10 +30,10 @@ afterAll(async () => {
 
 const DIGEST = `sha256:${"1".repeat(64)}`;
 
-const review = (identity: "sol" | "opus") => ({
+const review = (identity: "lead" | "challenger") => ({
   identity,
-  provider: identity === "sol" ? ("openai" as const) : ("anthropic" as const),
-  model: identity === "sol" ? "gpt-5.6-pro" : "claude-opus-4-8",
+  provider: "openai" as const,
+  model: "gpt-5.6-pro",
   evidenceDigest: DIGEST,
   decision: "ready" as const,
   purposeAligned: true,
@@ -79,7 +79,7 @@ function receipt() {
       liveVerified: false,
       localArtifactVerified: true,
     },
-    reviews: [review("sol"), review("opus")],
+    reviews: [review("lead"), review("challenger")],
   });
 }
 
@@ -115,7 +115,7 @@ describe("durable readiness state", () => {
       subjectType: "run",
       subjectId: id,
       evidenceDigest: DIGEST,
-      reviews: [review("sol"), review("opus")],
+      reviews: [review("lead"), review("challenger")],
       receipt: ready,
     });
     expect((await assertReadyReceipt(id, DIGEST)).ready).toBe(true);

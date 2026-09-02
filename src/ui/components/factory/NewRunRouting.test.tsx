@@ -25,6 +25,7 @@ const health: Health = {
   openaiConfigured: true,
   mandatoryProductionReadiness: true,
   readinessBrainFloorConfigured: true,
+  readinessPaidProviders: ["anthropic", "openai"],
   solConfigured: true,
   fableOrOpusConfigured: true,
   solModel: "gpt",
@@ -66,7 +67,11 @@ describe("automatic model ladder UI wiring", () => {
       />,
     );
 
-    expect(screen.getByText(/Production admission requires both/i)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Production admission requires at least one configured paid rung/i,
+      ),
+    ).toBeTruthy();
   });
 
   it("shows one ordered ladder and sends only automatic routing", async () => {

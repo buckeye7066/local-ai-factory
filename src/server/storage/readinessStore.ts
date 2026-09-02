@@ -14,7 +14,7 @@ const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".facto
 const READINESS_DIR = join(DATA_ROOT, "readiness");
 
 const BrainReviewSchema = z.object({
-  identity: z.enum(["sol", "fable", "opus"]),
+  identity: z.enum(["lead", "challenger", "sol", "fable", "opus"]),
   provider: z.enum(["openai", "anthropic"]),
   model: z.string().min(1),
   evidenceDigest: z.string().min(1),
@@ -46,6 +46,12 @@ const ReceiptSchema = z.object({
   appName: z.string(),
   evidenceDigest: z.string(),
   brainFloor: z.object({
+    // Defaults preserve readability of receipts written before the unified
+    // paid-ladder reviewer slots were introduced.
+    lead: z.boolean().default(false),
+    challenger: z.boolean().default(false),
+    independentReviews: z.boolean().default(false),
+    paidModels: z.boolean().default(false),
     sol: z.boolean(),
     fableOrOpus: z.boolean(),
     independentFamilies: z.boolean(),
@@ -215,7 +221,7 @@ export async function markReadinessEvaluating(input: {
     ...initialReadinessState(input.subjectType, input.subjectId),
     status: "evaluating",
     evidenceDigest: input.evidenceDigest,
-    blockers: ["Sol and Fable/Opus readiness reviews are running."],
+    blockers: ["Paid-ladder lead and challenger readiness reviews are running."],
   };
   await saveReadinessState(state);
   return state;

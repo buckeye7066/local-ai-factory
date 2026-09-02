@@ -359,16 +359,9 @@ function isPaidProvider(
 function assertReadinessBrainFloor(config: AppConfig, secrets: AppSecrets): void {
   const floor = readinessBrainFloor(config, secrets);
   if (floor.configured) return;
-  const missing: string[] = [];
-  if (!floor.solConfigured) {
-    missing.push("OPENAI_API_KEY and FACTORY_SOL_MODEL");
-  }
-  if (!floor.fableOrOpusConfigured) {
-    missing.push(
-      "ANTHROPIC_API_KEY and FACTORY_FABLE_OR_OPUS_MODEL containing Fable or Opus",
-    );
-  }
-  throw new MissingProviderCredentialError(missing);
+  throw new MissingProviderCredentialError([
+    "at least one configured paid model in FACTORY_MODEL_LADDER",
+  ]);
 }
 
 class StaleCheckpointSpecificationError extends Error {
@@ -2784,7 +2777,7 @@ async function executeRun(
       if (!restoredApproval.executed) {
         log(
           "model_call",
-          "Mandatory pre-release review: launching independent Sol and Fable/Opus judgments on the same exact candidate-byte digest.",
+          "Mandatory pre-release review: launching independent lead and challenger judgments through the same paid-first model ladder on the exact candidate-byte digest.",
           "final_review",
         );
         const brainProviders = createReadinessBrainProviders(
@@ -2796,11 +2789,12 @@ async function executeRun(
         );
         preReleaseApproval = await completePreReleaseReadiness({
           facts: candidateFacts,
-          solProvider: countProvider(brainProviders.sol),
-          solModel: brainProviders.solModel,
-          secondProvider: countProvider(brainProviders.second),
-          secondIdentity: brainProviders.secondIdentity,
-          secondModel: brainProviders.secondModel,
+          leadProvider: countProvider(brainProviders.lead.provider),
+          leadProviderName: brainProviders.lead.currentProvider,
+          leadModel: brainProviders.lead.currentModel,
+          challengerProvider: countProvider(brainProviders.challenger.provider),
+          challengerProviderName: brainProviders.challenger.currentProvider,
+          challengerModel: brainProviders.challenger.currentModel,
         });
         await checkpointNow({ preReleaseApproval });
       }

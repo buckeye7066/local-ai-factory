@@ -101,12 +101,12 @@ describe("production readiness brain agents", () => {
     const provider = new ReviewProvider("openai", readyResponse);
     const review = await productionReadinessAgent({
       provider,
-      identity: "sol",
+      identity: "lead",
       model: "gpt-5.6-pro",
       evidence: { ...facts, evidenceDigest: "sha256:exact" },
     });
     expect(review).toMatchObject({
-      identity: "sol",
+      identity: "lead",
       provider: "openai",
       model: "gpt-5.6-pro",
       evidenceDigest: "sha256:exact",
@@ -114,17 +114,20 @@ describe("production readiness brain agents", () => {
     });
   });
 
-  it("rejects a provider-family disguise before making a model call", async () => {
-    const wrong = new ReviewProvider("openai", readyResponse);
-    await expect(
-      productionReadinessAgent({
-        provider: wrong,
-        identity: "opus",
-        model: "claude-opus-4-8",
-        evidence: { ...facts, evidenceDigest: "sha256:exact" },
-      }),
-    ).rejects.toThrow(/requires anthropic/);
-    expect(wrong.seen).toHaveLength(0);
+  it("allows the challenger slot to use whichever paid provider answers", async () => {
+    const provider = new ReviewProvider("openai", readyResponse);
+    const review = await productionReadinessAgent({
+      provider,
+      identity: "challenger",
+      model: "gpt-5.6-pro",
+      evidence: { ...facts, evidenceDigest: "sha256:exact" },
+    });
+    expect(review).toMatchObject({
+      identity: "challenger",
+      provider: "openai",
+      model: "gpt-5.6-pro",
+    });
+    expect(provider.seen).toHaveLength(1);
   });
 
   it("normalizes contradictory READY prose into not_ready", async () => {
@@ -134,7 +137,7 @@ describe("production readiness brain agents", () => {
     });
     const review = await productionReadinessAgent({
       provider,
-      identity: "opus",
+      identity: "challenger",
       model: "claude-opus-4-8",
       evidence: { ...facts, evidenceDigest: "sha256:exact" },
     });
@@ -150,27 +153,28 @@ describe("production readiness brain agents", () => {
         release = resolve;
       }),
     };
-    const sol = new ReviewProvider("openai", readyResponse, barrier);
-    const opus = new ReviewProvider("anthropic", readyResponse, barrier);
+    const lead = new ReviewProvider("openai", readyResponse, barrier);
+    const challenger = new ReviewProvider("anthropic", readyResponse, barrier);
     const reviews = await independentProductionReadinessReviews({
-      solProvider: sol,
-      solModel: "gpt-5.6-pro",
-      secondProvider: opus,
-      secondIdentity: "opus",
-      secondModel: "claude-opus-4-8",
+      leadProvider: lead,
+      leadProviderName: "openai",
+      leadModel: "gpt-5.6-pro",
+      challengerProvider: challenger,
+      challengerProviderName: "anthropic",
+      challengerModel: "claude-opus-4-8",
       evidence: { ...facts, evidenceDigest: "sha256:exact" },
     });
     expect(barrier.arrivals).toBe(2);
-    expect(reviews.map((review) => review.identity)).toEqual(["sol", "opus"]);
-    expect(sol.seen[0].prompt).not.toMatch(/opus.*decision|anthropic.*decision/i);
-    expect(opus.seen[0].prompt).not.toMatch(/sol.*decision|openai.*decision/i);
+    expect(reviews.map((review) => review.identity)).toEqual(["lead", "challenger"]);
+    expect(lead.seen[0].prompt).not.toMatch(/challenger.*decision/i);
+    expect(challenger.seen[0].prompt).not.toMatch(/lead.*decision/i);
   });
 
   it("excludes owner-handled legal matters from the reviewer's blocker mandate", async () => {
     const provider = new ReviewProvider("openai", readyResponse);
     await productionReadinessAgent({
       provider,
-      identity: "sol",
+      identity: "lead",
       model: "gpt-5.6-pro",
       evidence: { ...facts, evidenceDigest: "sha256:exact" },
     });
@@ -181,16 +185,17 @@ describe("production readiness brain agents", () => {
   it("runs both semantic decisions before side effects and never calls the effect on rejection or call failure", async () => {
     const rejection = await completePreReleaseReadiness({
       facts,
-      solProvider: new ReviewProvider("openai", {
+      leadProvider: new ReviewProvider("openai", {
         ...readyResponse,
         decision: "not_ready",
         technicallyReady: false,
         blockers: [{ category: "verification", detail: "One flow is incomplete." }],
       }),
-      solModel: "gpt-5.6-pro",
-      secondProvider: new ReviewProvider("anthropic", readyResponse),
-      secondIdentity: "opus",
-      secondModel: "claude-opus-4-8",
+      leadProviderName: "openai",
+      leadModel: "gpt-5.6-pro",
+      challengerProvider: new ReviewProvider("anthropic", readyResponse),
+      challengerProviderName: "anthropic",
+      challengerModel: "claude-opus-4-8",
     });
     expect(rejection.approved).toBe(false);
     const sideEffects = { deliver: 0, release: 0, deploy: 0 };
@@ -206,11 +211,12 @@ describe("production readiness brain agents", () => {
 
     const failed = await completePreReleaseReadiness({
       facts,
-      solProvider: new ReviewProvider("openai", { invalid: true }),
-      solModel: "gpt-5.6-pro",
-      secondProvider: new ReviewProvider("anthropic", readyResponse),
-      secondIdentity: "opus",
-      secondModel: "claude-opus-4-8",
+      leadProvider: new ReviewProvider("openai", { invalid: true }),
+      leadProviderName: "openai",
+      leadModel: "gpt-5.6-pro",
+      challengerProvider: new ReviewProvider("anthropic", readyResponse),
+      challengerProviderName: "anthropic",
+      challengerModel: "claude-opus-4-8",
     });
     expect(failed.approved).toBe(false);
     for (const name of ["deliver", "release", "deploy"] as const) {
@@ -225,19 +231,20 @@ describe("production readiness brain agents", () => {
   });
 
   it("never reuses approval after candidate bytes change and finalizes actual delivery separately", async () => {
-    const sol = new ReviewProvider("openai", readyResponse);
-    const opus = new ReviewProvider("anthropic", readyResponse);
+    const lead = new ReviewProvider("openai", readyResponse);
+    const challenger = new ReviewProvider("anthropic", readyResponse);
     const approval = await completePreReleaseReadiness({
       facts,
-      solProvider: sol,
-      solModel: "gpt-5.6-pro",
-      secondProvider: opus,
-      secondIdentity: "opus",
-      secondModel: "claude-opus-4-8",
+      leadProvider: lead,
+      leadProviderName: "openai",
+      leadModel: "gpt-5.6-pro",
+      challengerProvider: challenger,
+      challengerProviderName: "anthropic",
+      challengerModel: "claude-opus-4-8",
     });
     expect(approval.approved).toBe(true);
-    expect(sol.seen[0].system).toMatch(/PRE-RELEASE CANDIDATE/);
-    expect(sol.seen[0].system).toMatch(/delivery fields are truthfully false/);
+    expect(lead.seen[0].system).toMatch(/PRE-RELEASE CANDIDATE/);
+    expect(lead.seen[0].system).toMatch(/delivery fields are truthfully false/);
 
     const final = finalizeProductionReadinessFromApproval(facts, approval);
     expect(final.receipt.ready).toBe(true);

@@ -41,9 +41,9 @@ export const OFFLINE_PROVIDERS = new Set<ProviderName>(["mock", "stub"]);
 
 /**
  * Raised when a provider-routing operation has no usable live build provider.
- * The mandatory Sol plus Fable/Opus floor is enforced separately at non-demo
+ * The mandatory paid-ladder review floor is enforced separately at non-demo
  * run admission and receipt issuance; it must never erase the final free/local
- * ladder rung.
+ * ladder rung used for ordinary work.
  */
 export class MissingProviderCredentialError extends Error {
   readonly missing: string[];
@@ -55,7 +55,7 @@ export class MissingProviderCredentialError extends Error {
       `Live factory operation blocked: required provider capability missing: ${list}. ` +
         `Live work uses one paid-first model ladder with free/local last; mock/stub are never a live fallback. ` +
         `Non-demo admission and production-readiness receipts additionally require ` +
-        `the independent Sol plus Fable/Opus brain floor.`,
+        `two independent judgments through the configured paid ladder.`,
     );
     this.name = "MissingProviderCredentialError";
     this.missing = missing;

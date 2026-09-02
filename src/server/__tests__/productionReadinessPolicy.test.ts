@@ -10,8 +10,8 @@ import {
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const STALE_DIGEST = `sha256:${"b".repeat(64)}`;
 
-const sol = (over: Partial<ReadinessBrainReview> = {}): ReadinessBrainReview => ({
-  identity: "sol",
+const lead = (over: Partial<ReadinessBrainReview> = {}): ReadinessBrainReview => ({
+  identity: "lead",
   provider: "openai",
   model: "gpt-5.6-pro",
   evidenceDigest: DIGEST,
@@ -23,8 +23,10 @@ const sol = (over: Partial<ReadinessBrainReview> = {}): ReadinessBrainReview => 
   ...over,
 });
 
-const opus = (over: Partial<ReadinessBrainReview> = {}): ReadinessBrainReview => ({
-  identity: "opus",
+const challenger = (
+  over: Partial<ReadinessBrainReview> = {},
+): ReadinessBrainReview => ({
+  identity: "challenger",
   provider: "anthropic",
   model: "claude-opus-4-8",
   evidenceDigest: DIGEST,
@@ -74,7 +76,7 @@ const evidence = (
     liveVerified: false,
     localArtifactVerified: false,
   },
-  reviews: [sol(), opus()],
+  reviews: [lead(), challenger()],
   ...over,
 });
 
@@ -94,46 +96,43 @@ describe("mandatory production-readiness policy", () => {
     ).toBe("new-repo");
   });
 
-  it("issues a receipt only for purpose-aligned, executed, delivered work approved by Sol and Opus/Fable", () => {
+  it("issues a receipt only for purpose-aligned, executed, delivered work approved by both paid-ladder reviewers", () => {
     const receipt = evaluateProductionReadiness(evidence());
     expect(receipt.ready).toBe(true);
     expect(receipt.mandatory).toBe(true);
     expect(receipt.schema).toBe(PRODUCTION_READINESS_POLICY.version);
     expect(receipt.brainFloor).toEqual({
-      sol: true,
-      fableOrOpus: true,
-      independentFamilies: true,
+      lead: true,
+      challenger: true,
+      independentReviews: true,
+      paidModels: true,
       sameEvidence: true,
+      sol: false,
+      fableOrOpus: false,
+      independentFamilies: true,
     });
   });
 
-  it("refuses a single-brain or same-family self-review", () => {
-    const onlySol = evaluateProductionReadiness(evidence({ reviews: [sol()] }));
-    expect(onlySol.ready).toBe(false);
-    expect(onlySol.blockers.join(" ")).toMatch(/Fable\/Opus|independent/);
+  it("requires both reviewer slots but permits both to land on one paid family", () => {
+    const onlyLead = evaluateProductionReadiness(evidence({ reviews: [lead()] }));
+    expect(onlyLead.ready).toBe(false);
+    expect(onlyLead.blockers.join(" ")).toMatch(/challenger|exactly two/i);
 
-    const disguised = evaluateProductionReadiness(
+    const sameFamily = evaluateProductionReadiness(
       evidence({
-        reviews: [sol(), opus({ provider: "openai" })],
+        reviews: [lead(), challenger({ provider: "openai", model: "gpt-5.6-pro" })],
       }),
     );
-    expect(disguised.ready).toBe(false);
-    expect(disguised.brainFloor.fableOrOpus).toBe(false);
+    expect(sameFamily.ready).toBe(true);
+    expect(sameFamily.brainFloor.independentFamilies).toBe(false);
   });
 
-  it("refuses weak, unknown, and cleverly renamed Anthropic models", () => {
-    for (const model of [
-      "claude-haiku",
-      "not-opus",
-      "claude-haiku-opus-proxy",
-      "some-fable-wrapper",
-    ]) {
-      const receipt = evaluateProductionReadiness(
-        evidence({ reviews: [sol(), opus({ model })] }),
-      );
-      expect(receipt.ready, model).toBe(false);
-      expect(receipt.brainFloor.fableOrOpus, model).toBe(false);
-    }
+  it("refuses a reviewer record without the actual model identity", () => {
+    const receipt = evaluateProductionReadiness(
+      evidence({ reviews: [lead(), challenger({ model: "" })] }),
+    );
+    expect(receipt.ready).toBe(false);
+    expect(receipt.brainFloor.paidModels).toBe(false);
   });
 
   it("requires a nonempty canonical SHA-256 evidence digest", () => {
@@ -142,8 +141,8 @@ describe("mandatory production-readiness policy", () => {
         evidence({
           evidenceDigest: badDigest,
           reviews: [
-            sol({ evidenceDigest: badDigest }),
-            opus({ evidenceDigest: badDigest }),
+            lead({ evidenceDigest: badDigest }),
+            challenger({ evidenceDigest: badDigest }),
           ],
         }),
       );
@@ -154,7 +153,7 @@ describe("mandatory production-readiness policy", () => {
 
   it("requires every eligible brain decision to agree on the same evidence", () => {
     const stale = evaluateProductionReadiness(
-      evidence({ reviews: [sol(), opus({ evidenceDigest: STALE_DIGEST })] }),
+      evidence({ reviews: [lead(), challenger({ evidenceDigest: STALE_DIGEST })] }),
     );
     expect(stale.ready).toBe(false);
     expect(stale.brainFloor.sameEvidence).toBe(false);
@@ -162,15 +161,15 @@ describe("mandatory production-readiness policy", () => {
     const conflict = evaluateProductionReadiness(
       evidence({
         reviews: [
-          sol(),
-          sol({ decision: "not_ready", technicallyReady: false }),
-          opus(),
+          lead(),
+          lead({ decision: "not_ready", technicallyReady: false }),
+          challenger(),
         ],
       }),
     );
     expect(conflict.ready).toBe(false);
-    expect(conflict.brainFloor.sol).toBe(false);
-    expect(conflict.blockers.join(" ")).toMatch(/Sol did not unanimously approve/);
+    expect(conflict.brainFloor.lead).toBe(false);
+    expect(conflict.blockers.join(" ")).toMatch(/lead reviewer|exactly two/i);
   });
 
   it("does not confuse a green pipeline with purpose completion", () => {

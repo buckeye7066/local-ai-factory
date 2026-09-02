@@ -39,6 +39,7 @@ type Deferred<T> = T | (() => T);
 type ReviewInput = {
   provider: LLMProvider;
   identity: Deferred<ReadinessBrainIdentity>;
+  providerName?: Deferred<"openai" | "anthropic">;
   model: Deferred<string>;
   evidence: Omit<ProductionReadinessEvidence, "reviews">;
   phase?: "pre-release" | "final";
@@ -49,18 +50,17 @@ function resolveDeferred<T>(value: Deferred<T>): T {
 }
 
 /**
- * Ask one readiness brain to decide independently. Identity, provider family,
- * model, and evidence digest are stamped by the orchestrator after generation;
- * model output cannot promote itself into Sol/Fable/Opus or review stale bytes.
+ * Ask one readiness brain to decide independently. Reviewer slot, actual paid
+ * provider, model, and evidence digest are stamped by the orchestrator after
+ * generation; model output cannot promote itself or review stale bytes.
  */
 export async function productionReadinessAgent(
   input: ReviewInput,
 ): Promise<ReadinessBrainReview> {
-  const initialIdentity = resolveDeferred(input.identity);
-  const expectedProvider = initialIdentity === "sol" ? "openai" : "anthropic";
-  if (input.provider.name !== expectedProvider) {
+  const initialProvider = resolveDeferred(input.providerName ?? input.provider.name);
+  if (initialProvider !== "openai" && initialProvider !== "anthropic") {
     throw new Error(
-      `${initialIdentity} readiness review requires ${expectedProvider}, not ${input.provider.name}.`,
+      `Production readiness review requires a paid provider, not ${initialProvider}.`,
     );
   }
   const preReleaseContract =
@@ -98,12 +98,13 @@ export async function productionReadinessAgent(
     draft.blockers.length === 0;
   const identity = resolveDeferred(input.identity);
   const model = resolveDeferred(input.model);
-  const resolvedProvider = identity === "sol" ? "openai" : "anthropic";
-  if (input.provider.name !== resolvedProvider) {
+  const resolvedProvider = resolveDeferred(input.providerName ?? input.provider.name);
+  if (resolvedProvider !== "openai" && resolvedProvider !== "anthropic") {
     throw new Error(
-      `${identity} readiness review requires ${resolvedProvider}, not ${input.provider.name}.`,
+      `Production readiness review requires a paid provider, not ${resolvedProvider}.`,
     );
   }
+  if (!model.trim()) throw new Error("Production readiness review model is missing.");
 
   return {
     identity,
@@ -124,26 +125,29 @@ export async function productionReadinessAgent(
  * fallback: one rejection/failure leaves the caller without a ready receipt.
  */
 export async function independentProductionReadinessReviews(input: {
-  solProvider: LLMProvider;
-  solModel: string;
-  secondProvider: LLMProvider;
-  secondIdentity: Deferred<"fable" | "opus">;
-  secondModel: Deferred<string>;
+  leadProvider: LLMProvider;
+  leadProviderName: Deferred<"openai" | "anthropic">;
+  leadModel: Deferred<string>;
+  challengerProvider: LLMProvider;
+  challengerProviderName: Deferred<"openai" | "anthropic">;
+  challengerModel: Deferred<string>;
   evidence: Omit<ProductionReadinessEvidence, "reviews">;
   phase?: "pre-release" | "final";
 }): Promise<[ReadinessBrainReview, ReadinessBrainReview]> {
   return Promise.all([
     productionReadinessAgent({
-      provider: input.solProvider,
-      identity: "sol",
-      model: input.solModel,
+      provider: input.leadProvider,
+      identity: "lead",
+      providerName: input.leadProviderName,
+      model: input.leadModel,
       evidence: input.evidence,
       phase: input.phase,
     }),
     productionReadinessAgent({
-      provider: input.secondProvider,
-      identity: input.secondIdentity,
-      model: input.secondModel,
+      provider: input.challengerProvider,
+      identity: "challenger",
+      providerName: input.challengerProviderName,
+      model: input.challengerModel,
       evidence: input.evidence,
       phase: input.phase,
     }),

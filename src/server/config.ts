@@ -110,9 +110,9 @@ export interface AppConfig {
    */
   anthropicModels?: string[];
   openaiModel: string;
-  /** OpenAI-family lead model used only for mandatory readiness review. */
+  /** OpenAI model used when the unified readiness ladder reaches OpenAI. */
   solModel: string;
-  /** Anthropic Fable/Opus-class model used only for independent readiness review. */
+  /** Legacy Anthropic readiness preference retained for configuration compatibility. */
   fableOrOpusModel: string;
   /**
    * Strongest-to-weakest provider order. Optional only for compatibility with
@@ -248,7 +248,7 @@ export function isFableOrOpusModel(model: string): boolean {
   return isSupportedFableOrOpusModel(model);
 }
 
-/** Mandatory non-demo readiness brain floor. */
+/** Mandatory non-demo readiness floor for the single paid model ladder. */
 export function readinessBrainFloor(config: AppConfig, secrets: AppSecrets) {
   const solConfigured =
     isOpenAiConfigured(secrets) && config.solModel.trim().length > 0;
@@ -260,8 +260,23 @@ export function readinessBrainFloor(config: AppConfig, secrets: AppSecrets) {
   ].filter(isSupportedFableOrOpusModel);
   const fableOrOpusConfigured =
     isAnthropicConfigured(secrets) && fableOrOpusModels.length > 0;
+  const anthropicConfigured =
+    isAnthropicConfigured(secrets) &&
+    (config.anthropicModels ?? [config.anthropicModel]).some(
+      (model) => model.trim().length > 0,
+    );
+  const openaiConfigured = solConfigured;
+  const paidProviders = (config.modelLadder ?? ["anthropic", "openai", "free"]).filter(
+    (name): name is "anthropic" | "openai" =>
+      (name === "anthropic" && anthropicConfigured) ||
+      (name === "openai" && openaiConfigured),
+  );
   return {
-    configured: solConfigured && fableOrOpusConfigured,
+    configured: paidProviders.length > 0,
+    paidProviders,
+    anthropicConfigured,
+    openaiConfigured,
+    // Legacy diagnostic fields remain truthful while stored clients age out.
     solConfigured,
     fableOrOpusConfigured,
     solModel: config.solModel,
@@ -310,6 +325,7 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
     openaiModel: config.openaiModel,
     mandatoryProductionReadiness: true as const,
     readinessBrainFloorConfigured: brainFloor.configured,
+    readinessPaidProviders: brainFloor.paidProviders,
     solConfigured: brainFloor.solConfigured,
     fableOrOpusConfigured: brainFloor.fableOrOpusConfigured,
     solModel: brainFloor.solModel,

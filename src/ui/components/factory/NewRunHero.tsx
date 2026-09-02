@@ -343,9 +343,9 @@ function NewAppPanel({
         <div className="mt-5 space-y-2">
           {!admissionReady && (
             <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
-              Production admission requires both the OpenAI Sol and Anthropic Fable/Opus
-              credentials. The free/local rung can finish work after paid exhaustion,
-              but it cannot issue the readiness receipt.
+              Production admission requires at least one configured paid rung. The
+              independent reviewers use the same paid-first ladder; free/local can
+              finish ordinary work after paid exhaustion but cannot issue the receipt.
             </Helper>
           )}
         </div>

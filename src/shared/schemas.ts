@@ -1017,9 +1017,10 @@ export const HealthSchema = z.object({
   freeModel: z.string(),
   anthropicConfigured: z.boolean(),
   openaiConfigured: z.boolean(),
-  /** Production admission requires both the Sol and Fable/Opus brain roles. */
+  /** Production admission requires a configured paid rung for both reviewer calls. */
   mandatoryProductionReadiness: z.literal(true).optional(),
   readinessBrainFloorConfigured: z.boolean().optional(),
+  readinessPaidProviders: z.array(z.enum(["anthropic", "openai"])).optional(),
   solConfigured: z.boolean().optional(),
   fableOrOpusConfigured: z.boolean().optional(),
   solModel: z.string().optional(),

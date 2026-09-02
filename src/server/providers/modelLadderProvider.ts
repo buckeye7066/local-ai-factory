@@ -13,12 +13,11 @@ export type ModelLadderRung = {
 };
 
 /**
- * One sticky strongest-to-weakest ladder inside a single provider family.
+ * One sticky strongest-to-weakest model ladder.
  *
- * The outer provider ladder still owns Anthropic -> OpenAI -> free/local.
- * This layer exhausts configured models within one family first, so a rejected
- * frontier model can fall through to the next paid model without losing family
- * identity or re-hammering the exhausted model at every later stage.
+ * Most callers use this inside one provider family. Readiness review also uses
+ * it across paid families so the mandatory judgment follows the same ordered
+ * paid route as the build instead of dying at an arbitrary provider boundary.
  */
 export class ModelLadderProvider implements LLMProvider {
   readonly name: LLMProvider["name"];
@@ -52,6 +51,11 @@ export class ModelLadderProvider implements LLMProvider {
 
   currentModel(): string {
     return this.rungs[this.cursor]!.model;
+  }
+
+  /** Actual provider family serving the current rung after any failover. */
+  currentProvider(): LLMProvider["name"] {
+    return this.rungs[this.cursor]!.provider.name;
   }
 
   private nextConfigured(after: number): number | null {

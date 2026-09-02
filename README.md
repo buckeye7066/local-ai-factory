@@ -168,8 +168,10 @@ Anthropic family with
 `FACTORY_ANTHROPIC_MODEL_LADDER=claude-fable-5-1,claude-opus-5,claude-sonnet-5,claude-haiku-4-5`,
 then order provider families with `FACTORY_MODEL_LADDER=anthropic,openai`.
 Missing rungs are skipped and the free/local rotator is always appended last.
-The mandatory independent Anthropic review may fall through only the
-Fable/Opus subset, preserving the two-family readiness floor.
+The mandatory lead and challenger reviews each start from the same strongest
+paid rung, independently descend the same ordered paid ladder, and record the
+actual provider/model that answered. They never fall through to free, mock, or
+stub capacity, and readiness no longer deadlocks at a provider-family boundary.
 `DEFAULT_CODE_PROVIDER` and `DEFAULT_REVIEW_PROVIDER` remain legacy
 compatibility fields only. The Settings screen reflects the active values.
 

@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { LLMProvider } from "../../shared/types.js";
-import { productionReadinessAgent } from "../agents/productionReadinessAgent.js";
+import {
+  independentProductionReadinessReviews,
+  productionReadinessAgent,
+} from "../agents/productionReadinessAgent.js";
 import { ModelLadderProvider } from "../providers/modelLadderProvider.js";
 
 function fake(
   behavior: "ok" | "exhausted" | "badRequest",
+  name: "anthropic" | "openai" = "anthropic",
 ): LLMProvider & { calls: number } {
   const provider = {
-    name: "anthropic" as const,
+    name,
     paidBudgetManaged: true,
     calls: 0,
     isConfigured: () => true,
@@ -17,7 +21,7 @@ function fake(
         throw new Error("model does not exist or you do not have access");
       }
       if (behavior === "badRequest") throw new Error("400 invalid prompt shape");
-      return { text: "ok", provider: "anthropic" as const };
+      return { text: "ok", provider: name };
     },
     async generateJson<T>() {
       provider.calls += 1;
@@ -73,14 +77,15 @@ describe("ModelLadderProvider", () => {
     expect(fallback.calls).toBe(0);
   });
 
-  it("stamps the model and Fable/Opus identity that actually reviewed", async () => {
+  it("stamps the actual paid provider and model after cross-family fallback", async () => {
     const provider = new ModelLadderProvider([
       { model: "claude-fable-5-1", provider: fake("exhausted") },
-      { model: "claude-opus-5", provider: fake("ok") },
+      { model: "gpt-5.5", provider: fake("ok", "openai") },
     ]);
     const review = await productionReadinessAgent({
       provider,
-      identity: () => (/fable/i.test(provider.currentModel()) ? "fable" : "opus"),
+      identity: "challenger",
+      providerName: () => provider.currentProvider() as "anthropic" | "openai",
       model: () => provider.currentModel(),
       evidence: {
         evidenceDigest: `sha256:${"a".repeat(64)}`,
@@ -89,10 +94,31 @@ describe("ModelLadderProvider", () => {
     });
 
     expect(review).toMatchObject({
-      identity: "opus",
-      provider: "anthropic",
-      model: "claude-opus-5",
+      identity: "challenger",
+      provider: "openai",
+      model: "gpt-5.5",
       decision: "ready",
     });
+  });
+
+  it("executes lead and challenger separately even when both land on OpenAI", async () => {
+    const lead = fake("ok", "openai");
+    const challenger = fake("ok", "openai");
+    const reviews = await independentProductionReadinessReviews({
+      leadProvider: lead,
+      leadProviderName: "openai",
+      leadModel: "gpt-5.5",
+      challengerProvider: challenger,
+      challengerProviderName: "openai",
+      challengerModel: "gpt-5.5",
+      evidence: {
+        evidenceDigest: `sha256:${"b".repeat(64)}`,
+      } as never,
+      phase: "pre-release",
+    });
+
+    expect(lead.calls).toBe(1);
+    expect(challenger.calls).toBe(1);
+    expect(reviews.map((review) => review.identity)).toEqual(["lead", "challenger"]);
   });
 });
