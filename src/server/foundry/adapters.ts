@@ -668,7 +668,11 @@ export class FoundryAdapters {
             mode: "new",
             ...routing,
             goals: extendGoals,
-            newRepo: { name: project.name, private: true, createRemote: true },
+            newRepo: {
+              name: project.name,
+              private: true,
+              createRemote: !boolEnv("PURPOSE_FOUNDRY_LOCAL_ARTIFACT_ONLY"),
+            },
             idempotencyKey: `purpose-foundry:${project.id}:factory-deck`,
           });
         })();

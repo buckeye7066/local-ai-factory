@@ -1,0 +1,84 @@
+name: purpose-foundry-cloud
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/purpose-foundry-cloud.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: purpose-foundry-cloud-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Purpose Foundry end-to-end production verification
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[foundry-smoke]'))
+    environment: paid-production-main-automated
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "10.17.0"
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Purpose Foundry production line
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
+          ANTHROPIC_MODEL: claude-opus-4-8
+          OPENAI_MODEL: gpt-5.5
+          FACTORY_SOL_MODEL: gpt-5.5
+          FACTORY_FABLE_OR_OPUS_MODEL: claude-opus-4-8
+          FACTORY_FREE_ENABLED: "0"
+          DEFAULT_CODE_PROVIDER: anthropic
+          DEFAULT_REVIEW_PROVIDER: openai
+          ALLOW_UNTRUSTED_SCRIPTS: "true"
+          PURPOSE_FOUNDRY_LOCAL_ARTIFACT_ONLY: "true"
+          WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
+          FACTORY_RUN_TIMEOUT_MS: "21000000"
+          PURPOSE_FOUNDRY_FACTORY_TIMEOUT_MS: "21000000"
+          PURPOSE_FOUNDRY_SMOKE_TIMEOUT_MS: "21000000"
+          MAX_MODEL_CALLS_PER_RUN: "60"
+          MAX_REPAIR_LOOPS: "3"
+          FACTORY_PAID_RESCUES_PER_HOUR: "60"
+          FACTORY_PAID_RESCUES_PER_DAY: "60"
+          FACTORY_PAID_MAX_USD_PER_DAY: "35"
+          CI: "true"
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || { echo "No Anthropic production credential is configured."; exit 1; }
+          test -n "$OPENAI_API_KEY" || { echo "No OpenAI production credential is configured."; exit 1; }
+          pnpm server > purpose-foundry-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          node scripts/ci/run-purpose-foundry-smoke.mjs
+
+      - name: Preserve Purpose Foundry evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: purpose-foundry-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            purpose-foundry-server.log
+            .factory/**
+            workspaces/**
