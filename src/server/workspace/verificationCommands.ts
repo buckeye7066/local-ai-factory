@@ -120,6 +120,31 @@ function packageScriptCommand(
   };
 }
 
+/**
+ * A restored candidate can live below the Factory Deck checkout. Vitest's
+ * config discovery must never escape that candidate and adopt an ancestor
+ * `vitest.config.*`, so simple Vitest host scripts receive an explicit root.
+ */
+function packageTestCommand(
+  manager: PackageManager,
+  workspacePath: string,
+): VerificationCommand {
+  const scripts = readPackage(workspacePath)?.scripts;
+  const testScript =
+    scripts && typeof scripts === "object"
+      ? (scripts as Record<string, unknown>).test
+      : undefined;
+  const simpleVitest =
+    typeof testScript === "string" && /^\s*vitest(?:\s+run)?\s*$/.test(testScript);
+  const args =
+    simpleVitest && manager === "npm"
+      ? ["test", "--", "--root=."]
+      : simpleVitest && manager === "pnpm"
+        ? ["test", "--root=."]
+        : ["test"];
+  return { bin: manager, args, isTest: true };
+}
+
 function javascriptCommands(
   workspacePath: string,
   resolution = packageManagerResolution(workspacePath),
@@ -129,7 +154,7 @@ function javascriptCommands(
   if (resolution.manager === "yarn") {
     return [
       { bin: "yarn", args: ["install"], isTest: false },
-      { bin: "yarn", args: ["test"], isTest: true },
+      packageTestCommand("yarn", workspacePath),
     ];
   }
   const prismaStep = hasPrismaSchema(workspacePath);
@@ -146,7 +171,7 @@ function javascriptCommands(
             },
           ]
         : []),
-      { bin: "npm", args: ["test"], isTest: true },
+      packageTestCommand("npm", workspacePath),
     ];
   }
   return [
@@ -161,7 +186,7 @@ function javascriptCommands(
           },
         ]
       : []),
-    { bin: "pnpm", args: ["test"], isTest: true },
+    packageTestCommand("pnpm", workspacePath),
   ];
 }
 
@@ -379,7 +404,7 @@ export function verificationPlanForWorkspace(
     if (deps.has("vitest") || String(scripts.test ?? "").includes("vitest")) {
       direct.push({
         bin: "npx",
-        args: ["--no-install", "vitest", "run", path, "--reporter=json"],
+        args: ["--no-install", "vitest", "run", path, "--reporter=json", "--root=."],
         isTest: true,
         runner: "vitest",
         directTestPath: path,
