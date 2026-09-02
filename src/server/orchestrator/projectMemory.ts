@@ -139,6 +139,9 @@ export function projectKeyForOptions(
         .digest("hex");
       return `new-local-sha256:${localIdentity}`;
     }
+    // A requested remote without a resolved owner is not a workspace-only
+    // project. Fail closed instead of silently assigning a different identity.
+    return null;
   }
   if (options.mode !== "extend" && context.localProjectId) {
     return `new-local-sha256:${createHash("sha256")
