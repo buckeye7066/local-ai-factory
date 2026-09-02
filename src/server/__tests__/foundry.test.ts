@@ -650,10 +650,22 @@ describe("Purpose Foundry", () => {
     const adapters = new FoundryAdapters(store, {
       fetch: async (_url, init) => {
         posted = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify({ results: [{ name: "useful/repo" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                repo: {
+                  fullName: "useful/repo",
+                  license: { spdxId: "MIT", name: "MIT License" },
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       },
     });
     const outcome = await adapters.execute(project, "repo-rewards");
@@ -669,13 +681,20 @@ describe("Purpose Foundry", () => {
           name: "useful/repo",
           url: null,
           summary: "",
-          license: null,
+          license: "MIT",
           score: null,
         },
       ],
     });
     expect(JSON.parse(await readFile(outcome.artifacts[0], "utf8"))).toEqual({
-      results: [{ name: "useful/repo" }],
+      results: [
+        {
+          repo: {
+            fullName: "useful/repo",
+            license: { spdxId: "MIT", name: "MIT License" },
+          },
+        },
+      ],
     });
     await expect(
       store.writeArtifact(project.id, "repo-rewards", "../escape.json", {}),
