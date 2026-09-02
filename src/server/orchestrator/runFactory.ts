@@ -15,6 +15,8 @@ import type {
   Architecture,
   TaskPlan,
   PurposeProfile,
+  GoalContract,
+  CompetitiveResearchSummary,
 } from "../../shared/schemas.js";
 import { freshStages } from "../../shared/schemas.js";
 import type { FileEdit } from "../../shared/schemas.js";
@@ -153,6 +155,7 @@ import { researchAgent } from "../agents/researchAgent.js";
 import {
   assessRequiredCompetitiveEvidence,
   requiresCompetitiveEvidence,
+  requiresProductionCompetitiveEvidence,
   shouldAttemptResearch,
   summarizeCompetitiveEvidence,
   withCompetitiveAcceptanceCriteria,
@@ -164,6 +167,15 @@ import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
 import { safeErrorMessage } from "../errors.js";
+import {
+  continuityFromMemory,
+  createGoalContract,
+  loadProjectMemory,
+  projectKeyForOptions,
+  rememberProjectCompletion,
+  rememberProjectPlan,
+  withGoalContract,
+} from "./projectMemory.js";
 
 export interface StartRunArgs {
   idea: string;
