@@ -146,6 +146,33 @@ describe("durable project purpose memory", () => {
     ).toThrow(/digest mismatch/i);
   });
 
+  it("turns owner-declared mission and audience markers into code-owned authority", () => {
+    const contract = createGoalContract({
+      projectKey: "git:github.com/buckeye7066/grantflow",
+      runId: randomUUID(),
+      idea: "Purpose Foundry assembly",
+      goals: [
+        "Mission: Match people to verified public funding",
+        "Audience: nonprofit grant seekers",
+        "Constraint: cite the original opportunity",
+      ],
+      spec: spec("A model-authored tagline that must not become the mission"),
+      purposeProfile: purposeProfile(
+        "A repository inference that is not the directive",
+      ),
+      now: 2,
+    });
+    expect(contract).toMatchObject({
+      purpose: "Match people to verified public funding",
+      purposeSource: "current-request",
+      targetUsers: ["nonprofit grant seekers"],
+      constraints: ["cite the original opportunity"],
+    });
+    expect(contract.activeGoals).not.toContain(
+      "Mission: Match people to verified public funding",
+    );
+  });
+
   it("persists completed context and carries it into a later run", async () => {
     const projectKey = `test:${randomUUID()}`;
     const firstRun = randomUUID();
