@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { ProductSpecSchema, PurposeProfileSchema } from "../../shared/schemas.js";
 import {
@@ -386,5 +387,18 @@ describe("durable project purpose memory", () => {
       purpose: completedContract.purpose,
       lastOutcome: { state: "completed", revision: "durable123" },
     });
+  });
+
+  it("publishes completion memory only after the terminal run is durably flushed", () => {
+    const source = readFileSync("src/server/orchestrator/runFactory.ts", "utf8");
+    const completedStatus = source.lastIndexOf('run.status = "completed";');
+    const terminalFlush = source.indexOf("await flush();", completedStatus);
+    const memoryCompletion = source.indexOf(
+      "await rememberProjectCompletion({",
+      completedStatus,
+    );
+    expect(completedStatus).toBeGreaterThan(-1);
+    expect(terminalFlush).toBeGreaterThan(completedStatus);
+    expect(memoryCompletion).toBeGreaterThan(terminalFlush);
   });
 });
