@@ -186,10 +186,7 @@ export const GoalContractSchema = z.object({
   nonGoals: z.array(z.string().trim().min(1)).max(30).default([]),
   continuity: z.object({
     previousRunIds: z.array(z.string().uuid()).max(12).default([]),
-    carriedForwardDecisions: z
-      .array(z.string().trim().min(1))
-      .max(30)
-      .default([]),
+    carriedForwardDecisions: z.array(z.string().trim().min(1)).max(30).default([]),
     priorResearch: z.array(z.string().trim().min(1)).max(30).default([]),
   }),
   createdFromRunId: z.string().uuid(),
