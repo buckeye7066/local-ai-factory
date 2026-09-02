@@ -178,13 +178,21 @@ export interface CommandResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  /** True when the corresponding stream exceeded its explicit capture bound. */
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
   reason?: string;
 }
 
 const MAX_CAPTURED_OUTPUT = 8_000;
+const MAX_STRUCTURED_CAPTURED_OUTPUT = 32 * 1024 * 1024;
 
-function appendOutputTail(current: string, chunk: Buffer | string): string {
-  return (current + chunk.toString()).slice(-MAX_CAPTURED_OUTPUT);
+function appendOutputTail(
+  current: string,
+  chunk: Buffer | string,
+  limit = MAX_CAPTURED_OUTPUT,
+): string {
+  return (current + chunk.toString()).slice(-limit);
 }
 
 export function isAllowed(bin: string, args: string[]): boolean {
@@ -404,6 +412,12 @@ export interface RunCommandOptions {
    */
   shouldCancel?: () => boolean;
   timeoutMs?: number;
+  /**
+   * Opt-in capture bound for machine-readable reporter output. The default
+   * remains a small diagnostic tail; callers that parse stdout must request
+   * enough complete output and reject the explicit truncation flags.
+   */
+  maxCapturedOutputBytes?: number;
 }
 
 /** Quote a Windows token if it contains a space (our args are metachar-free). */
@@ -564,10 +578,17 @@ export async function runCommand(
     );
   }
 
+  const captureLimit = Math.min(
+    Math.max(opts.maxCapturedOutputBytes ?? MAX_CAPTURED_OUTPUT, MAX_CAPTURED_OUTPUT),
+    MAX_STRUCTURED_CAPTURED_OUTPUT,
+  );
+
   return new Promise<CommandResult>((resolveP) => {
     const child = spawnPm(absBin, spawnArgs, req.cwd, env);
     let stdout = "";
     let stderr = "";
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
     let cancelled = false;
     // Kill the whole PROCESS TREE, not just the immediate child. On Windows the
     // immediate child is a cmd.exe wrapper: `child.kill("SIGKILL")` terminates
@@ -630,10 +651,14 @@ export async function runCommand(
     };
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      stdout = appendOutputTail(stdout, chunk);
+      const value = chunk.toString();
+      stdoutTruncated ||= stdout.length + value.length > captureLimit;
+      stdout = appendOutputTail(stdout, value, captureLimit);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      stderr = appendOutputTail(stderr, chunk);
+      const value = chunk.toString();
+      stderrTruncated ||= stderr.length + value.length > captureLimit;
+      stderr = appendOutputTail(stderr, value, captureLimit);
     });
     child.on("error", (err) => {
       cleanup();
@@ -644,6 +669,8 @@ export async function runCommand(
         exitCode: null,
         stdout,
         stderr: String(err),
+        stdoutTruncated,
+        stderrTruncated,
         reason: "spawn error",
       });
     });
@@ -655,8 +682,10 @@ export async function runCommand(
           allowed: true,
           executed: false,
           exitCode: code,
-          stdout: stdout.slice(-8000),
-          stderr: stderr.slice(-8000),
+          stdout,
+          stderr,
+          stdoutTruncated,
+          stderrTruncated,
           reason: "Cancelled: child process killed on cancel request.",
         });
         return;
@@ -667,8 +696,10 @@ export async function runCommand(
           allowed: true,
           executed: false,
           exitCode: code,
-          stdout: stdout.slice(-8000),
-          stderr: stderr.slice(-8000),
+          stdout,
+          stderr,
+          stdoutTruncated,
+          stderrTruncated,
           reason: "Timed out: child process tree was killed.",
         });
         return;
@@ -678,8 +709,10 @@ export async function runCommand(
         allowed: true,
         executed: true,
         exitCode: code,
-        stdout: stdout.slice(-8000),
-        stderr: stderr.slice(-8000),
+        stdout,
+        stderr,
+        stdoutTruncated,
+        stderrTruncated,
       });
     });
   });
