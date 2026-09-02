@@ -20,6 +20,7 @@ import { FATAL_EXIT_CODE } from "../exitCodes.js";
 
 const policyPath = resolve(process.cwd(), "scripts", "lib", "RestartPolicy.ps1");
 const launcherPath = resolve(process.cwd(), "scripts", "start-factory.ps1");
+const commandLauncherPath = resolve(process.cwd(), "scripts", "start-factory.cmd");
 
 /** Windows PowerShell is what the .cmd launcher actually runs. */
 function powershellAvailable(): boolean {
@@ -162,6 +163,21 @@ describe("launcher wiring — the guard is actually used", () => {
     );
   });
 
+  it("repairs a clean checkout and stale dependencies before launch", () => {
+    const launcher = readFileSync(launcherPath, "utf8");
+    expect(launcher).toContain("git pull --ff-only --quiet origin main");
+    expect(launcher).toContain("git status --porcelain --untracked-files=no");
+    expect(launcher).toContain("node_modules\\.modules.yaml");
+    expect(launcher).toContain("pnpm install --frozen-lockfile");
+  });
+
+  it("keeps startup errors visible when launched from the desktop icon", () => {
+    const commandLauncher = readFileSync(commandLauncherPath, "utf8");
+    expect(commandLauncher).toContain('if not "%FACTORY_EXIT%"=="0"');
+    expect(commandLauncher).toContain("pause >nul");
+    expect(commandLauncher).toContain("exit /b %FACTORY_EXIT%");
+  });
+
   it("the PowerShell fatal code matches the server's FATAL_EXIT_CODE", () => {
     // A drifting constant would silently turn the fatal guard back into a
     // retry loop, so the two definitions are pinned to each other.
@@ -170,7 +186,7 @@ describe("launcher wiring — the guard is actually used", () => {
   });
 
   it("the launcher scripts are ASCII-only (PS 5.1 reads no-BOM as CP1252)", () => {
-    for (const p of [policyPath, launcherPath]) {
+    for (const p of [policyPath, launcherPath, commandLauncherPath]) {
       const bytes = readFileSync(p);
       const nonAscii = [...bytes].filter((b) => b > 127);
       expect(nonAscii, `${p} must stay ASCII-only`).toHaveLength(0);
