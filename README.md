@@ -154,7 +154,7 @@ This is designed to be safe to run on your own machine:
 - `MAX_MODEL_CALLS_PER_RUN` hard-caps LLM calls per run.
 - `MAX_REPAIR_LOOPS` bounds the repair loop.
 - Every live run uses one orchestrated model ladder: the strongest configured
-  paid rung first, weaker configured paid rungs next, and free/local last.
+  paid model first, weaker configured paid models next, and free/local last.
   Credit, quota, capacity, or configured budget exhaustion demotes the run; the
   orchestrator never silently promotes it again mid-run.
 - Paid call-count limits are atomic only within one Factory Node process. The
@@ -163,12 +163,15 @@ This is designed to be safe to run on your own machine:
 
 ## Changing models
 
-Edit `ANTHROPIC_MODEL` / `OPENAI_MODEL` in `.env`, then order the paid
-provider families strongest-to-weaker with
-`FACTORY_MODEL_LADDER=anthropic,openai`. Missing providers are skipped and the
-free/local rotator is always appended last. `DEFAULT_CODE_PROVIDER` and
-`DEFAULT_REVIEW_PROVIDER` remain legacy compatibility fields only. The
-Settings screen reflects the active values.
+Edit `ANTHROPIC_MODEL` / `OPENAI_MODEL` in `.env`. Order models inside the
+Anthropic family with
+`FACTORY_ANTHROPIC_MODEL_LADDER=claude-fable-5-1,claude-opus-5,claude-sonnet-5,claude-haiku-4-5`,
+then order provider families with `FACTORY_MODEL_LADDER=anthropic,openai`.
+Missing rungs are skipped and the free/local rotator is always appended last.
+The mandatory independent Anthropic review may fall through only the
+Fable/Opus subset, preserving the two-family readiness floor.
+`DEFAULT_CODE_PROVIDER` and `DEFAULT_REVIEW_PROVIDER` remain legacy
+compatibility fields only. The Settings screen reflects the active values.
 
 ---
 

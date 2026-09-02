@@ -4,67 +4,16 @@ import type {
   GenerateTextInput,
   GenerateTextResult,
 } from "../../shared/types.js";
-import { PaidBudgetExhaustedError } from "./paidBudget.js";
 import { noteFailover, noteRoutePrimary, noteServed } from "./freeRoute.js";
 import { ProviderAbortError } from "./types.js";
+import { isModelExhaustion, modelFailureText } from "./modelExhaustion.js";
+export { isModelExhaustion, isQuotaRefusal } from "./modelExhaustion.js";
 
 /**
  * A credit/quota wall is routing state, not a failed build. The ladder starts
  * at the strongest configured paid model and demotes through weaker providers,
  * ending at the strongest available free/local rotation rung.
  */
-
-const QUOTA_SIGNS = [
-  /no credits remaining/i,
-  /insufficient_quota/i,
-  /credit balance is too low/i,
-  /exceeded your current quota/i,
-  /billing.*(hard limit|not active)/i,
-  /quota exceeded/i,
-];
-
-const MODEL_EXHAUSTION_SIGNS = [
-  ...QUOTA_SIGNS,
-  /rate.?limit/i,
-  /too many requests/i,
-  /overloaded/i,
-  /capacity/i,
-  /temporarily unavailable/i,
-  /model (?:is )?(?:unavailable|disabled|exhausted)/i,
-  /model_not_found/i,
-  /model not found/i,
-  /does not exist or you do not have access/i,
-  /not supported.*model/i,
-];
-
-function errorText(err: unknown): string {
-  if (err instanceof Error) return `${err.name} ${err.message}`;
-  if (typeof err === "string") return err;
-  try {
-    return JSON.stringify(err ?? "");
-  } catch {
-    return String(err);
-  }
-}
-
-export function isQuotaRefusal(err: unknown): boolean {
-  const text = errorText(err);
-  return QUOTA_SIGNS.some((rx) => rx.test(text));
-}
-
-/**
- * True only for a route-scoped exhaustion condition where another model can
- * reasonably serve the same request. Authentication failures, malformed
- * requests, cancellation, and arbitrary provider bugs remain loud.
- */
-export function isModelExhaustion(err: unknown): boolean {
-  if (err instanceof ProviderAbortError) return false;
-  if (err instanceof PaidBudgetExhaustedError) return true;
-  const status = (err as { status?: unknown })?.status;
-  if (status === 402 || status === 429 || status === 529) return true;
-  const text = errorText(err);
-  return MODEL_EXHAUSTION_SIGNS.some((rx) => rx.test(text));
-}
 
 /**
  * One sticky strongest-to-weakest route.
@@ -126,7 +75,7 @@ export class QuotaFailoverProvider implements LLMProvider {
         const nextIndex = this.nextConfigured(index);
         if (nextIndex === null) throw firstExhaustion;
         const next = this.providers[nextIndex]!;
-        const reason = errorText(error);
+        const reason = modelFailureText(error);
         noteFailover(next.name, reason, provider.name);
         this.onFailover(provider.name, next.name, reason);
         this.cursor = nextIndex;

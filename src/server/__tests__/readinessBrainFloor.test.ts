@@ -8,7 +8,7 @@ const keys = {
 } as NodeJS.ProcessEnv;
 
 describe("mandatory readiness brain configuration", () => {
-  it("requires both provider families and an Anthropic Fable/Opus-class model", () => {
+  it("requires both provider families and a Fable/Opus rung in the Anthropic ladder", () => {
     const config = loadConfig({
       ...keys,
       FACTORY_SOL_MODEL: "gpt-5.6-pro",
@@ -23,10 +23,25 @@ describe("mandatory readiness brain configuration", () => {
 
     const weak = loadConfig({
       ...keys,
+      ANTHROPIC_MODEL: "claude-haiku",
+      FACTORY_ANTHROPIC_MODEL_LADDER: "claude-haiku",
       FACTORY_SOL_MODEL: "gpt-5.6-pro",
       FACTORY_FABLE_OR_OPUS_MODEL: "claude-haiku",
     });
     expect(readinessBrainFloor(weak, secrets).configured).toBe(false);
+  });
+
+  it("does not let a weak readiness preference hide a Fable/Opus ladder rung", () => {
+    const config = loadConfig({
+      ...keys,
+      FACTORY_SOL_MODEL: "gpt-5.6-pro",
+      FACTORY_FABLE_OR_OPUS_MODEL: "claude-haiku",
+    });
+
+    expect(readinessBrainFloor(config, loadSecrets(keys))).toMatchObject({
+      configured: true,
+      fableOrOpusModels: ["claude-fable-5-1", "claude-opus-5"],
+    });
   });
 
   it("does not let the free route substitute for either readiness brain", () => {
@@ -70,8 +85,8 @@ describe("mandatory readiness brain configuration", () => {
     const pair = createReadinessBrainProviders(config, loadSecrets(keys));
     expect(pair.sol.name).toBe("openai");
     expect(pair.second.name).toBe("anthropic");
-    expect(pair.secondIdentity).toBe("opus");
+    expect(pair.secondIdentity()).toBe("opus");
     expect(pair.solModel).toBe("gpt-5.6-pro");
-    expect(pair.secondModel).toBe("claude-opus-4-8");
+    expect(pair.secondModel()).toBe("claude-opus-4-8");
   });
 });

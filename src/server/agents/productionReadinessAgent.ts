@@ -34,13 +34,19 @@ const ReviewDraftSchema = z.object({
 
 type ReviewDraft = z.infer<typeof ReviewDraftSchema>;
 
+type Deferred<T> = T | (() => T);
+
 type ReviewInput = {
   provider: LLMProvider;
-  identity: ReadinessBrainIdentity;
-  model: string;
+  identity: Deferred<ReadinessBrainIdentity>;
+  model: Deferred<string>;
   evidence: Omit<ProductionReadinessEvidence, "reviews">;
   phase?: "pre-release" | "final";
 };
+
+function resolveDeferred<T>(value: Deferred<T>): T {
+  return typeof value === "function" ? (value as () => T)() : value;
+}
 
 /**
  * Ask one readiness brain to decide independently. Identity, provider family,
@@ -50,10 +56,11 @@ type ReviewInput = {
 export async function productionReadinessAgent(
   input: ReviewInput,
 ): Promise<ReadinessBrainReview> {
-  const expectedProvider = input.identity === "sol" ? "openai" : "anthropic";
+  const initialIdentity = resolveDeferred(input.identity);
+  const expectedProvider = initialIdentity === "sol" ? "openai" : "anthropic";
   if (input.provider.name !== expectedProvider) {
     throw new Error(
-      `${input.identity} readiness review requires ${expectedProvider}, not ${input.provider.name}.`,
+      `${initialIdentity} readiness review requires ${expectedProvider}, not ${input.provider.name}.`,
     );
   }
   const preReleaseContract =
@@ -89,11 +96,19 @@ export async function productionReadinessAgent(
     draft.implementationComplete &&
     draft.technicallyReady &&
     draft.blockers.length === 0;
+  const identity = resolveDeferred(input.identity);
+  const model = resolveDeferred(input.model);
+  const resolvedProvider = identity === "sol" ? "openai" : "anthropic";
+  if (input.provider.name !== resolvedProvider) {
+    throw new Error(
+      `${identity} readiness review requires ${resolvedProvider}, not ${input.provider.name}.`,
+    );
+  }
 
   return {
-    identity: input.identity,
-    provider: expectedProvider,
-    model: input.model,
+    identity,
+    provider: resolvedProvider,
+    model,
     evidenceDigest: input.evidence.evidenceDigest,
     decision: ready ? "ready" : "not_ready",
     purposeAligned: draft.purposeAligned,
@@ -112,8 +127,8 @@ export async function independentProductionReadinessReviews(input: {
   solProvider: LLMProvider;
   solModel: string;
   secondProvider: LLMProvider;
-  secondIdentity: "fable" | "opus";
-  secondModel: string;
+  secondIdentity: Deferred<"fable" | "opus">;
+  secondModel: Deferred<string>;
   evidence: Omit<ProductionReadinessEvidence, "reviews">;
   phase?: "pre-release" | "final";
 }): Promise<[ReadinessBrainReview, ReadinessBrainReview]> {

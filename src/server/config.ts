@@ -42,6 +42,20 @@ function provider(value: string | undefined, fallback: ProviderName): ProviderNa
 
 export type ModelLadderProvider = "anthropic" | "openai" | "free";
 
+export const DEFAULT_ANTHROPIC_MODEL_LADDER = [
+  "claude-fable-5-1",
+  "claude-opus-5",
+  "claude-sonnet-5",
+  "claude-haiku-4-5",
+] as const;
+
+function modelIds(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/[;,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function modelLadder(value: string | undefined): ModelLadderProvider[] {
   const requested = (value ?? "")
     .split(/[;,]/)
@@ -90,6 +104,11 @@ export const FACTORY_SERVICE_ID = "factory-deck" as const;
 export interface AppConfig {
   free: FreeRouteSettings;
   anthropicModel: string;
+  /**
+   * Strongest-to-weakest Anthropic model order inside the paid Anthropic rung.
+   * Optional for compatibility with embedders that construct AppConfig directly.
+   */
+  anthropicModels?: string[];
   openaiModel: string;
   /** OpenAI-family lead model used only for mandatory readiness review. */
   solModel: string;
@@ -147,6 +166,15 @@ export interface AppSecrets {
 /** Build the typed config from process.env (pure — easy to test). */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const anthropicModel = env.ANTHROPIC_MODEL || "claude-fable-5-1";
+  const requestedAnthropicModels = modelIds(env.FACTORY_ANTHROPIC_MODEL_LADDER);
+  const anthropicModels = [
+    ...new Set([
+      anthropicModel,
+      ...(requestedAnthropicModels.length
+        ? requestedAnthropicModels
+        : DEFAULT_ANTHROPIC_MODEL_LADDER),
+    ]),
+  ];
   const openaiModel = env.OPENAI_MODEL || "gpt-5.5";
   return {
     free: {
@@ -165,6 +193,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       autoRestart: bool(env.FACTORY_FREE_AUTORESTART, true),
     },
     anthropicModel,
+    anthropicModels,
     openaiModel,
     // Readiness models are separate from ordinary build routing. Helper models
     // may build, but they can never impersonate the required production brains.
@@ -223,15 +252,21 @@ export function isFableOrOpusModel(model: string): boolean {
 export function readinessBrainFloor(config: AppConfig, secrets: AppSecrets) {
   const solConfigured =
     isOpenAiConfigured(secrets) && config.solModel.trim().length > 0;
+  const fableOrOpusModels = [
+    ...new Set([
+      config.fableOrOpusModel,
+      ...(config.anthropicModels ?? [config.anthropicModel]),
+    ]),
+  ].filter(isSupportedFableOrOpusModel);
   const fableOrOpusConfigured =
-    isAnthropicConfigured(secrets) &&
-    isSupportedFableOrOpusModel(config.fableOrOpusModel);
+    isAnthropicConfigured(secrets) && fableOrOpusModels.length > 0;
   return {
     configured: solConfigured && fableOrOpusConfigured,
     solConfigured,
     fableOrOpusConfigured,
     solModel: config.solModel,
     fableOrOpusModel: config.fableOrOpusModel,
+    fableOrOpusModels,
   };
 }
 
@@ -271,6 +306,7 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
     openaiConfigured,
     providersAvailable,
     anthropicModel: config.anthropicModel,
+    anthropicModels: config.anthropicModels ?? [config.anthropicModel],
     openaiModel: config.openaiModel,
     mandatoryProductionReadiness: true as const,
     readinessBrainFloorConfigured: brainFloor.configured,
