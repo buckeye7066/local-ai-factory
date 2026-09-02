@@ -6,9 +6,11 @@ RUN apt-get update \
       bash \
       build-essential \
       ca-certificates \
+      chromium \
       git \
       python3 \
       python3-pip \
+      python3-pytest \
       python-is-python3 \
     && rm -rf /var/lib/apt/lists/*
 
