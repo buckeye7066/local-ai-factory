@@ -40,9 +40,7 @@ describe("Foundry evidence ledger concurrency", () => {
       .map((line) => JSON.parse(line) as EvidenceEvent);
 
     expect(events).toHaveLength(stores.length);
-    expect(new Set(events.map((event) => event.type))).toHaveLength(
-      stores.length,
-    );
+    expect(new Set(events.map((event) => event.type)).size).toBe(stores.length);
     for (const [index, event] of events.entries()) {
       const { hash, ...unsigned } = event;
       expect(event.sequence).toBe(index + 1);
