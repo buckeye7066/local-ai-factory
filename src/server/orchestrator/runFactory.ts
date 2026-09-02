@@ -499,12 +499,11 @@ export function createTierProvider(
 function createRecord(args: StartRunArgs): RunRecord {
   const { config, secrets, options } = args;
   const registry = createProviderRegistry(config, secrets);
-  // Explicit demo only. Missing paid keys must NOT silently coerce to mock success.
+  // Explicit demo only. Missing live capacity must never coerce to mock success.
   const demo = options.demo === true;
 
-  // A live run needs ONE usable live provider — and the free route counts.
-  // Requiring a paid key here would have made "no credit card" mean "no
-  // factory", which is exactly backwards for a free-primary deck.
+  // A live run needs at least one usable rung. Paid providers are ordered first;
+  // the final free/local rung still permits work after all paid capacity is gone.
   if (!demo && registry.availableLive().length === 0) {
     throw new MissingProviderCredentialError(registry.missingCredentialNames());
   }
