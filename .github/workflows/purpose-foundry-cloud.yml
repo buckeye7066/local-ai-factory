@@ -41,7 +41,7 @@ jobs:
           docker build --pull \
             --file scripts/ci/verification-sandbox.Dockerfile \
             --tag "local-ai-factory-verifier:${GITHUB_SHA}" \
-            .
+            scripts/ci
           mkdir -p "${RUNNER_TEMP}/factory-verification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Run Purpose Foundry production line
