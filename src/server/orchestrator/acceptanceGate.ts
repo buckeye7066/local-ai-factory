@@ -19,6 +19,24 @@ const INTERACTIONS = new Set([
   "dispatchEvent",
 ]);
 const ASSERT_METHOD = /^(?:to|not|resolves|rejects|assert)/;
+const ASSERT_OBJECT_METHODS = new Set([
+  "ok",
+  "equal",
+  "notEqual",
+  "strictEqual",
+  "notStrictEqual",
+  "deepEqual",
+  "notDeepEqual",
+  "deepStrictEqual",
+  "notDeepStrictEqual",
+  "match",
+  "doesNotMatch",
+  "throws",
+  "doesNotThrow",
+  "rejects",
+  "doesNotReject",
+  "fail",
+]);
 
 export interface AcceptanceRequirement {
   id: string;
@@ -119,6 +137,26 @@ function analyzeCallback(
     }
     if (
       (name === "assert" || name?.startsWith("assert") === true) &&
+      !isPrimitiveLiteral(call.arguments[0])
+    ) {
+      meaningfulAssertion = true;
+      return;
+    }
+
+    // Node's assert/strict and Vitest's assert APIs put the assertion name on
+    // a property (assert.equal, assert.ok, assert.rejects, ...). The previous
+    // detector looked only at the property name, so real executable assertions
+    // generated with the host's declared node:assert stack were rejected before
+    // the runner could execute them. Require the receiver to be literally
+    // "assert" and the observed value/callback to be non-literal; this accepts
+    // standard assertion APIs without turning arbitrary .equal() calls or
+    // assert.equal(1, 1) into evidence.
+    if (
+      ts.isPropertyAccessExpression(call.expression) &&
+      ts.isIdentifier(call.expression.expression) &&
+      call.expression.expression.text === "assert" &&
+      name &&
+      ASSERT_OBJECT_METHODS.has(name) &&
       !isPrimitiveLiteral(call.arguments[0])
     ) {
       meaningfulAssertion = true;
