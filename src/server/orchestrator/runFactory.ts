@@ -1170,6 +1170,7 @@ async function executeRun(
     const extendMode = checkpoint.options.mode === "extend";
     let repoAnalysis: Awaited<ReturnType<typeof analyzeExistingCodebase>> | null = null;
     let ingestedWorkspacePath: string | null = null;
+    let resolvedExistingRepoOrigin: string | null = null;
     let goalsForSpec: string[] = [];
     let additionalSourceContexts: Awaited<ReturnType<typeof ingestAdditionalSource>>[] =
       [];
@@ -1226,6 +1227,7 @@ async function executeRun(
         );
         for (const line of ingested.log) log("info", line);
         ingestedWorkspacePath = ingested.path;
+        resolvedExistingRepoOrigin = ingested.originUrl;
         if (ingested.inPlace && ingested.previousBranch) {
           inPlaceRestore = {
             path: ingested.path,
@@ -1300,6 +1302,7 @@ async function executeRun(
         ? checkpoint.options.goals
         : [checkpoint.idea];
       if (ingestedWorkspacePath) {
+        resolvedExistingRepoOrigin = await originUrl(ingestedWorkspacePath);
         repoAnalysis = await analyzeExistingCodebase(ingestedWorkspacePath);
       }
       // Additional read-only sources only matter while spec/build are still
@@ -1319,7 +1322,7 @@ async function executeRun(
       // owner attached, which the checkpoint still records.
       if (!run.destination && ingestedWorkspacePath) {
         const attached = checkpoint.options.repoSource?.location ?? null;
-        const existing = await originUrl(ingestedWorkspacePath);
+        const existing = resolvedExistingRepoOrigin;
         if (!existing && attached) {
           const added = await git(
             ["remote", "add", "origin", attached],
@@ -1357,6 +1360,7 @@ async function executeRun(
         : null);
     const derivedProjectKey = projectKeyForOptions(checkpoint.options, {
       resolvedNewRepoOwner,
+      resolvedRepoOrigin: resolvedExistingRepoOrigin,
       localProjectId: checkpoint.options.idempotencyKey ?? run.id,
     });
     if (productionIntelligenceRequired && !derivedProjectKey) {
@@ -3426,32 +3430,6 @@ async function executeRun(
       );
     }
 
-    if (productionIntelligenceRequired && goalContract) {
-      try {
-        await rememberProjectCompletion({
-          projectKey,
-          runId: run.id,
-          goalContract,
-          spec,
-          competitiveResearch: durableCompetitiveResearch,
-          finalSummary: report.summary,
-          nextImprovements: report.nextImprovements,
-          revision: run.release?.mergedSha ?? run.destination?.commitSha ?? null,
-        });
-        log(
-          "success",
-          `Project memory finalized for run ${run.id.slice(0, 8)}; the next run will inherit this mission, decisions, research, and outcome.`,
-        );
-      } catch (err) {
-        // The pre-builder plan remains audit evidence, but only a successfully
-        // finalized completion becomes authoritative continuity for later runs.
-        log(
-          "warning",
-          `Project memory completion update failed; this run will not become authoritative continuity: ${safeErrorMessage(err).slice(0, 300)}.`,
-        );
-      }
-    }
-
     run.status = "completed";
     run.resumable = false;
     const doneEv = await appendAuditEvent({
@@ -3487,6 +3465,38 @@ async function executeRun(
     await deleteRunCheckpoint(run.id).catch(() => {
       log("warning", "Completed run checkpoint cleanup will be retried by retention.");
     });
+    // Publish authoritative continuity only after the terminal run, audit, and
+    // attribution have all been durably flushed. Any earlier write could let a
+    // later persistence failure turn this run into `failed` while memory still
+    // advertised it as a successful precedent.
+    if (productionIntelligenceRequired && goalContract) {
+      try {
+        await rememberProjectCompletion({
+          projectKey,
+          runId: run.id,
+          goalContract,
+          spec,
+          competitiveResearch: durableCompetitiveResearch,
+          finalSummary: report.summary,
+          nextImprovements: report.nextImprovements,
+          revision: run.release?.mergedSha ?? run.destination?.commitSha ?? null,
+        });
+        log(
+          "success",
+          `Project memory finalized for run ${run.id.slice(0, 8)}; the next run will inherit this mission, decisions, research, and outcome.`,
+        );
+      } catch (err) {
+        // The pre-builder plan remains audit evidence, but only a successfully
+        // finalized completion becomes authoritative continuity for later runs.
+        log(
+          "warning",
+          `Project memory completion update failed; this run will not become authoritative continuity: ${safeErrorMessage(err).slice(0, 300)}.`,
+        );
+      }
+      // Persist only the informational memory log. A failure here cannot
+      // retroactively invalidate the already-durable terminal outcome.
+      await flush().catch(() => {});
+    }
   } catch (rawErr) {
     // A provider call aborted mid-flight because the deadline fired or the
     // run was cancelled — reuse the exact same, already-tested
