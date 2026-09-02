@@ -361,6 +361,24 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
         ),
     ).toBe(false);
 
+    const bypass = await fetch(
+      `${baseUrl}/projects/${project.id}/stations/factory-deck/events`,
+      {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          status: "completed",
+          summary: "legacy callback attempted to bypass discovery",
+          artifacts: [],
+          evidence: {},
+        }),
+      },
+    );
+    expect(bypass.status).toBe(409);
+    expect(await bypass.json()).toMatchObject({
+      error: expect.stringMatching(/RepoRewards discovery must complete/i),
+    });
+
     adapters.release("repo-rewards");
     await waitFor(
       async () => adapters.getCalls(),
