@@ -45,7 +45,6 @@ const project = await request("/api/foundry/projects", {
     targets: [],
     source: "api",
     routingMode: "paid",
-    selectedStations: ["factory-deck", "crucible", "watchtower"],
   }),
 });
 
