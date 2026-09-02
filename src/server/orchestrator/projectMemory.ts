@@ -12,6 +12,7 @@ import {
   type RunOptions,
 } from "../../shared/schemas.js";
 import { loadProjectMemoryJson, saveProjectMemoryJson } from "../storage/runsStore.js";
+import { decodeStructuredGoalDirectives } from "./goalDirectives.js";
 
 const MAX_HISTORY = 12;
 
@@ -66,7 +67,7 @@ function unique(values: Iterable<string>, limit: number): string[] {
 
 function clip(value: string, max = 2_000): string {
   const normalized = value.trim();
-  return normalized.length <= max ? normalized : `${normalized.slice(0, max)}…`;
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1)}…`;
 }
 
 function canonicalGitIdentity(raw: string): string {
@@ -220,6 +221,14 @@ function partitionGoals(goals: string[], fallback: string) {
   const declaredPurposes: string[] = [];
   const declaredTargetUsers: string[] = [];
   for (const raw of goals.length ? goals : [fallback]) {
+    const structured = decodeStructuredGoalDirectives(raw);
+    if (structured) {
+      declaredTargetUsers.push(...structured.targetUsers.map((item) => clip(item)));
+      active.push(...structured.activeGoals.map((item) => clip(item)));
+      constraints.push(...structured.constraints.map((item) => clip(item)));
+      nonGoals.push(...structured.nonGoals.map((item) => clip(item)));
+      continue;
+    }
     const value = clip(raw);
     const constraint = value.match(/^constraint\s*:\s*(.+)$/i);
     const nonGoal = value.match(/^non[- ]?goal\s*:\s*(.+)$/i);
@@ -259,6 +268,8 @@ function explicitPurposeChange(texts: string[]): boolean {
     /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not|cannot|can't|cant|without|no)\b[^\n.;!?]{0,40}?\b(?:chang(?:e|ing)|replac(?:e|ing)|redefin(?:e|ing)|pivot(?:ing)?|repurpos(?:e|ing)|retarget(?:ing)?|shift(?:ing)?)\b[^\n.;!?]{0,80}?\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b/gi;
   const negatedTargetFirst =
     /\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[^\n.;!?]{0,40}?\b(?:do\s+not|not|never|must\s+not|should\s+not|cannot|can't|cant)\b[^\n.;!?]{0,40}?\b(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b/gi;
+  const negatedTargetShorthand =
+    /\b(?:no|without)\b[^\n.;!?]{0,20}?\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[^\n.;!?]{0,20}?\b(?:change|replacement|redefinition|pivot|repurposing|retargeting|shift)\b/gi;
   const affirmativeChange =
     /\b(?:(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting)\b[^\n.;!?]{0,80}\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)|(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[^\n.;!?]{0,80}\b(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting))\b/i;
   return texts.some((text) =>
@@ -269,7 +280,8 @@ function explicitPurposeChange(texts: string[]): boolean {
       // a mission pivot.
       const affirmativeOnly = clause
         .replace(negatedVerbFirst, " ")
-        .replace(negatedTargetFirst, " ");
+        .replace(negatedTargetFirst, " ")
+        .replace(negatedTargetShorthand, " ");
       return affirmativeChange.test(affirmativeOnly);
     }),
   );
@@ -320,6 +332,7 @@ export function createGoalContract(input: {
   const preservePriorPurpose = Boolean(
     previous && !purposeChanged && !partitioned.declaredPurpose,
   );
+  const preservePriorAudience = Boolean(previous && !purposeChanged);
   // Once an owner has accepted a mission, a fresh model inference from the
   // same repository may not silently replace it. Repository evidence is the
   // source of truth only for the first run; an explicit repurpose uses the
@@ -345,7 +358,7 @@ export function createGoalContract(input: {
   const targetUsers =
     partitioned.declaredTargetUsers.length > 0
       ? partitioned.declaredTargetUsers
-      : preservePriorPurpose
+      : preservePriorAudience
         ? previous!.goalContract.targetUsers
         : purposeChanged
           ? unique([input.spec.targetUser], 20)
