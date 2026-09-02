@@ -23,6 +23,7 @@ import {
   selectRunRouting,
   type ResolvedRunRouting,
 } from "../orchestrator/runFactory.js";
+import { platformEvidenceBlockersFromRunError } from "../orchestrator/platformEvidenceHold.js";
 import { getRun } from "../storage/runsStore.js";
 import {
   loadReadinessState,
@@ -736,13 +737,35 @@ export class FoundryAdapters {
         ...(secrets.authToken ? { authorization: `Bearer ${secrets.authToken}` } : {}),
       },
       body: JSON.stringify({ idea, options }),
-    })) as { runId?: unknown };
+    })) as { runId?: unknown; idempotent?: unknown };
     if (typeof runStart.runId !== "string")
       throw new Error("Factory Deck did not return a run id.");
 
     const deadline =
       Date.now() + numberEnv("PURPOSE_FOUNDRY_FACTORY_TIMEOUT_MS", 14_400_000);
     let run = await getRun(runStart.runId);
+    const heldBlockers = platformEvidenceBlockersFromRunError(run?.error);
+    if (
+      runStart.idempotent === true &&
+      run?.status === "failed" &&
+      run.resumable === true &&
+      heldBlockers
+    ) {
+      await this.fetchJson(
+        `http://127.0.0.1:${config.port}/api/runs/${encodeURIComponent(run.id)}/resume`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(secrets.authToken
+              ? { authorization: `Bearer ${secrets.authToken}` }
+              : {}),
+          },
+          body: "{}",
+        },
+      );
+      run = await getRun(runStart.runId);
+    }
     while (run && (run.status === "queued" || run.status === "running")) {
       if (Date.now() >= deadline)
         throw new Error("Factory Deck run exceeded the Foundry timeout.");
@@ -759,6 +782,21 @@ export class FoundryAdapters {
     // The run's error ledger (errorLedger.ts) rides the Foundry evidence so
     // the station shows WHAT failed and the suggested fix, not just "failed".
     const errorLedger = Array.isArray(run.errorLedger) ? run.errorLedger : [];
+    const platformBlockers = platformEvidenceBlockersFromRunError(run.error);
+    if (run.status === "failed" && run.resumable === true && platformBlockers) {
+      return {
+        status: "needs_attention",
+        summary: `Factory Deck run ${run.id} is waiting for trusted cross-platform execution: ${platformBlockers.join("; ")}`,
+        artifacts: [artifact],
+        evidence: {
+          runId: run.id,
+          status: run.status,
+          platformEvidenceHold: true,
+          blockers: platformBlockers,
+          errorLedger,
+        },
+      };
+    }
     if (run.status !== "completed") {
       return {
         status: "failed",
