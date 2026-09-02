@@ -54,8 +54,8 @@ describe("Factory Deck background startup", () => {
     expect(run.logs.at(-1)?.kind).toBe("error");
     expect(run.logs.at(-1)?.message).toBe(run.error);
     expect(run.errorLedger).toHaveLength(1);
-    expect(run.errorLedger[0]?.message).toBe(run.error);
-    expect(run.errorLedger[0]?.message).not.toContain(
+    expect(run.errorLedger?.[0]?.message).toBe(run.error);
+    expect(run.errorLedger?.[0]?.message).not.toContain(
       "sk-test-startup-secret-0123456789",
     );
   });
@@ -73,6 +73,6 @@ describe("Factory Deck background startup", () => {
 
     expect(run.error).toContain("Run could not start or persist: audit unavailable");
     expect(run.errorLedger).toHaveLength(1);
-    expect(run.errorLedger[0]?.message).toBe(run.error);
+    expect(run.errorLedger?.[0]?.message).toBe(run.error);
   });
 });
