@@ -70,7 +70,7 @@ function callable(
     },
     async generateJson<T>() {
       provider.calls += 1;
-      return (await behavior()) as T;
+      return (await behavior()) as unknown as T;
     },
   };
   return provider as LLMProvider & { calls: number };
