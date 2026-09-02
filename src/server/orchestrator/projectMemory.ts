@@ -232,7 +232,10 @@ export function createGoalContract(input: {
   memory?: ProjectMemory | null;
   now?: number;
 }): GoalContract {
-  const previous = input.memory?.entries.at(-1);
+  const history = (input.memory?.entries ?? []).filter(
+    (entry) => entry.runId !== input.runId,
+  );
+  const previous = history.at(-1);
   const partitioned = partitionGoals(input.goals, input.idea);
   const purposeChanged = explicitPurposeChange([
     input.idea,
@@ -259,14 +262,14 @@ export function createGoalContract(input: {
     20,
   );
   const priorResearch = unique(
-    [...(input.memory?.entries ?? [])]
+    [...history]
       .reverse()
       .flatMap((entry) => entry.competitiveResearch?.recommendations ?? [])
       .map((item) => `${item.name}: ${item.howToIntegrate}`),
     30,
   );
   const carriedForwardDecisions = unique(
-    (input.memory?.entries ?? [])
+    history
       .filter((entry) => entry.state === "completed")
       .flatMap((entry) => [
         ...entry.spec.coreFeatures.map((feature) => `Feature: ${feature}`),
@@ -296,9 +299,7 @@ export function createGoalContract(input: {
       30,
     ),
     continuity: {
-      previousRunIds: (input.memory?.entries ?? [])
-        .map((entry) => entry.runId)
-        .slice(-12),
+      previousRunIds: history.map((entry) => entry.runId).slice(-12),
       carriedForwardDecisions,
       priorResearch,
     },
