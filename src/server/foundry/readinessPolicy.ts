@@ -17,16 +17,16 @@ export const UNMETERED_CHILD_STATIONS = Object.freeze([
 ] as const satisfies readonly StationId[]);
 
 /**
- * Paid Purpose Foundry may not dispatch external, unmetered children outside
- * its per-call reservation ledger. Free projects still require FlexFactor;
- * Paid projects retain Factory Deck, Crucible, and Watchtower as the binding
- * internal production evidence line.
+ * The current automatic route has one metered internal evidence line:
+ * Factory Deck, Crucible, and Watchtower. FlexFactor remains an optional
+ * specialist because its child orchestrator owns a separate call ledger.
+ * Legacy free records retain their historical required FlexFactor station.
  */
 export function requiredProductionStations(
   routingMode?: RoutingMode,
 ): RequiredProductionStation[] {
   return REQUIRED_PRODUCTION_STATIONS.filter(
-    (station) => routingMode !== "paid" || station !== "flexfactor",
+    (station) => routingMode === "free" || station !== "flexfactor",
   );
 }
 
