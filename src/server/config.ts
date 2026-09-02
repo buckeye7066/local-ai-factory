@@ -315,7 +315,9 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
     anthropicConfigured,
     openaiConfigured,
     providersAvailable,
-    anthropicModel: config.anthropicModel,
+    // The singular compatibility field names the model actually tried first,
+    // never a legacy ANTHROPIC_MODEL excluded by the explicit ladder.
+    anthropicModel: config.anthropicModels?.[0] ?? config.anthropicModel,
     anthropicModels: config.anthropicModels ?? [config.anthropicModel],
     openaiModel: config.openaiModel,
     mandatoryProductionReadiness: true as const,
