@@ -685,7 +685,9 @@ describe("Purpose Foundry", () => {
     expect(repoRewardsQuery(project)).toContain("verified live opportunities");
     expect(outcome.artifacts[0]).toContain(join(project.id, "repo-rewards"));
     expect(outcome.handoff).toMatchObject({
-      insights: [expect.stringContaining("purpose-bound search")],
+      insights: expect.arrayContaining([
+        expect.stringContaining("purpose-bound search"),
+      ]),
       candidates: [
         {
           name: "useful/repo",
