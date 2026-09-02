@@ -36,7 +36,10 @@ describe("paid cloud workflow contract", () => {
   );
 
   it("does not cancel or credential production-readiness checkouts", () => {
-    expect(production).not.toMatch(/^concurrency:/m);
+    expect(production).toContain(
+      "group: production-readiness-${{ github.event_name }}-${{ github.ref }}",
+    );
+    expect(production).toContain("cancel-in-progress: false");
     expect(production).toContain("persist-credentials: false");
     expect(production).toContain("timeout-minutes: 60");
     expect(production).toContain("pnpm typecheck");
