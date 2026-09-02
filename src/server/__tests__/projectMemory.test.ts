@@ -79,6 +79,15 @@ describe("durable project purpose memory", () => {
     });
     expect(local).toMatch(/^path-sha256:[a-f0-9]{64}$/);
     expect(local).not.toContain("/private/work");
+    expect(
+      projectKeyForOptions(
+        {
+          mode: "extend",
+          repoSource: { type: "path", location: "/private/work/GrantFlow" },
+        },
+        { resolvedRepoOrigin: "git@github.com:Buckeye7066/GrantFlow.git" },
+      ),
+    ).toBe("git:github.com/buckeye7066/grantflow");
 
     const remote = projectKeyForOptions(
       {
@@ -116,6 +125,13 @@ describe("durable project purpose memory", () => {
     );
     expect(localNew).toMatch(/^new-local-sha256:[a-f0-9]{64}$/);
     expect(localNew).not.toContain("purpose-foundry");
+
+    const workspaceOnly = projectKeyForOptions(
+      { mode: "new", idempotencyKey: "workspace-job-1" },
+      { localProjectId: "workspace-job-1" },
+    );
+    expect(workspaceOnly).toMatch(/^new-local-sha256:[a-f0-9]{64}$/);
+    expect(workspaceOnly).not.toContain("workspace-job-1");
   });
 
   it("keeps one digest-verified mission unless the owner explicitly changes it", () => {
@@ -231,6 +247,30 @@ describe("durable project purpose memory", () => {
     expect(secondContract.targetUsers).toEqual(firstContract.targetUsers);
     expect(secondContract.continuity.previousRunIds).toEqual([firstRun]);
 
+    const protectedMission = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "Do not change the product purpose; improve export reliability",
+      goals: ["Do not change the mission", "Improve export reliability"],
+      spec: spec("A model-authored replacement that must be ignored"),
+      memory,
+      now: 31,
+    });
+    expect(protectedMission.purpose).toBe(firstContract.purpose);
+    expect(protectedMission.purposeSource).toBe("project-memory");
+
+    const audienceUpdate = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "Expand access for educators",
+      goals: ["Audience: teachers", "Improve classroom exports"],
+      spec: spec("Another model-authored replacement that must be ignored"),
+      memory,
+      now: 32,
+    });
+    expect(audienceUpdate.purpose).toBe(firstContract.purpose);
+    expect(audienceUpdate.targetUsers).toEqual(["teachers"]);
+
     await rememberProjectPlan({
       projectKey,
       runId: secondRun,
@@ -283,5 +323,68 @@ describe("durable project purpose memory", () => {
     });
     expect(followUp.purpose).toBe(firstContract.purpose);
     expect(followUp.continuity.previousRunIds).toEqual([firstRun]);
+  });
+
+  it("retains the latest completed mission across repeated abandoned plans", async () => {
+    const projectKey = `test:${randomUUID()}`;
+    const completedRun = randomUUID();
+    const completedContract = createGoalContract({
+      projectKey,
+      runId: completedRun,
+      idea: "Build the durable mission",
+      goals: ["Build the durable mission"],
+      spec: spec("The durable mission"),
+      now: 1,
+    });
+    const completedSpec = withGoalContract(
+      spec("The durable mission"),
+      completedContract,
+    );
+    await rememberProjectPlan({
+      projectKey,
+      runId: completedRun,
+      goalContract: completedContract,
+      spec: completedSpec,
+      now: 1,
+    });
+    await rememberProjectCompletion({
+      projectKey,
+      runId: completedRun,
+      goalContract: completedContract,
+      spec: completedSpec,
+      finalSummary: "The durable mission shipped.",
+      nextImprovements: [],
+      revision: "durable123",
+      now: 2,
+    });
+
+    for (let index = 0; index < 13; index += 1) {
+      const runId = randomUUID();
+      const planned = createGoalContract({
+        projectKey,
+        runId,
+        idea: `Abandoned experiment ${index}`,
+        goals: [`Abandoned experiment ${index}`],
+        spec: spec(`Drift ${index}`),
+        memory: await loadProjectMemory(projectKey),
+        now: 10 + index,
+      });
+      await rememberProjectPlan({
+        projectKey,
+        runId,
+        goalContract: planned,
+        spec: withGoalContract(spec(`Drift ${index}`), planned),
+        now: 10 + index,
+      });
+    }
+
+    const memory = await loadProjectMemory(projectKey);
+    expect(memory?.entries).toHaveLength(12);
+    expect(memory?.entries.some((entry) => entry.runId === completedRun)).toBe(true);
+    expect(continuityFromMemory(memory)).toMatchObject({
+      previousRunIds: [completedRun],
+      purpose: completedContract.purpose,
+      lastOutcome: { state: "completed", revision: "durable123" },
+    });
   });
 });
