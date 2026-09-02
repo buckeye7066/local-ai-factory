@@ -3729,16 +3729,18 @@ async function failBackgroundStart(run: RunRecord, error: unknown): Promise<void
   const detail = redactSecrets(
     error instanceof Error ? error.message : "Unknown startup error.",
   );
+  const failureMessage = `Run could not start or persist: ${detail}`;
+  const checkpoint = await getRunCheckpoint(run.id).catch(() => null);
   run.status = "failed";
-  run.resumable = false;
-  run.error = `Run could not start: ${detail}`;
-  run.logs.push(makeLog("error", run.error, run.currentStage));
+  run.resumable = Boolean(checkpoint);
+  run.error = run.error ?? failureMessage;
+  run.logs.push(makeLog("error", failureMessage, run.currentStage));
   run.updatedAt = nowMs();
   putRunInMemory(run);
   await appendAuditEvent({
     type: "run.failed",
     runId: run.id,
-    detail: run.error,
+    detail: failureMessage,
   }).catch(() => {});
   // A failed initial save may still be transient. Retry once so the terminal
   // state survives a restart, but never allow that retry to create another
