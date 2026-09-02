@@ -789,14 +789,14 @@ async function executeRun(
   const hasAuthoredDownstream = (): boolean =>
     Boolean(
       checkpoint.build ||
-        checkpoint.files.length > 0 ||
-        checkpoint.testPlan ||
-        checkpoint.testWriterComplete ||
-        checkpoint.verification ||
-        checkpoint.qa ||
-        checkpoint.pendingRepair ||
-        checkpoint.repairComplete ||
-        checkpoint.finalReport,
+      checkpoint.files.length > 0 ||
+      checkpoint.testPlan ||
+      checkpoint.testWriterComplete ||
+      checkpoint.verification ||
+      checkpoint.qa ||
+      checkpoint.pendingRepair ||
+      checkpoint.repairComplete ||
+      checkpoint.finalReport,
     );
 
   /**
@@ -1342,6 +1342,37 @@ async function executeRun(
       }
     }
 
+    const productionIntelligenceRequired = requiresProductionCompetitiveEvidence(
+      run.demo,
+    );
+    let projectKey = checkpoint.projectKey ?? projectKeyForOptions(checkpoint.options);
+    if (!projectKey && productionIntelligenceRequired) {
+      throw new Error(
+        "Production run requires a stable project identity. Select an existing repository or name the new repository before Factory Deck plans or builds.",
+      );
+    }
+    // Hermetic tests and explicit demo runs do not write shared project memory,
+    // but still receive an immutable per-run goal contract.
+    projectKey ??= `run:${run.id}`;
+    if (checkpoint.projectKey !== projectKey) {
+      await checkpointNow({ projectKey });
+    }
+    const projectMemory = productionIntelligenceRequired
+      ? await loadProjectMemory(projectKey)
+      : null;
+    const continuity = continuityFromMemory(projectMemory, run.id);
+    const requestedGoals = goalsForSpec.length ? goalsForSpec : [checkpoint.idea];
+    let goalContract: GoalContract | undefined = checkpoint.goalContract;
+    if (
+      goalContract &&
+      (goalContract.projectKey !== projectKey ||
+        goalContract.createdFromRunId !== run.id)
+    ) {
+      throw new StaleCheckpointSpecificationError(
+        "Checkpoint goal contract does not belong to this run and project.",
+      );
+    }
+
     let purposeProfile: PurposeProfile | undefined = checkpoint.purposeProfile;
     let purposeProfileAttempted = Boolean(purposeProfile);
     const ensurePurposeProfile = async (): Promise<PurposeProfile | undefined> => {
@@ -1363,7 +1394,7 @@ async function executeRun(
       purposeProfile = await purposeProfilerAgent(
         { provider: critical },
         repoAnalysis,
-        goalsForSpec.length ? goalsForSpec : [checkpoint.idea],
+        requestedGoals,
       );
       await checkpointNow({ purposeProfile });
       log(
@@ -1376,61 +1407,71 @@ async function executeRun(
     /* Stage 2 — Product Spec */
     let spec: ProductSpec | undefined = checkpoint.spec;
     if (spec) {
-      // Backfill resumptions created before purpose profiles existed. Stamping
-      // the typed spec makes the constitution durable through builder, test
-      // writer, QA, and final reviewer, all of which already consume `spec`.
+      // Backfill resumptions created before purpose profiles and goal
+      // contracts existed. Every downstream model already receives spec.
       await ensurePurposeProfile();
-      // Never trust a profile nested inside model-authored or legacy spec
-      // output. The separately checkpointed, analyzer-derived profile is the
-      // only authority; greenfield specs are stripped of the field.
+      // Never trust authority fields nested inside model-authored or legacy
+      // spec output. Only separately checkpointed orchestrator artifacts win.
       const previousSpec = spec;
-      const { purposeProfile: _untrustedProfile, ...specWithoutProfile } = previousSpec;
-      spec = purposeProfile
-        ? withPurposeAcceptanceCriteria(specWithoutProfile, purposeProfile)
-        : specWithoutProfile;
+      const {
+        purposeProfile: _untrustedProfile,
+        goalContract: _untrustedGoalContract,
+        ...specWithoutAuthority
+      } = previousSpec;
+      let authoritativeSpec = purposeProfile
+        ? withPurposeAcceptanceCriteria(specWithoutAuthority, purposeProfile)
+        : specWithoutAuthority;
+      goalContract ??= createGoalContract({
+        projectKey,
+        runId: run.id,
+        idea: checkpoint.idea,
+        goals: requestedGoals,
+        spec: authoritativeSpec,
+        purposeProfile,
+        memory: projectMemory,
+      });
+      authoritativeSpec = withGoalContract(authoritativeSpec, goalContract);
+      spec = authoritativeSpec;
       if (JSON.stringify(spec) !== JSON.stringify(previousSpec)) {
         await invalidateSpecDependents(
           "architect",
-          "The repository-derived purpose profile",
+          "The repository purpose or durable goal contract",
         );
       }
-      await checkpointNow({ spec });
+      await checkpointNow({ spec, goalContract, projectKey });
     }
     if (!spec) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "product_spec");
       await ensurePurposeProfile();
       log("model_call", `Product Spec agent (${critical.name})…`);
-      // Give the model the RAW idea (checkpoint.idea), not the redacted
-      // persisted copy. Extend mode composes a richer idea string (existing app
-      // name + stack + goals) and supplies the typed standing constitution.
       const ideaForSpec =
         extendMode && repoAnalysis
-          ? composeExtendIdea(
-              repoAnalysis,
-              goalsForSpec.length ? goalsForSpec : [checkpoint.idea],
-              additionalSourceContexts,
-            )
+          ? composeExtendIdea(repoAnalysis, requestedGoals, additionalSourceContexts)
           : checkpoint.idea;
       spec = await productSpecAgent(
         { provider: critical },
         ideaForSpec,
         purposeProfile,
+        continuity,
       );
       if (extendMode && repoAnalysis) {
-        // Authoritative override: the existing app's real name is known from
-        // disk, not from what the model decided to call it — never trust the
-        // model here.
         spec.appName = repoAnalysis.appNameGuess;
       }
       if (purposeProfile) {
-        // Deterministic stamp: the model cannot drop or rewrite the grounded
-        // constitution or its executable workflow/invariant obligations.
         spec = withPurposeAcceptanceCriteria(spec, purposeProfile);
       }
-      // Persist the provider output before any later mutation: a crash after
-      // this point resumes without paying for the same call again.
-      await checkpointNow({ spec });
+      goalContract = createGoalContract({
+        projectKey,
+        runId: run.id,
+        idea: checkpoint.idea,
+        goals: requestedGoals,
+        spec,
+        purposeProfile,
+        memory: projectMemory,
+      });
+      spec = withGoalContract(spec, goalContract);
+      await checkpointNow({ spec, goalContract, projectKey });
     }
     if (!stageDone("product_spec")) {
       // appName is model-controlled and is served by /api/runs + /:runId + logs;
@@ -2784,8 +2825,7 @@ async function executeRun(
     // candidate-byte digest before deliverRun can push a branch/fast-forward
     // trunk, releaseRun can merge, or deployRun can publish anything.
     let preReleaseApproval = checkpoint.preReleaseApproval as
-      | PreReleaseReadinessApproval
-      | undefined;
+      PreReleaseReadinessApproval | undefined;
     if (!run.demo) {
       const candidateFacts = await currentCandidateFacts();
       const candidateDigest = productionReadinessDigest(candidateFacts);
