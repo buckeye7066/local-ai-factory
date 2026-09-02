@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -312,6 +313,8 @@ describe("Purpose Foundry", () => {
       const directedScript = "C:\\Users\\firer\\flexfactor\\flexfactor_run.py";
       expect(scout?.destination).toBe(directedScript);
       expect(flexfactor?.destination).toBe(directedScript);
+      expect(scout?.configured).toBe(existsSync(directedScript));
+      expect(flexfactor?.configured).toBe(existsSync(directedScript));
 
       const success = await adapters.execute(project, "scout");
       expect(success.status).toBe("completed");
@@ -391,7 +394,26 @@ describe("Purpose Foundry", () => {
     ).toBeGreaterThan(
       project.stations.findIndex((station) => station.stationId === "promo-pilot"),
     );
-    expect(project.stations.every((station) => station.status === "queued")).toBe(true);
+    for (const stationId of [
+      "factory-deck",
+      "flexfactor",
+      "crucible",
+      "watchtower",
+    ]) {
+      expect(
+        project.stations.find((station) => station.stationId === stationId)?.status,
+      ).toBe("queued");
+    }
+    for (const stationId of [
+      "scout",
+      "repo-rewards",
+      "promo-pilot",
+      "app-store-publisher",
+    ]) {
+      expect(
+        project.stations.find((station) => station.stationId === stationId)?.status,
+      ).toBe("not_selected");
+    }
   });
 
   it("deduplicates an unchanged Obsidian note and hash-chains evidence", async () => {
