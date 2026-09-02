@@ -225,6 +225,7 @@ describe("Purpose Foundry", () => {
       );
       let receivedArgs: string[] = [];
       let receivedEnv: NodeJS.ProcessEnv | undefined;
+      let processExit = 0;
       const adapters = new FoundryAdapters(store, {
         config: () =>
           loadConfig({
@@ -236,7 +237,7 @@ describe("Purpose Foundry", () => {
         processRunner: async (_python, args, options) => {
           receivedArgs = args;
           receivedEnv = options.env;
-          return { stdout: "ok", stderr: "", exitCode: 0 };
+          return { stdout: "ok", stderr: "failed detail", exitCode: processExit };
         },
       });
 
@@ -249,12 +250,20 @@ describe("Purpose Foundry", () => {
       expect(scout?.destination).toBe(directedScript);
       expect(flexfactor?.destination).toBe(directedScript);
 
-      await adapters.execute(project, "scout");
+      const success = await adapters.execute(project, "scout");
+      expect(success.status).toBe("completed");
       expect(receivedArgs[0]).toBe(directedScript);
       expect(receivedArgs).toContain("ollama");
       expect(receivedArgs).not.toContain("anthropic");
       expect(receivedEnv?.OPENAI_API_KEY).toBeUndefined();
       expect(receivedEnv?.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER).toBeUndefined();
+
+      processExit = 7;
+      const failure = await adapters.execute(project, "scout");
+      expect(failure).toMatchObject({
+        status: "failed",
+        evidence: { exitCode: 7 },
+      });
     } finally {
       if (previousScript === undefined)
         delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
