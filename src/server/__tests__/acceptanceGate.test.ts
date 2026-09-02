@@ -161,6 +161,66 @@ describe("assessGeneratedTests", () => {
     });
   });
 
+  it("recognizes standard node:assert calls without accepting literal tautologies", () => {
+    const cliSpec: ProductSpec = {
+      ...spec,
+      userFlows: [],
+      acceptanceCriteria: ["The CLI reports the saved task"],
+    };
+    const cliBuild: FileBuild = {
+      files: [
+        {
+          path: "src/cli.ts",
+          purpose: "CLI",
+          contents: "export const list = () => ['saved task'];",
+          edits: [],
+        },
+      ],
+    };
+    const path = "tests/cli.test.ts";
+    const mapped = [
+      {
+        requirementId: "AC-1",
+        testPath: path,
+        testName: "reports the saved task",
+        kind: "unit" as const,
+      },
+    ];
+    const withSource = (assertion: string): TestPlan => ({
+      testPlan: "CLI acceptance",
+      coverage: mapped,
+      files: [
+        {
+          path,
+          purpose: "acceptance",
+          contents: [
+            "import assert from 'node:assert/strict';",
+            "import { test } from 'node:test';",
+            "test('reports the saved task', () => {",
+            "  const output = list();",
+            `  ${assertion}`,
+            "});",
+          ].join("\\n"),
+        },
+      ],
+    });
+
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource("assert.deepEqual(output, ['saved task']);"),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource("assert.equal('saved task', 'saved task');"),
+      ).ok,
+    ).toBe(false);
+  });
+
   it("requires the exact mapped title to appear in valid direct runner evidence", () => {
     const testPlan = plan(validJourney);
     expect(
