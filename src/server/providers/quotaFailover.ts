@@ -84,7 +84,15 @@ export class QuotaFailoverProvider implements LLMProvider {
     private onFailover: (from: string, to: string, reason: string) => void = () => {},
   ) {
     this.name = primary.name;
-    this.providers = [primary, ...alternates];
+    const seen = new Set([primary.name]);
+    this.providers = [
+      primary,
+      ...alternates.filter((provider) => {
+        if (seen.has(provider.name)) return false;
+        seen.add(provider.name);
+        return true;
+      }),
+    ];
   }
 
   isConfigured(): boolean {
