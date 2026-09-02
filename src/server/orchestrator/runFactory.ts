@@ -3443,11 +3443,11 @@ async function executeRun(
           `Project memory finalized for run ${run.id.slice(0, 8)}; the next run will inherit this mission, decisions, research, and outcome.`,
         );
       } catch (err) {
-        // The pre-builder plan is already durable. Do not misreport delivered
-        // bytes as undone solely because final outcome enrichment failed.
+        // The pre-builder plan remains audit evidence, but only a successfully
+        // finalized completion becomes authoritative continuity for later runs.
         log(
           "warning",
-          `Project memory completion update failed; the durable pre-build context remains available: ${safeErrorMessage(err).slice(0, 300)}.`,
+          `Project memory completion update failed; this run will not become authoritative continuity: ${safeErrorMessage(err).slice(0, 300)}.`,
         );
       }
     }
