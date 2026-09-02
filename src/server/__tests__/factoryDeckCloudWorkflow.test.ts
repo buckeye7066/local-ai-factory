@@ -18,6 +18,10 @@ const dockerfile = readFileSync(
   resolve("scripts/ci/verification-sandbox.Dockerfile"),
   "utf8",
 );
+const foundrySmoke = readFileSync(
+  resolve("scripts/ci/run-purpose-foundry-smoke.mjs"),
+  "utf8",
+);
 
 describe("paid cloud workflow contract", () => {
   it.each([
@@ -108,13 +112,33 @@ describe("paid cloud workflow contract", () => {
     expect(foundry).toContain("workspaces/**");
   });
 
+  it("uses greenfield proofs whose tests can be independently executed", () => {
+    expect(factory).toContain(
+      "command-line only with no HTML, browser, or web UI",
+    );
+    expect(foundrySmoke).toContain(
+      "Command-line only; do not generate HTML, browser, or web UI code.",
+    );
+    expect(foundrySmoke).toContain(
+      "Tasks persist in a local JSON file across separate CLI invocations.",
+    );
+    expect(factory).not.toContain("accessible single-page task checklist");
+    expect(foundrySmoke).not.toContain("minimal accessible task checklist");
+  });
+
   it("builds a verifier image with Node, Python, native tools, and no entrypoint", () => {
-    expect(dockerfile).toContain(\n      "FROM node:20.19.5-bookworm-slim@sha256:9e70124bd00f47dd023e349cd587132ae61892acc0e47ed641416c3e18f401c3",\n    );
+    expect(dockerfile).toContain(
+      "FROM node:20.19.5-bookworm-slim@sha256:9e70124bd00f47dd023e349cd587132ae61892acc0e47ed641416c3e18f401c3",
+    );
     for (const tool of [
       "build-essential",
+      "chromium",
+      "fonts-liberation",
+      "fonts-noto-color-emoji",
       "git",
       "python3",
       "python3-pip",
+      "python3-pytest",
       "python-is-python3",
     ]) {
       expect(dockerfile).toContain(tool);

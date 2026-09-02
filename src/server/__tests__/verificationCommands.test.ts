@@ -18,7 +18,12 @@ function workspace(): string {
 
 afterEach(() => {
   for (const path of workspaces.splice(0)) {
-    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    rmSync(path, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 200,
+    });
   }
 });
 
@@ -58,7 +63,10 @@ describe("verificationCommandsForWorkspace", () => {
     writeFileSync(join(path, "requirements.txt"), "numpy>=1.26\n");
     writeFileSync(join(path, "test_root.py"), "print('root ok')\n");
     writeFileSync(join(path, "iplay", "test_suite.py"), "print('suite ok')\n");
-    writeFileSync(join(path, "iplay", "test_camera.py"), "raise SystemExit(1)\n");
+    writeFileSync(
+      join(path, "iplay", "test_camera.py"),
+      "raise SystemExit(1)\n",
+    );
     writeFileSync(
       join(path, ".github", "workflows", "test.yml"),
       [
@@ -167,7 +175,11 @@ describe("verificationCommandsForWorkspace", () => {
     writeFileSync(
       join(path, "package.json"),
       JSON.stringify({
-        scripts: { test: "vitest run", build: "vite build", typecheck: "tsc --noEmit" },
+        scripts: {
+          test: "vitest run",
+          build: "vite build",
+          typecheck: "tsc --noEmit",
+        },
         devDependencies: { vitest: "3", vite: "6", typescript: "5" },
       }),
     );
@@ -192,13 +204,19 @@ describe("verificationCommandsForWorkspace", () => {
     expect(directIndex).toBeLessThan(hostIndex);
     expect(plan.commands[directIndex]).toMatchObject({
       bin: "npx",
-      args: ["--no-install", "vitest", "run", "src/App.test.tsx", "--reporter=json"],
+      args: [
+        "--no-install",
+        "vitest",
+        "run",
+        "src/App.test.tsx",
+        "--reporter=json",
+      ],
       isTest: true,
       runner: "vitest",
     });
-    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
-      true,
-    );
+    expect(
+      plan.commands.every((command) => isAllowed(command.bin, command.args)),
+    ).toBe(true);
   });
 
   it("holds UI verification without a declared Playwright harness", () => {
@@ -274,7 +292,17 @@ describe("verificationCommandsForWorkspace", () => {
       uiAcceptanceRequired: true,
     });
     expect(plan.incomplete).toEqual([]);
-    expect(plan.commands.find((command) => command.isBrowser)).toMatchObject({
+    const browserSetupIndex = plan.commands.findIndex(
+      (command) =>
+        command.bin === "npx" &&
+        command.args.join(" ") === "--no-install playwright install chromium",
+    );
+    const browserTestIndex = plan.commands.findIndex(
+      (command) => command.isBrowser,
+    );
+    expect(browserSetupIndex).toBeGreaterThan(-1);
+    expect(browserSetupIndex).toBeLessThan(browserTestIndex);
+    expect(plan.commands[browserTestIndex]).toMatchObject({
       args: [
         "--no-install",
         "playwright",
@@ -284,6 +312,9 @@ describe("verificationCommandsForWorkspace", () => {
       ],
       directTestPath: "tests/profile.spec.ts",
     });
+    expect(
+      plan.commands.every((command) => isAllowed(command.bin, command.args)),
+    ).toBe(true);
   });
 });
 
@@ -311,9 +342,9 @@ describe("Python command sandbox", () => {
     expect(isAllowed("python", ["../test_escape.py"])).toBe(false);
     expect(isAllowed("python", ["malicious.py"])).toBe(false);
     expect(isAllowed("python", ["-m", "http.server"])).toBe(false);
-    expect(isAllowed("python", ["-m", "pip", "install", "attacker-package"])).toBe(
-      false,
-    );
+    expect(
+      isAllowed("python", ["-m", "pip", "install", "attacker-package"]),
+    ).toBe(false);
   });
   it("directly selects idiomatic *_test.py files with parseable verbose output", () => {
     const root = workspace();
@@ -327,15 +358,17 @@ describe("Python command sandbox", () => {
       ],
     });
     expect(
-      plan.commands.find((cmd) => cmd.directTestPath === "tests/calculator_test.py"),
+      plan.commands.find(
+        (cmd) => cmd.directTestPath === "tests/calculator_test.py",
+      ),
     ).toMatchObject({
       bin: "python",
       args: ["-m", "pytest", "-vv", "tests/calculator_test.py"],
       runner: "pytest",
     });
-    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
-      true,
-    );
+    expect(
+      plan.commands.every((command) => isAllowed(command.bin, command.args)),
+    ).toBe(true);
   });
 
   it("never lets a workflow smoke replace the full pytest suite", () => {

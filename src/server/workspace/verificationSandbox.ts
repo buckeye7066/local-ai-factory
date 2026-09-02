@@ -77,8 +77,10 @@ export function verificationNetwork(
   if (
     bin === "npx" &&
     args[0] === "--no-install" &&
-    args[1] === "prisma" &&
-    args[2] === "generate"
+    ((args[1] === "prisma" && args[2] === "generate") ||
+      (args[1] === "playwright" &&
+        args[2] === "install" &&
+        args[3] === "chromium"))
   ) {
     return "bridge";
   }
@@ -123,11 +125,6 @@ export function buildVerificationSandboxPlan(input: {
     throw new Error("Verification sandbox container name is invalid.");
   }
 
-  const relativeCwd = relative(workspaceRoot, cwd)
-    .split(sep)
-    .filter(Boolean)
-    .join("/");
-  const workdir = relativeCwd ? `/workspace/${relativeCwd}` : "/workspace";
   const uid = input.uid ?? 65532;
   const gid = input.gid ?? 65532;
   if (
@@ -167,6 +164,8 @@ export function buildVerificationSandboxPlan(input: {
     "2",
     "--ulimit",
     "nofile=4096:4096",
+    "--shm-size",
+    "512m",
     "--tmpfs",
     "/tmp:rw,nosuid,nodev,size=1073741824",
     "--tmpfs",
@@ -174,9 +173,9 @@ export function buildVerificationSandboxPlan(input: {
     "--user",
     `${uid}:${gid}`,
     "--workdir",
-    workdir,
+    "/workspace",
     "--mount",
-    `type=bind,src=${workspaceRoot},dst=/workspace,rw`,
+    `type=bind,src=${cwd},dst=/workspace,rw`,
     "--mount",
     `type=bind,src=${stateRoot},dst=/sandbox-state,rw`,
     "--env",
@@ -194,6 +193,8 @@ export function buildVerificationSandboxPlan(input: {
     "--env",
     "PIP_CACHE_DIR=/sandbox-state/pip",
     "--env",
+    "PLAYWRIGHT_BROWSERS_PATH=/sandbox-state/playwright",
+    "--env",
     "PIP_DISABLE_PIP_VERSION_CHECK=1",
     "--env",
     "PIP_NO_INPUT=1",
@@ -206,7 +207,7 @@ export function buildVerificationSandboxPlan(input: {
     "--env",
     "NO_COLOR=1",
     "--env",
-    "PATH=/sandbox-state/pnpm:/sandbox-state/home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     input.image,
     input.bin,
     ...input.args,
