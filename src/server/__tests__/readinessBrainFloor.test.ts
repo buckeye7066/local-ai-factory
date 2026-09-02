@@ -85,14 +85,25 @@ describe("mandatory readiness brain configuration", () => {
     expect(JSON.stringify(health)).not.toContain("anthropic-test-key");
   });
 
-  it("constructs two independent reviewers over the same paid model order", () => {
+  it("constructs and meters two independent reviewers over the same paid order", () => {
     const config = loadConfig({
       ...keys,
       FACTORY_SOL_MODEL: "gpt-5.6-pro",
       FACTORY_FABLE_OR_OPUS_MODEL: "claude-opus-4-8",
+      FACTORY_ANTHROPIC_MODEL_LADDER: "claude-opus-5,claude-sonnet-5",
       FACTORY_MODEL_LADDER: "openai,anthropic",
     });
-    const pair = createReadinessBrainProviders(config, loadSecrets(keys));
+    const decoratedProviders: string[] = [];
+    const pair = createReadinessBrainProviders(
+      config,
+      loadSecrets(keys),
+      () => {},
+      undefined,
+      (provider) => {
+        decoratedProviders.push(provider.name);
+        return provider;
+      },
+    );
     expect(pair.lead.provider.name).toBe("openai");
     expect(pair.challenger.provider.name).toBe("openai");
     expect(pair.lead.provider).not.toBe(pair.challenger.provider);
@@ -100,5 +111,13 @@ describe("mandatory readiness brain configuration", () => {
     expect(pair.challenger.currentProvider()).toBe("openai");
     expect(pair.lead.currentModel()).toBe("gpt-5.6-pro");
     expect(pair.challenger.currentModel()).toBe("gpt-5.6-pro");
+    expect(decoratedProviders).toEqual([
+      "openai",
+      "anthropic",
+      "anthropic",
+      "openai",
+      "anthropic",
+      "anthropic",
+    ]);
   });
 });
