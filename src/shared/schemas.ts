@@ -179,7 +179,12 @@ export const GoalContractSchema = z.object({
   schema: z.literal("factory.goal-contract.v1"),
   projectKey: z.string().min(1).max(500),
   purpose: z.string().trim().min(1).max(20_000),
-  purposeSource: z.enum(["repository", "project-memory", "current-spec"]),
+  purposeSource: z.enum([
+    "repository",
+    "project-memory",
+    "current-request",
+    "current-spec",
+  ]),
   targetUsers: z.array(z.string().trim().min(1)).max(20).default([]),
   activeGoals: z.array(z.string().trim().min(1)).min(1).max(20),
   constraints: z.array(z.string().trim().min(1)).max(30).default([]),
