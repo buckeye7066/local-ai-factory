@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,22 +18,30 @@ afterEach(async () => {
 });
 
 describe("platformEvidenceRunner", () => {
-  it("detects every artifact-visible mutation while excluding node_modules", async () => {
+  it("detects artifact bytes and modes while excluding runtime byproducts", async () => {
     const root = await mkdtemp(join(tmpdir(), "factory-platform-proof-"));
     roots.push(root);
     await mkdir(join(root, "node_modules", "dependency"), { recursive: true });
     await writeFile(join(root, "package.json"), '{"name":"candidate"}\n');
+    await writeFile(join(root, "launcher"), "#!/bin/sh\n");
+    await chmod(join(root, "launcher"), 0o644);
     await writeFile(join(root, "node_modules", "dependency", "index.js"), "old\n");
     const before = await capturePlatformArtifactSnapshot(root);
 
     await mkdir(join(root, "dist"), { recursive: true });
     await writeFile(join(root, "dist", "cli.js"), "generated\n");
     await writeFile(join(root, "tasks.json"), "[]\n");
+    await mkdir(join(root, "src", "__pycache__"), { recursive: true });
+    await writeFile(join(root, "src", "__pycache__", "main.cpython.pyc"), "cache");
+    await mkdir(join(root, ".pytest_cache"), { recursive: true });
+    await writeFile(join(root, ".coverage"), "runtime coverage");
+    await chmod(join(root, "launcher"), 0o755);
     await writeFile(join(root, "node_modules", "dependency", "index.js"), "new\n");
     const after = await capturePlatformArtifactSnapshot(root);
 
     expect(changedPlatformArtifactPaths(before, after)).toEqual([
       "dist/cli.js",
+      "launcher",
       "tasks.json",
     ]);
   });
@@ -60,6 +68,7 @@ describe("platformEvidenceRunner", () => {
       executed: true,
       exitCode: 0,
       stdout: JSON.stringify({
+        reporterMetadata: "x".repeat(20_000),
         numPassedTests: 1,
         numPendingTests: 0,
         testResults: [
@@ -94,6 +103,14 @@ describe("platformEvidenceRunner", () => {
         "win32",
       ),
     ).toThrow(/direct vitest evidence is invalid/i);
+
+    expect(() =>
+      successfulPlatformCommandEvidence(
+        command,
+        { ...result, stdoutTruncated: true },
+        "win32",
+      ),
+    ).toThrow(/structured-output capture limit/i);
   });
 
   it("enables ordinary resume only after every held platform target is verified", () => {
