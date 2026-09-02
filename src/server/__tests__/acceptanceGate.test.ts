@@ -157,6 +157,16 @@ describe("assessGeneratedTests", () => {
     expect(regex.ok).toBe(false);
     expect(regex.errors.join("\n")).toMatch(/unbounded negated regex/i);
 
+    const partiallyAnchoredRegex = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion("expect(output).not.toMatch(/^vite|next$/i);"),
+    );
+    expect(partiallyAnchoredRegex.ok).toBe(false);
+    expect(partiallyAnchoredRegex.errors.join("\n")).toMatch(
+      /unbounded negated regex/i,
+    );
+
     const groupedRegex = assessGeneratedTests(
       cliSpec,
       cliBuild,
@@ -180,6 +190,20 @@ describe("assessGeneratedTests", () => {
         withAssertion(
           "expect(output).not.toMatch(/^\\s*at\\s+/m); expect(output).not.toMatch(/\\bvite\\b|\\bnext\\b/i);",
         ),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion("expect(output).not.toMatch(/(?:^|\\s)vite(?:\\s|$)/i);"),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion('expect(output).not.toContain(" vite ");'),
       ).ok,
     ).toBe(true);
     expect(
@@ -320,6 +344,32 @@ describe("assessGeneratedTests", () => {
         withSource("assert.equal('saved task', 'saved task');"),
       ).ok,
     ).toBe(false);
+    const awaitedRejects = withSource(
+      "await assert.rejects(async () => { throw new Error('failure'); });",
+    );
+    awaitedRejects.files[0]!.contents = awaitedRejects.files[0]!.contents.replace(
+      "test('reports the saved task', () => {",
+      "test('reports the saved task', async () => {",
+    );
+    expect(assessGeneratedTests(cliSpec, cliBuild, awaitedRejects).ok).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "const assert = { equal() {} }; assert.equal(output, ['saved task']);",
+        ),
+      ).ok,
+    ).toBe(false);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "assert.rejects(async () => { await new Promise(() => {}); assert.equal(output, ['saved task']); });",
+        ),
+      ).ok,
+    ).toBe(false);
   });
 
   it("recognizes assertions in awaited inline helper callbacks only", () => {
@@ -413,6 +463,48 @@ describe("assessGeneratedTests", () => {
         cliSpec,
         cliBuild,
         withSource(
+          "  const verifyResult = async () => { const result = run(); expect(result.exitCode).toBe(0); }; const ignore = async () => {}; await ignore(verifyResult());",
+        ),
+      ).ok,
+    ).toBe(false);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  const wrapper = async (callback) => { if (false) await callback(); }; await wrapper(async () => { const result = run(); expect(result.exitCode).toBe(0); });",
+        ),
+      ).ok,
+    ).toBe(false);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  const waitFor = async () => {}; await waitFor(() => { const result = run(); expect(result.exitCode).toBe(0); });",
+        ),
+      ).ok,
+    ).toBe(false);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource("  expect(runAsync()).rejects.toThrow('failure');"),
+      ).ok,
+    ).toBe(false);
+    const importedWaitFor = withSource(
+      "  await waitFor(() => { const result = run(); expect(result.exitCode).toBe(0); });",
+    );
+    importedWaitFor.files[0]!.contents = importedWaitFor.files[0]!.contents.replace(
+      "import { expect, it } from 'vitest';",
+      "import { expect, it } from 'vitest';\nimport { waitFor } from '@testing-library/react';",
+    );
+    expect(assessGeneratedTests(cliSpec, cliBuild, importedWaitFor).ok).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
           "  await withTempTaskFile(async () => { if (false) { const result = run(); expect(result.exitCode).toBe(0); } });",
         ),
       ).ok,
@@ -493,6 +585,28 @@ describe("assessGeneratedTests", () => {
       ].join("\n"),
     );
     expect(assessGeneratedTests(cliSpec, cliBuild, generator).ok).toBe(false);
+
+    const declaredAfterRegistration = mappedPlan(
+      [
+        "import { expect, it } from 'vitest';",
+        "it('mapped test', () => { verify(); });",
+        "const verify = () => { expect(run().exitCode).toBe(0); };",
+      ].join("\n"),
+    );
+    expect(assessGeneratedTests(cliSpec, cliBuild, declaredAfterRegistration).ok).toBe(
+      true,
+    );
+
+    const loopShadow = mappedPlan(
+      [
+        "import { expect, it } from 'vitest';",
+        "const verify = () => { expect(run().exitCode).toBe(0); };",
+        "it('mapped test', () => {",
+        "  for (const verify of [() => {}]) { verify(); }",
+        "});",
+      ].join("\n"),
+    );
+    expect(assessGeneratedTests(cliSpec, cliBuild, loopShadow).ok).toBe(false);
   });
 
   it("recognizes awaited Vitest rejection assertions as executable evidence", () => {
@@ -608,5 +722,21 @@ describe("assessGeneratedTests", () => {
     good.files[0]!.contents =
       'def test_add():\n    output = "vitest ready"\n    assert not re.search(r"(vite|next)", output)\n';
     expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(false);
+    good.files[0]!.contents = [
+      "def test_add():",
+      '    output = "vitest ready"',
+      "    assert not re.search(",
+      '        r"(vite|next)",',
+      "        output,",
+      "    )",
+    ].join("\n");
+    expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(false);
+    good.files[0]!.contents = [
+      "def test_add():",
+      '    output = "saved task"',
+      '    # assert "vite" not in output',
+      '    assert output == "saved task"',
+    ].join("\n");
+    expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(true);
   });
 });
