@@ -137,8 +137,8 @@ describe("paid cloud workflow contract", () => {
   it("proves one exact CLI candidate on Windows and macOS before paid finalization", () => {
     expect(factory).toContain("runs-on: windows-latest");
     expect(factory).toContain("runs-on: macos-latest");
-    expect(factory).toContain("needs: windows");
-    expect(factory).toContain("needs: macos");
+    expect(factory).toContain("needs: [seed, windows]");
+    expect(factory).toContain("needs: [seed, windows, macos]");
     expect(factory).toContain(
       "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
     );
