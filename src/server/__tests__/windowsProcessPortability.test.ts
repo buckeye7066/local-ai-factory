@@ -68,7 +68,7 @@ describe("Windows child-process portability audit", () => {
           function invoke(launch: (command: string) => void) {
             launch("npm.cmd");
           }
-          launch(`${tool}.cmd`, ["test"]);
+          launch(\`\${tool}.cmd\`, ["test"]);
         `,
       },
     ]);
