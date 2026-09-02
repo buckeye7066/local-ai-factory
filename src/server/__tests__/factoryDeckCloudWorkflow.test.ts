@@ -18,7 +18,7 @@ describe("Factory Deck cloud workflow", () => {
   });
 
   it("supports a controlled main-branch runtime smoke", () => {
-    expect(workflow).toMatch(/push:\\s*[\\s\\S]*branches: \\[main\\]/);
+    expect(workflow).toMatch(/push:\s*[\s\S]*branches: \[main\]/);
     expect(workflow).toContain("[factory-smoke]");
   });
 
@@ -36,13 +36,16 @@ describe("Factory Deck cloud workflow", () => {
     expect(workflow).toMatch(/FACTORY_FABLE_OR_OPUS_MODEL:\s*\S+/);
   });
 
-  it("verifies generated work only on an isolated runner and preserves evidence", () => {
-    expect(workflow).toContain('runs-on: windows-latest');
-    expect(workflow).toContain('ALLOW_UNTRUSTED_SCRIPTS: "true"');
-    expect(workflow).toContain("if: always()");
-    expect(workflow).toContain(".factory/**");
-    expect(workflow).toContain("workspaces/**");
-  });
+  it(
+    "verifies generated work only on an isolated runner and preserves evidence",
+    () => {
+      expect(workflow).toContain("runs-on: windows-latest");
+      expect(workflow).toContain('ALLOW_UNTRUSTED_SCRIPTS: "true"');
+      expect(workflow).toContain("if: always()");
+      expect(workflow).toContain(".factory/**");
+      expect(workflow).toContain("workspaces/**");
+    },
+  );
 
   it("does not grant generated work repository write permission", () => {
     expect(workflow).toMatch(/permissions:\s*\n\s+contents:\s+read/);
