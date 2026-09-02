@@ -31,7 +31,7 @@ const EXAMPLES = [
 
 /**
  * NewRunHero — the landing / new-run screen. Owns the idea text and the
- * live/demo provider choice, and surfaces helpful warnings (missing keys)
+ * single automatic route, and surfaces helpful warnings (missing keys)
  * before the user starts a run.
  */
 export function NewRunHero({
@@ -43,10 +43,7 @@ export function NewRunHero({
   starting: boolean;
   onStart: (idea: string, options: RunOptions) => void;
 }) {
-  const hasAnyProvider =
-    (health?.anthropicConfigured ?? false) ||
-    (health?.openaiConfigured ?? false) ||
-    (health?.freeConfigured ?? false);
+  const admissionReady = health?.readinessBrainFloorConfigured ?? false;
   const [idea, setIdea] = useState("");
   // Demo/simulate mode is not an owner surface — a run without a provider
   // fails loudly with the real missing-credential error instead of silently
@@ -162,7 +159,7 @@ export function NewRunHero({
           repoName={repoName}
           setRepoName={setRepoName}
           nameCheck={nameCheck}
-          hasAnyProvider={hasAnyProvider}
+          admissionReady={admissionReady}
           health={health}
           starting={starting}
           start={start}
@@ -249,7 +246,7 @@ function NewAppPanel({
   repoName,
   setRepoName,
   nameCheck,
-  hasAnyProvider,
+  admissionReady,
   health,
   starting,
   start,
@@ -259,7 +256,7 @@ function NewAppPanel({
   repoName: string;
   setRepoName: (v: string) => void;
   nameCheck: NameCheck;
-  hasAnyProvider: boolean;
+  admissionReady: boolean;
   health: Health | null;
   starting: boolean;
   start: () => void;
@@ -344,11 +341,11 @@ function NewAppPanel({
         {/* Warnings / helpers (provider routing renders above, shared with
             extend mode) */}
         <div className="mt-5 space-y-2">
-          {!hasAnyProvider && (
+          {!admissionReady && (
             <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
-              No live model is configured — add a paid key or enable the local
-              fallback in <code>.env</code>. Every run does real work; there is no
-              demo or test mode.
+              Production admission requires both the OpenAI Sol and Anthropic
+              Fable/Opus credentials. The free/local rung can finish work after
+              paid exhaustion, but it cannot issue the readiness receipt.
             </Helper>
           )}
         </div>
