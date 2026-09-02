@@ -14,7 +14,12 @@ describe("Factory Deck cloud workflow", () => {
   it("provides a user-dispatchable build input", () => {
     expect(workflow).toMatch(/workflow_dispatch:/);
     expect(workflow).toMatch(/idea:\s*[\s\S]*required:\s*true/);
-    expect(workflow).toContain("FACTORY_IDEA: ${{ inputs.idea }}");
+    expect(workflow).toContain("FACTORY_IDEA: ${{ inputs.idea ||");
+  });
+
+  it("supports a controlled main-branch runtime smoke", () => {
+    expect(workflow).toMatch(/push:\\s*[\\s\\S]*branches: \\[main\\]/);
+    expect(workflow).toContain("[factory-smoke]");
   });
 
   it("runs the real Factory Deck CLI with both readiness brains", () => {
