@@ -3725,15 +3725,30 @@ export async function resumeFactory(
   return prepared.run;
 }
 
-async function failBackgroundStart(run: RunRecord, error: unknown): Promise<void> {
+async function failBackgroundRun(run: RunRecord, error: unknown): Promise<void> {
   const detail = redactSecrets(
-    error instanceof Error ? error.message : "Unknown startup error.",
+    error instanceof Error ? error.message : "Unknown background error.",
   );
-  const failureMessage = `Run could not start or persist: ${detail}`;
+  const failureMessage =
+    run.status === "queued"
+      ? `Run could not start or persist: ${detail}`
+      : `Run terminal state could not persist: ${detail}`;
   const checkpoint = await getRunCheckpoint(run.id).catch(() => null);
   run.status = "failed";
   run.resumable = Boolean(checkpoint);
   run.error = run.error ?? failureMessage;
+  if (!Array.isArray(run.errorLedger)) run.errorLedger = [];
+  const ledger = new ErrorLedger(run.id, run.errorLedger);
+  ledger.record({
+    stage: run.currentStage,
+    message: failureMessage,
+    error,
+  });
+  try {
+    ledger.writeFile();
+  } catch {
+    // The run record retry below remains the second durable copy.
+  }
   run.logs.push(makeLog("error", failureMessage, run.currentStage));
   run.updatedAt = nowMs();
   putRunInMemory(run);
@@ -3742,8 +3757,8 @@ async function failBackgroundStart(run: RunRecord, error: unknown): Promise<void
     runId: run.id,
     detail: failureMessage,
   }).catch(() => {});
-  // A failed initial save may still be transient. Retry once so the terminal
-  // state survives a restart, but never allow that retry to create another
+  // A failed save may still be transient. Retry once so the terminal state
+  // survives a restart, but never allow that retry to create another
   // unhandled rejection or leave the in-memory run queued.
   await saveRun(run).catch(() => {});
 }
@@ -3752,10 +3767,10 @@ async function failBackgroundStart(run: RunRecord, error: unknown): Promise<void
 export function startRun(args: StartRunArgs): RunRecord {
   const run = createRecord(args);
   putRunInMemory(run);
-  void appendAuditEvent({ type: "run.queued", runId: run.id });
-  void saveRun(run)
+  void appendAuditEvent({ type: "run.queued", runId: run.id })
+    .then(() => saveRun(run))
     .then(() => executeRun(run, args))
-    .catch((error: unknown) => failBackgroundStart(run, error));
+    .catch((error: unknown) => failBackgroundRun(run, error));
   return run;
 }
 

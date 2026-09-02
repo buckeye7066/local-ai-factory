@@ -84,23 +84,32 @@ if ($nodeMajor -lt 20) {
     throw "Factory Deck needs Node.js 20 or newer; this computer has $(& node --version)."
 }
 
+$packageManager = [string]((Get-Content "package.json" -Raw | ConvertFrom-Json).packageManager)
+if ($packageManager -notmatch "^pnpm@(.+)$") {
+    throw "Factory Deck requires package.json to declare a pinned pnpm version."
+}
+$pinnedPnpmVersion = $Matches[1]
 $script:PnpmMode = $null
 $script:PnpmExe = $null
 $pnpm = Get-Command pnpm -CommandType Application -ErrorAction SilentlyContinue
 if ($null -ne $pnpm) {
-    $script:PnpmMode = "direct"
-    $script:PnpmExe = $pnpm.Source
-} else {
+    $pnpmVersion = ([string](& $pnpm.Source --version 2>$null)).Trim()
+    if ($LASTEXITCODE -eq 0 -and $pnpmVersion -eq $pinnedPnpmVersion) {
+        $script:PnpmMode = "direct"
+        $script:PnpmExe = $pnpm.Source
+    }
+}
+if ($null -eq $script:PnpmMode) {
     $corepack = Get-Command corepack -CommandType Application -ErrorAction SilentlyContinue
     if ($null -ne $corepack) {
         # Do not create Corepack shims beside a system-wide Node installation;
-        # a normal user may not own that directory. Invoke pnpm directly.
+        # a normal user may not own that directory. Invoke the project pin directly.
         $script:PnpmMode = "corepack"
         $script:PnpmExe = $corepack.Source
     }
 }
 if ($null -eq $script:PnpmMode) {
-    throw "Factory Deck could not find pnpm or Corepack for pinned pnpm 10.17.0."
+    throw "Factory Deck needs pnpm $pinnedPnpmVersion or Corepack on PATH."
 }
 function Invoke-Pnpm {
     if ($script:PnpmMode -eq "direct") {
@@ -114,7 +123,7 @@ function Invoke-Pnpm {
 # bounded, so an unreachable origin can never prevent the installed app opening.
 $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue
 if ($null -ne $git -and (Test-Path ".git")) {
-    $branch = (& git branch --show-current 2>$null).Trim()
+    $branch = ([string](& git branch --show-current 2>$null)).Trim()
     $trackedChanges = @(& git status --porcelain --untracked-files=no 2>$null)
     if ($branch -eq "main" -and $trackedChanges.Count -eq 0) {
         Write-Host "Checking for Factory Deck updates..." -ForegroundColor DarkGray
@@ -142,7 +151,7 @@ if ($null -ne $git -and (Test-Path ".git")) {
                 if ($afterHead -and $afterHead -ne $beforeHead -and $env:FACTORY_LAUNCHER_REEXEC -ne "1") {
                     Write-Host "Factory Deck updated - restarting through the updated launcher." -ForegroundColor Green
                     $env:FACTORY_LAUNCHER_REEXEC = "1"
-                    & powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath
+                    & powershell -NoLogo -NoProfile -File $PSCommandPath
                     exit $LASTEXITCODE
                 }
             }
@@ -162,6 +171,18 @@ if (-not $needInstall) {
     $installedAt = (Get-Item $moduleMarker).LastWriteTimeUtc
     foreach ($manifest in @("package.json", "pnpm-lock.yaml")) {
         if ((Get-Item $manifest).LastWriteTimeUtc -gt $installedAt) {
+            $needInstall = $true
+            break
+        }
+    }
+}
+if (-not $needInstall) {
+    foreach ($requiredPackage in @(
+        "node_modules\tsx\package.json",
+        "node_modules\vite\package.json",
+        "node_modules\.bin\vite.cmd"
+    )) {
+        if (-not (Test-Path $requiredPackage)) {
             $needInstall = $true
             break
         }

@@ -24,29 +24,31 @@ describe("Purpose Foundry desktop launcher", () => {
     expect(launcherAt).toBeGreaterThan(installerAt);
     expect(factory).toContain("-Quiet");
     const repairCommand = factory
-      .split(/\\r?\\n/)
+      .split(/\r?\n/)
       .find((line) => line.includes("Install-Purpose-Foundry-Icon.ps1"));
-    expect(repairCommand).toContain("-ExecutionPolicy Bypass");
+    expect(repairCommand).not.toContain("-ExecutionPolicy Bypass");
   });
 
-  it("opens Foundry mode, bypasses restrictive policies, and preserves errors", async () => {
+  it("opens Foundry mode and preserves errors without bypassing policy", async () => {
     const foundry = await script("start-purpose-foundry.cmd");
     expect(foundry).toContain("Install-Purpose-Foundry-Icon.ps1");
     expect(foundry).toContain("FACTORY_START_PATH=?mode=foundry");
     expect(foundry).toContain("start-factory.ps1");
-    expect(foundry.match(/-ExecutionPolicy Bypass/g)).toHaveLength(2);
+    expect(foundry).not.toContain("-ExecutionPolicy Bypass");
     expect(foundry).toContain('set "FOUNDRY_EXIT=%ERRORLEVEL%"');
     expect(foundry).toContain("Purpose Foundry could not start.");
     expect(foundry).toContain("pause >nul");
     expect(foundry).toContain("exit /b %FOUNDRY_EXIT%");
   });
 
-  it("package icon installers bypass restrictive PowerShell policies", async () => {
+  it("package icon installers preserve restrictive PowerShell policies", async () => {
     const pkg = JSON.parse(
       await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
     ) as { scripts: Record<string, string> };
-    expect(pkg.scripts["install:desktop-icon"]).toContain("-ExecutionPolicy Bypass");
-    expect(pkg.scripts["install:purpose-foundry-icon"]).toContain(
+    expect(pkg.scripts["install:desktop-icon"]).not.toContain(
+      "-ExecutionPolicy Bypass",
+    );
+    expect(pkg.scripts["install:purpose-foundry-icon"]).not.toContain(
       "-ExecutionPolicy Bypass",
     );
   });
