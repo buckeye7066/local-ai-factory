@@ -687,7 +687,7 @@ describe("durable project purpose memory", () => {
 
   it("keeps the newest bounded goals and decisions from completed history", async () => {
     const projectKey = `test:${randomUUID()}`;
-    for (let index = 0; index < 12; index += 1) {
+    for (let index = 0; index < 13; index += 1) {
       const runId = randomUUID();
       const runSpec = ProductSpecSchema.parse({
         ...spec("Durable history"),
@@ -725,8 +725,11 @@ describe("durable project purpose memory", () => {
 
     const memory = await loadProjectMemory(projectKey);
     const continuity = continuityFromMemory(memory)!;
-    expect(continuity.priorGoals[0]).toBe("Goal 11");
-    expect(continuity.priorDecisions).toContain("Kept feature: Feature 11A");
+    expect(memory?.entries).toHaveLength(12);
+    expect(memory?.completedFrontier).toHaveLength(12);
+    expect(continuity.previousRunIds).toEqual(memory?.completedFrontier);
+    expect(continuity.priorGoals[0]).toBe("Goal 12");
+    expect(continuity.priorDecisions).toContain("Kept feature: Feature 12A");
     expect(continuity.priorDecisions).not.toContain("Kept feature: Feature 0A");
 
     const next = createGoalContract({
@@ -738,7 +741,7 @@ describe("durable project purpose memory", () => {
       memory,
       now: 30,
     });
-    expect(next.continuity.carriedForwardDecisions).toContain("Feature: Feature 11A");
+    expect(next.continuity.carriedForwardDecisions).toContain("Feature: Feature 12A");
     expect(next.continuity.carriedForwardDecisions).not.toContain(
       "Feature: Feature 0A",
     );
