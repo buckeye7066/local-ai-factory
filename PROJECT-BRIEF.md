@@ -15,27 +15,20 @@ the deck is what actually happened.
 
 ## Supported Models
 
-### Free route (primary — zero cost)
+### Automatic model ladder
 
-| Variable                | Default                 | Description                            |
-| ----------------------- | ----------------------- | -------------------------------------- |
-| `FACTORY_FREE_MODEL`    | `claude-sonnet-4-5`     | Model alias forwarded to the FCC proxy |
-| `FACTORY_FREE_BASE_URL` | `http://127.0.0.1:8082` | Local FCC proxy endpoint               |
+| Rung       | Credential/setting     | Default model         |
+| ---------- | ---------------------- | --------------------- |
+| Anthropic  | `ANTHROPIC_API_KEY`    | `claude-opus-4-8`     |
+| OpenAI     | `OPENAI_API_KEY`       | `gpt-5.5`             |
+| Free/local | `FACTORY_FREE_ENABLED` | `claude-sonnet-4-5`   |
 
-The free route uses the local FCC proxy (the same one "Claude Code - FREE
-(Ollama)" turns on). `claude-sonnet-4-5` maps to the proxy's strong tier
-(glm-5.2 or equivalent); `claude-haiku-*` maps to a weaker tier.
-
-### Paid rescue tier (optional)
-
-| Provider  | Variable            | Default model     |
-| --------- | ------------------- | ----------------- |
-| Anthropic | `ANTHROPIC_API_KEY` | `claude-opus-4-8` |
-| OpenAI    | `OPENAI_API_KEY`    | `gpt-5.5`         |
-
-Paid providers are a rescue tier only. The deck returns to the free route
-automatically as soon as it recovers from a proven stall. A config that
-defaults to a paid provider is a bug, not a preference.
+Every live run uses one orchestrated route. `FACTORY_MODEL_LADDER` orders
+configured paid provider families strongest-to-weaker; the default is
+`anthropic,openai`. Credit, quota, capacity, model availability, or an
+owner-configured paid budget ceiling advances a sticky run cursor. The strongest
+available FCC/AI-Time free rotation is always appended last and cannot be moved
+ahead of configured paid capacity.
 
 ---
 
@@ -46,7 +39,7 @@ defaults to a paid provider is a bug, not a preference.
 | Node.js           | 20 LTS or later                           |
 | pnpm              | 10.17.0 (managed by corepack)             |
 | OS                | macOS, Linux, or Windows                  |
-| Free route        | Local FCC proxy running on port 8082      |
+| Free/local fallback | Local FCC proxy running on port 8082     |
 | Ollama (optional) | Running on port 11434 for liveness probes |
 
 The backend runs on Node 20+. The UI is a Vite/React application served from
@@ -84,15 +77,16 @@ cp .env.example .env
 Edit `.env` to set at minimum:
 
 ```ini
-# Free route (default — zero cost)
+# Strongest-to-weaker paid provider order
+FACTORY_MODEL_LADDER=anthropic,openai
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
+
+# Final free/local rung
 FACTORY_FREE_ENABLED=1
 FACTORY_FREE_BASE_URL=http://127.0.0.1:8082
 FACTORY_FREE_AUTH_TOKEN=freecc
 FACTORY_FREE_MODEL=claude-sonnet-4-5
-
-# Optional paid rescue tier
-ANTHROPIC_API_KEY=
-OPENAI_API_KEY=
 ```
 
 All other settings have sensible defaults. See `.env.example` for the full
@@ -171,14 +165,16 @@ crawl is bounded by query, candidate, file, byte, and timeout budgets.
 
 ## Provider Routing
 
-```
-DEFAULT_CODE_PROVIDER=free     # Which provider handles code generation
-DEFAULT_REVIEW_PROVIDER=free   # Which provider handles review/QA
+```ini
+FACTORY_MODEL_LADDER=anthropic,openai
 ```
 
-Available provider names: `free`, `anthropic`, `openai`, `stub` (test), `mock` (test).
+This is the only live route: configured paid models in explicit strength order,
+then the free/local rotator. Legacy `free`/`paid` request values and
+`DEFAULT_CODE_PROVIDER`/`DEFAULT_REVIEW_PROVIDER` still parse old records,
+but normalize to this ladder and cannot select a second execution path.
 
-The failover chain is: free → paid rescue → error. The paid rescue is rate-limited:
+Paid rungs can be admission-limited:
 
 | Variable                        | Default     | Meaning                           |
 | ------------------------------- | ----------- | --------------------------------- |
@@ -218,9 +214,9 @@ See `docs/PURPOSE_FOUNDRY.md` for the full station reference.
 
 ## Performance Tuning
 
-### Free route stall detection
+### Final free/local rung stall detection
 
-The free route uses measured thresholds for first-token silence and
+The final free/local rung uses measured thresholds for first-token silence and
 inter-token silence. Do not override these manually unless you are deliberately
 reproducing a stall in a test. Run `node scripts/measure-free-route.mjs` to
 recalibrate them for your host.
