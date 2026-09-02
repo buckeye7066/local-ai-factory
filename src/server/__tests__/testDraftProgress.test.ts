@@ -5,6 +5,8 @@ import { nextTestDraftToGenerate } from "../orchestrator/testDraftProgress.js";
 describe("test draft resume progress", () => {
   it("never replays a checkpointed corrective draft", () => {
     expect(nextTestDraftToGenerate(false, undefined)).toBe(1);
+    expect(nextTestDraftToGenerate(false, 1)).toBe(2);
+    expect(nextTestDraftToGenerate(false, 2)).toBe(3);
     expect(nextTestDraftToGenerate(true, undefined)).toBe(2);
     expect(nextTestDraftToGenerate(true, 2)).toBe(3);
     expect(nextTestDraftToGenerate(true, 3)).toBe(4);
