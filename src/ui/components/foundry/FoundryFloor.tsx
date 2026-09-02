@@ -64,7 +64,7 @@ type FoundryProject = {
   id: string;
   name: string;
   status: "draft" | "queued" | "running" | "needs_attention" | "completed" | "failed";
-  routingMode?: "free" | "paid";
+  routingMode?: "auto" | "free" | "paid";
   constitution: {
     purpose: string;
     targetUsers: string[];
@@ -85,12 +85,11 @@ type Adapter = {
   destination: string;
 };
 
-const REQUIRED_STATIONS: Record<"free" | "paid", ReadonlySet<StationId>> = {
-  free: new Set(["factory-deck", "flexfactor", "crucible", "watchtower"]),
-  paid: new Set(["factory-deck", "crucible", "watchtower"]),
-};
-
-const PAID_UNMETERED_STATIONS = new Set<StationId>(["scout", "flexfactor"]);
+const REQUIRED_STATIONS = new Set<StationId>([
+  "factory-deck",
+  "crucible",
+  "watchtower",
+]);
 
 const ICONS: Record<StationId, ComponentType<{ className?: string }>> = {
   "factory-deck": Factory,
@@ -167,7 +166,6 @@ export function FoundryFloor() {
   const [purpose, setPurpose] = useState("");
   const [targets, setTargets] = useState("");
   const [success, setSuccess] = useState("");
-  const [routingMode, setRoutingMode] = useState<"free" | "paid">("free");
   const [obsidianNote, setObsidianNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [catalogReady, setCatalogReady] = useState(false);
@@ -201,23 +199,22 @@ export function FoundryFloor() {
     [activeId, projects],
   );
 
-  const optionalStations = useMemo(() => {
-    const required = REQUIRED_STATIONS[routingMode];
-    return stations
-      .filter((station) => !required.has(station.id))
-      .map((station) => {
-        const adapter = adapters.find(
-          (candidate) => candidate.stationId === station.id,
-        );
-        const metered =
-          routingMode !== "paid" || !PAID_UNMETERED_STATIONS.has(station.id);
-        return {
-          station,
-          adapter,
-          selectable: Boolean(adapter?.configured && metered),
-        };
-      });
-  }, [adapters, routingMode, stations]);
+  const optionalStations = useMemo(
+    () =>
+      stations
+        .filter((station) => !REQUIRED_STATIONS.has(station.id))
+        .map((station) => {
+          const adapter = adapters.find(
+            (candidate) => candidate.stationId === station.id,
+          );
+          return {
+            station,
+            adapter,
+            selectable: Boolean(adapter?.configured),
+          };
+        }),
+    [adapters, stations],
+  );
 
   useEffect(() => {
     const selectable = new Set(
@@ -282,7 +279,7 @@ export function FoundryFloor() {
           constraints: [],
           nonGoals: [],
           targets: split(targets),
-          routingMode,
+          routingMode: "auto",
           source: "manual",
           selectedStations: intakeStations,
         }),
@@ -312,7 +309,7 @@ export function FoundryFloor() {
         body: JSON.stringify({
           markdown: obsidianNote,
           sourcePath: "Obsidian/Purpose Foundry.md",
-          routingMode,
+          routingMode: "auto",
           selectedStations: intakeStations,
         }),
       });
@@ -475,24 +472,16 @@ export function FoundryFloor() {
                 />
               </Field>
               <Field
-                label="Provider routing"
-                hint={
-                  routingMode === "free"
-                    ? "Free is a hard $0 boundary, including Scout and FlexFactor."
-                    : "Paid internal calls use single-process call limits and an estimated-USD admission guard. Unmeterable Scout/FlexFactor child stations are omitted."
-                }
+                label="Model routing"
+                hint="One orchestrated ladder serves every internal model call."
               >
-                <select
-                  value={routingMode}
-                  onChange={(event) =>
-                    setRoutingMode(event.target.value as "free" | "paid")
-                  }
-                  aria-label="Purpose Foundry provider routing"
-                  className={FIELD_CLASS}
+                <div
+                  aria-label="Purpose Foundry model routing"
+                  className="rounded-[3px] border border-plant-edge bg-plant-night/80 px-3 py-2 text-xs leading-5 text-plant-paint/75"
                 >
-                  <option value="free">Free — $0 routes only</option>
-                  <option value="paid">Paid — budget-gated routes only</option>
-                </select>
+                  Strongest configured paid model → weaker paid models → free/local
+                  fallback. Exhausted rungs stay demoted while the line runs.
+                </div>
               </Field>
               <Field
                 label="Optional specialist bays"
@@ -521,19 +510,16 @@ export function FoundryFloor() {
                       <span>
                         <span className="block text-white">{station.name}</span>
                         <span className="block text-[10px] text-plant-paint/45">
-                          {routingMode === "paid" &&
-                          PAID_UNMETERED_STATIONS.has(station.id)
-                            ? "Unavailable on Paid: this external process is outside the paid-call ledger."
-                            : adapter?.configured
-                              ? adapter.destination
-                              : "Not configured"}
+                          {adapter?.configured
+                            ? adapter.destination
+                            : "Not configured"}
                         </span>
                       </span>
                     </label>
                   ))}
                   {!optionalStations.length && (
                     <span className="text-[10px] text-plant-paint/45">
-                      No optional bays are available for this route.
+                      No optional bays are configured.
                     </span>
                   )}
                 </div>
@@ -638,7 +624,7 @@ export function FoundryFloor() {
                     </span>
                     <Stencil className="mt-0.5 block text-[8px] text-plant-paint/45">
                       {project.status.replace("_", " ")} ·{" "}
-                      {project.routingMode ?? "legacy default"}
+                      automatic model ladder
                     </Stencil>
                   </span>
                 </button>
