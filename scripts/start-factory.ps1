@@ -93,8 +93,8 @@ if ($null -ne $pnpm) {
 } else {
     $corepack = Get-Command corepack -CommandType Application -ErrorAction SilentlyContinue
     if ($null -ne $corepack) {
-        # Do not use corepack enable: a normal user cannot write shims beside a
-        # system-wide Node installation. Invoke the pinned manager directly.
+        # Do not create Corepack shims beside a system-wide Node installation;
+        # a normal user may not own that directory. Invoke pnpm directly.
         $script:PnpmMode = "corepack"
         $script:PnpmExe = $corepack.Source
     }
@@ -122,8 +122,11 @@ if ($null -ne $git -and (Test-Path ".git")) {
         $previousPrompt = $env:GIT_TERMINAL_PROMPT
         try {
             $env:GIT_TERMINAL_PROMPT = "0"
+            # Fetch is bounded separately because it cannot partially change
+            # the worktree. Only after it finishes do we perform the local
+            # fast-forward, which must never be killed mid-checkout.
             $update = Start-Process -FilePath $git.Source -ArgumentList @(
-                "pull", "--ff-only", "--quiet", "origin", "main"
+                "fetch", "--quiet", "origin", "main"
             ) -NoNewWindow -PassThru
             if (-not $update.WaitForExit(15000)) {
                 & taskkill.exe /PID $update.Id /T /F 2>$null | Out-Null
@@ -131,6 +134,10 @@ if ($null -ne $git -and (Test-Path ".git")) {
             } elseif ($update.ExitCode -ne 0) {
                 Write-Host "Update check could not complete; continuing with the installed revision." -ForegroundColor Yellow
             } else {
+                & git merge --ff-only --quiet FETCH_HEAD
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Factory Deck fetched an update but could not apply a safe fast-forward."
+                }
                 $afterHead = (& git rev-parse HEAD 2>$null).Trim()
                 if ($afterHead -and $afterHead -ne $beforeHead -and $env:FACTORY_LAUNCHER_REEXEC -ne "1") {
                     Write-Host "Factory Deck updated - restarting through the updated launcher." -ForegroundColor Green
