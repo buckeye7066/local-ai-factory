@@ -6,8 +6,7 @@ const failure = vi.hoisted(() => ({
 }));
 
 vi.mock("../storage/runsStore.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../storage/runsStore.js")>();
+  const actual = await importOriginal<typeof import("../storage/runsStore.js")>();
   return {
     ...actual,
     saveRun: vi.fn(async () => {
@@ -17,8 +16,7 @@ vi.mock("../storage/runsStore.js", async (importOriginal) => {
 });
 
 vi.mock("../storage/auditLog.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../storage/auditLog.js")>();
+  const actual = await importOriginal<typeof import("../storage/auditLog.js")>();
   return {
     ...actual,
     appendAuditEvent: vi.fn(async () => {
