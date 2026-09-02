@@ -168,7 +168,10 @@ const CompetitiveSelectionSchema = z
           candidateId: z.string().trim().min(1),
           element: z.string().trim().min(1),
           why: z.string().trim().min(1),
-          howToIntegrate: z.string().trim().min(1),
+          // Preserve otherwise valid evidence when a provider omits this one
+          // prose field; mergeCompetitiveResults derives a concrete, tested
+          // instruction from the selected element and enforced reuse mode.
+          howToIntegrate: z.string().trim().default(""),
           reuseMode: ActionableReuseModeSchema,
           evidenceUrls: z.array(HttpUrlSchema).min(1),
           score: z.number().min(0).max(100).default(0),
@@ -497,11 +500,14 @@ function mergeCompetitiveResults(
       reuseMode !== selected.reuseMode
         ? `License gate changed requested ${selected.reuseMode} to ${reuseMode}. `
         : "";
+    const integrationInstruction =
+      selected.howToIntegrate ||
+      `Integrate ${selected.element} using the enforced ${reuseMode} reuse mode in the target architecture, and add direct acceptance tests tied to the cited evidence.`;
     competitiveRecommendations.push({
       name: `${candidate.name}: ${selected.element}`,
       why: selected.why,
       sourceUrl: candidate.url,
-      howToIntegrate: `${legalPrefix}${selected.howToIntegrate}`.trim(),
+      howToIntegrate: `${legalPrefix}${integrationInstruction}`.trim(),
       candidateId: candidate.id,
       licenseSpdx: candidate.license.spdxId,
       licensePolicy: candidate.license.policy,
