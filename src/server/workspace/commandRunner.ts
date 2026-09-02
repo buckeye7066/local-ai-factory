@@ -1,7 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
 import { isJavascriptTestPath, isPythonTestPath } from "./testPaths.js";
+import {
+  buildVerificationSandboxPlan,
+  verificationSandboxConfig,
+} from "./verificationSandbox.js";
 
 /**
  * commandRunner.ts — conservative command execution for UNTRUSTED generated
@@ -40,10 +44,10 @@ import { isJavascriptTestPath, isPythonTestPath } from "./testPaths.js";
  *    purpose; rebuild's exposure is bounded to lockfile packages' own gyp
  *    builds (no `.pnpmfile.cjs`, no arbitrary workspace scripts).
  *
- * NOTE: `isInsideWorkspace` is a cwd BOUNDARY check, not a runtime filesystem
- * sandbox — a script that is actually executed can still read/write outside the
- * workspace via absolute or `../` paths. True containment requires an OS
- * sandbox and is out of scope for this module.
+ * NOTE: `isInsideWorkspace` remains only a cwd boundary. When
+ * FACTORY_VERIFICATION_SANDBOX_IMAGE is configured on Linux, every generated
+ * command is additionally executed in a locked-down container with only the
+ * workspace and an empty per-run state directory mounted writable.
  */
 
 /** (binary, firstArg) pairs that are permitted. */
@@ -171,6 +175,12 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   reason?: string;
+}
+
+const MAX_CAPTURED_OUTPUT = 8_000;
+
+function appendOutputTail(current: string, chunk: Buffer | string): string {
+  return (current + chunk.toString()).slice(-MAX_CAPTURED_OUTPUT);
 }
 
 export function isAllowed(bin: string, args: string[]): boolean {
@@ -349,7 +359,8 @@ export function hardenArgs(bin: string, args: string[]): string[] {
 }
 
 /** Executable extensions to probe when resolving a package manager on PATH. */
-const PM_EXT = process.platform === "win32" ? ["", ".cmd", ".exe", ".bat"] : [""];
+const PM_EXT =
+  process.platform === "win32" ? ["", ".cmd", ".exe", ".bat"] : [""];
 
 /**
  * Resolve a package-manager binary to an ABSOLUTE path, searching only PATH
@@ -426,7 +437,14 @@ function spawnPm(
       env,
     });
   }
-  return spawn(absBin, runArgs, { cwd, shell: false, env });
+  return spawn(absBin, runArgs, {
+    cwd,
+    shell: false,
+    env,
+    // A separate process group lets timeout/cancellation reap POSIX
+    // grandchildren instead of killing only npm/pnpm's immediate wrapper.
+    detached: true,
+  });
 }
 
 /**
@@ -477,20 +495,73 @@ export async function runCommand(
     return refuse("Refused: command arguments contain unsafe characters.");
   }
 
-  // Resolve the PM to an absolute path OUTSIDE the workspace (no shadowing).
-  const absBin = resolvePmBinary(req.bin, opts.workspaceRoot);
-  if (!absBin) {
+  // Sanitized host env: allowlisted names only, credential URLs dropped, and
+  // workspace entries removed from PATH.
+  const env = sanitizeChildEnv(process.env, opts.workspaceRoot);
+  let absBin: string;
+  let spawnArgs = runArgs;
+  let sandboxContainerName: string | null = null;
+  let sandboxDockerBin: string | null = null;
+  try {
+    const sandbox = verificationSandboxConfig(process.env);
+    if (sandbox) {
+      if (process.platform !== "linux") {
+        return refuse(
+          "Refused: the integrated verification sandbox is supported only on Linux.",
+        );
+      }
+      const docker = resolvePmBinary("docker", opts.workspaceRoot);
+      if (!docker) {
+        return refuse(
+          "Refused: Docker was not found on a trusted PATH for sandboxed verification.",
+        );
+      }
+      const plan = buildVerificationSandboxPlan({
+        workspaceRoot: opts.workspaceRoot,
+        cwd: req.cwd,
+        stateRoot: sandbox.stateRoot,
+        image: sandbox.image,
+        bin: req.bin,
+        args: runArgs,
+        uid: typeof process.getuid === "function" ? process.getuid() : 65532,
+        gid: typeof process.getgid === "function" ? process.getgid() : 65532,
+      });
+      for (const directory of [
+        "home",
+        "cache",
+        "corepack",
+        "pnpm",
+        "npm",
+        "yarn",
+        "pip",
+      ]) {
+        mkdirSync(join(resolve(sandbox.stateRoot), directory), {
+          recursive: true,
+        });
+      }
+      absBin = docker;
+      spawnArgs = plan.dockerArgs;
+      sandboxContainerName = plan.containerName;
+      sandboxDockerBin = docker;
+    } else {
+      const trustedBin = resolvePmBinary(req.bin, opts.workspaceRoot);
+      if (!trustedBin) {
+        return refuse(
+          `Refused: '${req.bin}' not found on a trusted PATH outside the workspace.`,
+        );
+      }
+      absBin = trustedBin;
+    }
+  } catch (error) {
     return refuse(
-      `Refused: '${req.bin}' not found on a trusted PATH outside the workspace.`,
+      `Refused: verification sandbox configuration is invalid: ${
+        error instanceof Error ? error.message : "unknown error"
+      }`,
     );
   }
 
-  // Sanitized env: allowlisted names only, credential URLs dropped, workspace
-  // removed from PATH — a generated project can't read secrets or shadow tools.
-  const env = sanitizeChildEnv(process.env, opts.workspaceRoot);
-
   return new Promise<CommandResult>((resolveP) => {
-    const child = spawnPm(absBin, runArgs, req.cwd, env);
+    const child = spawnPm(absBin, spawnArgs, req.cwd, env);
     let stdout = "";
     let stderr = "";
     let cancelled = false;
@@ -502,6 +573,20 @@ export async function runCommand(
     // produced a 19.5-minute zombie `npm test`). taskkill /T reaps the tree —
     // the same fix the EVA launcher uses for the identical problem.
     const killTree = () => {
+      if (sandboxContainerName && sandboxDockerBin) {
+        try {
+          spawnSync(sandboxDockerBin, ["kill", sandboxContainerName], {
+            stdio: "ignore",
+            env,
+          });
+          spawnSync(sandboxDockerBin, ["rm", "-f", sandboxContainerName], {
+            stdio: "ignore",
+            env,
+          });
+        } catch {
+          // The Docker client process group is still killed below.
+        }
+      }
       if (process.platform === "win32" && child.pid) {
         try {
           spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
@@ -510,16 +595,26 @@ export async function runCommand(
         } catch {
           child.kill("SIGKILL");
         }
+      } else if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          child.kill("SIGKILL");
+        }
       } else {
         child.kill("SIGKILL");
       }
     };
-    const timeout = setTimeout(killTree, opts.timeoutMs ?? 120_000);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      killTree();
+    }, opts.timeoutMs ?? 120_000);
     // Poll for a cancel request and force-kill the child if it arrives, so a
     // cancelled run does not keep a child alive until it finishes / times out.
     const cancelPoll = opts.shouldCancel
       ? setInterval(() => {
-          if (opts.shouldCancel!()) {
+          if (!cancelled && opts.shouldCancel!()) {
             cancelled = true;
             killTree();
           }
@@ -530,8 +625,12 @@ export async function runCommand(
       if (cancelPoll) clearInterval(cancelPoll);
     };
 
-    child.stdout?.on("data", (d) => (stdout += d.toString()));
-    child.stderr?.on("data", (d) => (stderr += d.toString()));
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout = appendOutputTail(stdout, chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = appendOutputTail(stderr, chunk);
+    });
     child.on("error", (err) => {
       cleanup();
       resolveP({
@@ -555,6 +654,18 @@ export async function runCommand(
           stdout: stdout.slice(-8000),
           stderr: stderr.slice(-8000),
           reason: "Cancelled: child process killed on cancel request.",
+        });
+        return;
+      }
+      if (timedOut) {
+        resolveP({
+          command,
+          allowed: true,
+          executed: false,
+          exitCode: code,
+          stdout: stdout.slice(-8000),
+          stderr: stderr.slice(-8000),
+          reason: "Timed out: child process tree was killed.",
         });
         return;
       }

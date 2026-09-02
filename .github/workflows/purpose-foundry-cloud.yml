@@ -4,15 +4,10 @@ run-name: "Purpose Foundry cloud proof @ ${{ github.sha }} (attempt ${{ github.r
 on:
   push:
     branches: [main]
-    paths: [.github/workflows/purpose-foundry-cloud.yml]
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: purpose-foundry-cloud-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   verify:
@@ -24,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -38,6 +35,15 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Build generated-code verification sandbox
+        shell: bash
+        run: |
+          docker build --pull \
+            --file scripts/ci/verification-sandbox.Dockerfile \
+            --tag "local-ai-factory-verifier:${GITHUB_SHA}" \
+            scripts/ci
+          mkdir -p "${RUNNER_TEMP}/factory-verification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
       - name: Run Purpose Foundry production line
         shell: bash
         env:
@@ -50,12 +56,14 @@ jobs:
           FACTORY_FREE_ENABLED: "0"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
+          FACTORY_VERIFICATION_SANDBOX_IMAGE: "local-ai-factory-verifier:${{ github.sha }}"
+          FACTORY_VERIFICATION_SANDBOX_STATE_ROOT: "${{ runner.temp }}/factory-verification-${{ github.run_id }}-${{ github.run_attempt }}"
           ALLOW_UNTRUSTED_SCRIPTS: "true"
           PURPOSE_FOUNDRY_LOCAL_ARTIFACT_ONLY: "true"
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
-          FACTORY_RUN_TIMEOUT_MS: "21000000"
-          PURPOSE_FOUNDRY_FACTORY_TIMEOUT_MS: "21000000"
-          PURPOSE_FOUNDRY_SMOKE_TIMEOUT_MS: "21000000"
+          FACTORY_RUN_TIMEOUT_MS: "19200000"
+          PURPOSE_FOUNDRY_FACTORY_TIMEOUT_MS: "19200000"
+          PURPOSE_FOUNDRY_SMOKE_TIMEOUT_MS: "19200000"
           MAX_MODEL_CALLS_PER_RUN: "60"
           MAX_REPAIR_LOOPS: "3"
           FACTORY_PAID_RESCUES_PER_HOUR: "60"
@@ -65,9 +73,9 @@ jobs:
         run: |
           test -n "$ANTHROPIC_API_KEY" || { echo "No Anthropic production credential is configured."; exit 1; }
           test -n "$OPENAI_API_KEY" || { echo "No OpenAI production credential is configured."; exit 1; }
-          pnpm server > purpose-foundry-server.log 2>&1 &
+          setsid pnpm server > purpose-foundry-server.log 2>&1 &
           server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          trap 'kill -- "-$server_pid" 2>/dev/null || true' EXIT
           node scripts/ci/run-purpose-foundry-smoke.mjs
 
       - name: Preserve Purpose Foundry evidence

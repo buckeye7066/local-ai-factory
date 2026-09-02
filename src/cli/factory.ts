@@ -1,4 +1,8 @@
-import { getConfig, getSecrets, readinessBrainFloor } from "../server/config.js";
+import {
+  getConfig,
+  getSecrets,
+  readinessBrainFloor,
+} from "../server/config.js";
 import {
   startRun,
   MissingProviderCredentialError,
@@ -6,6 +10,7 @@ import {
 import { loadReadinessState } from "../server/storage/readinessStore.js";
 import { getRun } from "../server/storage/runsStore.js";
 import type { RunOptions } from "../shared/schemas.js";
+import { factoryIdeaFromInputs } from "./factoryInput.js";
 
 /**
  * cli/factory.ts — run the assembly line from the terminal.
@@ -36,11 +41,7 @@ function parseArgs(argv: string[]): { idea: string } {
     );
     process.exit(2);
   }
-  const idea = args
-    .filter((a) => !a.startsWith("--"))
-    .join(" ")
-    .trim();
-  return { idea };
+  return { idea: factoryIdeaFromInputs(argv) };
 }
 
 const COLORS: Record<string, string> = {
@@ -66,8 +67,7 @@ function paint(kind: string, msg: string): string {
 }
 
 async function main() {
-  const { idea: parsedIdea } = parseArgs(process.argv);
-  const idea = parsedIdea || "Build a Bible reading habit tracker";
+  const { idea } = parseArgs(process.argv);
   const config = getConfig();
   const secrets = getSecrets();
   const brainFloor = readinessBrainFloor(config, secrets);
@@ -127,7 +127,10 @@ async function main() {
     ) {
       if (run.status === "completed" && run.finalReport) {
         const readiness = await loadReadinessState(run.id);
-        if (readiness?.status !== "ready" || readiness.receipt?.ready !== true) {
+        if (
+          readiness?.status !== "ready" ||
+          readiness.receipt?.ready !== true
+        ) {
           console.log(
             `\n${COLORS.red}✘ Pipeline ended, but the app is NOT production-ready.${COLORS.reset}`,
           );
@@ -148,11 +151,15 @@ async function main() {
           `\n${COLORS.green}✔ ${r.appName} — PRODUCTION READY${COLORS.reset}`,
         );
         console.log(`  ${r.summary}`);
-        console.log(`\n  ${COLORS.cyan}How to run:${COLORS.reset} ${r.howToRun}`);
+        console.log(
+          `\n  ${COLORS.cyan}How to run:${COLORS.reset} ${r.howToRun}`,
+        );
         console.log(
           `  ${COLORS.cyan}Tests:${COLORS.reset} ${r.testStatus}  ${COLORS.cyan}Repair loops:${COLORS.reset} ${r.repairLoops}`,
         );
-        console.log(`  ${COLORS.cyan}Workspace:${COLORS.reset} ${r.workspacePath}`);
+        console.log(
+          `  ${COLORS.cyan}Workspace:${COLORS.reset} ${r.workspacePath}`,
+        );
         console.log(
           `  ${COLORS.cyan}Readiness evidence:${COLORS.reset} ${readiness.evidenceDigest}`,
         );

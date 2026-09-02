@@ -4,7 +4,6 @@ run-name: "Factory Deck cloud proof @ ${{ github.sha }} (attempt ${{ github.run_
 on:
   push:
     branches: [main]
-    paths: [.github/workflows/factory-deck-cloud.yml]
   workflow_dispatch:
     inputs:
       idea:
@@ -14,10 +13,6 @@ on:
 
 permissions:
   contents: read
-
-concurrency:
-  group: factory-deck-cloud-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -29,6 +24,8 @@ jobs:
     steps:
       - name: Checkout Factory Deck
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -42,6 +39,15 @@ jobs:
 
       - name: Install Factory Deck
         run: pnpm install --frozen-lockfile
+
+      - name: Build generated-code verification sandbox
+        shell: bash
+        run: |
+          docker build --pull \
+            --file scripts/ci/verification-sandbox.Dockerfile \
+            --tag "local-ai-factory-verifier:${GITHUB_SHA}" \
+            scripts/ci
+          mkdir -p "${RUNNER_TEMP}/factory-verification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Validate production credentials
         shell: pwsh
@@ -66,19 +72,18 @@ jobs:
           FACTORY_FREE_ENABLED: "0"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
-          # The GitHub-hosted Ubuntu runner is disposable. commandRunner strips Factory
-          # credentials from generated child processes; enabling this gate lets
-          # the isolated runner execute the generated project's verification.
+          FACTORY_VERIFICATION_SANDBOX_IMAGE: "local-ai-factory-verifier:${{ github.sha }}"
+          FACTORY_VERIFICATION_SANDBOX_STATE_ROOT: "${{ runner.temp }}/factory-verification-${{ github.run_id }}-${{ github.run_attempt }}"
           ALLOW_UNTRUSTED_SCRIPTS: "true"
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
-          FACTORY_RUN_TIMEOUT_MS: "21000000"
+          FACTORY_RUN_TIMEOUT_MS: "19200000"
           MAX_MODEL_CALLS_PER_RUN: "60"
           MAX_REPAIR_LOOPS: "3"
           FACTORY_PAID_RESCUES_PER_HOUR: "60"
           FACTORY_PAID_RESCUES_PER_DAY: "60"
           FACTORY_PAID_MAX_USD_PER_DAY: "35"
           CI: "true"
-        run: pnpm exec tsx src/cli/factory.ts "$env:FACTORY_IDEA"
+        run: pnpm exec tsx src/cli/factory.ts
 
       - name: Preserve Factory Deck result
         if: always()
