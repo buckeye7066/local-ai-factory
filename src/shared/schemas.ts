@@ -1025,6 +1025,14 @@ export const HealthSchema = z.object({
   freeModel: z.string(),
   anthropicConfigured: z.boolean(),
   openaiConfigured: z.boolean(),
+  /** Production admission requires both the Sol and Fable/Opus brain roles. */
+  mandatoryProductionReadiness: z.literal(true).optional(),
+  readinessBrainFloorConfigured: z.boolean().optional(),
+  solConfigured: z.boolean().optional(),
+  fableOrOpusConfigured: z.boolean().optional(),
+  solModel: z.string().optional(),
+  fableOrOpusModel: z.string().optional(),
+  ownerExternalMatters: z.literal("owner-managed-outside-cyberland").optional(),
   providersAvailable: z.array(ProviderNameSchema),
   /** Current strongest-to-weakest execution order. */
   modelLadder: z.array(ProviderNameSchema).optional(),
