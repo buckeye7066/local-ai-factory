@@ -404,9 +404,20 @@ export function verificationPlanForWorkspace(
   }
 
   const setup = base.filter((command) => !command.isTest);
+  const browserSetup: VerificationCommand[] = direct.some(
+    (command) => command.isBrowser,
+  )
+    ? [
+        {
+          bin: "npx",
+          args: ["--no-install", "playwright", "install", "chromium"],
+          isTest: false,
+        },
+      ]
+    : [];
   const hostTests = base.filter((command) => command.isTest);
   return {
-    commands: [...setup, ...quality, ...direct, ...hostTests],
+    commands: [...setup, ...quality, ...browserSetup, ...direct, ...hostTests],
     incomplete,
   };
 }
