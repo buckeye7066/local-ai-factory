@@ -1,17 +1,24 @@
-import { readdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { readdir, readFile, readlink } from "node:fs/promises";
+import { join, relative, resolve } from "node:path";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
+import { parseDirectTestEvidence } from "../orchestrator/directTestEvidence.js";
 import { platformEvidenceBlockersFromRunError } from "../orchestrator/platformEvidenceHold.js";
 import {
   getRunCheckpoint,
   getRunForExecution,
+  saveRun,
   saveRunCheckpoint,
 } from "../storage/runsStore.js";
-import { runCommand } from "./commandRunner.js";
-import { platformStampForExecutedCommand } from "./completionEvidence.js";
+import { runCommand, type CommandResult } from "./commandRunner.js";
+import {
+  assessPlatformCompatibility,
+  platformStampForExecutedCommand,
+} from "./completionEvidence.js";
 import {
   generatedTestsForVerification,
   verificationPlanForWorkspace,
+  type VerificationCommand,
 } from "./verificationCommands.js";
 import { verifyFileDigests } from "./verificationReceipt.js";
 
@@ -30,6 +37,111 @@ export type PlatformEvidenceHold = {
 type CheckpointExecutedCommand = NonNullable<
   FactoryCheckpoint["verification"]
 >["executed"][number];
+
+export type PlatformArtifactSnapshot = Record<string, string>;
+
+/** Mirrors the workflow artifact: node_modules is the only workspace exclusion. */
+const ARTIFACT_EXCLUDED_DIRS = new Set(["node_modules"]);
+
+export async function capturePlatformArtifactSnapshot(
+  workspacePath: string,
+): Promise<PlatformArtifactSnapshot> {
+  const snapshot: PlatformArtifactSnapshot = {};
+  const pending = [workspacePath];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+    for (const entry of entries) {
+      if (entry.isDirectory() && ARTIFACT_EXCLUDED_DIRS.has(entry.name)) continue;
+      const absolute = join(directory, entry.name);
+      const path = relative(workspacePath, absolute).replace(/\\/g, "/");
+      if (entry.isDirectory()) {
+        pending.push(absolute);
+      } else if (entry.isSymbolicLink()) {
+        snapshot[path] = createHash("sha256")
+          .update(`symlink\0${await readlink(absolute)}`)
+          .digest("hex");
+      } else if (entry.isFile()) {
+        snapshot[path] = createHash("sha256")
+          .update(await readFile(absolute))
+          .digest("hex");
+      }
+    }
+  }
+  return snapshot;
+}
+
+export function changedPlatformArtifactPaths(
+  before: PlatformArtifactSnapshot,
+  after: PlatformArtifactSnapshot,
+): string[] {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter((path) => before[path] !== after[path])
+    .sort();
+}
+
+export function successfulPlatformCommandEvidence(
+  command: VerificationCommand,
+  result: CommandResult,
+  hostPlatform: PlatformProofHost,
+): CheckpointExecutedCommand {
+  if (!result.executed || result.exitCode !== 0) {
+    throw new Error(
+      "Only a successfully executed command can become platform evidence.",
+    );
+  }
+  const outputTail = `${result.stdout}\n${result.stderr}`.slice(-32_768);
+  const parsedDirect =
+    command.directTestPath && command.runner
+      ? parseDirectTestEvidence(command.runner, result.stdout, result.stderr)
+      : undefined;
+  const directEvidenceValid = parsedDirect?.valid;
+  if (parsedDirect && !parsedDirect.valid) {
+    throw new Error(
+      `${hostPlatform} direct ${command.runner} evidence is invalid: ${
+        parsedDirect.reason ?? "no passing non-skipped test was identified"
+      }.`,
+    );
+  }
+  return {
+    command: result.command,
+    exitCode: result.exitCode,
+    isTest: command.isTest,
+    directTestPath: command.directTestPath,
+    isBrowser: command.isBrowser ?? false,
+    ...platformStampForExecutedCommand(
+      {
+        command: result.command,
+        exitCode: result.exitCode,
+        isTest: command.isTest,
+        isBrowser: command.isBrowser ?? false,
+        directEvidenceValid,
+        outputTail,
+      },
+      hostPlatform,
+    ),
+    runner: command.runner,
+    directEvidenceValid,
+    passedCount: parsedDirect?.passedCount,
+    skippedCount: parsedDirect?.skippedCount,
+    passedTestNames: parsedDirect?.passedTestNames,
+    outputTail,
+  };
+}
+
+export function remainingPlatformEvidenceBlockers(
+  blockers: readonly string[],
+  compatibility: ReturnType<typeof assessPlatformCompatibility>,
+): string[] {
+  return blockers.filter((blocker) => {
+    const target = /^(windows|webkit|macos|ios|android) compatibility\b/.exec(
+      blocker,
+    )?.[1] as keyof typeof compatibility | undefined;
+    return !target || compatibility[target].verified !== true;
+  });
+}
 
 export function replaceHostPlatformEvidence<T extends CheckpointExecutedCommand>(
   existing: readonly T[],
@@ -101,10 +213,8 @@ export async function validatePlatformEvidenceHold(
     throw new Error("The held Factory run or its private checkpoint is missing.");
   }
   const blockers = platformEvidenceBlockersFromRunError(run.error);
-  if (run.status !== "failed" || run.resumable !== true || !blockers) {
-    throw new Error(
-      "Refused: the Factory run is not a resumable platform-evidence-only hold.",
-    );
+  if (run.status !== "failed" || !blockers) {
+    throw new Error("Refused: the Factory run is not a platform-evidence-only hold.");
   }
   if (!checkpoint.testWriterComplete || !checkpoint.verification) {
     throw new Error(
@@ -125,6 +235,8 @@ export async function recordCurrentPlatformEvidence(
     runId?: string;
     workspaceRoot?: string;
     hostPlatform?: NodeJS.Platform;
+    /** Explicit approval to execute model-authored install/build/test code. */
+    allowScriptExecution?: boolean;
   } = {},
 ): Promise<{
   runId: string;
@@ -138,6 +250,11 @@ export async function recordCurrentPlatformEvidence(
       `Platform proof must execute on a real Windows or macOS runner, not ${hostPlatform}.`,
     );
   }
+  if (input.allowScriptExecution !== true) {
+    throw new Error(
+      "Platform proof refused: ALLOW_UNTRUSTED_SCRIPTS is not explicitly enabled.",
+    );
+  }
   const held = await validatePlatformEvidenceHold(input);
   const expected = held.checkpoint.verification!.fileDigests!;
   const paths = Object.keys(expected);
@@ -147,6 +264,7 @@ export async function recordCurrentPlatformEvidence(
       `Candidate bytes changed before ${hostPlatform} verification: ${before.reason ?? "unknown mismatch"}.`,
     );
   }
+  const artifactBefore = await capturePlatformArtifactSnapshot(held.workspacePath);
 
   const plan = verificationPlanForWorkspace(held.workspacePath, {
     generatedTests: generatedTestsForVerification(held.checkpoint.files),
@@ -170,7 +288,7 @@ export async function recordCurrentPlatformEvidence(
             process.env.WORKSPACE_ROOT ??
             join(process.cwd(), "workspaces"),
         ),
-        allowScriptExecution: true,
+        allowScriptExecution: input.allowScriptExecution,
         timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
       },
     );
@@ -182,26 +300,12 @@ export async function recordCurrentPlatformEvidence(
         }. ${outputTail.slice(-2_000)}`,
       );
     }
-    executed.push({
-      command: result.command,
-      exitCode: result.exitCode,
-      isTest: command.isTest,
-      isBrowser: command.isBrowser ?? false,
-      ...platformStampForExecutedCommand(
-        {
-          command: result.command,
-          exitCode: result.exitCode,
-          isTest: command.isTest,
-          isBrowser: command.isBrowser ?? false,
-          outputTail,
-        },
-        hostPlatform,
-      ),
-      outputTail,
-    });
+    executed.push(successfulPlatformCommandEvidence(command, result, hostPlatform));
   }
-  if (!executed.some((entry) => entry.isTest === true)) {
-    throw new Error(`${hostPlatform} proof executed no test command.`);
+  if (!executed.some((entry) => entry.directEvidenceValid === true)) {
+    throw new Error(
+      `${hostPlatform} proof produced no structured, passing, non-skipped direct-test evidence.`,
+    );
   }
 
   const after = await verifyFileDigests(held.workspacePath, paths, expected);
@@ -211,19 +315,40 @@ export async function recordCurrentPlatformEvidence(
     );
   }
 
+  const artifactAfter = await capturePlatformArtifactSnapshot(held.workspacePath);
+  const artifactChanges = changedPlatformArtifactPaths(artifactBefore, artifactAfter);
+  if (artifactChanges.length > 0) {
+    throw new Error(
+      `Candidate artifact changed during ${hostPlatform} verification outside node_modules: ${artifactChanges
+        .slice(0, 20)
+        .join(", ")}.`,
+    );
+  }
+
+  const combinedEvidence = replaceHostPlatformEvidence(
+    held.checkpoint.verification!.executed,
+    hostPlatform,
+    executed,
+  );
   const checkpoint: FactoryCheckpoint = {
     ...held.checkpoint,
     verification: {
       ...held.checkpoint.verification!,
-      executed: replaceHostPlatformEvidence(
-        held.checkpoint.verification!.executed,
-        hostPlatform,
-        executed,
-      ),
+      executed: combinedEvidence,
     },
     updatedAt: Date.now(),
   };
+  const run = await getRunForExecution(held.runId);
+  if (!run) throw new Error("The held Factory run disappeared before evidence save.");
+  const compatibility = assessPlatformCompatibility(
+    held.workspacePath,
+    combinedEvidence,
+    hostPlatform,
+  );
+  run.resumable =
+    remainingPlatformEvidenceBlockers(held.blockers, compatibility).length === 0;
   await saveRunCheckpoint(checkpoint);
+  await saveRun(run);
   return {
     runId: held.runId,
     workspacePath: held.workspacePath,
