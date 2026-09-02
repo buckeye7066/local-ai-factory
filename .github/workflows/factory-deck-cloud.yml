@@ -66,7 +66,7 @@ jobs:
           FACTORY_FREE_ENABLED: "0"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
-          # The GitHub-hosted runner is disposable. commandRunner strips Factory
+          # The GitHub-hosted Ubuntu runner is disposable. commandRunner strips Factory
           # credentials from generated child processes; enabling this gate lets
           # the isolated runner execute the generated project's verification.
           ALLOW_UNTRUSTED_SCRIPTS: "true"
