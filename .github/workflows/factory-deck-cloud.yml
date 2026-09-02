@@ -22,7 +22,6 @@ jobs:
   build:
     name: Factory Deck cloud build
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[factory-smoke]'))
-    environment: paid-production-main-automated
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
