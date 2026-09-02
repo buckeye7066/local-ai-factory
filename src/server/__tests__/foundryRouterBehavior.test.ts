@@ -336,7 +336,10 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     expect(startRes.status).toBe(202);
     await waitFor(
       async () => adapters.getCalls(),
-      (calls) => calls.some((call) => call.stationId === "factory-deck"),
+      (calls) =>
+        calls.some(
+          (call) => call.projectId === projectId && call.stationId === "factory-deck",
+        ),
       4_000,
     );
 
@@ -371,7 +374,10 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     // Wait for a known post-restart adapter call, not merely old persisted state.
     await waitFor(
       async () => adapters.getCalls(),
-      (calls) => calls.some((call) => call.stationId === "factory-deck"),
+      (calls) =>
+        calls.some(
+          (call) => call.projectId === projectId && call.stationId === "factory-deck",
+        ),
       4_000,
     );
     const afterRestart = await waitFor(
