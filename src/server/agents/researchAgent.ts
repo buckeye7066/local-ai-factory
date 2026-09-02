@@ -196,6 +196,41 @@ const CompetitiveSelectionSchema = z
   });
 type CompetitiveSelection = z.infer<typeof CompetitiveSelectionSchema>;
 
+const ProductDiscoveryPlanSchema = z.object({
+  queries: z
+    .array(z.string().trim().min(3).max(180))
+    .min(5)
+    .max(8),
+});
+
+async function planProductDiscovery(
+  deps: AgentDeps,
+  spec: ProductSpec,
+  arch: Architecture,
+): Promise<string[]> {
+  const plan = await deps.provider.generateJson<z.infer<typeof ProductDiscoveryPlanSchema>>({
+    system:
+      `${SYSTEM_PREAMBLE}\\nYou are the PRODUCT DISCOVERY planner. Identify real products that compete with ` +
+      `the target app. Return only short web-search queries, one distinct product per query. Each query must name ` +
+      `a real competitor and ask for its official website. Prefer direct competitors; use adjacent products only ` +
+      `when the niche does not contain eight credible products. Never query for roundups, reviews, comparison ` +
+      `sites, source repositories, packages, articles, forums, or implementation tutorials. Do not evaluate or ` +
+      `cite products here: downstream search and page inspection provide the evidence.`,
+    prompt: [
+      `TARGET SPEC:\\n${JSON.stringify(spec)}`,
+      `TARGET ARCHITECTURE:\\n${JSON.stringify(arch)}`,
+      `Return 8 distinct official-product website search queries. A niche command-line or open-source app still ` +
+        `competes with real products; name those products rather than searching for generic lists.`,
+    ].join("\\n\\n"),
+    schema: ProductDiscoveryPlanSchema,
+    schemaName: "ProductDiscoveryPlan",
+    intent: { role: "researcher", needs: ["structured_json"] },
+    temperature: 0.1,
+    maxTokens: 1200,
+  });
+  return plan.queries;
+}
+
 export interface ResearchOptions {
   /** Preserve the small legacy research loop for tests and constrained callers. */
   competitive?: boolean;
@@ -539,7 +574,18 @@ export async function researchAgent(
   const base = await runToolResearch(deps, spec, arch);
   if (!options.competitive) return base;
 
-  const dossier = await buildCompetitiveDossier(spec, arch);
+  // The run-scoped orchestrator names plausible competitors; deterministic
+  // search, URL classification, page inspection, and the five-product gate
+  // decide whether any of them count. Planning failure falls back to the
+  // deterministic generic queries and remains advisory.
+  let productQueries: string[] = [];
+  try {
+    productQueries = await planProductDiscovery(deps, spec, arch);
+  } catch (err) {
+    if (err instanceof ProviderAbortError) throw err;
+  }
+
+  const dossier = await buildCompetitiveDossier(spec, arch, { productQueries });
   if (!dossier.candidates.length) {
     return ResearchFindingsSchema.parse({
       ...base,
