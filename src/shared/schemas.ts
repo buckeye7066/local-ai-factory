@@ -1020,6 +1020,8 @@ export const HealthSchema = z.object({
   anthropicConfigured: z.boolean(),
   openaiConfigured: z.boolean(),
   providersAvailable: z.array(ProviderNameSchema),
+  /** Current strongest-to-weakest execution order. */
+  modelLadder: z.array(ProviderNameSchema).optional(),
   anthropicModel: z.string(),
   openaiModel: z.string(),
   /** Live routing + cost picture. Optional so older clients still parse. */
