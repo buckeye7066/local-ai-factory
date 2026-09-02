@@ -677,7 +677,8 @@ export class FoundryAdapters {
         handoff: station.handoff,
       }));
     const goals = [
-      project.constitution.purpose,
+      `Mission: ${project.constitution.purpose}`,
+      ...project.constitution.targetUsers.map((item) => `Audience: ${item}`),
       ...project.constitution.successCriteria.map(
         (item) => `Success criterion: ${item}`,
       ),
