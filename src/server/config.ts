@@ -167,14 +167,9 @@ export interface AppSecrets {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const anthropicModel = env.ANTHROPIC_MODEL || "claude-fable-5-1";
   const requestedAnthropicModels = modelIds(env.FACTORY_ANTHROPIC_MODEL_LADDER);
-  const anthropicModels = [
-    ...new Set([
-      anthropicModel,
-      ...(requestedAnthropicModels.length
-        ? requestedAnthropicModels
-        : DEFAULT_ANTHROPIC_MODEL_LADDER),
-    ]),
-  ];
+  const anthropicModels = requestedAnthropicModels.length
+    ? [...new Set(requestedAnthropicModels)]
+    : [...new Set([anthropicModel, ...DEFAULT_ANTHROPIC_MODEL_LADDER])];
   const openaiModel = env.OPENAI_MODEL || "gpt-5.5";
   return {
     free: {
