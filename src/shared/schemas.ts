@@ -945,10 +945,8 @@ export type RunSummary = z.infer<typeof RunSummarySchema>;
 /* ------------------------------------------------------------------ */
 
 /**
- * The live routing picture. This exists so a silent demotion to a PAID
- * provider is impossible: the deck always shows who is serving right now, why
- * it failed over, how many times it nearly paid but waited instead, and what
- * the rescue has cost today.
+ * The live routing picture. The deck always shows the current ladder rung,
+ * demotion reason, provider call counts, and locally estimated paid usage.
  */
 export const RouteEventSchema = z.object({
   ts: z.number(),
@@ -1013,7 +1011,7 @@ export const HealthSchema = z.object({
   service: z.literal("factory-deck").optional(),
   /** Deterministic offline provider is always available. */
   mockConfigured: z.boolean(),
-  /** The FREE local route (FCC proxy / Ollama). The default primary. */
+  /** The final free/local ladder rung (FCC proxy / Ollama). */
   freeConfigured: z.boolean(),
   freeBaseUrl: z.string(),
   freeModel: z.string(),
