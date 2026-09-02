@@ -681,9 +681,27 @@ export function buildDiscoveryQueries(spec: ProductSpec): string[] {
 /** True for queries whose results are competitor PRODUCT pages, not code. */
 export function isCompetitorQuery(query: string): boolean {
   return (
-    /(^|\s)competitors?(\s|$)|^best |^top /i.test(query) ||
-    /\balternative products?\b/i.test(query)
+    /(^|\s)competitors?(\s|$)|^best |^top |^official /i.test(query) ||
+    /\balternative products?\b|\bofficial (?:site|website|product|app|software)\b/i.test(
+      query,
+    )
   );
+}
+
+/**
+ * Keep model-suggested discovery bounded, unique, and unmistakably classified
+ * as product discovery. The model proposes names; search plus page inspection
+ * still supplies all evidence and the strict distinct-domain gate remains
+ * authoritative.
+ */
+export function normalizeProductDiscoveryQueries(queries: string[]): string[] {
+  const normalized = queries
+    .map((query) => query.replace(/\s+/g, " ").trim().slice(0, 180))
+    .filter((query) => query.length >= 3)
+    .map((query) =>
+      isCompetitorQuery(query) ? query : `official product website ${query}`,
+    );
+  return [...new Set(normalized)].slice(0, 8);
 }
 
 const NON_PRODUCT_HOSTS = new Set([
@@ -924,11 +942,29 @@ async function mapWithConcurrency<T, R>(
  * intentionally bounded by candidate, byte, and timeout budgets so one run
  * cannot turn into an unending crawler.
  */
+export interface CompetitiveDiscoveryOptions {
+  /**
+   * Short, product-specific searches proposed by the run's orchestrator.
+   * They replace only the generic product searches; deterministic repository
+   * discovery, URL classification, evidence inspection, and release gates are
+   * unchanged.
+   */
+  productQueries?: string[];
+}
+
 export async function buildCompetitiveDossier(
   spec: ProductSpec,
   arch: Architecture,
+  options: CompetitiveDiscoveryOptions = {},
 ): Promise<CompetitiveDossier> {
-  const queries = buildDiscoveryQueries(spec);
+  const defaultQueries = buildDiscoveryQueries(spec);
+  const productQueries = normalizeProductDiscoveryQueries(options.productQueries ?? []);
+  const queries = productQueries.length
+    ? [
+        ...productQueries,
+        ...defaultQueries.filter((query) => !isCompetitorQuery(query)),
+      ].slice(0, 12)
+    : defaultQueries;
   const terms = termsFor(spec, arch);
   const repositories = new Map<
     string,
