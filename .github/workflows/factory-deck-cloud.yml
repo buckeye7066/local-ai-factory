@@ -1,5 +1,6 @@
 name: factory-deck-cloud
 run-name: "Factory Deck cloud proof @ ${{ github.sha }} (attempt ${{ github.run_attempt }})"
+# A marker-bearing main commit starts the exact paid proof; skipped runs are never evidence.
 
 on:
   push:
