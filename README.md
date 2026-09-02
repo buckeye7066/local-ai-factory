@@ -44,10 +44,14 @@ final report.
 The bounded project-memory record survives successful checkpoint cleanup.
 Factory Deck writes the exact goal, spec, and competitive evidence before the
 task planner or builder may proceed, then records the delivered revision,
-summary, and next improvements at completion. A later run inherits that context;
-model wording cannot silently rename or repurpose the app. A purpose change is
-accepted only when the current request explicitly asks to change, redefine,
-pivot, replace, or repurpose the product mission or audience.
+summary, and next improvements at completion. Pre-build plans remain audit
+evidence, but only completed runs become authoritative continuity. A later run
+inherits that completed context; model wording cannot silently rename or
+repurpose the app. A purpose change is accepted only when the current request
+explicitly asks to change, redefine, pivot, replace, or repurpose the product
+mission or audience. Purpose Foundry also sends its constitution as explicit
+`Mission:` and `Audience:` directives, which become code-owned contract
+fields instead of model-authored prose.
 
 ### Autonomous competitive intelligence
 
