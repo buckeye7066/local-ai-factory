@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ProductSpecSchema } from "../../shared/schemas.js";
+import { ProductSpecSchema, PurposeProfileSchema } from "../../shared/schemas.js";
 import {
   assertGoalContractIntegrity,
   continuityFromMemory,
@@ -21,6 +21,33 @@ function spec(tagline = "Help grant seekers find verified funding") {
     dataModel: [{ entity: "Opportunity", fields: ["id", "status"] }],
     userFlows: ["Search and verify a funding opportunity"],
     acceptanceCriteria: ["A user can find one verified opportunity"],
+  });
+}
+
+function purposeProfile(purpose: string, user = "grant seekers") {
+  const evidence = {
+    id: "PE-001",
+    kind: "readme" as const,
+    path: "README.md",
+    lineStart: 1,
+    lineEnd: 2,
+    sourceDigest: `sha256:${"a".repeat(64)}`,
+    signal: "Repository purpose",
+    excerpt: purpose,
+  };
+  return PurposeProfileSchema.parse({
+    profileVersion: 1,
+    appName: "GrantFlow",
+    purpose: { text: purpose, evidenceIds: [evidence.id] },
+    intendedUsers: [{ text: user, evidenceIds: [evidence.id] }],
+    evidence: [evidence],
+    grounding: {
+      grounded: true,
+      semanticVerification: "not-performed",
+      evidenceCoverage: 1,
+      rejectedEvidenceIds: [],
+      droppedClaims: [],
+    },
   });
 }
 
@@ -128,11 +155,16 @@ describe("durable project purpose memory", () => {
       idea: "Add exports without changing the product",
       goals: ["Add CSV exports"],
       spec: spec("A randomly drifted tagline"),
+      purposeProfile: purposeProfile(
+        "A randomly drifted model inference from the same repository",
+        "randomly inferred users",
+      ),
       memory,
       now: 30,
     });
     expect(secondContract.purpose).toBe(firstContract.purpose);
     expect(secondContract.purposeSource).toBe("project-memory");
+    expect(secondContract.targetUsers).toEqual(firstContract.targetUsers);
     expect(secondContract.continuity.previousRunIds).toEqual([firstRun]);
 
     await rememberProjectPlan({
