@@ -73,7 +73,6 @@ describe("importedPackages", () => {
     ]);
   });
 
-
   it("reads JSDoc @import tags and masks template, regex, and JSX fixtures", () => {
     const src = [
       '/** @import {SomeType} from "jsdoc-tag-package" */',
