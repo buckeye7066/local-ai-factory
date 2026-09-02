@@ -61,7 +61,7 @@ function callable(name: ProviderName, fail = false): LLMProvider & { calls: numb
 }
 
 describe("Purpose Foundry", () => {
-  it("pins Paid routing, omits unmetered children, and retains internal stations", async () => {
+  it("defaults Paid intake to the required production line only", async () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
     const project = await store.create(
@@ -73,25 +73,58 @@ describe("Purpose Foundry", () => {
 
     expect(project.routingMode).toBe("paid");
     expect((await store.get(project.id))?.routingMode).toBe("paid");
-    expect(
-      project.stations.find((station) => station.stationId === "scout")?.status,
-    ).toBe("not_selected");
-    expect(
-      project.stations.find((station) => station.stationId === "flexfactor")?.status,
-    ).toBe("not_selected");
-    expect(
-      project.stations.find((station) => station.stationId === "factory-deck")?.status,
-    ).toBe("queued");
-    expect(
-      project.stations.find((station) => station.stationId === "crucible")?.status,
-    ).toBe("queued");
+    for (const stationId of ["factory-deck", "crucible", "watchtower"]) {
+      expect(
+        project.stations.find((station) => station.stationId === stationId)?.status,
+      ).toBe("queued");
+    }
+    for (const stationId of [
+      "scout",
+      "repo-rewards",
+      "promo-pilot",
+      "flexfactor",
+      "app-store-publisher",
+    ]) {
+      expect(
+        project.stations.find((station) => station.stationId === stationId)?.status,
+      ).toBe("not_selected");
+    }
     const createdEvent = JSON.parse(
       (await readFile(join(root, "evidence.jsonl"), "utf8")).trim(),
     ) as { payload: { blockedUnmeteredStations?: string[] } };
-    expect(createdEvent.payload.blockedUnmeteredStations).toEqual([
-      "scout",
+    expect(createdEvent.payload.blockedUnmeteredStations).toEqual([]);
+  });
+
+  it("defaults Free intake to its required production line only", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown(
+        "# Free Core Line\nBuild through the required free production line.",
+        "C:/Vault/Free-Core-Line.md",
+      ),
+    );
+
+    for (const stationId of [
+      "factory-deck",
       "flexfactor",
-    ]);
+      "crucible",
+      "watchtower",
+    ]) {
+      expect(
+        project.stations.find((station) => station.stationId === stationId)?.status,
+      ).toBe("queued");
+    }
+    for (const stationId of [
+      "scout",
+      "repo-rewards",
+      "promo-pilot",
+      "app-store-publisher",
+    ]) {
+      expect(
+        project.stations.find((station) => station.stationId === stationId)?.status,
+      ).toBe("not_selected");
+    }
   });
 
   it("rejects a Paid project containing only unmetered child stations", async () => {

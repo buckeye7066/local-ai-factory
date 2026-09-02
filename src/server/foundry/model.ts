@@ -134,14 +134,14 @@ export const FoundryIntakeSchema = z
     sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
     /** Explicit owner-selected economic tier; absent preserves legacy defaults. */
     routingMode: RoutingModeSchema.optional(),
-    selectedStations: z
-      .array(StationIdSchema)
-      .min(1)
-      .default(STATIONS.map((station) => station.id)),
+    // Omitted means the smallest production line for the selected tier.
+    // Optional specialist bays run only when the caller explicitly selects them.
+    selectedStations: z.array(StationIdSchema).default([]),
   })
   .superRefine((intake, context) => {
     if (
       intake.routingMode === "paid" &&
+      intake.selectedStations.length > 0 &&
       intake.selectedStations.every((station) =>
         UNMETERED_CHILD_STATIONS.includes(
           station as (typeof UNMETERED_CHILD_STATIONS)[number],
