@@ -238,6 +238,36 @@ describe("Purpose Foundry", () => {
     });
   });
 
+  it("advertises App Store Publisher only with an explicit endpoint", async () => {
+    const previous = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL;
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    try {
+      delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL;
+      let publisher = new FoundryAdapters(store)
+        .descriptors()
+        .find((descriptor) => descriptor.stationId === "app-store-publisher");
+      expect(publisher?.configured).toBe(false);
+      expect(publisher?.destination).toContain(
+        "PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL",
+      );
+
+      process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL =
+        "http://127.0.0.1:4000";
+      publisher = new FoundryAdapters(store)
+        .descriptors()
+        .find((descriptor) => descriptor.stationId === "app-store-publisher");
+      expect(publisher).toMatchObject({
+        configured: true,
+        destination: "http://127.0.0.1:4000",
+      });
+    } finally {
+      if (previous === undefined)
+        delete process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL;
+      else process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL = previous;
+    }
+  });
+
   it("uses the directed FlexFactor run script by default in descriptors and process mode", async () => {
     const previousScript = process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
     const previousProvider = process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER;
