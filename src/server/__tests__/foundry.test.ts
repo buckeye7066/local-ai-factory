@@ -285,11 +285,16 @@ describe("Purpose Foundry", () => {
     const previousScript = process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
     const previousProvider = process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER;
     const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    const previousAuthToken = process.env.FACTORY_AUTH_TOKEN;
+    const previousPromoToken = process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN;
     delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
     // A stale operator override is adversarial input now: strict Free must
     // ignore it and force the unmetered child to local Ollama.
     process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER = "anthropic";
     process.env.OPENAI_API_KEY = "paid-secret-must-not-reach-free-child";
+    process.env.FACTORY_AUTH_TOKEN = "factory-secret-must-not-reach-child";
+    process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN =
+      "promo-secret-must-not-reach-child";
     try {
       const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
       const store = new FoundryStore(root);
@@ -313,7 +318,17 @@ describe("Purpose Foundry", () => {
         processRunner: async (_python, args, options) => {
           receivedArgs = args;
           receivedEnv = options.env;
-          return { stdout: "ok", stderr: "failed detail", exitCode: processExit };
+          return {
+            stdout:
+              processExit === 0
+                ? "ok"
+                : `FACTORY_AUTH_TOKEN=${process.env.FACTORY_AUTH_TOKEN}`,
+            stderr:
+              processExit === 0
+                ? "failed detail"
+                : `PURPOSE_FOUNDRY_PROMOPILOT_TOKEN=${process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN}`,
+            exitCode: processExit,
+          };
         },
       });
 
@@ -335,6 +350,8 @@ describe("Purpose Foundry", () => {
       expect(receivedArgs).not.toContain("anthropic");
       expect(receivedEnv?.OPENAI_API_KEY).toBeUndefined();
       expect(receivedEnv?.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER).toBeUndefined();
+      expect(receivedEnv?.FACTORY_AUTH_TOKEN).toBeUndefined();
+      expect(receivedEnv?.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN).toBeUndefined();
 
       processExit = 7;
       const failure = await adapters.execute(project, "scout");
@@ -342,6 +359,15 @@ describe("Purpose Foundry", () => {
         status: "failed",
         evidence: { exitCode: 7 },
       });
+      const failureOutput = await readFile(failure.artifacts[0], "utf8");
+      expect(failureOutput).not.toContain("factory-secret-must-not-reach-child");
+      expect(failureOutput).not.toContain("promo-secret-must-not-reach-child");
+      expect(JSON.stringify(failure.evidence)).not.toContain(
+        "factory-secret-must-not-reach-child",
+      );
+      expect(JSON.stringify(failure.evidence)).not.toContain(
+        "promo-secret-must-not-reach-child",
+      );
     } finally {
       if (previousScript === undefined)
         delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
@@ -351,6 +377,11 @@ describe("Purpose Foundry", () => {
       else process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER = previousProvider;
       if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = previousOpenAiKey;
+      if (previousAuthToken === undefined) delete process.env.FACTORY_AUTH_TOKEN;
+      else process.env.FACTORY_AUTH_TOKEN = previousAuthToken;
+      if (previousPromoToken === undefined)
+        delete process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN;
+      else process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN = previousPromoToken;
     }
   });
 
