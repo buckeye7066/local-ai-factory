@@ -123,7 +123,8 @@ export function projectKeyForOptions(
       .digest("hex")}`;
   }
   if (options.mode !== "extend" && options.newRepo?.name) {
-    if (options.newRepo.createRemote === false && context.localProjectId) {
+    if (options.newRepo.createRemote === false) {
+      if (!context.localProjectId) return null;
       const localIdentity = createHash("sha256")
         .update(
           JSON.stringify({
@@ -255,21 +256,23 @@ function currentSpecPurpose(spec: ProductSpec): string {
 
 function explicitPurposeChange(texts: string[]): boolean {
   const negatedVerbFirst =
-    /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not|cannot|can't|cant|without)\b[\s\S]{0,40}?\b(?:chang(?:e|ing)|replac(?:e|ing)|redefin(?:e|ing)|pivot(?:ing)?|repurpos(?:e|ing)|retarget(?:ing)?|shift(?:ing)?)\b[\s\S]{0,80}?\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b/gi;
+    /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not|cannot|can't|cant|without|no)\b[^\n.;!?]{0,40}?\b(?:chang(?:e|ing)|replac(?:e|ing)|redefin(?:e|ing)|pivot(?:ing)?|repurpos(?:e|ing)|retarget(?:ing)?|shift(?:ing)?)\b[^\n.;!?]{0,80}?\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b/gi;
   const negatedTargetFirst =
-    /\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[\s\S]{0,40}?\b(?:do\s+not|not|never|must\s+not|should\s+not|cannot|can't|cant)\b[\s\S]{0,40}?\b(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b/gi;
+    /\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[^\n.;!?]{0,40}?\b(?:do\s+not|not|never|must\s+not|should\s+not|cannot|can't|cant)\b[^\n.;!?]{0,40}?\b(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b/gi;
   const affirmativeChange =
-    /\b(?:(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting)\b[\s\S]{0,80}\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)|(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[\s\S]{0,80}\b(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting))\b/i;
-  return texts.some((text) => {
-    // Remove only syntactically negated target-change clauses first. This
-    // prevents a leading unrelated verb ("Change export workflow …") from
-    // reaching across "without changing the product purpose" and authorizing
-    // a mission pivot.
-    const affirmativeOnly = text
-      .replace(negatedVerbFirst, " ")
-      .replace(negatedTargetFirst, " ");
-    return affirmativeChange.test(affirmativeOnly);
-  });
+    /\b(?:(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting)\b[^\n.;!?]{0,80}\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)|(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[^\n.;!?]{0,80}\b(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting))\b/i;
+  return texts.some((text) =>
+    text.split(/(?:[\n.;!?]+|,?\s+but\s+)/i).some((clause) => {
+      // Remove only syntactically negated target-change clauses first. This
+      // prevents a leading unrelated verb ("Change export workflow …") from
+      // reaching across "without changing the product purpose" and authorizing
+      // a mission pivot.
+      const affirmativeOnly = clause
+        .replace(negatedVerbFirst, " ")
+        .replace(negatedTargetFirst, " ");
+      return affirmativeChange.test(affirmativeOnly);
+    }),
+  );
 }
 
 function digestGoalContract(
