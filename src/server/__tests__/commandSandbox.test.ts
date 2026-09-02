@@ -132,6 +132,22 @@ describe("engine-owned npx verification grammar", () => {
         "--reporter=json",
       ]),
     ).toBe(true);
+    expect(
+      isAllowedNpxVerification([
+        "--no-install",
+        "playwright",
+        "install",
+        "chromium",
+      ]),
+    ).toBe(true);
+    expect(
+      isAllowedNpxVerification([
+        "--no-install",
+        "playwright",
+        "install",
+        "firefox",
+      ]),
+    ).toBe(false);
     expect(isAllowed("npx", ["--package", "attacker", "evil"])).toBe(false);
     expect(isAllowed("npx", ["--no-install", "evil", "run"])).toBe(false);
     expect(
