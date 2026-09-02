@@ -16,7 +16,9 @@ import {
 } from "../../shared/schemas.js";
 
 const PreReleaseBrainReviewSchema = z.object({
-  identity: z.enum(["sol", "fable", "opus"]),
+  // Accept both current reviewer slots and legacy identities so old checkpoints
+  // remain resumable after the paid-ladder migration.
+  identity: z.enum(["lead", "challenger", "sol", "fable", "opus"]),
   provider: z.enum(["openai", "anthropic"]),
   model: z.string().min(1),
   evidenceDigest: z.string().min(1),

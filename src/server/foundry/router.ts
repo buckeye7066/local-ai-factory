@@ -370,7 +370,7 @@ export function createFoundryRouter(
       if (!brainFloor.configured) {
         res.status(409).json({
           error:
-            "Purpose Foundry is blocked until OpenAI Sol and Anthropic Fable/Opus readiness brains are configured.",
+            "Purpose Foundry is blocked until at least one paid model is configured in the unified readiness ladder.",
         });
         return;
       }
