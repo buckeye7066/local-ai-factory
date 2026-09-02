@@ -40,6 +40,7 @@ import {
 import {
   deterministicPreReleaseBlockers,
   evaluateProductionReadiness,
+  readinessDeliveryKind,
 } from "./productionReadinessPolicy.js";
 import { recordReadinessEvaluation } from "../storage/readinessStore.js";
 export { MissingProviderCredentialError };
@@ -2675,7 +2676,7 @@ async function executeRun(
       return;
     }
 
-    const readinessKind = run.destination?.kind ?? "workspace-only";
+    const readinessKind = readinessDeliveryKind(run.destination, checkpoint.options);
     const privateApp = checkpoint.options.publish === false;
     const readinessPurposeProfile = spec.purposeProfile;
     const wiringComplete = !(report.caveats ?? []).some((caveat) =>
@@ -3113,6 +3114,7 @@ async function executeRun(
         delivered.status === "delivered" &&
         delivered.kind === "new-repo" &&
         checkpoint.options.demo !== true &&
+        checkpoint.options.newRepo?.createRemote !== false &&
         process.env.FACTORY_DEPLOY_NEW_APPS !== "0"
       ) {
         const gate = qa.passed && testStatus === "passing";

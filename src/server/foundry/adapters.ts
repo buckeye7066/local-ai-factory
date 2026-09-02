@@ -15,6 +15,7 @@ import {
 } from "node:path";
 import { z } from "zod";
 import { getConfig, getSecrets, type AppConfig } from "../config.js";
+import { redactSecrets } from "../security/redact.js";
 import { underWorkTheme } from "../orchestrator/themeBind.js";
 import { createProviderRegistry, type ProviderRegistry } from "../providers/index.js";
 import {
@@ -373,7 +374,7 @@ function safeUrl(value: string, label: string): string {
   return trimSlash(parsed.toString());
 }
 
-function defaultProcessRunner(
+export function defaultProcessRunner(
   executable: string,
   args: string[],
   options: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
@@ -392,13 +393,22 @@ function defaultProcessRunner(
       },
       (error, stdout, stderr) => {
         if (error) {
-          const code = typeof error.code === "number" ? error.code : 1;
+          if (
+            typeof error.code === "number" &&
+            !error.killed &&
+            error.signal == null
+          ) {
+            resolvePromise({
+              stdout: String(stdout),
+              stderr: String(stderr),
+              exitCode: error.code,
+            });
+            return;
+          }
           // Child output can contain provider diagnostics or secret-shaped
-          // environment values. A failed process is recorded generically;
-          // raw stdout/stderr is never copied into the evidence ledger.
-          reject(
-            new Error(`Process exited ${code}. Inspect FlexFactor's local run log.`),
-          );
+          // environment values. Launch and timeout failures are recorded
+          // generically; raw stdout/stderr is never copied into the ledger.
+          reject(new Error("Process could not be launched or timed out."));
           return;
         }
         resolvePromise({
@@ -833,24 +843,47 @@ export class FoundryAdapters {
         String(numberEnv("PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST", 150)),
       );
     }
-    const childEnv = { ...process.env };
+    // The external child receives only process-bootstrap and local-Ollama
+    // settings. It must not inherit Factory Deck, Foundry, GitHub, provider,
+    // publisher, or proxy credentials from the parent service.
+    const childEnv: NodeJS.ProcessEnv = {};
     for (const name of [
-      "ANTHROPIC_API_KEY",
-      "OPENAI_API_KEY",
-      "XAI_API_KEY",
-      "GROK_API_KEY",
-      "OPENROUTER_API_KEY",
-      "PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER",
+      "PATH",
+      "Path",
+      "PATHEXT",
+      "SystemRoot",
+      "SYSTEMROOT",
+      "WINDIR",
+      "COMSPEC",
+      "SYSTEMDRIVE",
+      "HOME",
+      "USERPROFILE",
+      "LOCALAPPDATA",
+      "APPDATA",
+      "PROGRAMDATA",
+      "TMPDIR",
+      "TMP",
+      "TEMP",
+      "LANG",
+      "LC_ALL",
+      "PYTHONIOENCODING",
+      "SSL_CERT_FILE",
+      "REQUESTS_CA_BUNDLE",
+      "OLLAMA_HOST",
+      "OLLAMA_MODELS",
+      "OLLAMA_ORIGINS",
+      "CUDA_VISIBLE_DEVICES",
     ]) {
-      delete childEnv[name];
+      const value = process.env[name];
+      if (value !== undefined) childEnv[name] = value;
     }
     const result = await this.dependencies.processRunner(python, args, {
       cwd: dirname(resolve(script)),
       timeoutMs: numberEnv("PURPOSE_FOUNDRY_FLEXFACTOR_TIMEOUT_MS", 14_400_000),
       env: childEnv,
     });
-    const output = compactOutput(
-      [result.stdout, result.stderr].filter(Boolean).join("\n"),
+    const output = redactSecrets(
+      compactOutput([result.stdout, result.stderr].filter(Boolean).join("\n")),
     );
     const artifact = await this.store.writeArtifact(
       project.id,
@@ -1015,11 +1048,14 @@ export class FoundryAdapters {
   }
 
   private async appStorePublisher(project: FoundryProject): Promise<AdapterOutcome> {
-    const base = safeUrl(
-      process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim() ||
-        "http://127.0.0.1:4000",
-      "App Store Publisher URL",
-    );
+    const configuredUrl =
+      process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim();
+    if (!configuredUrl) {
+      throw new Error(
+        "App Store Publisher is not configured. Set PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL before selecting this station; no request was sent.",
+      );
+    }
+    const base = safeUrl(configuredUrl, "App Store Publisher URL");
     const [health, rawStores, rawPresets, submissions] = await Promise.all([
       this.fetchJson(`${base}/api/health`),
       this.fetchJson(`${base}/api/stores`),

@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("Purpose Foundry intake UI", () => {
-  it("includes configured bays without forcing unconfigured bays", async () => {
+  it("waits for the catalog and includes only explicitly selected specialists", async () => {
     const stations = stationIds.map((id, order) => ({
       id,
       name: id,
@@ -42,10 +42,14 @@ describe("Purpose Foundry intake UI", () => {
     const adapters = stationIds.map((stationId) => ({
       stationId,
       mode: "internal",
-      configured: stationId === "factory-deck" || stationId === "crucible",
+      configured:
+        stationId === "factory-deck" ||
+        stationId === "crucible" ||
+        stationId === "promo-pilot",
       destination: "test",
     }));
     let posted: Record<string, unknown> | null = null;
+    let obsidianPosted: Record<string, unknown> | null = null;
     let projects: unknown[] = [];
 
     vi.stubGlobal(
@@ -76,12 +80,38 @@ describe("Purpose Foundry intake UI", () => {
           projects = [created];
           return json(created, 201);
         }
+        if (url === "/api/foundry/obsidian/import" && init?.method === "POST") {
+          obsidianPosted = JSON.parse(String(init.body)) as Record<string, unknown>;
+          return json(
+            {
+              id: "dfa82a9c-c89d-4ce7-b35f-bf6389900b9f",
+              name: "Obsidian job",
+              status: "draft",
+              constitution: {
+                purpose: "Imported",
+                targetUsers: [],
+                successCriteria: [],
+                constraints: [],
+                nonGoals: [],
+                targets: [],
+              },
+              source: { kind: "obsidian", path: "Obsidian/Purpose Foundry.md" },
+              stations: [],
+              updatedAt: Date.now(),
+            },
+            201,
+          );
+        }
         if (url === "/api/foundry/projects") return json({ projects });
         return json({ error: "not found" }, 404);
       }),
     );
 
     render(<FoundryFloor />);
+
+    expect(
+      screen.getByRole("button", { name: /Release to the line/i }),
+    ).toBeDisabled();
 
     fireEvent.change(await screen.findByLabelText("Job name"), {
       target: { value: "Paid core job" },
@@ -92,6 +122,11 @@ describe("Purpose Foundry intake UI", () => {
     fireEvent.change(screen.getByLabelText("Purpose Foundry provider routing"), {
       target: { value: "paid" },
     });
+    const promoPilot = await screen.findByLabelText("Include promo-pilot");
+    expect(promoPilot).toBeEnabled();
+    fireEvent.click(promoPilot);
+    expect(screen.getByLabelText("Include scout")).toBeDisabled();
+    expect(screen.getByLabelText("Include flexfactor")).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /Release to the line/i }));
 
     await waitFor(() => expect(posted).not.toBeNull());
@@ -99,9 +134,19 @@ describe("Purpose Foundry intake UI", () => {
       name: "Paid core job",
       purpose: "Build and verify the core product",
       routingMode: "paid",
-      selectedStations: ["factory-deck", "crucible"],
+      selectedStations: ["promo-pilot"],
     });
-    expect(posted?.selectedStations).not.toContain("promo-pilot");
+    expect(posted?.selectedStations).not.toContain("factory-deck");
     expect(posted?.selectedStations).not.toContain("app-store-publisher");
+
+    fireEvent.change(screen.getByLabelText("Obsidian note"), {
+      target: { value: "# Obsidian job\nBuild the same product." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Take in note/i }));
+    await waitFor(() => expect(obsidianPosted).not.toBeNull());
+    expect(obsidianPosted).toMatchObject({
+      routingMode: "paid",
+      selectedStations: ["promo-pilot"],
+    });
   });
 });

@@ -37,6 +37,7 @@ const MarkdownImportSchema = z.object({
   markdown: z.string().min(1).max(1_000_000),
   sourcePath: z.string().min(1).max(2_000).default("Obsidian/Purpose Foundry.md"),
   routingMode: RoutingModeSchema.optional(),
+  selectedStations: z.array(StationIdSchema).default([]),
 });
 
 async function deriveProjectStatus(
@@ -336,6 +337,7 @@ export function createFoundryRouter(
         await store.create({
           ...intake,
           routingMode: input.routingMode ?? intake.routingMode,
+          selectedStations: input.selectedStations,
         }),
       );
     }),
