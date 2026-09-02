@@ -136,7 +136,8 @@ describe("Purpose Foundry intake UI", () => {
       (screen.getByLabelText("Include scout") as HTMLInputElement).disabled,
     ).toBe(true);
     expect(
-      (screen.getByLabelText("Include flexfactor") as HTMLInputElement).disabled,
+      (screen.getByLabelText("Include flexfactor") as HTMLInputElement)
+        .disabled,
     ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /Release to the line/i }));
 
@@ -148,7 +149,9 @@ describe("Purpose Foundry intake UI", () => {
       selectedStations: ["promo-pilot"],
     });
     expect(posted.current?.selectedStations).not.toContain("factory-deck");
-    expect(posted.current?.selectedStations).not.toContain("app-store-publisher");
+    expect(posted.current?.selectedStations).not.toContain(
+      "app-store-publisher",
+    );
 
     fireEvent.change(screen.getByLabelText("Obsidian note"), {
       target: { value: "# Obsidian job\nBuild the same product." },
