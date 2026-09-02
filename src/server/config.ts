@@ -40,6 +40,25 @@ function provider(value: string | undefined, fallback: ProviderName): ProviderNa
     : fallback;
 }
 
+export type ModelLadderProvider = "anthropic" | "openai" | "free";
+
+function modelLadder(value: string | undefined): ModelLadderProvider[] {
+  const requested = (value ?? "")
+    .split(/[;,]/)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(
+      (entry): entry is Exclude<ModelLadderProvider, "free"> =>
+        entry === "anthropic" || entry === "openai",
+    );
+  const paid = [...new Set([...requested, "anthropic", "openai"])] as Exclude<
+    ModelLadderProvider,
+    "free"
+  >[];
+  // Free/local rotation is one final rung, never a separate owner-selected
+  // route and never ahead of a configured paid model.
+  return [...paid, "free"];
+}
+
 /**
  * The FREE local route — the FCC proxy that "Claude Code - FREE (Ollama)"
  * turns on. Owner-facing runs select a strict Free or Paid tier; this route is
@@ -76,6 +95,12 @@ export interface AppConfig {
   solModel: string;
   /** Anthropic Fable/Opus-class model used only for independent readiness review. */
   fableOrOpusModel: string;
+  /**
+   * Strongest-to-weakest provider order. Optional only for compatibility with
+   * tests/embedders that construct AppConfig directly.
+   */
+  modelLadder?: ModelLadderProvider[];
+  /** Legacy fields retained for stored configuration compatibility. */
   defaultCodeProvider: ProviderName;
   defaultReviewProvider: ProviderName;
   maxRepairLoops: number;
@@ -145,8 +170,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // may build, but they can never impersonate the required production brains.
     solModel: env.FACTORY_SOL_MODEL || openaiModel,
     fableOrOpusModel: env.FACTORY_FABLE_OR_OPUS_MODEL || anthropicModel,
-    // Legacy callers that omit routingMode inherit these defaults. The UI
-    // submits an explicit Free/Paid tier for every new or extend run.
+    // One route: paid models in explicit strength order, then the strongest
+    // available free/local rotation rung. The env var changes order only; it
+    // cannot create a paid-only or free-only execution path.
+    modelLadder: modelLadder(env.FACTORY_MODEL_LADDER),
+    // Read only for compatibility with older deployments and records.
     defaultCodeProvider: provider(env.DEFAULT_CODE_PROVIDER, "free"),
     defaultReviewProvider: provider(env.DEFAULT_REVIEW_PROVIDER, "free"),
     maxRepairLoops: num(env.MAX_REPAIR_LOOPS, 3),
@@ -249,6 +277,7 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
     fableOrOpusConfigured: brainFloor.fableOrOpusConfigured,
     solModel: brainFloor.solModel,
     fableOrOpusModel: brainFloor.fableOrOpusModel,
+    modelLadder: config.modelLadder ?? ["anthropic", "openai", "free"],
     ownerExternalMatters: "owner-managed-outside-cyberland" as const,
     defaultCodeProvider: config.defaultCodeProvider,
     defaultReviewProvider: config.defaultReviewProvider,
