@@ -2135,24 +2135,53 @@ async function executeRun(
       let testPlan = checkpoint.testPlan?.files.length
         ? checkpoint.testPlan
         : undefined;
-      if (!testPlan) {
-        log("model_call", `Test Writer agent (${review.name})…`);
+      let testAssessment = testPlan
+        ? assessGeneratedTests(spec, testWriterBuild, testPlan)
+        : null;
+      const maxTestDrafts = 3;
+      const firstDraftToGenerate = testPlan ? 2 : 1;
+      for (
+        let draft = firstDraftToGenerate;
+        (!testPlan || (!run.demo && !testAssessment?.ok)) && draft <= maxTestDrafts;
+        draft += 1
+      ) {
+        if (testPlan && testAssessment && !testAssessment.ok) {
+          log(
+            "warning",
+            `Test Writer draft ${draft - 1} failed deterministic validation: ${testAssessment.errors.join("; ")}`,
+            "test_writer",
+          );
+        }
+        log(
+          "model_call",
+          `Test Writer agent (${review.name})${draft > 1 ? ` — corrective draft ${draft}/${maxTestDrafts}` : ""}…`,
+        );
         testPlan = await testWriterAgent({ provider: review }, spec, testWriterBuild, {
           manifestExcerpt:
             repoAnalysis?.manifestExcerpts
               .map((manifest) => `----- ${manifest.path} -----\n${manifest.excerpt}`)
               .join("\n\n") ?? "",
+          validationFeedback: testAssessment?.errors,
+          previousPlan: testPlan,
         });
+        // Persist every paid result before evaluating it so a crash never
+        // replays the call. An invalid checkpointed draft becomes feedback for
+        // the next bounded corrective draft on resume.
+        await checkpointNow({ testPlan });
+        testAssessment = assessGeneratedTests(spec, testWriterBuild, testPlan);
+      }
+      if (!testPlan) {
+        throw new Error("Test Writer did not return a test plan.");
       }
       if (!testPlan.files.length && !run.demo) {
         throw new Error(
           "Test Writer produced no change-specific tests; a live build cannot be verified or delivered.",
         );
       }
-      const testAssessment = assessGeneratedTests(spec, testWriterBuild, testPlan);
+      testAssessment ??= assessGeneratedTests(spec, testWriterBuild, testPlan);
       if (!run.demo && !testAssessment.ok) {
         throw new Error(
-          "Generated acceptance tests are not valid evidence: " +
+          `Generated acceptance tests remained invalid after ${maxTestDrafts} bounded drafts: ` +
             testAssessment.errors.join("; "),
         );
       }
