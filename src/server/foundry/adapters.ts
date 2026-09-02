@@ -55,7 +55,7 @@ function foundryProviderRegistry() {
   );
 }
 
-/** Resolve every Foundry model call through Factory Deck's strict tier contract. */
+/** Resolve every Foundry model call through Factory Deck's shared model ladder. */
 export function createFoundryTierProvider(
   routingMode: RoutingMode | undefined,
   registry: ProviderRegistry,
@@ -808,21 +808,9 @@ export class FoundryAdapters {
     }
     const script = flexfactorDirectedScript();
     const python = process.env.PURPOSE_FOUNDRY_PYTHON?.trim() || "python";
-    const config = this.dependencies.config();
-    const routing = selectRunRouting(
-      { routingMode: project.routingMode },
-      this.dependencies.providerRegistry(),
-      config,
-    );
-    if (routing.routingMode === "paid") {
-      throw new Error(
-        "Paid Purpose Foundry Scout/FlexFactor is blocked: the external child process cannot participate in Factory Deck's per-call paid reservation ledger. Select Free for these stations or run a metered internal station; no untracked paid process was started.",
-      );
-    }
-    // Free is a hard boundary. The child process is always pinned to Ollama;
-    // environment defaults must never promote it to a paid API.
-    const provider = "ollama";
-    const args = [script, mode, "--program", target, "--provider", provider];
+    // FlexFactor owns its own strongest-to-weakest model ladder. Purpose
+    // Foundry deliberately does not pin a provider or create a second route.
+    const args = [script, mode, "--program", target];
     if (mode === "scout") {
       args.push("--top", String(numberEnv("PURPOSE_FOUNDRY_SCOUT_TOP", 8)));
       const rewardsUrl =
@@ -843,9 +831,9 @@ export class FoundryAdapters {
         String(numberEnv("PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST", 150)),
       );
     }
-    // The external child receives only process-bootstrap and local-Ollama
-    // settings. It must not inherit Factory Deck, Foundry, GitHub, provider,
-    // publisher, or proxy credentials from the parent service.
+    // The external child receives only process-bootstrap and local model
+    // settings. FlexFactor may load its own paid credentials and ladder from
+    // its working directory; unrelated Factory/Foundry secrets are not copied.
     const childEnv: NodeJS.ProcessEnv = {};
     for (const name of [
       "PATH",
@@ -900,7 +888,7 @@ export class FoundryAdapters {
       artifacts: [artifact],
       evidence: {
         exitCode: result.exitCode,
-        provider,
+        provider: "flexfactor-orchestrated",
         target,
         outputTail: output.slice(-2_000),
       },
