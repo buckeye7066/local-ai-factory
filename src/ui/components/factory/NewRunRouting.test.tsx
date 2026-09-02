@@ -2,7 +2,13 @@
  * @vitest-environment happy-dom
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { NewRunHero } from "./NewRunHero.js";
 import { api } from "../../lib/api.js";
 import type { Health } from "../../../shared/schemas.js";
@@ -66,7 +72,9 @@ describe("automatic model ladder UI wiring", () => {
       />,
     );
 
-    expect(screen.getByText(/Production admission requires both/i)).toBeTruthy();
+    expect(
+      screen.getByText(/Production admission requires both/i),
+    ).toBeTruthy();
   });
 
   it("shows one ordered ladder and sends only automatic routing", async () => {

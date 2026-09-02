@@ -8,7 +8,8 @@ export const REQUIRED_PRODUCTION_STATIONS = Object.freeze([
   "watchtower",
 ] as const satisfies readonly StationId[]);
 
-export type RequiredProductionStation = (typeof REQUIRED_PRODUCTION_STATIONS)[number];
+export type RequiredProductionStation =
+  (typeof REQUIRED_PRODUCTION_STATIONS)[number];
 
 /**
  * One internal evidence line applies to every project, including records that
@@ -90,7 +91,9 @@ export function evaluateFoundryCompletion(input: {
       blockers.push(`${stationId} has not completed.`);
     }
     if (receipt && evidence.evidenceDigest !== receipt.evidenceDigest) {
-      blockers.push(`${stationId} evidence does not match the Factory Deck digest.`);
+      blockers.push(
+        `${stationId} evidence does not match the Factory Deck digest.`,
+      );
     }
   }
 
@@ -109,7 +112,12 @@ export function evaluateFoundryCompletion(input: {
   const failed = input.stations.some((station) => station.status === "failed");
   return {
     completed: blockers.length === 0,
-    status: blockers.length === 0 ? "completed" : failed ? "failed" : "needs_attention",
+    status:
+      blockers.length === 0
+        ? "completed"
+        : failed
+          ? "failed"
+          : "needs_attention",
     blockers,
   };
 }

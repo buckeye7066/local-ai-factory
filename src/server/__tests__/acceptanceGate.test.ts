@@ -138,7 +138,10 @@ describe("assessGeneratedTests", () => {
 
   it("rejects missing, unknown, and mismatched machine-readable coverage", () => {
     expect(
-      assessGeneratedTests(spec, uiBuild, { ...plan(validJourney), coverage: [] }).ok,
+      assessGeneratedTests(spec, uiBuild, {
+        ...plan(validJourney),
+        coverage: [],
+      }).ok,
     ).toBe(false);
     const bad = plan(validJourney, undefined, undefined, [
       {
@@ -150,11 +153,15 @@ describe("assessGeneratedTests", () => {
     ]);
     const result = assessGeneratedTests(spec, uiBuild, bad);
     expect(result.ok).toBe(false);
-    expect(result.errors.join("\n")).toMatch(/unknown coverage|no mapped test/i);
+    expect(result.errors.join("\n")).toMatch(
+      /unknown coverage|no mapped test/i,
+    );
   });
 
   it("accepts a mapped Playwright save/reload journey", () => {
-    expect(assessGeneratedTests(spec, uiBuild, plan(validJourney))).toMatchObject({
+    expect(
+      assessGeneratedTests(spec, uiBuild, plan(validJourney)),
+    ).toMatchObject({
       ok: true,
       uiAcceptanceRequired: true,
       browserTestPaths: ["tests/profile.spec.ts"],
@@ -273,7 +280,8 @@ describe("assessGeneratedTests", () => {
         {
           path: "tests/calculator_test.py",
           purpose: "unit",
-          contents: "def test_add():\n    result = add(1, 2)\n    assert result == 3\n",
+          contents:
+            "def test_add():\n    result = add(1, 2)\n    assert result == 3\n",
         },
       ],
     };

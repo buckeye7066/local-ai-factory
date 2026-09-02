@@ -63,7 +63,13 @@ type StationRun = {
 type FoundryProject = {
   id: string;
   name: string;
-  status: "draft" | "queued" | "running" | "needs_attention" | "completed" | "failed";
+  status:
+    | "draft"
+    | "queued"
+    | "running"
+    | "needs_attention"
+    | "completed"
+    | "failed";
   routingMode?: "auto" | "free" | "paid";
   constitution: {
     purpose: string;
@@ -118,7 +124,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
     throw new Error(body.error ?? `HTTP ${response.status}`);
   }
   return response.json() as Promise<T>;
@@ -143,10 +151,14 @@ function Field({
 }) {
   return (
     <label className="block">
-      <Stencil className="mb-1.5 block text-[9px] text-plant-paint/60">{label}</Stencil>
+      <Stencil className="mb-1.5 block text-[9px] text-plant-paint/60">
+        {label}
+      </Stencil>
       {children}
       {hint && (
-        <span className="mt-1 block text-[10px] text-plant-paint/40">{hint}</span>
+        <span className="mt-1 block text-[10px] text-plant-paint/40">
+          {hint}
+        </span>
       )}
     </label>
   );
@@ -304,15 +316,18 @@ export function FoundryFloor() {
     if (!catalogReady || !obsidianNote.trim()) return;
     setBusy(true);
     try {
-      const created = await request<FoundryProject>("/api/foundry/obsidian/import", {
-        method: "POST",
-        body: JSON.stringify({
-          markdown: obsidianNote,
-          sourcePath: "Obsidian/Purpose Foundry.md",
-          routingMode: "auto",
-          selectedStations: intakeStations,
-        }),
-      });
+      const created = await request<FoundryProject>(
+        "/api/foundry/obsidian/import",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            markdown: obsidianNote,
+            sourcePath: "Obsidian/Purpose Foundry.md",
+            routingMode: "auto",
+            selectedStations: intakeStations,
+          }),
+        },
+      );
       setObsidianNote("");
       setActiveId(created.id);
       await refresh();
@@ -351,7 +366,9 @@ export function FoundryFloor() {
     if (!active) return;
     setBusy(true);
     try {
-      await request(`/api/foundry/projects/${active.id}/start`, { method: "POST" });
+      await request(`/api/foundry/projects/${active.id}/start`, {
+        method: "POST",
+      });
       await refresh();
       toast.success("Line started", { description: active.name });
     } catch (error) {
@@ -367,9 +384,12 @@ export function FoundryFloor() {
     if (!active) return;
     setBusy(true);
     try {
-      await request(`/api/foundry/projects/${active.id}/stations/${stationId}/run`, {
-        method: "POST",
-      });
+      await request(
+        `/api/foundry/projects/${active.id}/stations/${stationId}/run`,
+        {
+          method: "POST",
+        },
+      );
       await refresh();
       toast.success("Bay restarted");
     } catch (error) {
@@ -479,8 +499,9 @@ export function FoundryFloor() {
                   aria-label="Purpose Foundry model routing"
                   className="rounded-[3px] border border-plant-edge bg-plant-night/80 px-3 py-2 text-xs leading-5 text-plant-paint/75"
                 >
-                  Strongest configured paid model → weaker paid models → free/local
-                  fallback. Exhausted rungs stay demoted while the line runs.
+                  Strongest configured paid model → weaker paid models →
+                  free/local fallback. Exhausted rungs stay demoted while the
+                  line runs.
                 </div>
               </Field>
               <Field
@@ -600,7 +621,9 @@ export function FoundryFloor() {
           {/* Job tickets waiting on the dock */}
           <SteelPanel>
             <div className="flex items-center justify-between border-b border-plant-edge/70 px-4 py-2.5">
-              <Stencil className="text-[10px] text-plant-paint/70">Job tickets</Stencil>
+              <Stencil className="text-[10px] text-plant-paint/70">
+                Job tickets
+              </Stencil>
               <span className="font-mono text-[11px] tabular-nums text-plant-safety/80">
                 {String(projects.length).padStart(2, "0")}
               </span>
@@ -623,8 +646,8 @@ export function FoundryFloor() {
                       {project.name}
                     </span>
                     <Stencil className="mt-0.5 block text-[8px] text-plant-paint/45">
-                      {project.status.replace("_", " ")} ·{" "}
-                      automatic model ladder
+                      {project.status.replace("_", " ")} · automatic model
+                      ladder
                     </Stencil>
                   </span>
                 </button>
@@ -658,17 +681,18 @@ export function FoundryFloor() {
                     "Pick a job ticket to see every bay and handoff."}
                 </p>
               </div>
-              {active && (active.status === "draft" || active.status === "queued") && (
-                <PlantButton
-                  variant="line"
-                  size="sm"
-                  loading={busy}
-                  onClick={startProject}
-                  icon={<Play className="h-3.5 w-3.5" />}
-                >
-                  Start the line
-                </PlantButton>
-              )}
+              {active &&
+                (active.status === "draft" || active.status === "queued") && (
+                  <PlantButton
+                    variant="line"
+                    size="sm"
+                    loading={busy}
+                    onClick={startProject}
+                    icon={<Play className="h-3.5 w-3.5" />}
+                  >
+                    Start the line
+                  </PlantButton>
+                )}
             </div>
 
             <div className="px-5 pb-5 pt-3">
@@ -736,7 +760,9 @@ export function FoundryFloor() {
 
                       <div className="relative mt-2 flex items-center justify-between text-[10px] text-plant-paint/40">
                         <span>
-                          {station.standalone ? "Runs standalone" : "Foundry only"}
+                          {station.standalone
+                            ? "Runs standalone"
+                            : "Foundry only"}
                         </span>
                         {run?.attempt ? (
                           <span className="font-mono tabular-nums">
@@ -785,7 +811,9 @@ export function FoundryFloor() {
             <div className="grid gap-4 md:grid-cols-3">
               <SteelPanel className="md:col-span-2">
                 <div className="border-b border-plant-edge/70 px-4 py-2.5">
-                  <Stencil className="text-[10px] text-white">Build sheet</Stencil>
+                  <Stencil className="text-[10px] text-white">
+                    Build sheet
+                  </Stencil>
                 </div>
                 <div className="grid gap-4 p-4 text-xs text-plant-paint/70 md:grid-cols-2">
                   <div>
@@ -821,12 +849,14 @@ export function FoundryFloor() {
 
               <SteelPanel>
                 <div className="border-b border-plant-edge/70 px-4 py-2.5">
-                  <Stencil className="text-[10px] text-white">Quality gate</Stencil>
+                  <Stencil className="text-[10px] text-white">
+                    Quality gate
+                  </Stencil>
                 </div>
                 <p className="p-4 text-[11px] leading-5 text-plant-paint/70">
-                  Every bay writes its result to a hash-chained ledger. A bay cannot
-                  overwrite the Crucible&apos;s findings, and no bay treats its own
-                  output as proof of readiness.
+                  Every bay writes its result to a hash-chained ledger. A bay
+                  cannot overwrite the Crucible&apos;s findings, and no bay
+                  treats its own output as proof of readiness.
                 </p>
               </SteelPanel>
             </div>

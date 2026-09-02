@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +22,11 @@ import {
   EXTEND_PERSISTENCE_CONTRACT,
   withExtendPersistenceGoals,
 } from "../orchestrator/composeExtendIdea.js";
-import { FoundryStore, STATIONS, intakeFromMarkdown } from "../foundry/model.js";
+import {
+  FoundryStore,
+  STATIONS,
+  intakeFromMarkdown,
+} from "../foundry/model.js";
 import { loadConfig } from "../config.js";
 import type { ProviderRegistry } from "../providers/index.js";
 import type { LLMProvider } from "../../shared/types.js";
@@ -23,13 +34,16 @@ import type { ProviderName } from "../../shared/schemas.js";
 import { resetPaidBudget } from "../providers/paidBudget.js";
 
 function providerRegistry(providers: LLMProvider[]): ProviderRegistry {
-  const byName = new Map(providers.map((provider) => [provider.name, provider]));
+  const byName = new Map(
+    providers.map((provider) => [provider.name, provider]),
+  );
   const missing = (name: ProviderName) =>
     ({ name, isConfigured: () => false }) as LLMProvider;
   const get = (name: ProviderName) => byName.get(name) ?? missing(name);
   const configured = providers.map((provider) => provider.name);
   const paid = configured.filter(
-    (name): name is "anthropic" | "openai" => name === "anthropic" || name === "openai",
+    (name): name is "anthropic" | "openai" =>
+      name === "anthropic" || name === "openai",
   );
   return {
     get,
@@ -43,7 +57,10 @@ function providerRegistry(providers: LLMProvider[]): ProviderRegistry {
   };
 }
 
-function callable(name: ProviderName, fail = false): LLMProvider & { calls: number } {
+function callable(
+  name: ProviderName,
+  fail = false,
+): LLMProvider & { calls: number } {
   const provider = {
     name,
     calls: 0,
@@ -130,7 +147,12 @@ describe("Purpose Foundry", () => {
       FACTORY_FREE_ENABLED: "true",
       FACTORY_MODEL_LADDER: "openai",
     });
-    const selected = createFoundryTierProvider("free", registry, config, "review");
+    const selected = createFoundryTierProvider(
+      "free",
+      registry,
+      config,
+      "review",
+    );
 
     await expect(
       selected.provider.generateText({ system: "", prompt: "" }),
@@ -159,7 +181,12 @@ describe("Purpose Foundry", () => {
         FACTORY_FREE_ENABLED: "true",
         FACTORY_MODEL_LADDER: "openai",
       });
-      const selected = createFoundryTierProvider("paid", registry, config, "review");
+      const selected = createFoundryTierProvider(
+        "paid",
+        registry,
+        config,
+        "review",
+      );
 
       await expect(
         selected.provider.generateText({ system: "", prompt: "" }),
@@ -169,7 +196,8 @@ describe("Purpose Foundry", () => {
     } finally {
       if (previousDir === undefined) delete process.env.FACTORY_DATA_DIR;
       else process.env.FACTORY_DATA_DIR = previousDir;
-      if (previousDay === undefined) delete process.env.FACTORY_PAID_RESCUES_PER_DAY;
+      if (previousDay === undefined)
+        delete process.env.FACTORY_PAID_RESCUES_PER_DAY;
       else process.env.FACTORY_PAID_RESCUES_PER_DAY = previousDay;
       resetPaidBudget();
     }
@@ -310,7 +338,9 @@ describe("Purpose Foundry", () => {
       });
 
       const descriptors = adapters.descriptors();
-      const scout = descriptors.find((descriptor) => descriptor.stationId === "scout");
+      const scout = descriptors.find(
+        (descriptor) => descriptor.stationId === "scout",
+      );
       const flexfactor = descriptors.find(
         (descriptor) => descriptor.stationId === "flexfactor",
       );
@@ -341,7 +371,9 @@ describe("Purpose Foundry", () => {
         },
       });
       const failureOutput = await readFile(failure.artifacts[0], "utf8");
-      expect(failureOutput).not.toContain("factory-secret-must-not-reach-child");
+      expect(failureOutput).not.toContain(
+        "factory-secret-must-not-reach-child",
+      );
       expect(failureOutput).not.toContain("promo-secret-must-not-reach-child");
       expect(JSON.stringify(failure.evidence)).not.toContain(
         "factory-secret-must-not-reach-child",
@@ -358,7 +390,8 @@ describe("Purpose Foundry", () => {
       else process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER = previousProvider;
       if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = previousOpenAiKey;
-      if (previousAuthToken === undefined) delete process.env.FACTORY_AUTH_TOKEN;
+      if (previousAuthToken === undefined)
+        delete process.env.FACTORY_AUTH_TOKEN;
       else process.env.FACTORY_AUTH_TOKEN = previousAuthToken;
       if (previousPromoToken === undefined)
         delete process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN;
@@ -382,11 +415,9 @@ describe("Purpose Foundry", () => {
       exitCode: 7,
     });
     await expect(
-      defaultProcessRunner(
-        `missing-foundry-process-${Date.now()}`,
-        [],
-        { timeoutMs: 1_000 },
-      ),
+      defaultProcessRunner(`missing-foundry-process-${Date.now()}`, [], {
+        timeoutMs: 1_000,
+      }),
     ).rejects.toThrow(/could not be launched/i);
   });
 
@@ -400,8 +431,9 @@ describe("Purpose Foundry", () => {
       ),
       routingMode: "paid",
     });
-    project.stations.find((station) => station.stationId === "flexfactor")!.status =
-      "queued";
+    project.stations.find(
+      (station) => station.stationId === "flexfactor",
+    )!.status = "queued";
     let processCalls = 0;
     const adapters = new FoundryAdapters(store, {
       config: () =>
@@ -410,14 +442,17 @@ describe("Purpose Foundry", () => {
           DEFAULT_CODE_PROVIDER: "free",
           DEFAULT_REVIEW_PROVIDER: "free",
         }),
-      providerRegistry: () => providerRegistry([callable("free"), callable("openai")]),
+      providerRegistry: () =>
+        providerRegistry([callable("free"), callable("openai")]),
       processRunner: async () => {
         processCalls += 1;
         return { stdout: "completed", stderr: "", exitCode: 0 };
       },
     });
 
-    await expect(adapters.execute(project, "flexfactor")).resolves.toMatchObject({
+    await expect(
+      adapters.execute(project, "flexfactor"),
+    ).resolves.toMatchObject({
       status: "completed",
       evidence: { provider: "flexfactor-orchestrated" },
     });
@@ -439,13 +474,18 @@ describe("Purpose Foundry", () => {
     expect(project.stations).toHaveLength(STATIONS.length);
     expect(project.stations[0].stationId).toBe("scout");
     expect(
-      project.stations.findIndex((station) => station.stationId === "factory-deck"),
+      project.stations.findIndex(
+        (station) => station.stationId === "factory-deck",
+      ),
     ).toBeGreaterThan(
-      project.stations.findIndex((station) => station.stationId === "promo-pilot"),
+      project.stations.findIndex(
+        (station) => station.stationId === "promo-pilot",
+      ),
     );
     for (const stationId of ["factory-deck", "crucible", "watchtower"]) {
       expect(
-        project.stations.find((station) => station.stationId === stationId)?.status,
+        project.stations.find((station) => station.stationId === stationId)
+          ?.status,
       ).toBe("queued");
     }
     for (const stationId of [
@@ -456,7 +496,8 @@ describe("Purpose Foundry", () => {
       "app-store-publisher",
     ]) {
       expect(
-        project.stations.find((station) => station.stationId === stationId)?.status,
+        project.stations.find((station) => station.stationId === stationId)
+          ?.status,
       ).toBe("not_selected");
     }
   });
@@ -478,7 +519,10 @@ describe("Purpose Foundry", () => {
     const lines = (await readFile(join(root, "evidence.jsonl"), "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { hash: string; previousHash: string | null });
+      .map(
+        (line) =>
+          JSON.parse(line) as { hash: string; previousHash: string | null },
+      );
     expect(lines).toHaveLength(2);
     expect(lines[1].previousHash).toBe(lines[0].hash);
   });
@@ -513,7 +557,9 @@ describe("Purpose Foundry", () => {
     expect(lines).toHaveLength(13);
     lines.forEach((event, index) => {
       expect(event.sequence).toBe(index + 1);
-      expect(event.previousHash).toBe(index === 0 ? null : lines[index - 1].hash);
+      expect(event.previousHash).toBe(
+        index === 0 ? null : lines[index - 1].hash,
+      );
     });
   });
 
@@ -547,7 +593,9 @@ describe("Purpose Foundry", () => {
     const first = await store.importObsidianInbox(inbox);
     const second = await store.importObsidianInbox(inbox);
     expect(first.imported).toBe(1);
-    expect(first.errors.some((error) => error.startsWith("outside.md:"))).toBe(true);
+    expect(first.errors.some((error) => error.startsWith("outside.md:"))).toBe(
+      true,
+    );
     expect(second.imported).toBe(0);
     expect(second.unchanged).toBe(1);
     expect(await store.list()).toHaveLength(1);
@@ -584,10 +632,13 @@ describe("Purpose Foundry", () => {
     const adapters = new FoundryAdapters(store, {
       fetch: async (_url, init) => {
         posted = JSON.parse(String(init?.body));
-        return new Response(JSON.stringify({ results: [{ name: "useful/repo" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ results: [{ name: "useful/repo" }] }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
       },
     });
     const outcome = await adapters.execute(project, "repo-rewards");
@@ -603,7 +654,9 @@ describe("Purpose Foundry", () => {
       store.writeArtifact(project.id, "repo-rewards", "../escape.json", {}),
     ).rejects.toThrow("Invalid artifact filename");
 
-    const outside = await mkdtemp(join(tmpdir(), "purpose-foundry-artifact-outside-"));
+    const outside = await mkdtemp(
+      join(tmpdir(), "purpose-foundry-artifact-outside-"),
+    );
     const stationParent = join(root, "artifacts", project.id);
     await mkdir(stationParent, { recursive: true });
     await symlink(outside, join(stationParent, "watchtower"), "dir");
@@ -684,7 +737,9 @@ describe("Purpose Foundry", () => {
           let body: Record<string, unknown>;
           if (path === "/api/stores") {
             body = {
-              stores: [{ id: "google_play", label: "Google Play", configured: true }],
+              stores: [
+                { id: "google_play", label: "Google Play", configured: true },
+              ],
             };
           } else if (path === "/api/presets") {
             body = {
@@ -754,7 +809,9 @@ describe("Purpose Foundry", () => {
         submittedStores: 1,
       });
       expect(calls).toContain("POST /api/upload");
-      expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(2);
+      expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(
+        2,
+      );
     }
   });
 });

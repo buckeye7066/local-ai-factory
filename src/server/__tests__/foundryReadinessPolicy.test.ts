@@ -40,9 +40,7 @@ describe("Purpose Foundry mandatory production path", () => {
   });
 
   it("allows configured child orchestrators as optional automatic stations", () => {
-    expect(
-      normalizeFoundryStations(["scout", "flexfactor"], "auto"),
-    ).toEqual([
+    expect(normalizeFoundryStations(["scout", "flexfactor"], "auto")).toEqual([
       "factory-deck",
       "crucible",
       "watchtower",
@@ -90,7 +88,9 @@ describe("Purpose Foundry mandatory production path", () => {
       stations,
     });
     expect(decision.completed).toBe(false);
-    expect(decision.blockers.join(" ")).toMatch(/crucible evidence does not match/i);
+    expect(decision.blockers.join(" ")).toMatch(
+      /crucible evidence does not match/i,
+    );
   });
 
   it("requires one exact delivered revision across the mandatory stations", () => {
@@ -104,7 +104,9 @@ describe("Purpose Foundry mandatory production path", () => {
       stations,
     });
     expect(decision.completed).toBe(false);
-    expect(decision.blockers.join(" ")).toMatch(/one exact delivered revision/i);
+    expect(decision.blockers.join(" ")).toMatch(
+      /one exact delivered revision/i,
+    );
   });
 
   it("completes only when receipt, digest, revision, and station outcomes converge", () => {

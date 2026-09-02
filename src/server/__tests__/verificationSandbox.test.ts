@@ -79,9 +79,7 @@ describe("generated-code verification sandbox", () => {
       `type=bind,src=${workspace},dst=/workspace`,
       `type=bind,src=${stateRoot},dst=/sandbox-state`,
     ]);
-    expect(mounts.every((mount) => !/(?:^|,)rw(?:,|$)/.test(mount))).toBe(
-      true,
-    );
+    expect(mounts.every((mount) => !/(?:^|,)rw(?:,|$)/.test(mount))).toBe(true);
 
     const imageIndex = plan.dockerArgs.indexOf(image);
     expect(plan.dockerArgs.slice(imageIndex)).toEqual([image, "pnpm", "test"]);

@@ -92,12 +92,13 @@ export function NewRunHero({
           Local AI Software Factory
         </Badge>
         <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
-          Build apps through an <span className="text-aurora">AI assembly line</span>
+          Build apps through an{" "}
+          <span className="text-aurora">AI assembly line</span>
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-pretty text-sm leading-relaxed text-slate-400 sm:text-base">
-          Planner, architect, builder, tester, critic, and repair agents work together
-          through one orchestrated model ladder, strongest paid first and free/local
-          last.
+          Planner, architect, builder, tester, critic, and repair agents work
+          together through one orchestrated model ladder, strongest paid first
+          and free/local last.
         </p>
       </motion.div>
 
@@ -137,9 +138,10 @@ export function NewRunHero({
             <span>
               <span className="font-medium text-white">Publish this app</span>
               <span className="block text-xs text-slate-400">
-                List the finished app in your Axiom BioLabs app store and let PromoPilot
-                promote it. Uncheck for something that is just for you - it still gets
-                built, saved to GitHub, and hosted, but never listed or promoted.
+                List the finished app in your Axiom BioLabs app store and let
+                PromoPilot promote it. Uncheck for something that is just for
+                you - it still gets built, saved to GitHub, and hosted, but
+                never listed or promoted.
               </span>
             </span>
           </label>
@@ -297,8 +299,8 @@ function NewAppPanel({
           ) : nameCheck.availability === "free" ? (
             <span className="inline-flex items-center gap-1.5 text-emerald-300">
               <GitBranch className="h-3 w-3" />
-              Will create {nameCheck.fullName} (private) and push the finished work
-              there.
+              Will create {nameCheck.fullName} (private) and push the finished
+              work there.
             </span>
           ) : nameCheck.availability === "unknown" && nameCheck.reason ? (
             <span className="text-amber-300">{nameCheck.reason}</span>
@@ -342,7 +344,10 @@ function NewAppPanel({
             extend mode) */}
         <div className="mt-5 space-y-2">
           {!admissionReady && (
-            <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
+            <Helper
+              tone="amber"
+              icon={<TriangleAlert className="h-3.5 w-3.5" />}
+            >
               Production admission requires both the OpenAI Sol and Anthropic
               Fable/Opus credentials. The free/local rung can finish work after
               paid exhaustion, but it cannot issue the readiness receipt.
@@ -391,10 +396,12 @@ function Helper({
     <div
       className={cn(
         "flex items-start gap-2 rounded-xl border px-3 py-2 text-xs leading-relaxed",
-        tone === "amber" && "border-amber-400/25 bg-amber-400/[0.06] text-amber-200",
+        tone === "amber" &&
+          "border-amber-400/25 bg-amber-400/[0.06] text-amber-200",
         tone === "violet" &&
           "border-aurora-violet/25 bg-aurora-violet/[0.06] text-violet-200",
-        tone === "cyan" && "border-aurora-cyan/25 bg-aurora-cyan/[0.06] text-cyan-100",
+        tone === "cyan" &&
+          "border-aurora-cyan/25 bg-aurora-cyan/[0.06] text-cyan-100",
       )}
     >
       <span className="mt-0.5 shrink-0">{icon}</span>

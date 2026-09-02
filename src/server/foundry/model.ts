@@ -55,7 +55,8 @@ export const STATIONS: StationDefinition[] = [
     id: "repo-rewards",
     name: "Repo Rewards",
     department: "Discovery Wing",
-    purpose: "Find and evaluate reusable open-source repositories and components.",
+    purpose:
+      "Find and evaluate reusable open-source repositories and components.",
     standalone: true,
     order: 20,
     color: "violet",
@@ -64,7 +65,8 @@ export const STATIONS: StationDefinition[] = [
     id: "promo-pilot",
     name: "PromoPilot",
     department: "Market Laboratory",
-    purpose: "Supply market, campaign, attribution, and advertisement evidence.",
+    purpose:
+      "Supply market, campaign, attribution, and advertisement evidence.",
     standalone: true,
     order: 30,
     color: "amber",
@@ -83,7 +85,8 @@ export const STATIONS: StationDefinition[] = [
     id: "flexfactor",
     name: "FlexFactor",
     department: "Engineering Floor",
-    purpose: "Inspect, improve, test, repair, and align implementation with purpose.",
+    purpose:
+      "Inspect, improve, test, repair, and align implementation with purpose.",
     standalone: true,
     order: 50,
     color: "emerald",
@@ -92,7 +95,8 @@ export const STATIONS: StationDefinition[] = [
     id: "crucible",
     name: "The Crucible",
     department: "Adversarial Chamber",
-    purpose: "Assume the work is wrong and independently try to disprove readiness.",
+    purpose:
+      "Assume the work is wrong and independently try to disprove readiness.",
     standalone: false,
     order: 60,
     color: "rose",
@@ -119,24 +123,23 @@ export const STATIONS: StationDefinition[] = [
 ];
 
 const StringListSchema = z.array(z.string().trim().min(1)).max(50).default([]);
-export const FoundryIntakeSchema = z
-  .object({
-    name: z.string().trim().min(1).max(120),
-    purpose: z.string().trim().min(1).max(20_000),
-    targetUsers: StringListSchema,
-    successCriteria: StringListSchema,
-    constraints: StringListSchema,
-    nonGoals: StringListSchema,
-    targets: StringListSchema,
-    source: z.enum(["manual", "obsidian", "api"]).default("manual"),
-    sourcePath: z.string().trim().max(2_000).nullable().default(null),
-    sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
-    /** Legacy clients may send free/paid; FoundryStore normalizes all new work. */
-    routingMode: RoutingModeSchema.optional(),
-    // Omitted means the smallest production line for the automatic route.
-    // Optional specialist bays run only when the caller explicitly selects them.
-    selectedStations: z.array(StationIdSchema).default([]),
-  });
+export const FoundryIntakeSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  purpose: z.string().trim().min(1).max(20_000),
+  targetUsers: StringListSchema,
+  successCriteria: StringListSchema,
+  constraints: StringListSchema,
+  nonGoals: StringListSchema,
+  targets: StringListSchema,
+  source: z.enum(["manual", "obsidian", "api"]).default("manual"),
+  sourcePath: z.string().trim().max(2_000).nullable().default(null),
+  sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
+  /** Legacy clients may send free/paid; FoundryStore normalizes all new work. */
+  routingMode: RoutingModeSchema.optional(),
+  // Omitted means the smallest production line for the automatic route.
+  // Optional specialist bays run only when the caller explicitly selects them.
+  selectedStations: z.array(StationIdSchema).default([]),
+});
 export type FoundryIntake = z.infer<typeof FoundryIntakeSchema>;
 
 export const StationRunStatusSchema = z.enum([
@@ -388,7 +391,8 @@ export class FoundryStore {
       );
       if (
         existing &&
-        existing.source.contentHash === hashText(input.sourceMarkdown ?? input.purpose)
+        existing.source.contentHash ===
+          hashText(input.sourceMarkdown ?? input.purpose)
       )
         return existing;
     }
@@ -412,7 +416,9 @@ export class FoundryStore {
       source: {
         kind: input.source,
         path: input.sourcePath,
-        contentHash: input.sourceMarkdown ? hashText(input.sourceMarkdown) : null,
+        contentHash: input.sourceMarkdown
+          ? hashText(input.sourceMarkdown)
+          : null,
       },
       stations: STATIONS.map((station) => ({
         stationId: station.id,
@@ -433,7 +439,9 @@ export class FoundryStore {
       source: project.source,
       constitution: project.constitution,
       routingMode: project.routingMode ?? "legacy-default",
-      requiredProductionStations: requiredProductionStations(project.routingMode),
+      requiredProductionStations: requiredProductionStations(
+        project.routingMode,
+      ),
       blockedUnmeteredStations: [],
     });
     return project;
@@ -441,7 +449,10 @@ export class FoundryStore {
 
   async save(project: FoundryProject): Promise<void> {
     await this.ready();
-    const parsed = FoundryProjectSchema.parse({ ...project, updatedAt: Date.now() });
+    const parsed = FoundryProjectSchema.parse({
+      ...project,
+      updatedAt: Date.now(),
+    });
     const target = this.projectPath(parsed.id);
     const temporary = `${target}.${randomUUID()}.tmp`;
     await writeFile(temporary, `${JSON.stringify(parsed, null, 2)}\n`, {
@@ -457,7 +468,8 @@ export class FoundryStore {
     type: string,
     payload: unknown,
   ): Promise<EvidenceEvent> {
-    const previousWrite = ledgerWriteQueues.get(this.ledgerPath) ?? Promise.resolve();
+    const previousWrite =
+      ledgerWriteQueues.get(this.ledgerPath) ?? Promise.resolve();
     const write = previousWrite.then(() =>
       this.appendEvidenceUnlocked(projectId, stationId, type, payload),
     );
@@ -486,7 +498,8 @@ export class FoundryStore {
         .trim()
         .split("\n")
         .filter(Boolean);
-      if (lines.length) previous = JSON.parse(lines[lines.length - 1]) as EvidenceEvent;
+      if (lines.length)
+        previous = JSON.parse(lines[lines.length - 1]) as EvidenceEvent;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -515,7 +528,8 @@ export class FoundryStore {
   ): Promise<{ imported: number; unchanged: number; errors: string[] }> {
     const root = resolve(inbox);
     const info = await stat(root);
-    if (!info.isDirectory()) throw new Error("Obsidian inbox is not a directory.");
+    if (!info.isDirectory())
+      throw new Error("Obsidian inbox is not a directory.");
     let imported = 0;
     let unchanged = 0;
     const errors: string[] = [];
@@ -523,11 +537,15 @@ export class FoundryStore {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.name.toLowerCase().endsWith(".md")) continue;
       if (!entry.isFile() || entry.isSymbolicLink()) {
-        errors.push(`${entry.name}: symbolic links and non-files are not imported`);
+        errors.push(
+          `${entry.name}: symbolic links and non-files are not imported`,
+        );
         continue;
       }
       const path = resolve(root, entry.name);
-      if (!path.startsWith(`${root}${process.platform === "win32" ? "\\" : "/"}`))
+      if (
+        !path.startsWith(`${root}${process.platform === "win32" ? "\\" : "/"}`)
+      )
         continue;
       try {
         const markdown = await readFile(path, "utf8");

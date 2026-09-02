@@ -255,7 +255,12 @@ export function isHoldActive(): boolean {
   state.holdUntilMonotonic = 0;
   state.holdUntil = null;
   state.holdActive = false;
-  pushEvent("hold-expired", null, "free", "hold window lapsed; re-probing free route");
+  pushEvent(
+    "hold-expired",
+    null,
+    "free",
+    "hold window lapsed; re-probing free route",
+  );
   return false;
 }
 
@@ -289,7 +294,11 @@ export function noteFailover(
 export function noteServed(provider: ProviderName): void {
   const previous = state.serving;
   state.serving = provider;
-  if (provider === "free" || provider === "anthropic" || provider === "openai") {
+  if (
+    provider === "free" ||
+    provider === "anthropic" ||
+    provider === "openai"
+  ) {
     state.counts[provider] += 1;
   }
   if (provider === "free" && previous !== null && previous !== "free") {
@@ -318,7 +327,12 @@ export function noteProxyProbe(up: boolean): void {
   state.proxyUp = up;
   state.proxyLastProbeAt = Date.now();
   if (was === true && up === false) {
-    pushEvent("proxy-down", "free", null, "fcc-server /health stopped answering");
+    pushEvent(
+      "proxy-down",
+      "free",
+      null,
+      "fcc-server /health stopped answering",
+    );
   }
 }
 
@@ -546,7 +560,8 @@ export async function probeLiveness(
 
   const adminStatus =
     admin?.ok && admin.body && typeof admin.body === "object"
-      ? (((admin.body as { status?: unknown }).status as string | undefined) ?? null)
+      ? (((admin.body as { status?: unknown }).status as string | undefined) ??
+        null)
       : null;
 
   const loaded: string[] = [];
@@ -563,8 +578,10 @@ export async function probeLiveness(
 
   const aliveSignals: string[] = [];
   if (proxyHealth === true) aliveSignals.push("proxy /health ok");
-  if (adminStatus === "running") aliveSignals.push("proxy admin status=running");
-  if (loaded.length > 0) aliveSignals.push(`ollama resident: ${loaded.join(",")}`);
+  if (adminStatus === "running")
+    aliveSignals.push("proxy admin status=running");
+  if (loaded.length > 0)
+    aliveSignals.push(`ollama resident: ${loaded.join(",")}`);
 
   // "dead" requires every probe to have returned a definite negative — an
   // unreachable socket or a non-2xx. If we merely failed to interpret a probe,
@@ -718,7 +735,12 @@ async function doRestart(baseUrl: string): Promise<boolean> {
     await sleep(RESTART_POLL_MS);
     if (await probeProxyHealth(baseUrl)) {
       state.proxyRestarts += 1;
-      pushEvent("proxy-restart", null, "free", "fcc-server restarted and healthy");
+      pushEvent(
+        "proxy-restart",
+        null,
+        "free",
+        "fcc-server restarted and healthy",
+      );
       return true;
     }
   }

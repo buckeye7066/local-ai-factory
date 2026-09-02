@@ -95,11 +95,11 @@ function containsExpectCall(node: ts.Node): ts.CallExpression | null {
 function isPrimitiveLiteral(node: ts.Expression | undefined): boolean {
   return Boolean(
     node &&
-    (ts.isStringLiteralLike(node) ||
-      ts.isNumericLiteral(node) ||
-      node.kind === ts.SyntaxKind.TrueKeyword ||
-      node.kind === ts.SyntaxKind.FalseKeyword ||
-      node.kind === ts.SyntaxKind.NullKeyword),
+      (ts.isStringLiteralLike(node) ||
+        ts.isNumericLiteral(node) ||
+        node.kind === ts.SyntaxKind.TrueKeyword ||
+        node.kind === ts.SyntaxKind.FalseKeyword ||
+        node.kind === ts.SyntaxKind.NullKeyword),
   );
 }
 
@@ -132,7 +132,8 @@ function analyzeCallback(
 
     const expectCall = containsExpectCall(call.expression);
     if (name && ASSERT_METHOD.test(name) && expectCall) {
-      if (!isPrimitiveLiteral(expectCall.arguments[0])) meaningfulAssertion = true;
+      if (!isPrimitiveLiteral(expectCall.arguments[0]))
+        meaningfulAssertion = true;
       return;
     }
     if (
@@ -239,10 +240,17 @@ function analyzeJavascript(source: string): FileEvidence {
         base = callee.expression.text;
         mode = callee.name.text;
       }
-      if ((base === "test" || base === "it") && (mode === "skip" || mode === "todo")) {
+      if (
+        (base === "test" || base === "it") &&
+        (mode === "skip" || mode === "todo")
+      ) {
         skippedOrTodo = true;
       }
-      if ((base === "test" || base === "it") && mode !== "skip" && mode !== "todo") {
+      if (
+        (base === "test" || base === "it") &&
+        mode !== "skip" &&
+        mode !== "todo"
+      ) {
         const title = node.arguments[0];
         const callback = node.arguments[1];
         if (
@@ -293,7 +301,8 @@ function analyzePython(source: string): FileEvidence {
     }
     const meaningfulAssertion = body.some(
       (entry) =>
-        /^\s*assert\s+/.test(entry) && !/^\s*assert\s+(?:True|1)(?:\s|$)/.test(entry),
+        /^\s*assert\s+/.test(entry) &&
+        !/^\s*assert\s+(?:True|1)(?:\s|$)/.test(entry),
     );
     tests.set(match[1]!, {
       name: match[1]!,
@@ -309,7 +318,9 @@ function analyzePython(source: string): FileEvidence {
 }
 
 function analyzeFile(path: string, source: string): FileEvidence {
-  return /\.py$/i.test(path) ? analyzePython(source) : analyzeJavascript(source);
+  return /\.py$/i.test(path)
+    ? analyzePython(source)
+    : analyzeJavascript(source);
 }
 
 export function acceptanceRequirements(
@@ -370,12 +381,16 @@ export function assessGeneratedTests(
     const evidence = analyzeFile(path, file.contents);
     files.set(path, evidence);
     if (evidence.skippedOrTodo) {
-      errors.push(`${file.path}: skipped or todo tests are not acceptance evidence`);
+      errors.push(
+        `${file.path}: skipped or todo tests are not acceptance evidence`,
+      );
     }
     if (!evidence.tests.size) {
       errors.push(`${file.path}: no active named test was found`);
     }
-    if (![...evidence.tests.values()].some((test) => test.meaningfulAssertion)) {
+    if (
+      ![...evidence.tests.values()].some((test) => test.meaningfulAssertion)
+    ) {
       errors.push(`${file.path}: no meaningful executable assertion was found`);
     }
     if (evidence.browserImport) browserTestPaths.push(path);
@@ -398,7 +413,9 @@ export function assessGeneratedTests(
     const file = path ? files.get(path) : undefined;
     const test = file?.tests.get(item.testName);
     if (!path || !file) {
-      errors.push(`${item.requirementId}: coverage path is not a generated test file`);
+      errors.push(
+        `${item.requirementId}: coverage path is not a generated test file`,
+      );
       continue;
     }
     if (!test) {
@@ -408,11 +425,15 @@ export function assessGeneratedTests(
       continue;
     }
     if (!test.meaningfulAssertion) {
-      errors.push(`${item.requirementId}: mapped test has no meaningful assertion`);
+      errors.push(
+        `${item.requirementId}: mapped test has no meaningful assertion`,
+      );
     }
     if (item.kind === "browser") {
       if (!file.browserImport || !test.browser) {
-        errors.push(`${item.requirementId}: browser coverage is not a Playwright test`);
+        errors.push(
+          `${item.requirementId}: browser coverage is not a Playwright test`,
+        );
       }
       if (!test.gotoApp || test.forbiddenBrowserFixture) {
         errors.push(
@@ -437,11 +458,18 @@ export function assessGeneratedTests(
   }
   for (const requirement of requirements) {
     if (!coverage.some((item) => item.requirementId === requirement.id)) {
-      errors.push(`${requirement.id}: acceptance requirement has no mapped test`);
+      errors.push(
+        `${requirement.id}: acceptance requirement has no mapped test`,
+      );
     }
   }
-  if (uiAcceptanceRequired && !coverage.some((item) => item.kind === "browser")) {
-    errors.push("UI source changed but no mapped Playwright browser journey exists");
+  if (
+    uiAcceptanceRequired &&
+    !coverage.some((item) => item.kind === "browser")
+  ) {
+    errors.push(
+      "UI source changed but no mapped Playwright browser journey exists",
+    );
   }
 
   return {

@@ -54,17 +54,27 @@ export function ProviderRoutingCards({ health }: { health: Health | null }) {
         )}
       </div>
 
-      <p className="mt-3 text-sm font-semibold text-white">Automatic model ladder</p>
+      <p className="mt-3 text-sm font-semibold text-white">
+        Automatic model ladder
+      </p>
       <p className="mt-0.5 text-xs leading-relaxed text-slate-400">
-        Strongest configured paid model first. Quota or capacity exhaustion moves the
-        whole run down the ladder; free/local capacity is last.
+        Strongest configured paid model first. Quota or capacity exhaustion
+        moves the whole run down the ladder; free/local capacity is last.
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5">
         {ladder.map((name, index) => (
           <span key={name} className="inline-flex items-center gap-1.5">
             {index > 0 && <span className="text-xs text-slate-600">→</span>}
-            <Badge tone={name === serving ? "cyan" : name === "free" ? "emerald" : "violet"}>
+            <Badge
+              tone={
+                name === serving
+                  ? "cyan"
+                  : name === "free"
+                    ? "emerald"
+                    : "violet"
+              }
+            >
               {LABELS[name]}
               {name === serving ? " · serving" : ""}
             </Badge>
