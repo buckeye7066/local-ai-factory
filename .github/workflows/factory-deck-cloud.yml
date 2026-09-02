@@ -16,8 +16,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Factory Deck cloud build
+  seed:
+    name: Generate exact Factory Deck candidate
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[factory-smoke]'))
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -60,7 +60,12 @@ jobs:
           if (-not $env:OPENAI_API_KEY) { throw "No OpenAI production credential is configured." }
           Write-Host "Production provider credentials are available (values not displayed)."
 
-      - name: Build and verify application
+      # A CLI candidate is expected to stop at the mandatory cross-platform
+      # gate after its Linux build. Only the validator below may convert that
+      # non-zero exit into a resumable fan-out; every other failure stays red.
+      - name: Build and verify candidate on Linux
+        id: candidate
+        continue-on-error: true
         shell: pwsh
         env:
           FACTORY_IDEA: ${{ inputs.idea || 'Build and verify a minimal TypeScript command-line task checklist. It must be command-line only with no HTML, browser, or web UI; support add, list, complete, and delete commands; persist tasks in a local JSON file; and include automated tests for the complete primary workflow.' }}
@@ -86,14 +91,195 @@ jobs:
           CI: "true"
         run: pnpm exec tsx src/cli/factory.ts
 
-      - name: Preserve Factory Deck result
+      - name: Validate platform-only readiness hold
+        shell: pwsh
+        env:
+          WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
+        run: |
+          if ("${{ steps.candidate.outcome }}" -ne "failure") {
+            throw "The Linux seed did not stop at the expected cross-platform gate."
+          }
+          pnpm exec tsx src/cli/factory-platform-proof.ts validate
+
+      - name: Preserve exact candidate
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: factory-deck-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: warn
+          name: factory-deck-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
           include-hidden-files: true
           retention-days: 14
           path: |
             .factory/**
             workspaces/**
+            !workspaces/**/node_modules/**
+
+  windows:
+    name: Verify exact candidate on Windows
+    needs: seed
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Factory Deck
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "10.17.0"
+
+      - name: Install Factory Deck
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore exact candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: factory-deck-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .
+
+      - name: Execute Windows proof without production secrets
+        shell: pwsh
+        env:
+          WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
+          ALLOW_UNTRUSTED_SCRIPTS: "true"
+          CI: "true"
+        run: pnpm exec tsx src/cli/factory-platform-proof.ts record
+
+      - name: Preserve Windows evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: factory-deck-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            .factory/**
+            workspaces/**
+            !workspaces/**/node_modules/**
+
+  macos:
+    name: Verify exact candidate on macOS
+    needs: windows
+    runs-on: macos-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Factory Deck
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "10.17.0"
+
+      - name: Install Factory Deck
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore Windows-verified candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: factory-deck-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .
+
+      - name: Execute macOS proof without production secrets
+        shell: pwsh
+        env:
+          WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
+          ALLOW_UNTRUSTED_SCRIPTS: "true"
+          CI: "true"
+        run: pnpm exec tsx src/cli/factory-platform-proof.ts record
+
+      - name: Preserve macOS evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: factory-deck-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            .factory/**
+            workspaces/**
+            !workspaces/**/node_modules/**
+
+  build:
+    name: Factory Deck cloud build
+    needs: macos
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Factory Deck
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "10.17.0"
+
+      - name: Install Factory Deck
+        run: pnpm install --frozen-lockfile
+
+      - name: Restore cross-platform candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: factory-deck-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .
+
+      - name: Finalize paid readiness on exact candidate
+        shell: pwsh
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
+          ANTHROPIC_MODEL: claude-opus-4-8
+          OPENAI_MODEL: gpt-5.5
+          FACTORY_SOL_MODEL: gpt-5.5
+          FACTORY_FABLE_OR_OPUS_MODEL: claude-opus-4-8
+          FACTORY_FREE_ENABLED: "0"
+          DEFAULT_CODE_PROVIDER: anthropic
+          DEFAULT_REVIEW_PROVIDER: openai
+          WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
+          FACTORY_RUN_TIMEOUT_MS: "19200000"
+          MAX_MODEL_CALLS_PER_RUN: "60"
+          MAX_REPAIR_LOOPS: "3"
+          FACTORY_PAID_RESCUES_PER_HOUR: "60"
+          FACTORY_PAID_RESCUES_PER_DAY: "60"
+          FACTORY_PAID_MAX_USD_PER_DAY: "35"
+          CI: "true"
+        run: pnpm exec tsx src/cli/factory-resume.ts
+
+      - name: Preserve Factory Deck result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: factory-deck-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            .factory/**
+            workspaces/**
+            !workspaces/**/node_modules/**
