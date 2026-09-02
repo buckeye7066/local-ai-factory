@@ -132,8 +132,8 @@ export const FoundryIntakeSchema = z.object({
   sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
   /** Legacy clients may send free/paid; FoundryStore normalizes all new work. */
   routingMode: RoutingModeSchema.optional(),
-  // Omitted means the smallest production line for the automatic route.
-  // Optional specialist bays run only when the caller explicitly selects them.
+  // Omitted means the smallest production line: RepoRewards discovery first,
+  // followed by Factory Deck, Crucible, and Watchtower. Other bays are optional.
   selectedStations: z.array(StationIdSchema).default([]),
 });
 export type FoundryIntake = z.infer<typeof FoundryIntakeSchema>;
@@ -148,12 +148,40 @@ export const StationRunStatusSchema = z.enum([
 ]);
 export type StationRunStatus = z.infer<typeof StationRunStatusSchema>;
 
+const StationHandoffStringListSchema = z
+  .array(z.string().trim().min(1).max(4_000))
+  .max(50)
+  .default([]);
+
+export const StationHandoffCandidateSchema = z.object({
+  name: z.string().trim().min(1).max(500),
+  url: z.string().trim().max(2_000).nullable().default(null),
+  summary: z.string().trim().max(4_000).default(""),
+  license: z.string().trim().max(200).nullable().default(null),
+  score: z.number().finite().nullable().default(null),
+});
+export type StationHandoffCandidate = z.infer<typeof StationHandoffCandidateSchema>;
+
+export const StationHandoffSchema = z.object({
+  insights: StationHandoffStringListSchema,
+  sources: z.array(z.string().trim().min(1).max(2_000)).max(50).default([]),
+  candidates: z.array(StationHandoffCandidateSchema).max(20).default([]),
+});
+export type StationHandoff = z.infer<typeof StationHandoffSchema>;
+
+const EMPTY_STATION_HANDOFF: StationHandoff = {
+  insights: [],
+  sources: [],
+  candidates: [],
+};
+
 export const StationRunSchema = z.object({
   stationId: StationIdSchema,
   status: StationRunStatusSchema,
   attempt: z.number().int().nonnegative(),
   summary: z.string(),
   artifacts: z.array(z.string()),
+  handoff: StationHandoffSchema.default(EMPTY_STATION_HANDOFF),
   evidenceDigest: z.string().nullable().default(null),
   revision: z.string().nullable().default(null),
   startedAt: z.number().nullable(),
@@ -197,6 +225,7 @@ export const StationEventSchema = z.object({
   status: z.enum(["active", "needs_attention", "completed", "failed"]),
   summary: z.string().trim().max(20_000).default(""),
   artifacts: z.array(z.string().trim().min(1).max(2_000)).max(100).default([]),
+  handoff: StationHandoffSchema.default(EMPTY_STATION_HANDOFF),
   evidence: z.record(z.unknown()).default({}),
 });
 
@@ -419,6 +448,7 @@ export class FoundryStore {
         attempt: 0,
         summary: "",
         artifacts: [],
+        handoff: EMPTY_STATION_HANDOFF,
         evidenceDigest: null,
         revision: null,
         startedAt: null,
