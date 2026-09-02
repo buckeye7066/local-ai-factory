@@ -185,7 +185,7 @@ export function createProviderRegistry(
       })
     : free;
 
-  /** Legacy compatibility chain; strict owner-selected Free runs bypass it. */
+  /** Legacy free-route diagnostic chain; current live work uses the ladder. */
   const chain = new FailoverProvider(
     freePrimary,
     anthropic,
