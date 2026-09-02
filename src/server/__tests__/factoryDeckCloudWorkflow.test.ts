@@ -109,7 +109,7 @@ describe("paid cloud workflow contract", () => {
   });
 
   it("builds a verifier image with Node, Python, native tools, and no entrypoint", () => {
-    expect(dockerfile).toContain("FROM node:20.19.5-bookworm-slim");
+    expect(dockerfile).toContain(\n      "FROM node:20.19.5-bookworm-slim@sha256:9e70124bd00f47dd023e349cd587132ae61892acc0e47ed641416c3e18f401c3",\n    );
     for (const tool of [
       "build-essential",
       "git",
