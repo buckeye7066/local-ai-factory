@@ -54,6 +54,15 @@ describe("config", () => {
     ).toEqual(cfg.anthropicModels);
   });
 
+  it("does not prepend the legacy model to an explicit Anthropic ladder", () => {
+    const cfg = loadConfig({
+      ANTHROPIC_MODEL: "claude-fable-5-1",
+      FACTORY_ANTHROPIC_MODEL_LADDER: "claude-opus-5,claude-sonnet-5",
+    });
+    expect(cfg.anthropicModels).toEqual(["claude-opus-5", "claude-sonnet-5"]);
+    expect(toHealth(cfg, loadSecrets({})).anthropicModel).toBe("claude-opus-5");
+  });
+
   it("detects configured keys", () => {
     const secrets = loadSecrets({
       ANTHROPIC_API_KEY: "sk-abc",

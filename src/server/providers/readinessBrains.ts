@@ -37,6 +37,7 @@ export function createReadinessBrainProviders(
   secrets: AppSecrets,
   log: RouteLogger = () => {},
   signal?: AbortSignal,
+  decorateProvider: (provider: LLMProvider) => LLMProvider = (provider) => provider,
 ): ReadinessProviderPair {
   const floor = readinessBrainFloor(config, secrets);
   if (!floor.configured) {
@@ -70,24 +71,28 @@ export function createReadinessBrainProviders(
         for (const model of config.anthropicModels ?? [config.anthropicModel]) {
           rungs.push({
             model,
-            provider: new AnthropicProvider(
-              secrets.anthropicApiKey,
-              model,
-              usageLogger(reviewer, "anthropic", model),
-              signal,
-              true,
+            provider: decorateProvider(
+              new AnthropicProvider(
+                secrets.anthropicApiKey,
+                model,
+                usageLogger(reviewer, "anthropic", model),
+                signal,
+                true,
+              ),
             ),
           });
         }
       } else {
         rungs.push({
           model: config.solModel,
-          provider: new OpenAIProvider(
-            secrets.openaiApiKey,
-            config.solModel,
-            usageLogger(reviewer, "openai", config.solModel),
-            signal,
-            true,
+          provider: decorateProvider(
+            new OpenAIProvider(
+              secrets.openaiApiKey,
+              config.solModel,
+              usageLogger(reviewer, "openai", config.solModel),
+              signal,
+              true,
+            ),
           ),
         });
       }
