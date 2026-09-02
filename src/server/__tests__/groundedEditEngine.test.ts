@@ -297,7 +297,8 @@ describe("repair accounting and scope are mechanical", () => {
       priorStatus: "generated" as const,
       suppliedInFull: true,
       hasAnchoredEdits: false,
-      contents: "test('stronger acceptance proof', () => expect(true).toBe(true));",
+      contents:
+        "test('stronger acceptance proof', () => expect(true).toBe(true));",
     };
 
     expect(canReplaceFullyShownGeneratedTest(eligible)).toBe(true);
