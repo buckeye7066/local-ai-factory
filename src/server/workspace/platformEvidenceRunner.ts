@@ -58,11 +58,33 @@ const ARTIFACT_EXCLUDED_DIRS = new Set([
   ".tox",
   ".nox",
   ".nyc_output",
-  "coverage",
-  "playwright-report",
-  "test-results",
 ]);
 const ARTIFACT_EXCLUDED_FILES = [/^\.coverage(?:\..+)?$/, /^.+\.(?:pyc|pyo)$/];
+
+const RUNTIME_REPORT_SENTINELS: Record<string, ReadonlySet<string>> = {
+  coverage: new Set([
+    "clover.xml",
+    "cobertura-coverage.xml",
+    "coverage-final.json",
+    "lcov-report",
+    "lcov.info",
+  ]),
+  "playwright-report": new Set(["index.html"]),
+  "test-results": new Set([".last-run.json"]),
+};
+
+async function isRecognizedRuntimeReportDirectory(
+  absolute: string,
+  name: string,
+): Promise<boolean> {
+  const sentinels = RUNTIME_REPORT_SENTINELS[name];
+  if (!sentinels) return false;
+  try {
+    return (await readdir(absolute)).some((entry) => sentinels.has(entry));
+  } catch {
+    return false;
+  }
+}
 
 function isExcludedArtifactEntry(path: string, name: string): boolean {
   return (
@@ -101,9 +123,15 @@ export async function capturePlatformArtifactSnapshot(
       a.name.localeCompare(b.name),
     );
     for (const entry of entries) {
-      if (entry.isDirectory() && ARTIFACT_EXCLUDED_DIRS.has(entry.name)) continue;
       const absolute = join(directory, entry.name);
       const path = relative(workspacePath, absolute).replace(/\\/g, "/");
+      if (
+        entry.isDirectory() &&
+        (ARTIFACT_EXCLUDED_DIRS.has(entry.name) ||
+          (await isRecognizedRuntimeReportDirectory(absolute, entry.name)))
+      ) {
+        continue;
+      }
       if (isExcludedArtifactEntry(path, entry.name)) continue;
       if (entry.isDirectory()) {
         pending.push(absolute);

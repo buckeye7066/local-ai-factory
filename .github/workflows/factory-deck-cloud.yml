@@ -118,9 +118,6 @@ jobs:
             --exclude='*/.pytest_cache/*' \
             --exclude='*/.mypy_cache/*' \
             --exclude='*/.ruff_cache/*' \
-            --exclude='*/coverage/*' \
-            --exclude='*/playwright-report/*' \
-            --exclude='*/test-results/*' \
             workspaces
 
       - name: Preserve exact candidate

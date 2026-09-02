@@ -99,9 +99,6 @@ jobs:
             --exclude='*/.tox/*' \
             --exclude='*/.nox/*' \
             --exclude='*/.nyc_output/*' \
-            --exclude='*/coverage/*' \
-            --exclude='*/playwright-report/*' \
-            --exclude='*/test-results/*' \
             workspaces
 
       - name: Preserve exact candidate
@@ -337,9 +334,6 @@ jobs:
             !workspaces/**/.tox/**
             !workspaces/**/.nox/**
             !workspaces/**/.nyc_output/**
-            !workspaces/**/coverage/**
-            !workspaces/**/playwright-report/**
-            !workspaces/**/test-results/**
 
   report:
     name: Publish exact Purpose Foundry proof status

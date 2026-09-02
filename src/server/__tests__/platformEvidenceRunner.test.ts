@@ -3,6 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  appendCheckpointCommandOutput,
+  boundCheckpointCommandOutput,
+  MAX_CHECKPOINT_COMMAND_OUTPUT_CHARS,
+} from "../orchestrator/checkpoint.js";
+import {
   capturePlatformArtifactSnapshot,
   checkpointOutputTail,
   changedPlatformArtifactPaths,
@@ -56,6 +61,28 @@ describe("platformEvidenceRunner", () => {
     );
   });
 
+  it("preserves product directories named coverage and ignores only recognized reports", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-platform-coverage-"));
+    roots.push(root);
+    await mkdir(join(root, "src", "coverage"), { recursive: true });
+    await writeFile(join(root, "src", "coverage", "policy.ts"), "export {}\n");
+    await mkdir(join(root, "build", "coverage"), { recursive: true });
+    await writeFile(join(root, "build", "coverage", "coverage-final.json"), "{}\n");
+    await writeFile(join(root, "build", "coverage", "lcov.info"), "old\n");
+
+    const before = await capturePlatformArtifactSnapshot(root);
+    expect(before).toHaveProperty("src/coverage/policy.ts");
+    expect(before).not.toHaveProperty("build/coverage/coverage-final.json");
+
+    await writeFile(join(root, "src", "coverage", "policy.ts"), "export const x=1\n");
+    await writeFile(join(root, "build", "coverage", "lcov.info"), "new\n");
+    const after = await capturePlatformArtifactSnapshot(root);
+
+    expect(changedPlatformArtifactPaths(before, after)).toEqual([
+      "src/coverage/policy.ts",
+    ]);
+  });
+
   it("keeps POSIX mode intent in the seal while comparing portable Windows bytes", () => {
     const digest = "a".repeat(64);
     const changedDigest = "b".repeat(64);
@@ -81,6 +108,26 @@ describe("platformEvidenceRunner", () => {
     const tail = checkpointOutputTail("prefix" + "x".repeat(40_000), "stderr-end");
     expect(tail).toHaveLength(MAX_CHECKPOINT_OUTPUT_TAIL_CHARS);
     expect(tail).toMatch(/stderr-end$/);
+  });
+
+  it("keeps full reporter buffers out of checkpoints and model context", () => {
+    let output = "";
+    for (let index = 0; index < 40; index += 1) {
+      output = appendCheckpointCommandOutput(
+        output,
+        `npx vitest run generated-${index}.test.ts`,
+        `report-${index}:` + "x".repeat(40_000),
+        `stderr-${index}`,
+      );
+    }
+
+    expect(output.length).toBeLessThanOrEqual(MAX_CHECKPOINT_COMMAND_OUTPUT_CHARS);
+    expect(output).toContain("generated-39.test.ts");
+    expect(output).toContain("stderr-39");
+    expect(output).not.toContain("generated-0.test.ts");
+    expect(boundCheckpointCommandOutput("z".repeat(100_000))).toHaveLength(
+      MAX_CHECKPOINT_COMMAND_OUTPUT_CHARS,
+    );
   });
 
   it("requires structured passing non-skipped evidence for direct tests", () => {

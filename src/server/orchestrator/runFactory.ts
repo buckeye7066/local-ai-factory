@@ -104,7 +104,7 @@ import {
   deleteRunCheckpoint,
   getRunForExecution,
 } from "../storage/runsStore.js";
-import type { FactoryCheckpoint } from "./checkpoint.js";
+import { appendCheckpointCommandOutput, type FactoryCheckpoint } from "./checkpoint.js";
 import { appendAuditEvent } from "../storage/auditLog.js";
 import { buildAttribution, writeAttribution } from "../storage/attribution.js";
 import {
@@ -2074,7 +2074,12 @@ async function executeRun(
                 : (res.reason ?? res.command),
             );
             if (res.executed) {
-              commandOutput += `\n$ ${res.command}\n${res.stdout}\n${res.stderr}`;
+              commandOutput = appendCheckpointCommandOutput(
+                commandOutput,
+                res.command,
+                res.stdout,
+                res.stderr,
+              );
               const parsedDirect =
                 cmd.directTestPath && cmd.runner
                   ? res.stdoutTruncated || res.stderrTruncated

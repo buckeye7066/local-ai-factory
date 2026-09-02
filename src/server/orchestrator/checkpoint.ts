@@ -16,6 +16,27 @@ import {
   TestPlanSchema,
 } from "../../shared/schemas.js";
 
+export const MAX_CHECKPOINT_COMMAND_OUTPUT_CHARS = 64 * 1024;
+const MAX_COMMAND_OUTPUT_PER_COMMAND_CHARS = 4 * 1024;
+const MAX_COMMAND_LABEL_CHARS = 1024;
+
+export function boundCheckpointCommandOutput(output: string): string {
+  return output.slice(-MAX_CHECKPOINT_COMMAND_OUTPUT_CHARS);
+}
+
+export function appendCheckpointCommandOutput(
+  current: string,
+  command: string,
+  stdout: string,
+  stderr: string,
+): string {
+  const outputTail = `${stdout}\n${stderr}`.slice(
+    -MAX_COMMAND_OUTPUT_PER_COMMAND_CHARS,
+  );
+  const entry = `\n$ ${command.slice(0, MAX_COMMAND_LABEL_CHARS)}\n${outputTail}`;
+  return boundCheckpointCommandOutput(`${current}${entry}`);
+}
+
 const PreReleaseBrainReviewSchema = z.object({
   // Accept both current reviewer slots and legacy identities so old checkpoints
   // remain resumable after the paid-ladder migration.
@@ -95,7 +116,9 @@ export const FactoryCheckpointSchema = z.object({
     )
     .default([]),
   testWriterComplete: z.boolean().default(false),
-  commandOutput: z.string().default(""),
+  // Bound legacy and current checkpoints on read as well as write. Full direct
+  // reporter buffers are parsed in memory and must never become model context.
+  commandOutput: z.string().transform(boundCheckpointCommandOutput).default(""),
   /**
    * Structured record of the commands that actually EXECUTED in the last
    * verification pass — the evidence that grounds every QA verdict

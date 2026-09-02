@@ -61,6 +61,8 @@ describe("paid cloud workflow contract", () => {
         workflow.match(new RegExp(archive.replace(".", "\\."), "g")),
       ).not.toBeNull();
       expect(workflow.match(/tar --extract --file/g)).toHaveLength(3);
+      expect(workflow).not.toContain("--exclude='*/coverage/*'");
+      expect(workflow).not.toContain("!workspaces/**/coverage/**");
 
       for (const [start, end] of [
         ["Preserve Windows evidence", "macos:"],
