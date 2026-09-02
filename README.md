@@ -153,18 +153,22 @@ This is designed to be safe to run on your own machine:
 
 - `MAX_MODEL_CALLS_PER_RUN` hard-caps LLM calls per run.
 - `MAX_REPAIR_LOOPS` bounds the repair loop.
-- Every owner-facing run chooses a strict economic tier. **Free** stays on the
-  $0 rotator with paid fallback disabled. **Paid** uses only configured paid
-  providers, budget-gating each call and quota-failing over only within Paid.
+- Every live run uses one orchestrated model ladder: the strongest configured
+  paid rung first, weaker configured paid rungs next, and free/local last.
+  Credit, quota, capacity, or configured budget exhaustion demotes the run; the
+  orchestrator never silently promotes it again mid-run.
 - Paid call-count limits are atomic only within one Factory Node process. The
   USD ledger is an estimated admission guard, not an actual billing cap; use
   provider-native account caps for a hard actual-dollar guarantee.
 
 ## Changing models
 
-Edit `ANTHROPIC_MODEL` / `OPENAI_MODEL` in `.env`, and the default routing with
-`DEFAULT_CODE_PROVIDER` / `DEFAULT_REVIEW_PROVIDER`. The Settings screen reflects
-the active values.
+Edit `ANTHROPIC_MODEL` / `OPENAI_MODEL` in `.env`, then order the paid
+provider families strongest-to-weaker with
+`FACTORY_MODEL_LADDER=anthropic,openai`. Missing providers are skipped and the
+free/local rotator is always appended last. `DEFAULT_CODE_PROVIDER` and
+`DEFAULT_REVIEW_PROVIDER` remain legacy compatibility fields only. The
+Settings screen reflects the active values.
 
 ---
 
@@ -216,7 +220,7 @@ Double-clicking it launches `pnpm dev` and opens the UI in your browser.
 
 ## Purpose Foundry
 
-Purpose Foundry is the optional portfolio assembly-line mode. It coordinates Factory Deck, Scout a Program, Repo Rewards, PromoPilot, FlexFactor, The Crucible, App Store Publisher, and Watchtower through a durable station contract and hash-chained evidence ledger. Every existing application remains independently launchable.
+Purpose Foundry is the optional portfolio assembly-line mode. It coordinates Factory Deck, Scout a Program, Repo Rewards, PromoPilot, FlexFactor, The Crucible, App Store Publisher, and Watchtower through a durable station contract and hash-chained evidence ledger. Its internal model calls use the same single paid-first ladder; the FlexFactor child owns its own equivalent orchestrator instead of being pinned to a separate free or paid route. Every existing application remains independently launchable.
 
 Set `PURPOSE_FOUNDRY_OBSIDIAN_INBOX` to an Obsidian folder to ingest saved Markdown project notes automatically. Run `pnpm install:purpose-foundry-icon` once to create the separate **Purpose Foundry** desktop shortcut; the existing Factory Deck shortcut is unchanged. See [`docs/PURPOSE_FOUNDRY.md`](docs/PURPOSE_FOUNDRY.md).
 
