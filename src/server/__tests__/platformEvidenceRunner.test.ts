@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   capturePlatformArtifactSnapshot,
   changedPlatformArtifactPaths,
+  platformArtifactFileFingerprint,
   remainingPlatformEvidenceBlockers,
   successfulPlatformCommandEvidence,
 } from "../workspace/platformEvidenceRunner.js";
@@ -41,9 +42,12 @@ describe("platformEvidenceRunner", () => {
 
     expect(changedPlatformArtifactPaths(before, after)).toEqual([
       "dist/cli.js",
-      "launcher",
+      ...(process.platform === "win32" ? [] : ["launcher"]),
       "tasks.json",
     ]);
+    expect(platformArtifactFileFingerprint(Buffer.from("same"), 0o644)).not.toBe(
+      platformArtifactFileFingerprint(Buffer.from("same"), 0o755),
+    );
   });
 
   it("requires structured passing non-skipped evidence for direct tests", () => {
