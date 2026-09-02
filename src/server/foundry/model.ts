@@ -479,8 +479,7 @@ export class FoundryStore {
     type: string,
     payload: unknown,
   ): Promise<EvidenceEvent> {
-    const previousWrite =
-      ledgerWriteQueues.get(this.ledgerPath) ?? Promise.resolve();
+    const previousWrite = ledgerWriteQueues.get(this.ledgerPath) ?? Promise.resolve();
     const write = previousWrite.then(() =>
       this.appendEvidenceUnlocked(projectId, stationId, type, payload),
     );
