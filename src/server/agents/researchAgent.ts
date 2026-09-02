@@ -224,7 +224,7 @@ async function planProductDiscovery(
     ].join("\n\n"),
     schema: ProductDiscoveryPlanSchema,
     schemaName: "ProductDiscoveryPlan",
-    intent: { role: "researcher", needs: ["structured_json"] },
+    intent: { role: "judge", needs: ["structured_json"] },
     temperature: 0.1,
     maxTokens: 1200,
   });
