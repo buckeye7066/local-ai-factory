@@ -405,15 +405,127 @@ function dependencies(pkg: Record<string, unknown> | null): Set<string> {
 
 type JavascriptRunner = "vitest" | "jest";
 
+type RunnerApiName = "vi" | "jest";
+
+function runnerApiNamesInBinding(name: ts.BindingName): RunnerApiName[] {
+  if (ts.isIdentifier(name)) {
+    return name.text === "vi" || name.text === "jest" ? [name.text] : [];
+  }
+  return name.elements.flatMap((element) =>
+    ts.isOmittedExpression(element) ? [] : runnerApiNamesInBinding(element.name),
+  );
+}
+
+function isRunnerLexicalScope(node: ts.Node): boolean {
+  return (
+    ts.isSourceFile(node) ||
+    ts.isFunctionLike(node) ||
+    ts.isBlock(node) ||
+    ts.isCaseBlock(node) ||
+    ts.isCatchClause(node) ||
+    ts.isForStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isForOfStatement(node)
+  );
+}
+
+function nearestRunnerScope(node: ts.Node, kind: "function" | "lexical"): ts.Node {
+  for (let current: ts.Node | undefined = node; current; current = current.parent) {
+    if (ts.isSourceFile(current) || ts.isFunctionLike(current)) return current;
+    if (kind === "lexical" && isRunnerLexicalScope(current)) return current;
+  }
+  return node.getSourceFile();
+}
+
+function runnerApiBindingScopes(
+  source: ts.SourceFile,
+): Record<RunnerApiName, ts.Node[]> {
+  const scopes: Record<RunnerApiName, ts.Node[]> = { vi: [], jest: [] };
+  const add = (name: ts.BindingName, scope: ts.Node): void => {
+    for (const api of runnerApiNamesInBinding(name)) scopes[api].push(scope);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && node.importClause) {
+      if (node.importClause.name) add(node.importClause.name, source);
+      const bindings = node.importClause.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) add(bindings.name, source);
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) add(element.name, source);
+      }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      add(node.name, source);
+    } else if (ts.isVariableDeclaration(node)) {
+      const declarationList = node.parent;
+      const blockScoped =
+        ts.isVariableDeclarationList(declarationList) &&
+        (declarationList.flags & ts.NodeFlags.BlockScoped) !== 0;
+      add(
+        node.name,
+        nearestRunnerScope(
+          declarationList.parent,
+          blockScoped ? "lexical" : "function",
+        ),
+      );
+    } else if (ts.isParameter(node)) {
+      add(node.name, nearestRunnerScope(node.parent, "function"));
+    } else if (ts.isCatchClause(node) && node.variableDeclaration) {
+      add(node.variableDeclaration.name, node);
+    } else if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isClassDeclaration(node) ||
+        ts.isEnumDeclaration(node) ||
+        ts.isModuleDeclaration(node)) &&
+      node.name &&
+      ts.isIdentifier(node.name)
+    ) {
+      add(node.name, nearestRunnerScope(node.parent, "lexical"));
+    } else if (
+      (ts.isFunctionExpression(node) || ts.isClassExpression(node)) &&
+      node.name
+    ) {
+      add(node.name, node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return scopes;
+}
+
+function nodeIsWithin(node: ts.Node, scope: ts.Node): boolean {
+  for (let current: ts.Node | undefined = node; current; current = current.parent) {
+    if (current === scope) return true;
+  }
+  return false;
+}
+
 function runnerDeclaredByTest(contents: string): JavascriptRunner | "ambiguous" | null {
-  const source = ts.createSourceFile(
-    "generated-test.tsx",
+  const fileName = "generated-test.tsx";
+  const compilerOptions: ts.CompilerOptions = {
+    jsx: ts.JsxEmit.Preserve,
+    module: ts.ModuleKind.ESNext,
+    noLib: true,
+    noResolve: true,
+    target: ts.ScriptTarget.Latest,
+  };
+  const parsedSource = ts.createSourceFile(
+    fileName,
     contents,
     ts.ScriptTarget.Latest,
     true,
     ts.ScriptKind.TSX,
   );
+  const compilerHost = ts.createCompilerHost(compilerOptions, true);
+  compilerHost.getSourceFile = (requested) =>
+    requested === fileName ? parsedSource : undefined;
+  compilerHost.fileExists = (requested) => requested === fileName;
+  compilerHost.readFile = (requested) =>
+    requested === fileName ? contents : undefined;
+  compilerHost.writeFile = () => {};
+  const program = ts.createProgram([fileName], compilerOptions, compilerHost);
+  const source = program.getSourceFile(fileName) ?? parsedSource;
+  const checker = program.getTypeChecker();
   const modules = new Set<string>();
+  const bindingScopes = runnerApiBindingScopes(source);
   let vitestApi = false;
   let jestApi = false;
   const visit = (node: ts.Node): void => {
@@ -438,10 +550,20 @@ function runnerDeclaredByTest(contents: string): JavascriptRunner | "ambiguous" 
     if (
       ts.isPropertyAccessExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      ["fn", "mock", "spyOn"].includes(node.name.text)
+      ["fn", "mock", "spyOn"].includes(node.name.text) &&
+      // Imports already establish their runner through `modules`. API syntax
+      // is evidence only for an unshadowed runner global; a local parameter,
+      // variable, or import named `vi`/`jest` is ordinary candidate code.
+      !checker.getSymbolAtLocation(node.expression)
     ) {
-      if (node.expression.text === "vi") vitestApi = true;
-      if (node.expression.text === "jest") jestApi = true;
+      const api = node.expression.text;
+      if (
+        (api === "vi" || api === "jest") &&
+        !bindingScopes[api].some((scope) => nodeIsWithin(node.expression, scope))
+      ) {
+        if (api === "vi") vitestApi = true;
+        if (api === "jest") jestApi = true;
+      }
     }
     ts.forEachChild(node, visit);
   };
