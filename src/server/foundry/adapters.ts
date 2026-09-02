@@ -30,6 +30,7 @@ import {
   recordReadinessEvaluation,
 } from "../storage/readinessStore.js";
 import { withExtendPersistenceGoals } from "../orchestrator/composeExtendIdea.js";
+import { encodeStructuredGoalDirectives } from "../orchestrator/goalDirectives.js";
 import {
   repoNameProblem,
   RunOptionsSchema,
@@ -678,12 +679,14 @@ export class FoundryAdapters {
       }));
     const goals = [
       `Mission: ${project.constitution.purpose}`,
-      ...project.constitution.targetUsers.map((item) => `Audience: ${item}`),
-      ...project.constitution.successCriteria.map(
-        (item) => `Success criterion: ${item}`,
-      ),
-      ...project.constitution.constraints.map((item) => `Constraint: ${item}`),
-      ...project.constitution.nonGoals.map((item) => `Non-goal: ${item}`),
+      encodeStructuredGoalDirectives({
+        targetUsers: project.constitution.targetUsers,
+        activeGoals: project.constitution.successCriteria.map(
+          (item) => `Success criterion: ${item}`,
+        ),
+        constraints: project.constitution.constraints,
+        nonGoals: project.constitution.nonGoals,
+      }),
       ...(upstreamEvidence.length
         ? [
             `Use these completed specialist handoffs as implementation evidence: ${JSON.stringify(upstreamEvidence)}`,
