@@ -16,7 +16,6 @@ import { RoutingModeSchema } from "../../shared/schemas.js";
 import {
   normalizeFoundryStations,
   requiredProductionStations,
-  UNMETERED_CHILD_STATIONS,
 } from "./readinessPolicy.js";
 
 export const StationIdSchema = z.enum([
@@ -132,29 +131,11 @@ export const FoundryIntakeSchema = z
     source: z.enum(["manual", "obsidian", "api"]).default("manual"),
     sourcePath: z.string().trim().max(2_000).nullable().default(null),
     sourceMarkdown: z.string().max(1_000_000).nullable().default(null),
-    /** Explicit owner-selected economic tier; absent preserves legacy defaults. */
+    /** Legacy clients may send free/paid; FoundryStore normalizes all new work. */
     routingMode: RoutingModeSchema.optional(),
-    // Omitted means the smallest production line for the selected tier.
+    // Omitted means the smallest production line for the automatic route.
     // Optional specialist bays run only when the caller explicitly selects them.
     selectedStations: z.array(StationIdSchema).default([]),
-  })
-  .superRefine((intake, context) => {
-    if (
-      intake.routingMode === "paid" &&
-      intake.selectedStations.length > 0 &&
-      intake.selectedStations.every((station) =>
-        UNMETERED_CHILD_STATIONS.includes(
-          station as (typeof UNMETERED_CHILD_STATIONS)[number],
-        ),
-      )
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["selectedStations"],
-        message:
-          "Paid Purpose Foundry requires at least one metered internal station; Scout and FlexFactor cannot join the paid-call ledger.",
-      });
-    }
   });
 export type FoundryIntake = z.infer<typeof FoundryIntakeSchema>;
 
@@ -387,7 +368,11 @@ export class FoundryStore {
   }
 
   async create(input: FoundryIntake): Promise<FoundryProject> {
-    const parsed = FoundryIntakeSchema.parse(input);
+    const legacyCompatible = FoundryIntakeSchema.parse(input);
+    const parsed: FoundryIntake = {
+      ...legacyCompatible,
+      routingMode: "auto",
+    };
     const create = this.projectCreates.then(() => this.createUnlocked(parsed));
     this.projectCreates = create.catch(() => undefined);
     return create;
@@ -449,14 +434,7 @@ export class FoundryStore {
       constitution: project.constitution,
       routingMode: project.routingMode ?? "legacy-default",
       requiredProductionStations: requiredProductionStations(project.routingMode),
-      blockedUnmeteredStations:
-        project.routingMode === "paid"
-          ? input.selectedStations.filter((station) =>
-              UNMETERED_CHILD_STATIONS.includes(
-                station as (typeof UNMETERED_CHILD_STATIONS)[number],
-              ),
-            )
-          : [],
+      blockedUnmeteredStations: [],
     });
     return project;
   }
