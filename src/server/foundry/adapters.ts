@@ -701,6 +701,7 @@ export class FoundryAdapters {
           ...(repoSource ? { repoSource } : {}),
           goals: extendGoals,
           pushToOrigin: true,
+          projectId: `purpose-foundry:${project.id}`,
           idempotencyKey: `purpose-foundry:${project.id}:factory-deck`,
         })
       : (() => {
@@ -718,6 +719,7 @@ export class FoundryAdapters {
               private: true,
               createRemote: !boolEnv("PURPOSE_FOUNDRY_LOCAL_ARTIFACT_ONLY"),
             },
+            projectId: `purpose-foundry:${project.id}`,
             idempotencyKey: `purpose-foundry:${project.id}:factory-deck`,
           });
         })();
@@ -984,10 +986,11 @@ export class FoundryAdapters {
     );
     const resultObject =
       result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-    const resultRows = Array.isArray(resultObject.results)
-      ? resultObject.results
-      : null;
-    const rows = (resultRows ?? []).filter(
+    if (!Array.isArray(resultObject.results)) {
+      throw new Error("RepoRewards response did not include a results array.");
+    }
+    const resultRows = resultObject.results;
+    const rows = resultRows.filter(
       (row): row is Record<string, unknown> =>
         Boolean(row) && typeof row === "object" && !Array.isArray(row),
     );
@@ -1063,11 +1066,11 @@ export class FoundryAdapters {
         },
       ];
     });
-    const count = resultRows?.length ?? null;
+    const count = resultRows.length;
     const topCandidates = candidates.slice(0, 10);
     const handoff: StationHandoff = {
       insights: [
-        `RepoRewards completed a purpose-bound search for ${project.name}${count === null ? "" : ` and returned ${count} result(s)`}.`,
+        `RepoRewards completed a purpose-bound search for ${project.name} and returned ${count} result(s).`,
         ...topCandidates.map((candidate) =>
           `${candidate.name}${candidate.score === null ? "" : ` (score ${candidate.score})`}: ${candidate.summary || "candidate repository for implementation review"}`.slice(
             0,
@@ -1083,7 +1086,7 @@ export class FoundryAdapters {
     };
     return {
       status: "completed",
-      summary: `Repo Rewards completed its purpose-bound search${count === null ? "" : ` and returned ${count} candidate(s)`}${topCandidates.length ? `; leading matches: ${topCandidates.map((item) => item.name).join(", ")}` : ""}.`,
+      summary: `Repo Rewards completed its purpose-bound search and returned ${count} candidate(s)${topCandidates.length ? `; leading matches: ${topCandidates.map((item) => item.name).join(", ")}` : ""}.`,
       artifacts: [artifact],
       handoff,
       evidence: { query, resultCount: count, topCandidates },
