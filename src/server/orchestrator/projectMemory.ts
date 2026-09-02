@@ -97,6 +97,8 @@ function canonicalGitIdentity(raw: string): string {
 export interface ProjectIdentityContext {
   /** Authenticated destination owner resolved before a new remote is planned. */
   resolvedNewRepoOwner?: string | null;
+  /** Origin discovered from a local checkout during ingestion. */
+  resolvedRepoOrigin?: string | null;
   /** Stable within one local-only project; always hashed before persistence. */
   localProjectId?: string | null;
 }
@@ -107,11 +109,16 @@ export function projectKeyForOptions(
   context: ProjectIdentityContext = {},
 ): string | null {
   if (options.mode === "extend" && options.repoSource) {
-    return options.repoSource.type === "git"
-      ? `git:${canonicalGitIdentity(options.repoSource.location)}`
-      : `path-sha256:${createHash("sha256")
-          .update(resolve(options.repoSource.location))
-          .digest("hex")}`;
+    if (options.repoSource.type === "git" || context.resolvedRepoOrigin) {
+      return `git:${canonicalGitIdentity(
+        options.repoSource.type === "git"
+          ? options.repoSource.location
+          : context.resolvedRepoOrigin!,
+      )}`;
+    }
+    return `path-sha256:${createHash("sha256")
+      .update(resolve(options.repoSource.location))
+      .digest("hex")}`;
   }
   if (options.mode !== "extend" && options.newRepo?.name) {
     const owner = options.newRepo.owner ?? context.resolvedNewRepoOwner;
@@ -132,6 +139,11 @@ export function projectKeyForOptions(
         .digest("hex");
       return `new-local-sha256:${localIdentity}`;
     }
+  }
+  if (options.mode !== "extend" && context.localProjectId) {
+    return `new-local-sha256:${createHash("sha256")
+      .update(JSON.stringify({ project: context.localProjectId }))
+      .digest("hex")}`;
   }
   return null;
 }
@@ -238,8 +250,24 @@ function currentSpecPurpose(spec: ProductSpec): string {
 
 function explicitPurposeChange(texts: string[]): boolean {
   const pattern =
-    /\b(?:(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b[\s\S]{0,80}\b(?:purpose|mission|audience|product)|(?:purpose|mission|audience|product)\b[\s\S]{0,80}\b(?:change|replace|redefine|pivot|repurpose|retarget|shift))\b/i;
-  return texts.some((text) => pattern.test(text));
+    /\b(?:(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b[\s\S]{0,80}\b(?:purpose|mission|audience|product)|(?:purpose|mission|audience|product)\b[\s\S]{0,80}\b(?:change|replace|redefine|pivot|repurpose|retarget|shift))\b/gi;
+  const startsWithChange =
+    /^(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b/i;
+  const immediateNegation =
+    /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not|cannot|can't|cant|no)(?:\s+\w+){0,3}\s*$/i;
+  const targetThenNegation =
+    /\b(?:not|never|without)\b[\s\S]{0,40}\b(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b/i;
+  return texts.some((text) => {
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
+      const prefix = text.slice(Math.max(0, (match.index ?? 0) - 50), match.index);
+      const negated = startsWithChange.test(match[0])
+        ? immediateNegation.test(prefix)
+        : targetThenNegation.test(match[0]);
+      if (!negated) return true;
+    }
+    return false;
+  });
 }
 
 function digestGoalContract(
@@ -309,19 +337,21 @@ export function createGoalContract(input: {
         : input.purposeProfile
           ? "repository"
           : "current-spec";
-  const targetUsers = preservePriorPurpose
-    ? previous!.goalContract.targetUsers
-    : partitioned.declaredTargetUsers.length > 0
+  const targetUsers =
+    partitioned.declaredTargetUsers.length > 0
       ? partitioned.declaredTargetUsers
-      : purposeChanged
-        ? unique([input.spec.targetUser], 20)
-        : unique(
-            [
-              ...(input.purposeProfile?.intendedUsers.map((claim) => claim.text) ?? []),
-              input.spec.targetUser,
-            ],
-            20,
-          );
+      : preservePriorPurpose
+        ? previous!.goalContract.targetUsers
+        : purposeChanged
+          ? unique([input.spec.targetUser], 20)
+          : unique(
+              [
+                ...(input.purposeProfile?.intendedUsers.map((claim) => claim.text) ??
+                  []),
+                input.spec.targetUser,
+              ],
+              20,
+            );
   const priorResearch = unique(
     [...history]
       .reverse()
@@ -401,6 +431,17 @@ export function withGoalContract(
 
 const writes = new Map<string, Promise<unknown>>();
 
+function retainMemoryHistory(
+  entries: z.infer<typeof ProjectMemoryEntrySchema>[],
+): z.infer<typeof ProjectMemoryEntrySchema>[] {
+  const tail = entries.slice(-MAX_HISTORY);
+  if (tail.some((entry) => entry.state === "completed")) return tail;
+  const latestCompleted = [...entries]
+    .reverse()
+    .find((entry) => entry.state === "completed");
+  return latestCompleted ? [latestCompleted, ...tail.slice(-(MAX_HISTORY - 1))] : tail;
+}
+
 async function updateMemory(
   projectKey: string,
   update: (memory: ProjectMemory) => ProjectMemory,
@@ -454,10 +495,10 @@ export async function rememberProjectPlan(input: {
     });
     return {
       ...memory,
-      entries: [
+      entries: retainMemoryHistory([
         ...memory.entries.filter((item) => item.runId !== input.runId),
         entry,
-      ].slice(-MAX_HISTORY),
+      ]),
       updatedAt: now,
     };
   });
@@ -495,10 +536,10 @@ export async function rememberProjectCompletion(input: {
     });
     return {
       ...memory,
-      entries: [
+      entries: retainMemoryHistory([
         ...memory.entries.filter((item) => item.runId !== input.runId),
         entry,
-      ].slice(-MAX_HISTORY),
+      ]),
       updatedAt: now,
     };
   });
