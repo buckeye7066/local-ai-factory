@@ -228,6 +228,14 @@ export function FoundryFloor() {
           targets: split(targets),
           routingMode,
           source: "manual",
+          selectedStations: stations
+            .filter((station) =>
+              adapters.some(
+                (adapter) =>
+                  adapter.stationId === station.id && adapter.configured,
+              ),
+            )
+            .map((station) => station.id),
         }),
       });
       setName("");
