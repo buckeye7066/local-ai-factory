@@ -74,7 +74,7 @@ function canonicalGitIdentity(raw: string): string {
   const scp = raw.trim().match(/^(?:[^@\s]+@)?([^:\s/]+):(.+)$/);
   if (scp && !raw.includes("://") && !/^[A-Za-z]:[\\/]/.test(raw)) {
     const host = scp[1]!.toLowerCase();
-    const pathname = scp[2]!.replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "");
+    const pathname = scp[2]!.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
     return `${host}/${host === "github.com" ? pathname.toLowerCase() : pathname}`;
   }
   try {
@@ -86,13 +86,13 @@ function canonicalGitIdentity(raw: string): string {
     // Preserve an explicit port: two self-hosted Git services on one hostname
     // are distinct repositories and must never share durable purpose memory.
     const host = url.host.toLowerCase();
-    const pathname = url.pathname.replace(/\.git$/i, "").replace(/\/+$/g, "");
+    const pathname = url.pathname.replace(/\/+$/g, "").replace(/\.git$/i, "");
     return `${host}${host === "github.com" ? pathname.toLowerCase() : pathname}`;
   } catch {
     return raw
       .trim()
-      .replace(/\.git$/i, "")
       .replace(/^\/+|\/+$/g, "")
+      .replace(/\.git$/i, "")
       .toLowerCase();
   }
 }
@@ -194,14 +194,16 @@ export function continuityFromMemory(
     purpose: last.goalContract.purpose,
     targetUsers: last.goalContract.targetUsers,
     priorGoals: unique(
-      entries.flatMap((entry) => entry.goalContract.activeGoals),
+      [...entries].reverse().flatMap((entry) => entry.goalContract.activeGoals),
       30,
     ),
     priorDecisions: unique(
-      entries.flatMap((entry) => [
-        ...entry.spec.coreFeatures.map((feature) => `Kept feature: ${feature}`),
-        ...entry.spec.userFlows.map((flow) => `Kept workflow: ${flow}`),
-      ]),
+      [...entries]
+        .reverse()
+        .flatMap((entry) => [
+          ...entry.spec.coreFeatures.map((feature) => `Kept feature: ${feature}`),
+          ...entry.spec.userFlows.map((flow) => `Kept workflow: ${flow}`),
+        ]),
       30,
     ),
     priorResearch: unique(research, 30),
@@ -214,33 +216,58 @@ export function continuityFromMemory(
   };
 }
 
+/** A checkpoint is current only while the completed-history frontier is unchanged. */
+export function goalContractMatchesProjectMemory(
+  contract: GoalContract,
+  memory: ProjectMemory | null,
+): boolean {
+  const completedRunIds = (memory?.entries ?? [])
+    .filter(
+      (entry) =>
+        entry.state === "completed" && entry.runId !== contract.createdFromRunId,
+    )
+    .map((entry) => entry.runId)
+    .slice(-12);
+  return (
+    completedRunIds.length === contract.continuity.previousRunIds.length &&
+    completedRunIds.every(
+      (runId, index) => runId === contract.continuity.previousRunIds[index],
+    )
+  );
+}
+
 function partitionGoals(goals: string[], fallback: string) {
   const active: string[] = [];
   const constraints: string[] = [];
   const nonGoals: string[] = [];
   const declaredPurposes: string[] = [];
   const declaredTargetUsers: string[] = [];
+  let structuredEnvelopeSeen = false;
   for (const raw of goals.length ? goals : [fallback]) {
     const structured = decodeStructuredGoalDirectives(raw);
     if (structured) {
+      if (structuredEnvelopeSeen) {
+        throw new Error("Only one structured goal directive envelope is allowed.");
+      }
+      structuredEnvelopeSeen = true;
       declaredTargetUsers.push(...structured.targetUsers.map((item) => clip(item)));
       active.push(...structured.activeGoals.map((item) => clip(item)));
       constraints.push(...structured.constraints.map((item) => clip(item)));
       nonGoals.push(...structured.nonGoals.map((item) => clip(item)));
       continue;
     }
-    const value = clip(raw);
-    const constraint = value.match(/^constraint\s*:\s*(.+)$/i);
-    const nonGoal = value.match(/^non[- ]?goal\s*:\s*(.+)$/i);
-    const declaredPurpose = value.match(/^(?:mission|purpose)\s*:\s*(.+)$/i);
+    const value = raw.trim();
+    const constraint = value.match(/^constraint\s*:\s*([\s\S]+)$/i);
+    const nonGoal = value.match(/^non[- ]?goal\s*:\s*([\s\S]+)$/i);
+    const declaredPurpose = value.match(/^(?:mission|purpose)\s*:\s*([\s\S]+)$/i);
     const declaredAudience = value.match(
-      /^(?:audience|target[- ]?users?)\s*:\s*(.+)$/i,
+      /^(?:audience|target[- ]?users?)\s*:\s*([\s\S]+)$/i,
     );
-    if (declaredPurpose) declaredPurposes.push(declaredPurpose[1]!);
-    else if (declaredAudience) declaredTargetUsers.push(declaredAudience[1]!);
-    else if (constraint) constraints.push(constraint[1]!);
-    else if (nonGoal) nonGoals.push(nonGoal[1]!);
-    else active.push(value);
+    if (declaredPurpose) declaredPurposes.push(clip(declaredPurpose[1]!, 20_000));
+    else if (declaredAudience) declaredTargetUsers.push(clip(declaredAudience[1]!));
+    else if (constraint) constraints.push(clip(constraint[1]!));
+    else if (nonGoal) nonGoals.push(clip(nonGoal[1]!));
+    else active.push(clip(value));
   }
   const purposes = unique(declaredPurposes, 2);
   if (purposes.length > 1) {
@@ -250,10 +277,10 @@ function partitionGoals(goals: string[], fallback: string) {
   }
   return {
     declaredPurpose: purposes[0] ?? null,
-    declaredTargetUsers: unique(declaredTargetUsers, 50),
-    activeGoals: unique(active.length ? active : [fallback], 50),
-    constraints: unique(constraints, 50),
-    nonGoals: unique(nonGoals, 50),
+    declaredTargetUsers: unique(declaredTargetUsers, 100),
+    activeGoals: unique(active.length ? active : [clip(fallback)], 100),
+    constraints: unique(constraints, 100),
+    nonGoals: unique(nonGoals, 100),
   };
 }
 
@@ -271,7 +298,7 @@ function explicitPurposeChange(texts: string[]): boolean {
   const negatedTargetShorthand =
     /\b(?:no|without)\b[^\n.;!?]{0,20}?\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[^\n.;!?]{0,20}?\b(?:change|replacement|redefinition|pivot|repurposing|retargeting|shift)\b/gi;
   const affirmativeChange =
-    /\b(?:(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting)\b[^\n.;!?]{0,80}\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)|(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[^\n.;!?]{0,80}\b(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting))\b/i;
+    /\b(?:(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting)\b[^\n.;!?]{0,80}\b(?:product\s+(?:purpose|mission)|purpose|mission|audience)|(?:product\s+(?:purpose|mission)|purpose|mission|audience)\b[^\n.;!?]{0,80}\b(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting)|(?:pivot|pivoting|repurpose|repurposing|retarget|retargeting)\b[^\n.;!?]{0,40}\b(?:the\s+)?product\b|(?:the\s+)?product\b[^\n.;!?]{0,40}\b(?:pivot|pivoting|repurpose|repurposing|retarget|retargeting))\b/i;
   return texts.some((text) =>
     text.split(/(?:[\n.;!?]+|,?\s+but\s+)/i).some((clause) => {
       // Remove only syntactically negated target-change clauses first. This
@@ -378,8 +405,8 @@ export function createGoalContract(input: {
     30,
   );
   const carriedForwardDecisions = unique(
-    history
-      .filter((entry) => entry.state === "completed")
+    [...history]
+      .reverse()
       .flatMap((entry) => [
         ...entry.spec.coreFeatures.map((feature) => `Feature: ${feature}`),
         ...entry.spec.userFlows.map((flow) => `Workflow: ${flow}`),
@@ -398,14 +425,14 @@ export function createGoalContract(input: {
         ...partitioned.constraints,
         ...(previous && !purposeChanged ? previous.goalContract.constraints : []),
       ],
-      100,
+      200,
     ),
     nonGoals: unique(
       [
         ...partitioned.nonGoals,
         ...(previous && !purposeChanged ? previous.goalContract.nonGoals : []),
       ],
-      100,
+      200,
     ),
     continuity: {
       previousRunIds: history.map((entry) => entry.runId).slice(-12),
