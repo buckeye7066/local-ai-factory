@@ -177,6 +177,12 @@ export interface CommandResult {
   reason?: string;
 }
 
+const MAX_CAPTURED_OUTPUT = 8_000;
+
+function appendOutputTail(current: string, chunk: Buffer | string): string {
+  return (current + chunk.toString()).slice(-MAX_CAPTURED_OUTPUT);
+}
+
 export function isAllowed(bin: string, args: string[]): boolean {
   if (PYTHON_BINS.has(bin)) return isAllowedPython(args);
   if (bin === "npx") return isAllowedNpxVerification(args);
@@ -619,8 +625,12 @@ export async function runCommand(
       if (cancelPoll) clearInterval(cancelPoll);
     };
 
-    child.stdout?.on("data", (d) => (stdout += d.toString()));
-    child.stderr?.on("data", (d) => (stderr += d.toString()));
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout = appendOutputTail(stdout, chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = appendOutputTail(stderr, chunk);
+    });
     child.on("error", (err) => {
       cleanup();
       resolveP({
