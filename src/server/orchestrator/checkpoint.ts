@@ -68,6 +68,8 @@ export const FactoryCheckpointSchema = z.object({
   /** Immutable pre-run host contents used to bound cumulative change across repair passes. */
   hostFileBaselines: z.record(z.string()).default({}),
   testPlan: TestPlanSchema.optional(),
+  /** Last paid Test Writer draft persisted before deterministic validation. */
+  testPlanDraft: z.number().int().min(1).max(3).optional(),
   files: z.array(FileContentSchema).default([]),
   /** Durable safety ledger: a restart/resume must never forget refused writes. */
   writeRefusals: z
