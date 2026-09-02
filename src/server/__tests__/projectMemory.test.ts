@@ -668,6 +668,18 @@ describe("durable project purpose memory", () => {
 
     const currentMemory = await loadProjectMemory(projectKey);
     expect(goalContractMatchesProjectMemory(staleContract, currentMemory)).toBe(false);
+    await expect(
+      rememberProjectCompletion({
+        projectKey,
+        runId: staleRun,
+        goalContract: staleContract,
+        spec: withGoalContract(spec("A stale draft"), staleContract),
+        finalSummary: "Stale run tried to finish late.",
+        nextImprovements: [],
+        revision: "stale",
+        now: 6,
+      }),
+    ).rejects.toThrow(/stale/i);
     expect(goalContractMatchesProjectMemory(interveningContract, currentMemory)).toBe(
       true,
     );
