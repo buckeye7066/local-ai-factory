@@ -72,6 +72,7 @@ import {
 } from "../workspace/unwiredFiles.js";
 import { assessProtectedHostWrite } from "../workspace/protectedFiles.js";
 import { assessPhantomImports } from "../workspace/phantomImports.js";
+import { assessWindowsProcessPortability } from "../workspace/windowsProcessPortability.js";
 import {
   assessPlatformCompatibility,
   carryForwardPlatformEvidence,
@@ -1950,10 +1951,15 @@ async function executeRun(
         // Greenfield code cannot prove itself with a model-authored harness.
         trustedBrowserHarness: extendMode && checkpoint.baselineBrowserHarness === true,
       });
+      const windowsPortabilityIssues = assessWindowsProcessPortability(files.values());
       verification.incomplete = [
         ...acceptance.errors.map((reason) => ({
           command: "generated acceptance tests",
           reason,
+        })),
+        ...windowsPortabilityIssues.map((issue) => ({
+          command: `Windows process portability: ${issue.path}:${issue.line}`,
+          reason: issue.reason,
         })),
         ...verificationPlan.incomplete,
       ];
