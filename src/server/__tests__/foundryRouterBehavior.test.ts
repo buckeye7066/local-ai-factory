@@ -216,6 +216,60 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     ).toBe("not_selected");
   });
 
+  it("finishes an earlier Scout pass once, then runs mandatory RepoRewards", async () => {
+    const project = await store.create({
+      ...intakeFromMarkdown(
+        "# ScoutFirst\nInspect the market before improving the product.",
+        "C:/Vault/ScoutFirst.md",
+      ),
+      selectedStations: ["scout"],
+    });
+    adapters.hold("repo-rewards");
+
+    const started = await fetch(`${baseUrl}/projects/${project.id}/start`, {
+      method: "POST",
+      headers: jsonHeaders(),
+    });
+    expect(started.status).toBe(202);
+    await waitFor(
+      async () => adapters.getCalls().filter((call) => call.projectId === project.id),
+      (calls) => calls.some((call) => call.stationId === "repo-rewards"),
+    );
+
+    const whileDiscoveryRuns = (await store.get(project.id))!;
+    expect(
+      adapters
+        .getCalls()
+        .filter((call) => call.projectId === project.id)
+        .map((call) => call.stationId),
+    ).toEqual(["scout", "repo-rewards"]);
+    expect(
+      whileDiscoveryRuns.stations.find((station) => station.stationId === "scout")
+        ?.status,
+    ).toBe("completed");
+    expect(
+      whileDiscoveryRuns.stations.find(
+        (station) => station.stationId === "repo-rewards",
+      )?.status,
+    ).toBe("active");
+
+    adapters.release("repo-rewards");
+    await waitFor(
+      async () => (await store.get(project.id))!,
+      (candidate) =>
+        candidate.stations.find((station) => station.stationId === "crucible")
+          ?.status === "needs_attention",
+    );
+    const completedCalls = adapters
+      .getCalls()
+      .filter((call) => call.projectId === project.id)
+      .map((call) => call.stationId);
+    expect(completedCalls.filter((stationId) => stationId === "scout")).toHaveLength(1);
+    expect(
+      completedCalls.filter((stationId) => stationId === "repo-rewards"),
+    ).toHaveLength(1);
+  });
+
   it("rejects a completed RepoRewards event without its typed handoff", async () => {
     const created = await store.create(
       intakeFromMarkdown(
