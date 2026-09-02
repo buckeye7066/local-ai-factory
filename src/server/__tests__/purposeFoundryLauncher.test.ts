@@ -23,6 +23,10 @@ describe("Purpose Foundry desktop launcher", () => {
     expect(installerAt).toBeGreaterThan(0);
     expect(launcherAt).toBeGreaterThan(installerAt);
     expect(factory).toContain("-Quiet");
+    const repairCommand = factory
+      .split(/\\r?\\n/)
+      .find((line) => line.includes("Install-Purpose-Foundry-Icon.ps1"));
+    expect(repairCommand).toContain("-ExecutionPolicy Bypass");
   });
 
   it("opens Foundry mode, bypasses restrictive policies, and preserves errors", async () => {
@@ -35,6 +39,16 @@ describe("Purpose Foundry desktop launcher", () => {
     expect(foundry).toContain("Purpose Foundry could not start.");
     expect(foundry).toContain("pause >nul");
     expect(foundry).toContain("exit /b %FOUNDRY_EXIT%");
+  });
+
+  it("package icon installers bypass restrictive PowerShell policies", async () => {
+    const pkg = JSON.parse(
+      await readFile(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { scripts: Record<string, string> };
+    expect(pkg.scripts["install:desktop-icon"]).toContain("-ExecutionPolicy Bypass");
+    expect(pkg.scripts["install:purpose-foundry-icon"]).toContain(
+      "-ExecutionPolicy Bypass",
+    );
   });
 
   it("the standard desktop installer creates both independent icons", async () => {
