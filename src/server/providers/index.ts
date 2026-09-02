@@ -22,9 +22,11 @@ import {
   filterRoutableCatalog,
 } from "../rotation/rotatingProvider.js";
 import { ThemedProvider } from "../orchestrator/workTheme.js";
+import { ModelLadderProvider } from "./modelLadderProvider.js";
 
 export { AnthropicProvider, OpenAIProvider, StubProvider, MockProvider, FreeProvider };
 export { FailoverProvider };
+export { ModelLadderProvider };
 export { ProviderAbortError } from "./types.js";
 
 /**
@@ -107,19 +109,30 @@ export function createProviderRegistry(
   // Every paid SDK call reserves admission before I/O. Its returned token
   // usage then replaces the in-flight estimate in the local ledger; provider
   // billing can include charges this estimate does not model.
-  const anthropic = new AnthropicProvider(
-    secrets.anthropicApiKey,
-    config.anthropicModel,
-    (u) => {
-      const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
+  const anthropicModels = config.anthropicModels ?? [config.anthropicModel];
+  const anthropic = new ModelLadderProvider(
+    anthropicModels.map((model) => ({
+      model,
+      provider: new AnthropicProvider(
+        secrets.anthropicApiKey,
+        model,
+        (u) => {
+          const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
+          log(
+            "warn",
+            `[route] paid Anthropic ${model} call billed: ${u.inTokens} in / ` +
+              `${u.outTokens} out tokens (est. $${usd.toFixed(4)}).`,
+          );
+        },
+        signal,
+        true,
+      ),
+    })),
+    (from, to, reason) =>
       log(
         "warn",
-        `[route] paid Anthropic call billed: ${u.inTokens} in / ${u.outTokens} out ` +
-          `tokens (est. $${usd.toFixed(4)}).`,
-      );
-    },
-    signal,
-    true,
+        `[route] Anthropic model ${from} exhausted — continuing on ${to}. (${reason.slice(0, 120)})`,
+      ),
   );
   const openai = new OpenAIProvider(
     secrets.openaiApiKey,

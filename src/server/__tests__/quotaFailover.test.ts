@@ -60,6 +60,13 @@ describe("isModelExhaustion", () => {
   it("demotes on capacity and model availability without hiding bad input", () => {
     expect(isModelExhaustion({ status: 429, message: "busy" })).toBe(true);
     expect(isModelExhaustion(new Error("model is temporarily unavailable"))).toBe(true);
+    expect(
+      isModelExhaustion(
+        new Error(
+          "400 invalid_request_error: model is not available under zero data retention",
+        ),
+      ),
+    ).toBe(true);
     expect(isModelExhaustion(new Error("400 invalid model parameter"))).toBe(false);
   });
 });

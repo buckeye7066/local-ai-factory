@@ -11,6 +11,12 @@ describe("config", () => {
   it("loads defaults when env is empty", () => {
     const cfg = loadConfig({});
     expect(cfg.anthropicModel).toBe("claude-fable-5-1");
+    expect(cfg.anthropicModels).toEqual([
+      "claude-fable-5-1",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
+    ]);
     expect(cfg.openaiModel).toBe("gpt-5.5");
     expect(cfg.maxRepairLoops).toBe(3);
     expect(cfg.maxModelCallsPerRun).toBe(30);
@@ -27,6 +33,25 @@ describe("config", () => {
     });
     expect(cfg.maxRepairLoops).toBe(5);
     expect(cfg.allowUntrustedScripts).toBe(true);
+  });
+
+  it("keeps one explicit strongest-to-weakest Anthropic model ladder", () => {
+    const cfg = loadConfig({
+      ANTHROPIC_MODEL: "claude-fable-5-1",
+      FACTORY_ANTHROPIC_MODEL_LADDER:
+        "claude-fable-5-1, claude-opus-5; claude-sonnet-5",
+    });
+    expect(cfg.anthropicModels).toEqual([
+      "claude-fable-5-1",
+      "claude-opus-5",
+      "claude-sonnet-5",
+    ]);
+    expect(
+      toHealth(
+        cfg,
+        loadSecrets({ ANTHROPIC_API_KEY: "sk-anthropic", OPENAI_API_KEY: "sk-openai" }),
+      ).anthropicModels,
+    ).toEqual(cfg.anthropicModels);
   });
 
   it("detects configured keys", () => {

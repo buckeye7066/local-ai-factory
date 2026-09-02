@@ -5,20 +5,22 @@ import { AnthropicProvider } from "./anthropicProvider.js";
 import { OpenAIProvider } from "./openaiProvider.js";
 import { MissingProviderCredentialError } from "./index.js";
 import type { RouteLogger } from "./failoverProvider.js";
+import { ModelLadderProvider } from "./modelLadderProvider.js";
 
 export type ReadinessProviderPair = {
   sol: LLMProvider;
   solModel: string;
   second: LLMProvider;
-  secondIdentity: "fable" | "opus";
-  secondModel: string;
+  secondIdentity: () => "fable" | "opus";
+  secondModel: () => string;
 };
 
 /**
  * Construct the mandatory readiness brains independently from ordinary run
  * routing. Free/helper models may build, but production completion always pays
  * for and records one OpenAI Sol judgment plus one Anthropic Fable/Opus-class
- * judgment. No failover crosses this boundary.
+ * judgment. Model fallback stays inside the Anthropic family, so independence
+ * is preserved even when the strongest configured Anthropic model is exhausted.
  */
 export function createReadinessBrainProviders(
   config: AppConfig,
@@ -58,19 +60,29 @@ export function createReadinessBrainProviders(
     signal,
     true,
   );
-  const second = new AnthropicProvider(
-    secrets.anthropicApiKey,
-    config.fableOrOpusModel,
-    usageLogger("Fable/Opus"),
-    signal,
-    true,
+  const second = new ModelLadderProvider(
+    floor.fableOrOpusModels.map((model) => ({
+      model,
+      provider: new AnthropicProvider(
+        secrets.anthropicApiKey,
+        model,
+        usageLogger("Fable/Opus"),
+        signal,
+        true,
+      ),
+    })),
+    (from, to, reason) =>
+      log(
+        "warn",
+        `[readiness] Anthropic model ${from} exhausted — continuing on ${to}. (${reason.slice(0, 120)})`,
+      ),
   );
 
   return {
     sol,
     solModel: config.solModel,
     second,
-    secondIdentity: /fable/i.test(config.fableOrOpusModel) ? "fable" : "opus",
-    secondModel: config.fableOrOpusModel,
+    secondIdentity: () => (/fable/i.test(second.currentModel()) ? "fable" : "opus"),
+    secondModel: () => second.currentModel(),
   };
 }

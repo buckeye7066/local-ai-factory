@@ -103,8 +103,8 @@ export async function completePreReleaseReadiness(input: {
   solProvider: LLMProvider;
   solModel: string;
   secondProvider: LLMProvider;
-  secondIdentity: "fable" | "opus";
-  secondModel: string;
+  secondIdentity: "fable" | "opus" | (() => "fable" | "opus");
+  secondModel: string | (() => string);
 }): Promise<PreReleaseReadinessApproval> {
   const facts = candidateReadinessFacts(input.facts);
   const evidenceDigest = productionReadinessDigest(facts);
@@ -229,8 +229,8 @@ export async function completeProductionReadiness(input: {
   solProvider: LLMProvider;
   solModel: string;
   secondProvider: LLMProvider;
-  secondIdentity: "fable" | "opus";
-  secondModel: string;
+  secondIdentity: "fable" | "opus" | (() => "fable" | "opus");
+  secondModel: string | (() => string);
 }): Promise<ProductionReadinessCompletion> {
   const evidenceDigest = productionReadinessDigest(input.facts);
   await markReadinessEvaluating({
