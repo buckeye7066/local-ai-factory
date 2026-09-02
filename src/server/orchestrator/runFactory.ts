@@ -59,6 +59,7 @@ import {
 } from "../workspace/verificationReceipt.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import {
+  generatedTestsForVerification,
   hasPlaywrightHarness,
   verificationPlanForWorkspace,
 } from "../workspace/verificationCommands.js";
@@ -1938,7 +1939,11 @@ async function executeRun(
             requirements: [],
           };
       const verificationPlan = verificationPlanForWorkspace(workspacePath, {
-        generatedTests: checkpoint.testPlan?.files ?? [],
+        // Builder may author tests before Test Writer adds acceptance coverage.
+        // Every written test needs its own structured direct-runner evidence;
+        // planning only checkpoint.testPlan made an otherwise green build
+        // permanently degrade to unknown.
+        generatedTests: generatedTestsForVerification(files.values()),
         uiAcceptanceRequired: acceptance.uiAcceptanceRequired,
         // Extend runs may use only the harness observed before generated writes.
         // Greenfield code cannot prove itself with a model-authored harness.
