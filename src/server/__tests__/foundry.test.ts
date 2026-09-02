@@ -194,7 +194,7 @@ describe("Purpose Foundry", () => {
         exhausted.calls += 1;
         throw Object.assign(new Error("rate limit exhausted"), { status: 429 });
       },
-      async generateJson<T>() {
+      async generateJson() {
         exhausted.calls += 1;
         throw Object.assign(new Error("rate limit exhausted"), { status: 429 });
       },
