@@ -24,6 +24,50 @@ describe("Windows child-process portability audit", () => {
     ]);
   });
 
+  it("resolves aliased imports, namespaces, require destructuring, and promisify", () => {
+    const issues = assessWindowsProcessPortability([
+      {
+        path: "tests/aliases.test.ts",
+        contents: `
+          import * as child from "node:child_process";
+          import { spawn as launch, execFile } from "child_process";
+          import { promisify as makeAsync } from "node:util";
+          const { spawnSync: launchSync } = require("node:child_process");
+          const runFile = makeAsync(execFile);
+          const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+          launch(npmCommand, ["test"]);
+          child.execFile(npmCommand, ["test"]);
+          launchSync(npmCommand, ["test"]);
+          await runFile(npmCommand, ["test"]);
+        `,
+      },
+    ]);
+
+    expect(issues).toHaveLength(4);
+    expect(issues.map((issue) => issue.reason)).toEqual([
+      expect.stringContaining("spawn directly"),
+      expect.stringContaining("execFile directly"),
+      expect.stringContaining("spawnSync directly"),
+      expect.stringContaining("execFile directly"),
+    ]);
+  });
+
+  it("ignores comments, fixture strings, and unrelated same-named functions", () => {
+    expect(
+      assessWindowsProcessPortability([
+        {
+          path: "tests/fixtures.test.ts",
+          contents: `
+            // execFile("npm.cmd", ["test"]);
+            const fixture = 'spawn("npm.cmd", ["test"])';
+            function spawn(command: string) { return command; }
+            spawn("npm.cmd");
+          `,
+        },
+      ]),
+    ).toEqual([]);
+  });
+
   it("accepts real executables and deliberately shell-enabled wrappers", () => {
     expect(
       assessWindowsProcessPortability([
