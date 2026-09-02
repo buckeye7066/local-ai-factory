@@ -81,18 +81,56 @@ type ScannedToken = {
   depth: number;
 };
 
+
+type SourceRange = { start: number; end: number };
+
+function flowScannerInertRanges(source: string, relPath: string): SourceRange[] {
+  const sourceFile = ts.createSourceFile(
+    relPath,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKind(relPath),
+  );
+  const ranges: SourceRange[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isTemplateExpression(node) ||
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      ts.isRegularExpressionLiteral(node) ||
+      ts.isJsxElement(node) ||
+      ts.isJsxSelfClosingElement(node) ||
+      ts.isJsxFragment(node)
+    ) {
+      ranges.push({ start: node.getStart(sourceFile), end: node.getEnd() });
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return ranges;
+}
+
+function positionInRanges(position: number, ranges: readonly SourceRange[]): boolean {
+  return ranges.some((range) => position >= range.start && position < range.end);
+}
+
 /**
  * TypeScript's parser deliberately rejects Flow's `import typeof` syntax.
  * Scan tokens instead: comments and string fixtures remain single tokens, and
  * only a top-level import/typeof/from/string sequence becomes a dependency.
  */
-function flowTypeofImportSpecifiers(source: string): ImportedSpecifier[] {
+function flowTypeofImportSpecifiers(
+  source: string,
+  relPath: string,
+): ImportedSpecifier[] {
   const scanner = ts.createScanner(
     ts.ScriptTarget.Latest,
     true,
     ts.LanguageVariant.Standard,
     source,
   );
+  const inertRanges = flowScannerInertRanges(source, relPath);
   const tokens: ScannedToken[] = [];
   let depth = 0;
   for (
@@ -117,6 +155,7 @@ function flowTypeofImportSpecifiers(source: string): ImportedSpecifier[] {
     const token = tokens[index]!;
     if (
       token.depth !== 0 ||
+      positionInRanges(token.start, inertRanges) ||
       token.kind !== ts.SyntaxKind.ImportKeyword ||
       tokens[index + 1]?.kind !== ts.SyntaxKind.TypeOfKeyword
     ) {
@@ -199,6 +238,12 @@ function importedSpecifiers(
         add(first);
       }
     } else if (
+      ts.isJSDocImportTag(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      add(node.moduleSpecifier);
+    } else if (
       ts.isImportTypeNode(node) &&
       ts.isLiteralTypeNode(node.argument) &&
       ts.isStringLiteralLike(node.argument.literal)
@@ -214,7 +259,7 @@ function importedSpecifiers(
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  specs.push(...flowTypeofImportSpecifiers(source));
+  specs.push(...flowTypeofImportSpecifiers(source, relPath));
   return specs;
 }
 
