@@ -159,7 +159,7 @@ export interface RouteEvent {
 }
 
 export interface RouteSnapshot {
-  /** The provider the deck is SUPPOSED to run on. Always the free route. */
+  /** First configured rung in the current automatic model ladder. */
   primary: ProviderName;
   /** Who served the most recent model call. null before the first call. */
   serving: ProviderName | null;
@@ -272,10 +272,18 @@ export function armHold(holdMs: number, reason: string): void {
   pushEvent("hold-armed", "free", null, reason);
 }
 
-export function noteFailover(to: ProviderName, reason: string): void {
+export function noteRoutePrimary(provider: ProviderName): void {
+  state.primary = provider;
+}
+
+export function noteFailover(
+  to: ProviderName,
+  reason: string,
+  from: ProviderName = "free",
+): void {
   state.lastFailoverAt = Date.now();
   state.lastFailoverReason = reason;
-  pushEvent("failover", "free", to, reason);
+  pushEvent("failover", from, to, reason);
 }
 
 export function noteServed(provider: ProviderName): void {
