@@ -81,7 +81,6 @@ type ScannedToken = {
   depth: number;
 };
 
-
 type SourceRange = { start: number; end: number };
 
 function flowScannerInertRanges(source: string, relPath: string): SourceRange[] {
