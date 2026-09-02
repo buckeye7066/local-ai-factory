@@ -373,7 +373,7 @@ function safeUrl(value: string, label: string): string {
   return trimSlash(parsed.toString());
 }
 
-function defaultProcessRunner(
+export function defaultProcessRunner(
   executable: string,
   args: string[],
   options: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
@@ -392,13 +392,22 @@ function defaultProcessRunner(
       },
       (error, stdout, stderr) => {
         if (error) {
-          const code = typeof error.code === "number" ? error.code : 1;
+          if (
+            typeof error.code === "number" &&
+            !error.killed &&
+            error.signal == null
+          ) {
+            resolvePromise({
+              stdout: String(stdout),
+              stderr: String(stderr),
+              exitCode: error.code,
+            });
+            return;
+          }
           // Child output can contain provider diagnostics or secret-shaped
-          // environment values. A failed process is recorded generically;
-          // raw stdout/stderr is never copied into the evidence ledger.
-          reject(
-            new Error(`Process exited ${code}. Inspect FlexFactor's local run log.`),
-          );
+          // environment values. Launch and timeout failures are recorded
+          // generically; raw stdout/stderr is never copied into the ledger.
+          reject(new Error("Process could not be launched or timed out."));
           return;
         }
         resolvePromise({
@@ -1015,11 +1024,14 @@ export class FoundryAdapters {
   }
 
   private async appStorePublisher(project: FoundryProject): Promise<AdapterOutcome> {
-    const base = safeUrl(
-      process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim() ||
-        "http://127.0.0.1:4000",
-      "App Store Publisher URL",
-    );
+    const configuredUrl =
+      process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim();
+    if (!configuredUrl) {
+      throw new Error(
+        "App Store Publisher is not configured. Set PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL before selecting this station; no request was sent.",
+      );
+    }
+    const base = safeUrl(configuredUrl, "App Store Publisher URL");
     const [health, rawStores, rawPresets, submissions] = await Promise.all([
       this.fetchJson(`${base}/api/health`),
       this.fetchJson(`${base}/api/stores`),
