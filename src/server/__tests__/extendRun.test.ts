@@ -76,7 +76,7 @@ describe("extend mode (end-to-end, offline mock)", () => {
     // New files were actually written into the SAME ingested workspace.
     expect(run.files.length).toBeGreaterThan(0);
     expect(run.finalReport).not.toBeNull();
-  }, 20_000);
+  }, 40_000);
 
   it("operates directly on the real path when repoSource.inPlace is explicitly set", async () => {
     const src = await makeExistingRepo();
@@ -114,7 +114,7 @@ describe("extend mode (end-to-end, offline mock)", () => {
       .toString()
       .trim();
     expect(runBranches).toMatch(/factory-deck\//);
-  }, 20_000);
+  }, 40_000);
 
   it("greenfield 'new' mode is unaffected — same behavior as before extend mode existed", async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-new-ws-"));

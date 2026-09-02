@@ -1,0 +1,328 @@
+import express from "express";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  FoundryStore,
+  intakeFromMarkdown,
+  STATIONS,
+  type StationId,
+} from "../foundry/model.js";
+import {
+  FoundryAdapters,
+  type AdapterOutcome,
+  type AdapterDescriptor,
+} from "../foundry/adapters.js";
+import { createFoundryRouter } from "../foundry/router.js";
+
+function jsonHeaders() {
+  return { "content-type": "application/json" };
+}
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+async function waitFor<T>(fn: () => Promise<T>, pred: (v: T) => boolean, ms = 8000) {
+  const start = Date.now();
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const v = await fn();
+    if (pred(v)) return v;
+    if (Date.now() - start > ms) throw new Error("waitFor: timed out");
+    await sleep(25);
+  }
+}
+
+class TestFoundryAdapters extends FoundryAdapters {
+  private completions = new Map<string, Set<StationId>>();
+  private calls: Array<{ projectId: string; stationId: StationId }> = [];
+  getCalls() {
+    return this.calls.slice();
+  }
+  override descriptors(): AdapterDescriptor[] {
+    return STATIONS.map((s) => {
+      const desc: AdapterDescriptor = {
+        stationId: s.id,
+        mode: "internal",
+        destination: "in-memory",
+        configured: true,
+      };
+      return desc;
+    });
+  }
+  override async execute(
+    project: Awaited<ReturnType<FoundryStore["get"]>>,
+    stationId: StationId,
+  ): Promise<AdapterOutcome> {
+    if (!project) throw new Error("no project");
+    const done = this.completions.get(project.id) ?? new Set<StationId>();
+    this.completions.set(project.id, done);
+    this.calls.push({ projectId: project.id, stationId });
+    // Complete discovery and Factory Deck quickly; hold Crucible for attention to prove restart dispatch.
+    const complete: StationId[] = [
+      "scout",
+      "repo-rewards",
+      "promo-pilot",
+      "factory-deck",
+      "flexfactor",
+    ];
+    if (complete.includes(stationId)) {
+      done.add(stationId);
+      const evidence: Record<string, unknown> = {};
+      if (stationId === "factory-deck") {
+        // Build a deterministic artifact tree digest bound to project id.
+        const tree = { projectId: project.id, files: ["a.txt", "b.txt"], bytes: 42 };
+        const hex = createHash("sha256").update(JSON.stringify(tree)).digest("hex");
+        evidence.evidenceDigest = `sha256:${hex}`;
+        evidence.revision = `rev-${hex.slice(0, 12)}`;
+      }
+      return {
+        status: "completed",
+        summary: `completed:${stationId}`,
+        artifacts: [],
+        evidence,
+      } satisfies AdapterOutcome;
+    }
+    if (stationId === "crucible") {
+      return {
+        status: "needs_attention",
+        summary: "adversary requires attention",
+        artifacts: [],
+        evidence: {},
+      } satisfies AdapterOutcome;
+    }
+    // Anything after attention point is left queued.
+    return {
+      status: "needs_attention",
+      summary: "default",
+      artifacts: [],
+      evidence: {},
+    } satisfies AdapterOutcome;
+  }
+}
+
+describe("Foundry router invariants (deterministic adapters): single-active, stale-reject, auto-advance, restart dispatch, evidence chain", () => {
+  let root!: string;
+  let store!: FoundryStore;
+  let baseUrl!: string;
+  let server: import("http").Server;
+  let adapters!: TestFoundryAdapters;
+  let prevOpenAi!: string | undefined;
+  let prevAnthropic!: string | undefined;
+
+  async function startServer() {
+    const app = express();
+    app.use(express.json());
+    app.use("/api/foundry", createFoundryRouter(store, adapters));
+    server = app.listen(0);
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no server address");
+    baseUrl = `http://127.0.0.1:${address.port}/api/foundry`;
+  }
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "foundry-router-"));
+    store = new FoundryStore(root);
+    adapters = new TestFoundryAdapters(store);
+    prevOpenAi = process.env.OPENAI_API_KEY;
+    prevAnthropic = process.env.ANTHROPIC_API_KEY;
+    process.env.OPENAI_API_KEY = prevOpenAi || "test-openai";
+    process.env.ANTHROPIC_API_KEY = prevAnthropic || "test-anthropic";
+    await startServer();
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (prevOpenAi === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = prevOpenAi;
+    if (prevAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = prevAnthropic;
+  });
+
+  it("router-level start, single-active, stale reject, auto-advance, survives restart, valid evidence chain", async () => {
+    // Create a project (obsidian equivalence)
+    const intake = intakeFromMarkdown(
+      "# GrantFlow\nFind funding.",
+      "C:/Vault/GrantFlow.md",
+    );
+    const createdRes = await fetch(`${baseUrl}/projects`, {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify(intake),
+    });
+    expect(createdRes.status).toBe(201);
+    const project = (await createdRes.json()) as Awaited<
+      ReturnType<typeof store.create>
+    >;
+    const projectId = project.id;
+
+    // Start the assembly line via router (exercises readiness brain floor + dispatcher).
+    const startRes = await fetch(`${baseUrl}/projects/${projectId}/start`, {
+      method: "POST",
+      headers: jsonHeaders(),
+    });
+    expect(startRes.status).toBe(202);
+
+    const completedBeforeRestart: StationId[] = [
+      "scout",
+      "repo-rewards",
+      "promo-pilot",
+      "factory-deck",
+      "flexfactor",
+    ];
+
+    // Wait until every deterministic pre-Crucible station is durably completed.
+    const beforeRestart = await waitFor(
+      async () => (await store.get(projectId))!,
+      (p) =>
+        completedBeforeRestart.every(
+          (id) => p.stations.find((s) => s.stationId === id)?.status === "completed",
+        ),
+      4000,
+    );
+    const factoryBeforeRestart = beforeRestart.stations.find(
+      (s) => s.stationId === "factory-deck",
+    )!;
+    const digestBeforeRestart = factoryBeforeRestart.evidenceDigest;
+    const revisionBeforeRestart = factoryBeforeRestart.revision;
+    expect(digestBeforeRestart).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(revisionBeforeRestart).toMatch(/^rev-[0-9a-f]{12}$/);
+
+    // Restart with a fresh adapter instance. Its ledger now contains only post-restart calls.
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store = new FoundryStore(root);
+    adapters = new TestFoundryAdapters(store);
+    await startServer();
+
+    const afterRestart = await waitFor(
+      async () => (await store.get(projectId))!,
+      (p) =>
+        completedBeforeRestart.every(
+          (id) => p.stations.find((s) => s.stationId === id)?.status === "completed",
+        ),
+      4000,
+    );
+    // Assert Factory Deck digest/revision preserved across restart.
+    const factoryAfter = afterRestart.stations.find(
+      (s) => s.stationId === "factory-deck",
+    )!;
+    expect(factoryAfter.evidenceDigest).toBe(digestBeforeRestart);
+    expect(factoryAfter.revision).toBe(revisionBeforeRestart);
+    // Also assert no replay for already-completed stations by examining the adapter call ledger post-restart.
+    const callsAfterRestart = adapters.getCalls();
+    const noReplayIds = new Set<StationId>([
+      "scout",
+      "repo-rewards",
+      "promo-pilot",
+      "factory-deck",
+      "flexfactor",
+    ]);
+    expect(callsAfterRestart.every((c) => !noReplayIds.has(c.stationId))).toBe(true);
+
+    for (const id of completedBeforeRestart) {
+      expect(afterRestart.stations.find((s) => s.stationId === id)?.status).toBe(
+        "completed",
+      );
+    }
+    const replayedCompletedStations = adapters
+      .getCalls()
+      .filter(
+        (call) =>
+          call.projectId === projectId &&
+          completedBeforeRestart.includes(call.stationId),
+      );
+    expect(replayedCompletedStations).toEqual([]);
+
+    const factoryAfterRestart = afterRestart.stations.find(
+      (s) => s.stationId === "factory-deck",
+    )!;
+    expect(factoryAfterRestart.evidenceDigest).toBe(digestBeforeRestart);
+    expect(factoryAfterRestart.revision).toBe(revisionBeforeRestart);
+
+    // Sample repeatedly to assert at most one concurrent active station throughout.
+    for (let i = 0; i < 40; i++) {
+      const snap = (await store.get(projectId))!;
+      const activeCount = snap.stations.filter((s) => s.status === "active").length;
+      expect(activeCount).toBeLessThanOrEqual(1);
+      await sleep(10);
+    }
+
+    // Stale/duplicate completion is rejected (complete a previously completed station again).
+    const currentAfter = (await store.get(projectId))!;
+    const scout = currentAfter.stations.find((s) => s.stationId === "scout")!;
+    expect(scout.status).toBe("completed");
+    const stale = await fetch(
+      `${baseUrl}/projects/${projectId}/stations/scout/events`,
+      {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          status: "completed",
+          summary: "duplicate",
+          artifacts: [],
+          evidence: {},
+        }),
+      },
+    );
+    expect(stale.status).toBe(409);
+
+    // Verify digest/revision binding from the persisted Factory Deck station.
+    const expectedHex = createHash("sha256")
+      .update(JSON.stringify({ projectId, files: ["a.txt", "b.txt"], bytes: 42 }))
+      .digest("hex");
+    expect(factoryAfterRestart.evidenceDigest).toBe(`sha256:${expectedHex}`);
+    expect(factoryAfterRestart.revision).toBe(`rev-${expectedHex.slice(0, 12)}`);
+
+    // At this point Crucible should be active; restart the server and prove dispatcher runs:
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await startServer();
+    await waitFor(
+      async () => (await store.get(projectId))!,
+      (p) =>
+        Boolean(
+          p.stations.find(
+            (s) => s.stationId === "crucible" && s.status === "needs_attention",
+          ),
+        ),
+      4000,
+    );
+
+    // Evidence ledger cryptographic chain verification (previousHash/hash).
+    const lines = (await readFile(join(root, "evidence.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    expect(lines.length).toBeGreaterThan(0);
+    type Event = {
+      sequence: number;
+      timestamp: number;
+      projectId: string;
+      stationId: StationId;
+      type: string;
+      payload: unknown;
+      previousHash: string | null;
+      hash: string;
+    };
+    const events = lines.map((l) => JSON.parse(l) as Event);
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
+      const unsigned = {
+        sequence: e.sequence,
+        timestamp: e.timestamp,
+        projectId: e.projectId,
+        stationId: e.stationId,
+        type: e.type,
+        payload: e.payload,
+        previousHash: e.previousHash,
+      };
+      const recomputed = createHash("sha256")
+        .update(JSON.stringify(unsigned))
+        .digest("hex");
+      expect(e.hash).toBe(recomputed);
+      if (i === 0) expect(e.previousHash).toBeNull();
+      else expect(e.previousHash).toBe(events[i - 1].hash);
+    }
+  });
+});
