@@ -25,11 +25,16 @@ describe("Purpose Foundry desktop launcher", () => {
     expect(factory).toContain("-Quiet");
   });
 
-  it("opens Foundry mode and self-repairs its shortcut", async () => {
+  it("opens Foundry mode, bypasses restrictive policies, and preserves errors", async () => {
     const foundry = await script("start-purpose-foundry.cmd");
     expect(foundry).toContain("Install-Purpose-Foundry-Icon.ps1");
     expect(foundry).toContain("FACTORY_START_PATH=?mode=foundry");
     expect(foundry).toContain("start-factory.ps1");
+    expect(foundry.match(/-ExecutionPolicy Bypass/g)).toHaveLength(2);
+    expect(foundry).toContain('set "FOUNDRY_EXIT=%ERRORLEVEL%"');
+    expect(foundry).toContain("Purpose Foundry could not start.");
+    expect(foundry).toContain("pause >nul");
+    expect(foundry).toContain("exit /b %FOUNDRY_EXIT%");
   });
 
   it("the standard desktop installer creates both independent icons", async () => {
