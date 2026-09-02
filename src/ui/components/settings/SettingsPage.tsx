@@ -198,8 +198,9 @@ export function SettingsPage({ health }: { health: Health | null }) {
               <code className="font-mono text-slate-400">
                 FACTORY_ANTHROPIC_MODEL_LADDER
               </code>{" "}
-              (or legacy <code className="font-mono text-slate-400">ANTHROPIC_MODEL</code>)
-              and the OpenAI model with{" "}
+              (or legacy{" "}
+              <code className="font-mono text-slate-400">ANTHROPIC_MODEL</code>) and the
+              OpenAI model with{" "}
               <code className="font-mono text-slate-400">OPENAI_MODEL</code>.
             </p>
           </Card>
