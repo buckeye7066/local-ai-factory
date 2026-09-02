@@ -62,9 +62,22 @@ interface FileEvidence {
 }
 
 type JavascriptHelper =
-  | ts.ArrowFunction
-  | ts.FunctionExpression
-  | ts.FunctionDeclaration;
+  ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration;
+
+const PROMISE_CALLBACK_METHODS = new Set(["then", "catch", "finally"]);
+const SYNC_ITERATION_CALLBACK_METHODS = new Set([
+  "forEach",
+  "map",
+  "flatMap",
+  "filter",
+  "some",
+  "every",
+  "find",
+  "findIndex",
+  "reduce",
+  "reduceRight",
+]);
+const KNOWN_ASYNC_CALLBACK_HELPERS = new Set(["act", "waitFor"]);
 
 export interface GeneratedTestAssessment {
   ok: boolean;
@@ -101,12 +114,225 @@ function containsExpectCall(node: ts.Node): ts.CallExpression | null {
 function isPrimitiveLiteral(node: ts.Expression | undefined): boolean {
   return Boolean(
     node &&
-      (ts.isStringLiteralLike(node) ||
-        ts.isNumericLiteral(node) ||
-        node.kind === ts.SyntaxKind.TrueKeyword ||
-        node.kind === ts.SyntaxKind.FalseKeyword ||
-        node.kind === ts.SyntaxKind.NullKeyword),
+    (ts.isStringLiteralLike(node) ||
+      ts.isNumericLiteral(node) ||
+      node.kind === ts.SyntaxKind.TrueKeyword ||
+      node.kind === ts.SyntaxKind.FalseKeyword ||
+      node.kind === ts.SyntaxKind.NullKeyword),
   );
+}
+
+function isAsyncFunction(node: JavascriptHelper): boolean {
+  return (
+    node.modifiers?.some(
+      (modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword,
+    ) === true
+  );
+}
+
+function isGeneratorHelper(node: JavascriptHelper): boolean {
+  return (
+    (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)) &&
+    Boolean(node.asteriskToken)
+  );
+}
+
+function helperDeclaredBy(
+  statement: ts.Statement,
+  name: string,
+  callPosition: number,
+): JavascriptHelper | null {
+  if (
+    ts.isFunctionDeclaration(statement) &&
+    statement.name?.text === name &&
+    !isGeneratorHelper(statement)
+  ) {
+    return statement;
+  }
+  if (
+    !ts.isVariableStatement(statement) ||
+    statement.getStart() >= callPosition
+  ) {
+    return null;
+  }
+  for (const declaration of statement.declarationList.declarations) {
+    if (
+      ts.isIdentifier(declaration.name) &&
+      declaration.name.text === name &&
+      declaration.initializer &&
+      (ts.isArrowFunction(declaration.initializer) ||
+        ts.isFunctionExpression(declaration.initializer)) &&
+      !isGeneratorHelper(declaration.initializer)
+    ) {
+      return declaration.initializer;
+    }
+  }
+  return null;
+}
+
+/** Resolve the helper binding visible at a call site, nearest lexical scope first. */
+function resolveVisibleHelper(
+  call: ts.CallExpression,
+  name: string,
+): JavascriptHelper | null {
+  const callPosition = call.getStart();
+  let current: ts.Node | undefined = call.parent;
+  while (current) {
+    if (ts.isBlock(current) || ts.isSourceFile(current)) {
+      for (let index = current.statements.length - 1; index >= 0; index -= 1) {
+        const helper = helperDeclaredBy(
+          current.statements[index]!,
+          name,
+          callPosition,
+        );
+        if (helper) return helper;
+      }
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
+/**
+ * Follow expression composition until the value is awaited or returned. This
+ * recognizes `await Promise.all([helper()])` and concise returned helper calls
+ * without treating a floating promise as executed evidence.
+ */
+function expressionResultIsObserved(expression: ts.Expression): boolean {
+  let current: ts.Node = expression;
+  while (current.parent) {
+    const parent = current.parent;
+    if (ts.isAwaitExpression(parent) && parent.expression === current)
+      return true;
+    if (ts.isReturnStatement(parent) && parent.expression === current)
+      return true;
+    if (ts.isArrowFunction(parent) && parent.body === current) return true;
+    if (
+      ts.isParenthesizedExpression(parent) ||
+      ts.isAsExpression(parent) ||
+      ts.isTypeAssertionExpression(parent) ||
+      ts.isNonNullExpression(parent) ||
+      ts.isSatisfiesExpression(parent) ||
+      ts.isArrayLiteralExpression(parent) ||
+      ts.isConditionalExpression(parent) ||
+      (ts.isCallExpression(parent) &&
+        parent.arguments.some((arg) => arg === current))
+    ) {
+      current = parent;
+      continue;
+    }
+    break;
+  }
+  return false;
+}
+
+function helperInvokesParameter(
+  helper: JavascriptHelper,
+  parameterIndex: number,
+  callback: ts.ArrowFunction | ts.FunctionExpression,
+): boolean {
+  const parameter = helper.parameters[parameterIndex]?.name;
+  if (!parameter || !ts.isIdentifier(parameter) || !helper.body) return false;
+  let invoked = false;
+  const visit = (node: ts.Node, root = false): void => {
+    if (invoked) return;
+    if (
+      !root &&
+      (ts.isArrowFunction(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isFunctionDeclaration(node) ||
+        ts.isMethodDeclaration(node))
+    ) {
+      return;
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === parameter.text &&
+      (!isAsyncFunction(callback) || expressionResultIsObserved(node))
+    ) {
+      invoked = true;
+      return;
+    }
+    ts.forEachChild(node, (child) => visit(child));
+  };
+  visit(helper.body, true);
+  return invoked;
+}
+
+function callInvokesInlineCallback(
+  call: ts.CallExpression,
+  callback: ts.ArrowFunction | ts.FunctionExpression,
+): boolean {
+  const parameterIndex = call.arguments.findIndex(
+    (argument) => argument === callback,
+  );
+  if (parameterIndex < 0) return false;
+  const name = expressionName(call.expression);
+  if (name && PROMISE_CALLBACK_METHODS.has(name)) return true;
+  if (name && KNOWN_ASYNC_CALLBACK_HELPERS.has(name)) return true;
+  if (name && SYNC_ITERATION_CALLBACK_METHODS.has(name)) {
+    return !isAsyncFunction(callback);
+  }
+  if (!ts.isIdentifier(call.expression)) return false;
+  const helper = resolveVisibleHelper(call, call.expression.text);
+  return helper
+    ? helperInvokesParameter(helper, parameterIndex, callback)
+    : false;
+}
+
+function shortUnboundedRegexToken(pattern: string): string | null {
+  if (pattern.startsWith("^") && pattern.endsWith("$")) return null;
+  let inCharacterClass = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index]!;
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (char === "[") {
+      inCharacterClass = true;
+      continue;
+    }
+    if (char === "]") {
+      inCharacterClass = false;
+      continue;
+    }
+    if (inCharacterClass || !/[A-Za-z]/.test(char)) continue;
+    let end = index + 1;
+    while (end < pattern.length && /[A-Za-z0-9_-]/.test(pattern[end]!))
+      end += 1;
+    const token = pattern.slice(index, end);
+    const previous = pattern[index - 1] ?? "";
+    const following = pattern[end] ?? "";
+    const partOfLongerToken = /[A-Za-z0-9_-]/.test(previous + following);
+    if (!partOfLongerToken && token.length >= 2 && token.length <= 4) {
+      const left = pattern.slice(0, index);
+      const right = pattern.slice(end);
+      const leftBounded =
+        left.endsWith("\\b") || /(?:\^|\\s[*+?]*)$/.test(left);
+      const rightBounded =
+        right.startsWith("\\b") || /^(?:\$|\\s[*+?]*)/.test(right);
+      if (!leftBounded || !rightBounded) return token;
+    }
+    index = end - 1;
+  }
+  return null;
+}
+
+function brittleSubstring(text: string): string | null {
+  return text.trim().length <= 4
+    ? `brittle negated substring ${JSON.stringify(text)}; ` +
+        "use a token-, line-, or structure-specific assertion"
+    : null;
+}
+
+function brittleRegex(pattern: string): string | null {
+  const token = shortUnboundedRegexToken(pattern);
+  return token
+    ? `brittle unbounded negated regex alternative ${JSON.stringify(token)}; ` +
+        "use explicit token boundaries or exact dependency/command checks"
+    : null;
 }
 
 /**
@@ -120,41 +346,41 @@ function brittleNegatedMatcher(call: ts.CallExpression): string | null {
   if (!ts.isPropertyAccessExpression(call.expression)) return null;
   const matcher = call.expression.name.text;
   const negated = call.expression.expression;
-  if (
-    !ts.isPropertyAccessExpression(negated) ||
-    negated.name.text !== "not" ||
-    !ts.isCallExpression(negated.expression) ||
-    !ts.isIdentifier(negated.expression.expression) ||
-    negated.expression.expression.text !== "expect"
-  ) {
-    return null;
-  }
-
   const expected = call.arguments[0];
-  if (
-    matcher === "toContain" &&
-    expected &&
-    ts.isStringLiteralLike(expected) &&
-    expected.text.trim().length < 4
-  ) {
-    return (
-      `brittle negated substring ${JSON.stringify(expected.text)}; ` +
-      "use a token-, line-, or structure-specific assertion"
-    );
+  const expectNegation =
+    ts.isPropertyAccessExpression(negated) &&
+    negated.name.text === "not" &&
+    ts.isCallExpression(negated.expression) &&
+    ts.isIdentifier(negated.expression.expression) &&
+    negated.expression.expression.text === "expect";
+  if (expectNegation) {
+    if (
+      matcher === "toContain" &&
+      expected &&
+      ts.isStringLiteralLike(expected)
+    ) {
+      return brittleSubstring(expected.text);
+    }
+    if (
+      matcher === "toMatch" &&
+      expected &&
+      ts.isRegularExpressionLiteral(expected)
+    ) {
+      const literal = expected.getText();
+      const finalSlash = literal.lastIndexOf("/");
+      return brittleRegex(finalSlash > 0 ? literal.slice(1, finalSlash) : "");
+    }
   }
-
-  if (matcher === "toMatch" && expected && ts.isRegularExpressionLiteral(expected)) {
-    const literal = expected.getText();
-    const finalSlash = literal.lastIndexOf("/");
-    const pattern = finalSlash > 0 ? literal.slice(1, finalSlash) : "";
-    const shortBareAlternative = pattern
-      .split("|")
-      .find((alternative) => /^[A-Za-z][A-Za-z0-9_-]{1,3}$/.test(alternative));
-    if (shortBareAlternative) {
-      return (
-        `brittle unbounded negated regex alternative ${JSON.stringify(shortBareAlternative)}; ` +
-        "use explicit token boundaries or exact dependency/command checks"
-      );
+  if (
+    matcher === "doesNotMatch" &&
+    ts.isIdentifier(negated) &&
+    negated.text === "assert"
+  ) {
+    const pattern = call.arguments[1];
+    if (pattern && ts.isRegularExpressionLiteral(pattern)) {
+      const literal = pattern.getText();
+      const finalSlash = literal.lastIndexOf("/");
+      return brittleRegex(finalSlash > 0 ? literal.slice(1, finalSlash) : "");
     }
   }
   return null;
@@ -162,7 +388,6 @@ function brittleNegatedMatcher(call: ts.CallExpression): string | null {
 
 function analyzeCallback(
   callback: ts.ArrowFunction | ts.FunctionExpression,
-  helpers: ReadonlyMap<string, JavascriptHelper>,
 ): Omit<TestEvidence, "name" | "browser"> {
   let meaningfulAssertion = false;
   const brittleAssertions: string[] = [];
@@ -195,13 +420,11 @@ function analyzeCallback(
 
     const expectCall = containsExpectCall(call.expression);
     if (name && ASSERT_METHOD.test(name) && expectCall) {
-      if (!isPrimitiveLiteral(expectCall.arguments[0])) meaningfulAssertion = true;
+      if (!isPrimitiveLiteral(expectCall.arguments[0]))
+        meaningfulAssertion = true;
       return;
     }
-    if (
-      (name === "assert" || name?.startsWith("assert") === true) &&
-      !isPrimitiveLiteral(call.arguments[0])
-    ) {
+    if (name === "assert" && !isPrimitiveLiteral(call.arguments[0])) {
       meaningfulAssertion = true;
       return;
     }
@@ -230,27 +453,14 @@ function analyzeCallback(
   // callback passed to a call the test awaits is part of that test's reachable
   // control flow, so inspect it while still rejecting stored/deferred helpers.
   const isAwaitedInlineCallback = (node: ts.Node): boolean => {
-    if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return false;
+    if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node))
+      return false;
     const call = node.parent;
     return (
       ts.isCallExpression(call) &&
       call.arguments.some((argument) => argument === node) &&
-      ts.isAwaitExpression(call.parent)
-    );
-  };
-
-  const isAsyncHelper = (helper: JavascriptHelper): boolean =>
-    helper.modifiers?.some(
-      (modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword,
-    ) === true;
-
-  const asyncHelperResultIsObserved = (call: ts.CallExpression): boolean => {
-    let parent: ts.Node = call.parent;
-    while (ts.isParenthesizedExpression(parent)) parent = parent.parent;
-    return (
-      ts.isAwaitExpression(parent) ||
-      ts.isReturnStatement(parent) ||
-      callback.body === call
+      expressionResultIsObserved(call) &&
+      callInvokesInlineCallback(call, node)
     );
   };
 
@@ -294,12 +504,13 @@ function analyzeCallback(
     if (ts.isCallExpression(node)) {
       inspectCall(node);
       if (ts.isIdentifier(node.expression)) {
-        const helper = helpers.get(node.expression.text);
+        const helper = resolveVisibleHelper(node, node.expression.text);
         if (
           helper &&
           helper.body &&
           !activeHelpers.has(helper) &&
-          (!isAsyncHelper(helper) || asyncHelperResultIsObserved(node))
+          !isGeneratorHelper(helper) &&
+          (!isAsyncFunction(helper) || expressionResultIsObserved(node))
         ) {
           activeHelpers.add(helper);
           visit(helper.body, true);
@@ -331,23 +542,6 @@ function analyzeJavascript(source: string): FileEvidence {
   let browserImport = false;
   let skippedOrTodo = false;
   const tests = new Map<string, TestEvidence>();
-  const helpers = new Map<string, JavascriptHelper>();
-
-  const collectHelpers = (node: ts.Node): void => {
-    if (ts.isFunctionDeclaration(node) && node.name) {
-      helpers.set(node.name.text, node);
-    } else if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer &&
-      (ts.isArrowFunction(node.initializer) ||
-        ts.isFunctionExpression(node.initializer))
-    ) {
-      helpers.set(node.name.text, node.initializer);
-    }
-    ts.forEachChild(node, collectHelpers);
-  };
-  collectHelpers(file);
 
   const visit = (node: ts.Node): void => {
     if (
@@ -370,10 +564,17 @@ function analyzeJavascript(source: string): FileEvidence {
         base = callee.expression.text;
         mode = callee.name.text;
       }
-      if ((base === "test" || base === "it") && (mode === "skip" || mode === "todo")) {
+      if (
+        (base === "test" || base === "it") &&
+        (mode === "skip" || mode === "todo")
+      ) {
         skippedOrTodo = true;
       }
-      if ((base === "test" || base === "it") && mode !== "skip" && mode !== "todo") {
+      if (
+        (base === "test" || base === "it") &&
+        mode !== "skip" &&
+        mode !== "todo"
+      ) {
         const title = node.arguments[0];
         const callback = node.arguments[1];
         if (
@@ -385,7 +586,7 @@ function analyzeJavascript(source: string): FileEvidence {
           tests.set(title.text, {
             name: title.text,
             browser: browserImport,
-            ...analyzeCallback(callback, helpers),
+            ...analyzeCallback(callback),
           });
         }
       }
@@ -424,12 +625,34 @@ function analyzePython(source: string): FileEvidence {
     }
     const meaningfulAssertion = body.some(
       (entry) =>
-        /^\s*assert\s+/.test(entry) && !/^\s*assert\s+(?:True|1)(?:\s|$)/.test(entry),
+        /^\s*assert\s+/.test(entry) &&
+        !/^\s*assert\s+(?:True|1)(?:\s|$)/.test(entry),
     );
+    const brittleAssertions: string[] = [];
+    for (const entry of body) {
+      const substring = /\bassert\s+(["'])(.*?)\1\s+not\s+in\b/.exec(entry);
+      if (substring) {
+        const issue = brittleSubstring(substring[2] ?? "");
+        if (issue && !brittleAssertions.includes(issue))
+          brittleAssertions.push(issue);
+      }
+      const negativeRegex =
+        /\bassert\s+(?:not\s+)?re\.(?:search|match|fullmatch)\(\s*r?(["'])(.*?)\1/.exec(
+          entry,
+        );
+      if (
+        negativeRegex &&
+        (/\bassert\s+not\s+/.test(entry) || /\bis\s+None\b/.test(entry))
+      ) {
+        const issue = brittleRegex(negativeRegex[2] ?? "");
+        if (issue && !brittleAssertions.includes(issue))
+          brittleAssertions.push(issue);
+      }
+    }
     tests.set(match[1]!, {
       name: match[1]!,
       meaningfulAssertion,
-      brittleAssertions: [],
+      brittleAssertions,
       browser: false,
       gotoApp: false,
       interaction: false,
@@ -441,7 +664,9 @@ function analyzePython(source: string): FileEvidence {
 }
 
 function analyzeFile(path: string, source: string): FileEvidence {
-  return /\.py$/i.test(path) ? analyzePython(source) : analyzeJavascript(source);
+  return /\.py$/i.test(path)
+    ? analyzePython(source)
+    : analyzeJavascript(source);
 }
 
 export function acceptanceRequirements(
@@ -502,17 +727,23 @@ export function assessGeneratedTests(
     const evidence = analyzeFile(path, file.contents);
     files.set(path, evidence);
     if (evidence.skippedOrTodo) {
-      errors.push(`${file.path}: skipped or todo tests are not acceptance evidence`);
+      errors.push(
+        `${file.path}: skipped or todo tests are not acceptance evidence`,
+      );
     }
     if (!evidence.tests.size) {
       errors.push(`${file.path}: no active named test was found`);
     }
-    if (![...evidence.tests.values()].some((test) => test.meaningfulAssertion)) {
+    if (
+      ![...evidence.tests.values()].some((test) => test.meaningfulAssertion)
+    ) {
       errors.push(`${file.path}: no meaningful executable assertion was found`);
     }
     for (const test of evidence.tests.values()) {
       for (const issue of test.brittleAssertions) {
-        errors.push(`${file.path}: test ${JSON.stringify(test.name)} uses ${issue}`);
+        errors.push(
+          `${file.path}: test ${JSON.stringify(test.name)} uses ${issue}`,
+        );
       }
     }
     if (evidence.browserImport) browserTestPaths.push(path);
@@ -535,7 +766,9 @@ export function assessGeneratedTests(
     const file = path ? files.get(path) : undefined;
     const test = file?.tests.get(item.testName);
     if (!path || !file) {
-      errors.push(`${item.requirementId}: coverage path is not a generated test file`);
+      errors.push(
+        `${item.requirementId}: coverage path is not a generated test file`,
+      );
       continue;
     }
     if (!test) {
@@ -545,11 +778,15 @@ export function assessGeneratedTests(
       continue;
     }
     if (!test.meaningfulAssertion) {
-      errors.push(`${item.requirementId}: mapped test has no meaningful assertion`);
+      errors.push(
+        `${item.requirementId}: mapped test has no meaningful assertion`,
+      );
     }
     if (item.kind === "browser") {
       if (!file.browserImport || !test.browser) {
-        errors.push(`${item.requirementId}: browser coverage is not a Playwright test`);
+        errors.push(
+          `${item.requirementId}: browser coverage is not a Playwright test`,
+        );
       }
       if (!test.gotoApp || test.forbiddenBrowserFixture) {
         errors.push(
@@ -574,11 +811,18 @@ export function assessGeneratedTests(
   }
   for (const requirement of requirements) {
     if (!coverage.some((item) => item.requirementId === requirement.id)) {
-      errors.push(`${requirement.id}: acceptance requirement has no mapped test`);
+      errors.push(
+        `${requirement.id}: acceptance requirement has no mapped test`,
+      );
     }
   }
-  if (uiAcceptanceRequired && !coverage.some((item) => item.kind === "browser")) {
-    errors.push("UI source changed but no mapped Playwright browser journey exists");
+  if (
+    uiAcceptanceRequired &&
+    !coverage.some((item) => item.kind === "browser")
+  ) {
+    errors.push(
+      "UI source changed but no mapped Playwright browser journey exists",
+    );
   }
 
   return {
