@@ -64,7 +64,7 @@ describe("generated-code verification sandbox", () => {
         "--user",
         "1001:1001",
         "--workdir",
-        "/workspace/generated-app",
+        "/workspace",
       ]),
     );
 
@@ -74,14 +74,21 @@ describe("generated-code verification sandbox", () => {
       )
       .filter((value): value is string => value !== null);
     expect(mounts).toEqual([
-      `type=bind,src=${workspaceRoot},dst=/workspace,rw`,
+      `type=bind,src=${workspace},dst=/workspace,rw`,
       `type=bind,src=${stateRoot},dst=/sandbox-state,rw`,
     ]);
 
     const imageIndex = plan.dockerArgs.indexOf(image);
     expect(plan.dockerArgs.slice(imageIndex)).toEqual([image, "pnpm", "test"]);
-    expect(JSON.stringify(plan.dockerArgs)).not.toMatch(
+    const serialized = JSON.stringify(plan.dockerArgs);
+    expect(serialized).not.toMatch(
       /OPENAI|ANTHROPIC|GITHUB_TOKEN|DOCKER_HOST/i,
+    );
+    expect(plan.dockerArgs).toContain(
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    );
+    expect(serialized).not.toMatch(
+      /PATH=[^"]*sandbox-state\/(?:pnpm|home\/\.local\/bin)/,
     );
   });
 
@@ -99,6 +106,14 @@ describe("generated-code verification sandbox", () => {
     ).toBe("bridge");
     expect(
       verificationNetwork("npx", ["--no-install", "prisma", "generate"]),
+    ).toBe("bridge");
+    expect(
+      verificationNetwork("npx", [
+        "--no-install",
+        "playwright",
+        "install",
+        "chromium",
+      ]),
     ).toBe("bridge");
     expect(verificationNetwork("pnpm", ["test"])).toBe("none");
     expect(verificationNetwork("npx", ["--no-install", "vitest", "run"])).toBe(
