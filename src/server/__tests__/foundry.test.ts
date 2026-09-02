@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FoundryAdapters,
   createFoundryTierProvider,
@@ -61,6 +61,10 @@ function callable(name: ProviderName, fail = false): LLMProvider & { calls: numb
   };
   return provider;
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("Purpose Foundry", () => {
   it.each(["free", "paid"] as const)(
@@ -170,6 +174,67 @@ describe("Purpose Foundry", () => {
       else process.env.FACTORY_PAID_RESCUES_PER_DAY = previousDay;
       resetPaidBudget();
     }
+  });
+
+  it("keeps an exhausted rung demoted across Purpose Foundry station retries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create({
+      ...intakeFromMarkdown(
+        "# Sticky Ladder\nKeep exhausted models demoted.",
+        "C:/Vault/Sticky-Ladder.md",
+      ),
+    });
+    const exhausted: LLMProvider & { calls: number } = {
+      name: "openai",
+      paidBudgetManaged: true,
+      calls: 0,
+      isConfigured: () => true,
+      async generateText() {
+        exhausted.calls += 1;
+        throw Object.assign(new Error("rate limit exhausted"), { status: 429 });
+      },
+      async generateJson<T>() {
+        exhausted.calls += 1;
+        throw Object.assign(new Error("rate limit exhausted"), { status: 429 });
+      },
+    };
+    const fallback: LLMProvider & { calls: number } = {
+      name: "free",
+      calls: 0,
+      isConfigured: () => true,
+      async generateText() {
+        fallback.calls += 1;
+        return { text: "ok", provider: "free" };
+      },
+      async generateJson<T>() {
+        fallback.calls += 1;
+        return {
+          verdict: "hardened",
+          summary: "All supplied claims survived adversarial review.",
+          findings: [],
+          testedClaims: ["sticky ladder"],
+        } as T;
+      },
+    };
+    const registry = providerRegistry([exhausted, fallback]);
+    const adapters = new FoundryAdapters(store, {
+      config: () =>
+        loadConfig({
+          FACTORY_FREE_ENABLED: "true",
+          FACTORY_MODEL_LADDER: "openai",
+        }),
+      providerRegistry: () => registry,
+    });
+
+    await expect(adapters.execute(project, "crucible")).resolves.toMatchObject({
+      status: "completed",
+    });
+    await expect(adapters.execute(project, "crucible")).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(exhausted.calls).toBe(1);
+    expect(fallback.calls).toBe(2);
   });
 
   it("forwards the resolved automatic ladder to Factory Deck's run API", async () => {
@@ -606,6 +671,7 @@ describe("Purpose Foundry", () => {
   });
 
   it("does not mistake an artifact filename for an App Store submission", async () => {
+    vi.stubEnv("PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL", "https://publisher.example");
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
     const project = await store.create(
@@ -652,6 +718,7 @@ describe("Purpose Foundry", () => {
   });
 
   it("streams, checksum-verifies, dry-runs, and submits a real build through Publisher", async () => {
+    vi.stubEnv("PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL", "https://publisher.example");
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const target = await mkdtemp(join(tmpdir(), "purpose-foundry-release-"));
     const release = join(target, "grantflow-release.aab");

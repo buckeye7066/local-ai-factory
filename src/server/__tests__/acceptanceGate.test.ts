@@ -203,7 +203,7 @@ describe("assessGeneratedTests", () => {
             "  const output = list();",
             `  ${assertion}`,
             "});",
-          ].join("\\n"),
+          ].join("\n"),
         },
       ],
     });

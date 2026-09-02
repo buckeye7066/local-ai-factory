@@ -469,6 +469,12 @@ function compactOutput(value: string): string {
 
 export class FoundryAdapters {
   private readonly dependencies: AdapterDependencies;
+  /**
+   * Purpose Foundry owns one sticky model ladder per project. A quota or
+   * capacity wall demotes the whole assembly line; later station retries must
+   * not recreate a fresh ladder and hammer the exhausted rung again.
+   */
+  private readonly modelProviders = new Map<string, LLMProvider>();
 
   constructor(
     private readonly store: FoundryStore,
@@ -482,6 +488,20 @@ export class FoundryAdapters {
       config: dependencies.config ?? getConfig,
       providerRegistry: dependencies.providerRegistry ?? foundryProviderRegistry,
     };
+  }
+
+  private modelProvider(project: FoundryProject): LLMProvider {
+    const cached = this.modelProviders.get(project.id);
+    if (cached) return cached;
+    const config = this.dependencies.config();
+    const { provider } = createFoundryTierProvider(
+      project.routingMode,
+      this.dependencies.providerRegistry(),
+      config,
+      "review",
+    );
+    this.modelProviders.set(project.id, provider);
+    return provider;
   }
 
   descriptors(): AdapterDescriptor[] {
@@ -632,6 +652,13 @@ export class FoundryAdapters {
       this.dependencies.providerRegistry(),
       config,
     );
+    // The ladder is orchestration state, not a client-selectable RunOptions
+    // field. Factory Deck recomputes it from the same config and credentials.
+    const forwardedRouting = {
+      routingMode: routing.routingMode,
+      codeProvider: routing.codeProvider,
+      reviewProvider: routing.reviewProvider,
+    };
     const target = firstTarget(project);
     const repoSource = target ? repoSourceFromTarget(target) : null;
     const upstreamEvidence = project.stations
@@ -661,7 +688,7 @@ export class FoundryAdapters {
     const options = target
       ? RunOptionsSchema.parse({
           mode: "extend",
-          ...routing,
+          ...forwardedRouting,
           ...(repoSource ? { repoSource } : {}),
           goals: extendGoals,
           pushToOrigin: true,
@@ -675,7 +702,7 @@ export class FoundryAdapters {
           }
           return RunOptionsSchema.parse({
             mode: "new",
-            ...routing,
+            ...forwardedRouting,
             goals: extendGoals,
             newRepo: {
               name: project.name,
@@ -977,7 +1004,6 @@ export class FoundryAdapters {
   }
 
   private async crucible(project: FoundryProject): Promise<AdapterOutcome> {
-    const config = this.dependencies.config();
     const result = await underWorkTheme(
       {
         idea: `Purpose Foundry crucible for ${project.name}`,
@@ -986,14 +1012,8 @@ export class FoundryAdapters {
         issue:
           "Disprove every success claim using only supplied evidence; stay on this project's open release risks",
       },
-      () => {
-        const { provider } = createFoundryTierProvider(
-          project.routingMode,
-          this.dependencies.providerRegistry(),
-          config,
-          "review",
-        );
-        return provider.generateJson({
+      () =>
+        this.modelProvider(project).generateJson({
           system:
             "You are The Crucible, an independent adversarial release verifier. Assume the project is not ready. Try to disprove every success claim using only supplied evidence. Never reward effort, optimism, or unsupported claims. A claim without evidence is a finding.",
           prompt: `Review this Purpose Foundry project.\n\nPROJECT:\n${JSON.stringify({
@@ -1010,8 +1030,7 @@ export class FoundryAdapters {
           schemaName: "CrucibleResult",
           temperature: 0.1,
           maxTokens: 12_000,
-        });
-      },
+        }),
     );
     const artifact = await this.store.writeArtifact(
       project.id,
