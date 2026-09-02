@@ -80,7 +80,8 @@ describe("repair eligibility with incomplete verification", () => {
       "missing declared runner",
       {
         command: "tests/workflow.test.ts",
-        reason: "no declared local Vitest/Jest/Pytest runner can execute this generated test directly",
+        reason:
+          "no declared local Vitest/Jest/Pytest runner can execute this generated test directly",
       },
     ],
   ])("keeps repairing a %s", (_name, gap) => {
