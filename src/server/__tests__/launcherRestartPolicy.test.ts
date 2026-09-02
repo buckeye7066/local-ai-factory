@@ -171,9 +171,21 @@ describe("launcher wiring — the guard is actually used", () => {
     expect(launcher).toContain("$update.WaitForExit(15000)");
     expect(launcher).toContain('$env:GIT_TERMINAL_PROMPT = "0"');
     expect(launcher).toContain('$env:FACTORY_LAUNCHER_REEXEC = "1"');
+    expect(launcher).toContain(
+      "([string](& git branch --show-current 2>$null)).Trim()",
+    );
+    expect(launcher).toContain("packageManager");
+    expect(launcher).toContain("$pinnedPnpmVersion");
+    expect(launcher).toContain("--version");
     expect(launcher).toContain("node_modules\\.modules.yaml");
+    expect(launcher).toContain("node_modules\\tsx\\package.json");
+    expect(launcher).toContain("node_modules\\vite\\package.json");
+    expect(launcher).toContain("node_modules\\.bin\\vite.cmd");
     expect(launcher).toContain("Invoke-Pnpm install --frozen-lockfile");
     expect(launcher).not.toMatch(/^\\s*&\\s*corepack\\s+enable/m);
+    expect(launcher).not.toContain(
+      "-ExecutionPolicy Bypass -File $PSCommandPath",
+    );
     const guardIndex = launcher.indexOf("# --- 0. Idempotency guard");
     const updateIndex = launcher.indexOf("Checking for Factory Deck updates");
     expect(guardIndex).toBeGreaterThanOrEqual(0);
