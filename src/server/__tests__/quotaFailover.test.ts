@@ -5,6 +5,10 @@ import {
   isQuotaRefusal,
 } from "../providers/quotaFailover.js";
 import type { LLMProvider } from "../../shared/types.js";
+import {
+  resetRouteState,
+  snapshotRoute,
+} from "../providers/freeRoute.js";
 
 /**
  * Owner rule 2026-08-16: errors are to be FIXED, not blocked. A provider
@@ -67,6 +71,7 @@ describe("isModelExhaustion", () => {
 
 describe("QuotaFailoverProvider", () => {
   it("continues on the funded alternate when the primary is out of credit", async () => {
+    resetRouteState();
     const primary = fake("openai", "quota");
     const alt = fake("anthropic", "ok");
     const events: string[] = [];
@@ -77,6 +82,18 @@ describe("QuotaFailoverProvider", () => {
     expect(out.served).toBe("anthropic");
     expect(events).toEqual(["openai->anthropic"]);
     expect(alt.calls).toBe(1);
+    expect(snapshotRoute()).toMatchObject({
+      primary: "openai",
+      serving: "anthropic",
+      counts: { free: 0, anthropic: 1, openai: 0 },
+      events: [
+        expect.objectContaining({
+          kind: "failover",
+          from: "openai",
+          to: "anthropic",
+        }),
+      ],
+    });
   });
 
   it("keeps the run on the lower rung after the upper account is exhausted", async () => {
