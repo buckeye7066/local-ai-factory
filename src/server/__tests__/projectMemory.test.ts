@@ -7,6 +7,7 @@ import {
   assertGoalContractIntegrity,
   continuityFromMemory,
   createGoalContract,
+  goalContractMatchesProjectMemory,
   loadProjectMemory,
   projectKeyForOptions,
   rememberProjectCompletion,
@@ -74,6 +75,15 @@ describe("durable project purpose memory", () => {
     expect(withCredential).toBe("git:github.com/buckeye7066/grantflow");
     expect(withCredential).not.toContain("secret-token");
     expect(withCredential).not.toContain("token=leak");
+    expect(
+      projectKeyForOptions({
+        mode: "extend",
+        repoSource: {
+          type: "git",
+          location: "https://github.com/Buckeye7066/GrantFlow.git/",
+        },
+      }),
+    ).toBe(clean);
 
     const local = projectKeyForOptions({
       mode: "extend",
@@ -264,6 +274,8 @@ describe("durable project purpose memory", () => {
       (_, index) => `Constraint ${index + 1}`,
     );
     const nonGoals = Array.from({ length: 50 }, (_, index) => `Non-goal ${index + 1}`);
+    const handoffGoal = "Use the completed RepoRewards handoff as evidence";
+    const persistenceGoal = "EXTEND PERSISTENCE CONTRACT: preserve host storage";
     const goals = [
       "Mission: Match people to verified public funding",
       encodeStructuredGoalDirectives({
@@ -272,6 +284,8 @@ describe("durable project purpose memory", () => {
         constraints,
         nonGoals,
       }),
+      handoffGoal,
+      persistenceGoal,
     ];
     expect(goals.length).toBeLessThanOrEqual(50);
 
@@ -284,9 +298,31 @@ describe("durable project purpose memory", () => {
       now: 4,
     });
     expect(contract.targetUsers).toEqual(targetUsers);
-    expect(contract.activeGoals).toEqual(successCriteria);
+    expect(contract.activeGoals).toEqual([
+      ...successCriteria,
+      handoffGoal,
+      persistenceGoal,
+    ]);
+    expect(contract.activeGoals).toHaveLength(52);
     expect(contract.constraints).toEqual(constraints);
     expect(contract.nonGoals).toEqual(nonGoals);
+    expect(withGoalContract(spec(), contract).acceptanceCriteria).toContain(
+      `[GOAL-52] Deliver and directly verify: ${persistenceGoal}`,
+    );
+  });
+
+  it("preserves the full accepted Foundry mission bound", () => {
+    const purpose = "p".repeat(20_000);
+    const contract = createGoalContract({
+      projectKey: "git:github.com/buckeye7066/grantflow",
+      runId: randomUUID(),
+      idea: "Accept the complete long constitution",
+      goals: [`Mission: ${purpose}`],
+      spec: spec(),
+      now: 4,
+    });
+    expect(contract.purpose).toBe(purpose);
+    expect(contract.purpose).toHaveLength(20_000);
   });
 
   it("clips durable completion fields within their schema limits", async () => {
@@ -429,6 +465,33 @@ describe("durable project purpose memory", () => {
     });
     expect(targetFirstProtection.purpose).toBe(firstContract.purpose);
 
+    for (const ordinaryEdit of [
+      "Change the product color to blue",
+      "Change the product export screen",
+    ]) {
+      const ordinaryContract = createGoalContract({
+        projectKey,
+        runId: randomUUID(),
+        idea: ordinaryEdit,
+        goals: [ordinaryEdit],
+        spec: spec("A generic product edit must not replace the mission"),
+        memory,
+        now: 31,
+      });
+      expect(ordinaryContract.purpose).toBe(firstContract.purpose);
+    }
+
+    const explicitProductRepurpose = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "Repurpose the product for funders publishing opportunities",
+      goals: ["Repurpose the product for funders"],
+      spec: spec("Help funders publish opportunities"),
+      memory,
+      now: 31,
+    });
+    expect(explicitProductRepurpose.purpose).toBe("Help funders publish opportunities");
+
     const contrastedPivot = createGoalContract({
       projectKey,
       runId: randomUUID(),
@@ -523,6 +586,152 @@ describe("durable project purpose memory", () => {
     expect(followUp.continuity.previousRunIds).toEqual([firstRun]);
   });
 
+  it("rejects a checkpoint contract after another run completes", async () => {
+    const projectKey = `test:${randomUUID()}`;
+    const firstRun = randomUUID();
+    const firstContract = createGoalContract({
+      projectKey,
+      runId: firstRun,
+      idea: "Establish the mission",
+      goals: ["Establish the mission"],
+      spec: spec("The accepted mission"),
+      now: 1,
+    });
+    const firstSpec = withGoalContract(spec("The accepted mission"), firstContract);
+    await rememberProjectPlan({
+      projectKey,
+      runId: firstRun,
+      goalContract: firstContract,
+      spec: firstSpec,
+      now: 1,
+    });
+    await rememberProjectCompletion({
+      projectKey,
+      runId: firstRun,
+      goalContract: firstContract,
+      spec: firstSpec,
+      finalSummary: "Initial mission shipped.",
+      nextImprovements: [],
+      revision: "first",
+      now: 2,
+    });
+
+    const staleRun = randomUUID();
+    const staleContract = createGoalContract({
+      projectKey,
+      runId: staleRun,
+      idea: "Improve exports",
+      goals: ["Improve exports"],
+      spec: spec("A stale draft"),
+      memory: await loadProjectMemory(projectKey),
+      now: 3,
+    });
+    await rememberProjectPlan({
+      projectKey,
+      runId: staleRun,
+      goalContract: staleContract,
+      spec: withGoalContract(spec("A stale draft"), staleContract),
+      now: 3,
+    });
+
+    const interveningRun = randomUUID();
+    const interveningContract = createGoalContract({
+      projectKey,
+      runId: interveningRun,
+      idea: "Change the product purpose to help funders",
+      goals: ["Change the product purpose to help funders"],
+      spec: spec("Help funders publish opportunities"),
+      memory: await loadProjectMemory(projectKey),
+      now: 4,
+    });
+    const interveningSpec = withGoalContract(
+      spec("Help funders publish opportunities"),
+      interveningContract,
+    );
+    await rememberProjectPlan({
+      projectKey,
+      runId: interveningRun,
+      goalContract: interveningContract,
+      spec: interveningSpec,
+      now: 4,
+    });
+    await rememberProjectCompletion({
+      projectKey,
+      runId: interveningRun,
+      goalContract: interveningContract,
+      spec: interveningSpec,
+      finalSummary: "Repurposed mission shipped.",
+      nextImprovements: [],
+      revision: "second",
+      now: 5,
+    });
+
+    const currentMemory = await loadProjectMemory(projectKey);
+    expect(goalContractMatchesProjectMemory(staleContract, currentMemory)).toBe(false);
+    expect(goalContractMatchesProjectMemory(interveningContract, currentMemory)).toBe(
+      true,
+    );
+  });
+
+  it("keeps the newest bounded goals and decisions from completed history", async () => {
+    const projectKey = `test:${randomUUID()}`;
+    for (let index = 0; index < 12; index += 1) {
+      const runId = randomUUID();
+      const runSpec = ProductSpecSchema.parse({
+        ...spec("Durable history"),
+        coreFeatures: [`Feature ${index}A`, `Feature ${index}B`],
+        userFlows: [`Workflow ${index}`],
+      });
+      const contract = createGoalContract({
+        projectKey,
+        runId,
+        idea: `Goal ${index}`,
+        goals: [`Goal ${index}`],
+        spec: runSpec,
+        memory: await loadProjectMemory(projectKey),
+        now: index * 2 + 1,
+      });
+      const stamped = withGoalContract(runSpec, contract);
+      await rememberProjectPlan({
+        projectKey,
+        runId,
+        goalContract: contract,
+        spec: stamped,
+        now: index * 2 + 1,
+      });
+      await rememberProjectCompletion({
+        projectKey,
+        runId,
+        goalContract: contract,
+        spec: stamped,
+        finalSummary: `Completed ${index}`,
+        nextImprovements: [],
+        revision: `rev-${index}`,
+        now: index * 2 + 2,
+      });
+    }
+
+    const memory = await loadProjectMemory(projectKey);
+    const continuity = continuityFromMemory(memory)!;
+    expect(continuity.priorGoals[0]).toBe("Goal 11");
+    expect(continuity.priorDecisions).toContain("Kept feature: Feature 11A");
+    expect(continuity.priorDecisions).not.toContain("Kept feature: Feature 0A");
+
+    const next = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "Continue current product",
+      goals: ["Continue current product"],
+      spec: spec("Fresh inference"),
+      memory,
+      now: 30,
+    });
+    expect(next.continuity.carriedForwardDecisions).toContain("Feature: Feature 11A");
+    expect(next.continuity.carriedForwardDecisions).not.toContain(
+      "Feature: Feature 0A",
+    );
+  });
+
   it("retains the latest completed mission across repeated abandoned plans", async () => {
     const projectKey = `test:${randomUUID()}`;
     const completedRun = randomUUID();
@@ -594,16 +803,19 @@ describe("durable project purpose memory", () => {
       "await rememberProjectCompletion({",
       completedStatus,
     );
+    const checkpointDeletion = source.indexOf(
+      "await deleteRunCheckpoint(run.id)",
+      completedStatus,
+    );
     expect(completedStatus).toBeGreaterThan(-1);
     expect(terminalFlush).toBeGreaterThan(completedStatus);
     expect(memoryCompletion).toBeGreaterThan(terminalFlush);
+    expect(checkpointDeletion).toBeGreaterThan(memoryCompletion);
   });
 
   it("never promotes a generated run UUID into a durable local project identity", () => {
     const source = readFileSync("src/server/orchestrator/runFactory.ts", "utf8");
-    expect(source).toContain("localProjectId: checkpoint.options.idempotencyKey,");
-    expect(source).not.toContain(
-      "localProjectId: checkpoint.options.idempotencyKey ?? run.id",
-    );
+    expect(source).toContain("localProjectId: checkpoint.options.projectId,");
+    expect(source).not.toMatch(/localProjectId:.*(?:idempotencyKey|run\.id)/);
   });
 });
