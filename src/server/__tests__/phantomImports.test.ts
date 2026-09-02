@@ -45,6 +45,19 @@ describe("importedPackages", () => {
     expect(pkgs).toContain("node:fs");
     expect(pkgs).not.toContain("./local");
   });
+
+  it("reads export, import type, and import-equals module specifiers", () => {
+    const src = [
+      'export { value } from "exported-package";',
+      'type External = import("typed-package").External;',
+      'import legacy = require("legacy-package");',
+    ].join(BR);
+    expect(importedPackages(src, "src/example.ts")).toEqual([
+      "exported-package",
+      "typed-package",
+      "legacy-package",
+    ]);
+  });
 });
 
 describe("declaredDependencies", () => {
@@ -97,6 +110,19 @@ describe("assessPhantomImports (the SermonSmith failure, twice over)", () => {
     expect(out.contents).toContain("'react-router/server'");
   });
 
+  it("corrects only the real import and leaves fixture strings unchanged", () => {
+    const declared = new Set(["react-router"]);
+    const out = correctPhantomImports(
+      [
+        'import { Link } from "react-router-dom";',
+        'const forbiddenPackage = "react-router-dom";',
+      ].join(BR),
+      declared,
+    );
+    expect(out.contents).toContain('from "react-router"');
+    expect(out.contents).toContain('forbiddenPackage = "react-router-dom"');
+  });
+
   it("still refuses an import with NO declared counterpart (the build must declare it)", () => {
     const root = repo({ "": { dependencies: { react: "19" } } });
     const verdict = assessPhantomImports(root, "src/a.js", "import x from 'left-pad';");
@@ -113,6 +139,25 @@ describe("assessPhantomImports (the SermonSmith failure, twice over)", () => {
       "import { helper } from '../lib/helper.js';",
     ].join(BR);
     expect(assessPhantomImports(root, "apps/web/src/App.jsx", src).refused).toBe(false);
+  });
+
+  it("ignores package names and import-like text used as test data", () => {
+    const root = repo({
+      "": { devDependencies: { vitest: "3" } },
+    });
+    const src = [
+      'import { describe, expect, it } from "vitest";',
+      'import { runCommand } from "../src/app.js";',
+      'const forbiddenPackages = ["react", "react-dom", "express", "fastify"];',
+      'const forbiddenImports = ["from \\"react\\"", "from \'express\'"];',
+      '// import Fastify from "fastify";',
+      'it("rejects forbidden dependencies", () => {',
+      "  expect(forbiddenPackages).toHaveLength(4);",
+      "  expect(forbiddenImports).toHaveLength(2);",
+      "});",
+    ].join(BR);
+    expect(importedPackages(src, "tests/app.test.ts")).toEqual(["vitest"]);
+    expect(assessPhantomImports(root, "tests/app.test.ts", src).refused).toBe(false);
   });
 
   it("passes once the build declares the dependency itself (manifests are read from disk)", () => {
