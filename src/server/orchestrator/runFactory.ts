@@ -2344,7 +2344,7 @@ async function executeRun(
         shouldSkipRepairForIncompleteVerification({
           qa: report,
           testExit,
-          incompleteVerification: verification.incomplete?.length ?? 0,
+          incompleteVerification: verification.incomplete ?? [],
         });
       const skipRepairForIncompleteVerification =
         shouldStopForIncompleteVerification(qa);
