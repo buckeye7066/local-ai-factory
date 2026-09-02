@@ -168,6 +168,7 @@ import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
 import { safeErrorMessage } from "../errors.js";
 import {
+  assertGoalContractIntegrity,
   continuityFromMemory,
   createGoalContract,
   loadProjectMemory,
@@ -1363,14 +1364,16 @@ async function executeRun(
     const continuity = continuityFromMemory(projectMemory, run.id);
     const requestedGoals = goalsForSpec.length ? goalsForSpec : [checkpoint.idea];
     let goalContract: GoalContract | undefined = checkpoint.goalContract;
-    if (
-      goalContract &&
-      (goalContract.projectKey !== projectKey ||
-        goalContract.createdFromRunId !== run.id)
-    ) {
-      throw new StaleCheckpointSpecificationError(
-        "Checkpoint goal contract does not belong to this run and project.",
-      );
+    if (goalContract) {
+      assertGoalContractIntegrity(goalContract);
+      if (
+        goalContract.projectKey !== projectKey ||
+        goalContract.createdFromRunId !== run.id
+      ) {
+        throw new StaleCheckpointSpecificationError(
+          "Checkpoint goal contract does not belong to this run and project.",
+        );
+      }
     }
 
     let purposeProfile: PurposeProfile | undefined = checkpoint.purposeProfile;
