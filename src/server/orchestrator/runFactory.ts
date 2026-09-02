@@ -124,6 +124,7 @@ import { shouldSkipRepairForIncompleteVerification } from "./repairEligibility.j
 import { isForbiddenRepairPath } from "./repairScope.js";
 import { reportRouteQuality } from "../rotation/rotatingProvider.js";
 import { assessExecutedCoverage, assessGeneratedTests } from "./acceptanceGate.js";
+import { nextTestDraftToGenerate } from "./testDraftProgress.js";
 import { parseDirectTestEvidence } from "./directTestEvidence.js";
 import { groundFinalReport } from "./reportGrounding.js";
 import { ErrorLedger, renderErrorLines } from "./errorLedger.js";
@@ -815,6 +816,7 @@ async function executeRun(
       writeRefusals: [],
       blockingWriteRefusals: [],
       testPlan: undefined,
+      testPlanDraft: undefined,
       testWriterComplete: false,
       commandOutput: "",
       verification: undefined,
@@ -2139,7 +2141,10 @@ async function executeRun(
         ? assessGeneratedTests(spec, testWriterBuild, testPlan)
         : null;
       const maxTestDrafts = 3;
-      const firstDraftToGenerate = testPlan ? 2 : 1;
+      const firstDraftToGenerate = nextTestDraftToGenerate(
+        Boolean(testPlan),
+        checkpoint.testPlanDraft,
+      );
       for (
         let draft = firstDraftToGenerate;
         (!testPlan || (!run.demo && !testAssessment?.ok)) && draft <= maxTestDrafts;
@@ -2167,7 +2172,7 @@ async function executeRun(
         // Persist every paid result before evaluating it so a crash never
         // replays the call. An invalid checkpointed draft becomes feedback for
         // the next bounded corrective draft on resume.
-        await checkpointNow({ testPlan });
+        await checkpointNow({ testPlan, testPlanDraft: draft });
         testAssessment = assessGeneratedTests(spec, testWriterBuild, testPlan);
       }
       if (!testPlan) {
