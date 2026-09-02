@@ -231,6 +231,13 @@ type EvidenceEvent = {
   hash: string;
 };
 
+/**
+ * A router restart can recreate FoundryStore while an older instance is still
+ * settling. Serialize by canonical ledger path so every in-process store
+ * instance extends the same hash chain.
+ */
+const ledgerWriteQueues = new Map<string, Promise<unknown>>();
+
 function splitList(value: string | undefined): string[] {
   return (value ?? "")
     .split(/[,;|]/)
@@ -281,12 +288,11 @@ export class FoundryStore {
   private readonly projectsRoot: string;
   private readonly ledgerPath: string;
   private projectCreates: Promise<unknown> = Promise.resolve();
-  private ledgerWrites: Promise<unknown> = Promise.resolve();
 
   constructor(root = resolve(process.cwd(), ".factory", "foundry")) {
-    this.root = root;
-    this.projectsRoot = join(root, "projects");
-    this.ledgerPath = join(root, "evidence.jsonl");
+    this.root = resolve(root);
+    this.projectsRoot = join(this.root, "projects");
+    this.ledgerPath = join(this.root, "evidence.jsonl");
   }
 
   private async ready(): Promise<void> {
@@ -473,12 +479,20 @@ export class FoundryStore {
     type: string,
     payload: unknown,
   ): Promise<EvidenceEvent> {
-    const write = this.ledgerWrites.then(() =>
+    const previousWrite =
+      ledgerWriteQueues.get(this.ledgerPath) ?? Promise.resolve();
+    const write = previousWrite.then(() =>
       this.appendEvidenceUnlocked(projectId, stationId, type, payload),
     );
     // Preserve serialization after either success or failure; a rejected write
     // must not permanently poison every future ledger append.
-    this.ledgerWrites = write.catch(() => undefined);
+    const settled = write.catch(() => undefined);
+    ledgerWriteQueues.set(this.ledgerPath, settled);
+    void settled.then(() => {
+      if (ledgerWriteQueues.get(this.ledgerPath) === settled) {
+        ledgerWriteQueues.delete(this.ledgerPath);
+      }
+    });
     return write;
   }
 
