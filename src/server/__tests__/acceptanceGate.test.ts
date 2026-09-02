@@ -224,6 +224,76 @@ describe("assessGeneratedTests", () => {
     ).toBe(false);
   });
 
+  it("recognizes assertions in awaited inline helper callbacks only", () => {
+    const cliSpec: ProductSpec = {
+      ...spec,
+      userFlows: [],
+      acceptanceCriteria: ["The CLI reports the saved task"],
+    };
+    const cliBuild: FileBuild = {
+      files: [
+        {
+          path: "src/cli.ts",
+          purpose: "CLI",
+          contents: "export const run = () => ({ exitCode: 0 });",
+          edits: [],
+        },
+      ],
+    };
+    const path = "tests/workflow.test.ts";
+    const withSource = (body: string): TestPlan => ({
+      testPlan: "CLI acceptance",
+      coverage: [
+        {
+          requirementId: "AC-1",
+          testPath: path,
+          testName: "reports the saved task",
+          kind: "unit",
+        },
+      ],
+      files: [
+        {
+          path,
+          purpose: "acceptance",
+          contents: [
+            "import { expect, it } from 'vitest';",
+            "it('reports the saved task', async () => {",
+            body,
+            "});",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  await withTempTaskFile(async (filePath) => { const result = run(filePath); expect(result.exitCode).toBe(0); });",
+        ),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  const deferred = () => { const result = run(); expect(result.exitCode).toBe(0); };",
+        ),
+      ).ok,
+    ).toBe(false);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  await withTempTaskFile(async () => { if (false) { const result = run(); expect(result.exitCode).toBe(0); } });",
+        ),
+      ).ok,
+    ).toBe(false);
+  });
+
   it("requires the exact mapped title to appear in valid direct runner evidence", () => {
     const testPlan = plan(validJourney);
     expect(
