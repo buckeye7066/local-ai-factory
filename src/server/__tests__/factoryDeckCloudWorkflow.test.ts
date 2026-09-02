@@ -23,14 +23,17 @@ describe("paid cloud workflow contract", () => {
   it.each([
     ["Factory Deck", factory],
     ["Purpose Foundry", foundry],
-  ])("%s runs current main without checkout credentials or cancellation", (_name, workflow) => {
-    expect(workflow).toMatch(/push:\n\s+branches: \[main\]/);
-    expect(workflow).not.toMatch(/^\s+paths:/m);
-    expect(workflow).toContain("persist-credentials: false");
-    expect(workflow).not.toMatch(/^concurrency:/m);
-    expect(workflow).toContain("timeout-minutes: 360");
-    expect(workflow).toContain("if: always()");
-  });
+  ])(
+    "%s runs current main without checkout credentials or cancellation",
+    (_name, workflow) => {
+      expect(workflow).toMatch(/push:\n\s+branches: \[main\]/);
+      expect(workflow).not.toMatch(/^\s+paths:/m);
+      expect(workflow).toContain("persist-credentials: false");
+      expect(workflow).not.toMatch(/^concurrency:/m);
+      expect(workflow).toContain("timeout-minutes: 360");
+      expect(workflow).toContain("if: always()");
+    },
+  );
 
   it("does not cancel or credential production-readiness checkouts", () => {
     expect(production).not.toMatch(/^concurrency:/m);
@@ -44,24 +47,27 @@ describe("paid cloud workflow contract", () => {
   it.each([
     ["Factory Deck", factory],
     ["Purpose Foundry", foundry],
-  ])("%s builds the sandbox before production secrets are exposed", (_name, workflow) => {
-    const buildIndex = workflow.indexOf("docker build --pull");
-    const firstSecretIndex = workflow.indexOf("ANTHROPIC_API_KEY:");
-    expect(buildIndex).toBeGreaterThan(0);
-    expect(firstSecretIndex).toBeGreaterThan(buildIndex);
-    expect(workflow).toContain(
-      "--file scripts/ci/verification-sandbox.Dockerfile",
-    );
-    expect(workflow).toContain(
-      'FACTORY_VERIFICATION_SANDBOX_IMAGE: "local-ai-factory-verifier:${{ github.sha }}"',
-    );
-    expect(workflow).toContain(
-      'FACTORY_VERIFICATION_SANDBOX_STATE_ROOT: "${{ runner.temp }}/factory-verification-${{ github.run_id }}-${{ github.run_attempt }}"',
-    );
-    expect(workflow).toContain('ALLOW_UNTRUSTED_SCRIPTS: "true"');
-    expect(workflow).toContain('FACTORY_RUN_TIMEOUT_MS: "19200000"');
-    expect(workflow).not.toContain("21000000");
-  });
+  ])(
+    "%s builds the sandbox before production secrets are exposed",
+    (_name, workflow) => {
+      const buildIndex = workflow.indexOf("docker build --pull");
+      const firstSecretIndex = workflow.indexOf("ANTHROPIC_API_KEY:");
+      expect(buildIndex).toBeGreaterThan(0);
+      expect(firstSecretIndex).toBeGreaterThan(buildIndex);
+      expect(workflow).toContain(
+        "--file scripts/ci/verification-sandbox.Dockerfile",
+      );
+      expect(workflow).toContain(
+        'FACTORY_VERIFICATION_SANDBOX_IMAGE: "local-ai-factory-verifier:${{ github.sha }}"',
+      );
+      expect(workflow).toContain(
+        'FACTORY_VERIFICATION_SANDBOX_STATE_ROOT: "${{ runner.temp }}/factory-verification-${{ github.run_id }}-${{ github.run_attempt }}"',
+      );
+      expect(workflow).toContain('ALLOW_UNTRUSTED_SCRIPTS: "true"');
+      expect(workflow).toContain('FACTORY_RUN_TIMEOUT_MS: "19200000"');
+      expect(workflow).not.toContain("21000000");
+    },
+  );
 
   it("keeps option-like Factory prompts out of positional CLI parsing", () => {
     expect(factory).toContain("FACTORY_IDEA:");
@@ -91,12 +97,8 @@ describe("paid cloud workflow contract", () => {
   });
 
   it("keeps Purpose Foundry's real paid end-to-end smoke and upload reserve", () => {
-    expect(foundry).toContain(
-      'PURPOSE_FOUNDRY_FACTORY_TIMEOUT_MS: "19200000"',
-    );
-    expect(foundry).toContain(
-      'PURPOSE_FOUNDRY_SMOKE_TIMEOUT_MS: "19200000"',
-    );
+    expect(foundry).toContain('PURPOSE_FOUNDRY_FACTORY_TIMEOUT_MS: "19200000"');
+    expect(foundry).toContain('PURPOSE_FOUNDRY_SMOKE_TIMEOUT_MS: "19200000"');
     expect(foundry).toContain("node scripts/ci/run-purpose-foundry-smoke.mjs");
     expect(foundry).toContain("purpose-foundry-server.log");
     expect(foundry).toContain(".factory/**");
