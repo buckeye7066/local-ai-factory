@@ -76,7 +76,7 @@ function canonicalGitIdentity(raw: string): string {
   const scp = raw
     .trim()
     .match(/^(?:[^@\s]+@)?([^:\s/]+):(.+)$/);
-  if (scp && !/^[A-Za-z]:[\\/]/.test(raw)) {
+  if (scp && !raw.includes("://") && !/^[A-Za-z]:[\\/]/.test(raw)) {
     return `${scp[1]!.toLowerCase()}/${scp[2]!
       .replace(/\.git$/i, "")
       .replace(/^\/+|\/+$/g, "")
@@ -132,11 +132,15 @@ export async function loadProjectMemory(
 
 export function continuityFromMemory(
   memory: ProjectMemory | null,
+  excludeRunId?: string,
 ): ProjectContinuity | undefined {
-  const last = memory?.entries.at(-1);
+  const entries = (memory?.entries ?? []).filter(
+    (entry) => entry.runId !== excludeRunId,
+  );
+  const last = entries.at(-1);
   if (!memory || !last) return undefined;
-  const completed = memory.entries.filter((entry) => entry.state === "completed");
-  const research = [...memory.entries]
+  const completed = entries.filter((entry) => entry.state === "completed");
+  const research = [...entries]
     .reverse()
     .flatMap((entry) => entry.competitiveResearch?.recommendations ?? [])
     .map(
@@ -144,11 +148,11 @@ export function continuityFromMemory(
         `${item.name}: ${item.howToIntegrate} (evidence: ${item.sourceUrl})`,
     );
   return {
-    previousRunIds: memory.entries.map((entry) => entry.runId),
+    previousRunIds: entries.map((entry) => entry.runId),
     purpose: last.goalContract.purpose,
     targetUsers: last.goalContract.targetUsers,
     priorGoals: unique(
-      memory.entries.flatMap((entry) => entry.goalContract.activeGoals),
+      entries.flatMap((entry) => entry.goalContract.activeGoals),
       30,
     ),
     priorDecisions: unique(
