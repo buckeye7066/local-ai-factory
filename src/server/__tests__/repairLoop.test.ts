@@ -58,6 +58,26 @@ describe("bounded repair loop", () => {
     expect(res.finalQa.passed).toBe(true);
   });
 
+  it("stops before another paid repair when fresh evidence becomes non-repairable", async () => {
+    let calls = 0;
+    let evidenceOnly = false;
+    const res = await runRepairLoop({
+      maxLoops: 3,
+      initialQa: failing,
+      shouldStop: () => evidenceOnly,
+      repair: async () => void calls++,
+      verify: async () => {
+        evidenceOnly = true;
+      },
+      reverify: async () => failing,
+    });
+
+    expect(res.loops).toBe(1);
+    expect(calls).toBe(1);
+    expect(res.finalQa.passed).toBe(false);
+    expect(res.stoppedEarly).toBe(true);
+  });
+
   it("NEVER exceeds maxLoops even if QA keeps failing", async () => {
     let calls = 0;
     const res = await runRepairLoop({
