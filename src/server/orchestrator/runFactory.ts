@@ -1361,7 +1361,7 @@ async function executeRun(
     const derivedProjectKey = projectKeyForOptions(checkpoint.options, {
       resolvedNewRepoOwner,
       resolvedRepoOrigin: resolvedExistingRepoOrigin,
-      localProjectId: checkpoint.options.idempotencyKey ?? run.id,
+      localProjectId: checkpoint.options.idempotencyKey,
     });
     if (productionIntelligenceRequired && !derivedProjectKey) {
       throw new Error(
