@@ -62,6 +62,7 @@ import {
   hasPlaywrightHarness,
   verificationPlanForWorkspace,
 } from "../workspace/verificationCommands.js";
+import { isTestFilePath } from "../workspace/testPaths.js";
 import {
   enforceWiredIntegration,
   findUnwiredNewFiles,
@@ -215,6 +216,30 @@ export function generatedFilesNeedingWrite<
   );
   return incoming.filter(
     (file) => current.get(normalizeGeneratedPath(file.path)) !== file.contents,
+  );
+}
+
+/**
+ * A Test Writer may replace a file only when this run generated the test and
+ * the exact current bytes were supplied to that stage. Host files, product
+ * source, unseen paths, anchored edits, and empty output keep the normal
+ * edit-only safety contract.
+ */
+export function canReplaceFullyShownGeneratedTest(input: {
+  path: string;
+  existedBefore: boolean;
+  priorStatus?: FileContent["status"];
+  suppliedInFull: boolean;
+  hasAnchoredEdits: boolean;
+  contents: string;
+}): boolean {
+  return (
+    input.existedBefore &&
+    input.priorStatus === "generated" &&
+    input.suppliedInFull &&
+    !input.hasAnchoredEdits &&
+    input.contents.trim().length > 0 &&
+    isTestFilePath(input.path)
   );
 }
 
@@ -980,13 +1005,25 @@ async function executeRun(
         );
       }
 
-      // ROOT FIX: an existing file is EDITED, never regenerated from its name.
-      // resolveGeneratedWrite reads the real file and applies anchored edits;
-      // a blind whole-file replacement of existing source is refused outright.
-      const resolved = resolveGeneratedWrite(workspacePath, generatedPath, {
+      // Host files remain anchored-edit-only. A same-run generated test may be
+      // replaced only when its exact current bytes were explicitly supplied to
+      // the Test Writer; this lets that stage strengthen Builder-authored tests
+      // without reopening the destructive host-file replacement path.
+      const edits = f.edits ?? [];
+      const replaceGeneratedTest = canReplaceFullyShownGeneratedTest({
+        path: generatedPath,
+        existedBefore,
+        priorStatus: priorFile?.status,
+        suppliedInFull: allowedExisting?.has(generatedPath) ?? false,
+        hasAnchoredEdits: edits.length > 0,
         contents: f.contents,
-        edits: f.edits ?? [],
       });
+      const resolved = replaceGeneratedTest
+        ? { contents: f.contents, edited: true }
+        : resolveGeneratedWrite(workspacePath, generatedPath, {
+            contents: f.contents,
+            edits,
+          });
       if (resolved.contents === null) {
         const reason = resolved.reason ?? "refused";
         log("warning", `WRITE REFUSED: ${generatedPath} — ${reason}`, stage);
@@ -2162,24 +2199,30 @@ async function executeRun(
     if (!checkpoint.testWriterComplete) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "test_writer");
+      const testWriterBuild = fullBuild();
       let testPlan = checkpoint.testPlan?.files.length
         ? checkpoint.testPlan
         : undefined;
       if (!testPlan) {
         log("model_call", `Test Writer agent (${review.name})…`);
-        testPlan = await testWriterAgent({ provider: review }, spec, fullBuild(), {
+        testPlan = await testWriterAgent(
+          { provider: review },
+          spec,
+          testWriterBuild,
+          {
           manifestExcerpt:
             repoAnalysis?.manifestExcerpts
               .map((manifest) => `----- ${manifest.path} -----\n${manifest.excerpt}`)
               .join("\n\n") ?? "",
-        });
+          },
+        );
       }
       if (!testPlan.files.length && !run.demo) {
         throw new Error(
           "Test Writer produced no change-specific tests; a live build cannot be verified or delivered.",
         );
       }
-      const testAssessment = assessGeneratedTests(spec, fullBuild(), testPlan);
+      const testAssessment = assessGeneratedTests(spec, testWriterBuild, testPlan);
       if (!run.demo && !testAssessment.ok) {
         throw new Error(
           "Generated acceptance tests are not valid evidence: " +
@@ -2203,7 +2246,7 @@ async function executeRun(
           workspacePath,
           pendingTestFiles,
           "test_writer",
-          [],
+          testWriterBuild.files.map((file) => file.path),
         );
         reportWrites(testTally, "test_writer", "test");
         if (!run.demo && testTally.refusals.length > 0) {
