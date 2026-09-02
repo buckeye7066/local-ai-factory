@@ -2,19 +2,25 @@ import type { RoutingMode } from "../../shared/schemas.js";
 import type { ProductionReadinessReceipt } from "../orchestrator/productionReadinessPolicy.js";
 import type { StationId } from "./model.js";
 
+/** Discovery inputs that must finish before Factory Deck may start. */
+export const REQUIRED_DISCOVERY_STATIONS = Object.freeze([
+  "repo-rewards",
+] as const satisfies readonly StationId[]);
+
 export const REQUIRED_PRODUCTION_STATIONS = Object.freeze([
   "factory-deck",
   "crucible",
   "watchtower",
 ] as const satisfies readonly StationId[]);
 
+export type RequiredDiscoveryStation = (typeof REQUIRED_DISCOVERY_STATIONS)[number];
 export type RequiredProductionStation = (typeof REQUIRED_PRODUCTION_STATIONS)[number];
 
 /**
- * One internal evidence line applies to every project, including records that
- * still carry a legacy free/paid value: Factory Deck, Crucible, and Watchtower.
- * FlexFactor remains an optional specialist because its child orchestrator owns
- * its own single model ladder and call ledger.
+ * Every project first gathers structured RepoRewards discovery, then follows
+ * one internal evidence line: Factory Deck, Crucible, and Watchtower. Legacy
+ * free/paid values normalize to this same route. FlexFactor remains optional
+ * because its child orchestrator owns its own model ladder and call ledger.
  */
 export function requiredProductionStations(
   _routingMode?: RoutingMode,
@@ -28,7 +34,11 @@ export function normalizeFoundryStations(
 ): StationId[] {
   const out: StationId[] = [];
   const seen = new Set<StationId>();
-  for (const station of [...requiredProductionStations(routingMode), ...selected]) {
+  for (const station of [
+    ...REQUIRED_DISCOVERY_STATIONS,
+    ...requiredProductionStations(routingMode),
+    ...selected,
+  ]) {
     if (!seen.has(station)) {
       seen.add(station);
       out.push(station);
