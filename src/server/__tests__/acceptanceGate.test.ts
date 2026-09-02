@@ -97,7 +97,9 @@ describe("assessGeneratedTests", () => {
     const cliSpec: ProductSpec = {
       ...spec,
       userFlows: [],
-      acceptanceCriteria: ["CLI errors are friendly and contain no stack trace"],
+      acceptanceCriteria: [
+        "CLI errors are friendly and contain no stack trace",
+      ],
     };
     const cliBuild: FileBuild = {
       files: [
@@ -119,6 +121,7 @@ describe("assessGeneratedTests", () => {
           path: testPath,
           purpose: "CLI acceptance",
           contents: [
+            'import assert from "node:assert/strict";',
             'import { expect, it } from "vitest";',
             `it(${JSON.stringify(testName)}, () => {`,
             "  const output = run();",
@@ -138,6 +141,16 @@ describe("assessGeneratedTests", () => {
     expect(substring.ok).toBe(false);
     expect(substring.errors.join("\n")).toMatch(/brittle negated substring/i);
 
+    const overlappingSubstring = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion('expect(output).not.toContain("vite");'),
+    );
+    expect(overlappingSubstring.ok).toBe(false);
+    expect(overlappingSubstring.errors.join("\n")).toMatch(
+      /brittle negated substring/i,
+    );
+
     const regex = assessGeneratedTests(
       cliSpec,
       cliBuild,
@@ -146,6 +159,24 @@ describe("assessGeneratedTests", () => {
     expect(regex.ok).toBe(false);
     expect(regex.errors.join("\n")).toMatch(/unbounded negated regex/i);
 
+    const groupedRegex = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion("expect(output).not.toMatch(/(vite|next)/i);"),
+    );
+    expect(groupedRegex.ok).toBe(false);
+    expect(groupedRegex.errors.join("\n")).toMatch(/unbounded negated regex/i);
+
+    const nodeAssertRegex = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion("assert.doesNotMatch(output, /(vite|next)/i);"),
+    );
+    expect(nodeAssertRegex.ok).toBe(false);
+    expect(nodeAssertRegex.errors.join("\n")).toMatch(
+      /unbounded negated regex/i,
+    );
+
     expect(
       assessGeneratedTests(
         cliSpec,
@@ -153,6 +184,13 @@ describe("assessGeneratedTests", () => {
         withAssertion(
           "expect(output).not.toMatch(/^\\s*at\\s+/m); expect(output).not.toMatch(/\\bvite\\b|\\bnext\\b/i);",
         ),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion("assert.doesNotMatch(output, /\\bvite\\b|\\bnext\\b/i);"),
       ).ok,
     ).toBe(true);
   });
@@ -217,11 +255,15 @@ describe("assessGeneratedTests", () => {
     ]);
     const result = assessGeneratedTests(spec, uiBuild, bad);
     expect(result.ok).toBe(false);
-    expect(result.errors.join("\n")).toMatch(/unknown coverage|no mapped test/i);
+    expect(result.errors.join("\n")).toMatch(
+      /unknown coverage|no mapped test/i,
+    );
   });
 
   it("accepts a mapped Playwright save/reload journey", () => {
-    expect(assessGeneratedTests(spec, uiBuild, plan(validJourney))).toMatchObject({
+    expect(
+      assessGeneratedTests(spec, uiBuild, plan(validJourney)),
+    ).toMatchObject({
       ok: true,
       uiAcceptanceRequired: true,
       browserTestPaths: ["tests/profile.spec.ts"],
@@ -334,7 +376,7 @@ describe("assessGeneratedTests", () => {
         cliSpec,
         cliBuild,
         withSource(
-          "  await withTempTaskFile(async (filePath) => { const result = run(filePath); expect(result.exitCode).toBe(0); });",
+          "  const withTempTaskFile = async (callback) => { await callback('task.json'); }; await withTempTaskFile(async (filePath) => { const result = run(filePath); expect(result.exitCode).toBe(0); });",
         ),
       ).ok,
     ).toBe(true);
@@ -343,7 +385,25 @@ describe("assessGeneratedTests", () => {
         cliSpec,
         cliBuild,
         withSource(
-          "  const assertResult = async () => { const result = run(); expect(result.exitCode).toBe(0); }; await assertResult();",
+          "  const verifyResult = async () => { const result = run(); expect(result.exitCode).toBe(0); }; await verifyResult();",
+        ),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  const verifyResult = async () => { const result = run(); expect(result.exitCode).toBe(0); }; await Promise.all([verifyResult()]);",
+        ),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  const inspectResult = async () => { const result = run(); expect(result.exitCode).toBe(0); }; const verifyResult = () => inspectResult(); await verifyResult();",
         ),
       ).ok,
     ).toBe(true);
@@ -374,6 +434,77 @@ describe("assessGeneratedTests", () => {
         ),
       ).ok,
     ).toBe(false);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  await Promise.resolve(async () => { const result = run(); expect(result.exitCode).toBe(0); });",
+        ),
+      ).ok,
+    ).toBe(false);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  const verifyResult = async () => {}; await verifyResult();",
+        ),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("resolves same-named helpers lexically and rejects unconsumed generators", () => {
+    const cliSpec: ProductSpec = {
+      ...spec,
+      userFlows: [],
+      acceptanceCriteria: ["The CLI reports the saved task"],
+    };
+    const cliBuild: FileBuild = {
+      files: [
+        {
+          path: "src/cli.ts",
+          purpose: "CLI",
+          contents: "export const run = () => ({ exitCode: 0 });",
+          edits: [],
+        },
+      ],
+    };
+    const path = "tests/scoped.test.ts";
+    const mappedPlan = (contents: string): TestPlan => ({
+      testPlan: "CLI acceptance",
+      coverage: [
+        {
+          requirementId: "AC-1",
+          testPath: path,
+          testName: "mapped test",
+          kind: "unit",
+        },
+      ],
+      files: [{ path, purpose: "acceptance", contents }],
+    });
+
+    const duplicateNames = mappedPlan(
+      [
+        "import { expect, it } from 'vitest';",
+        "it('mapped test', () => { const verify = () => {}; verify(); });",
+        "it('other test', () => { const verify = () => { expect(run().exitCode).toBe(0); }; verify(); });",
+      ].join("\n"),
+    );
+    expect(assessGeneratedTests(cliSpec, cliBuild, duplicateNames).ok).toBe(
+      false,
+    );
+
+    const generator = mappedPlan(
+      [
+        "import { expect, it } from 'vitest';",
+        "it('mapped test', () => {",
+        "  function* verify() { expect(run().exitCode).toBe(0); }",
+        "  verify();",
+        "});",
+      ].join("\n"),
+    );
+    expect(assessGeneratedTests(cliSpec, cliBuild, generator).ok).toBe(false);
   });
 
   it("recognizes awaited Vitest rejection assertions as executable evidence", () => {
@@ -387,7 +518,8 @@ describe("assessGeneratedTests", () => {
         {
           path: "src/commands.ts",
           purpose: "CLI commands",
-          contents: "export async function runCommand() { throw new Error('blank'); }",
+          contents:
+            "export async function runCommand() { throw new Error('blank'); }",
           edits: [],
         },
       ],
@@ -475,12 +607,20 @@ describe("assessGeneratedTests", () => {
         {
           path: "tests/calculator_test.py",
           purpose: "unit",
-          contents: "def test_add():\n    result = add(1, 2)\n    assert result == 3\n",
+          contents:
+            "def test_add():\n    result = add(1, 2)\n    assert result == 3\n",
         },
       ],
     };
     expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(true);
     good.files[0]!.contents = "def test_add():\n    assert True\n";
+    expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(false);
+
+    good.files[0]!.contents =
+      'def test_add():\n    output = "vitest ready"\n    assert "vite" not in output\n';
+    expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(false);
+    good.files[0]!.contents =
+      'def test_add():\n    output = "vitest ready"\n    assert not re.search(r"(vite|next)", output)\n';
     expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(false);
   });
 });
