@@ -185,10 +185,10 @@ export const GoalContractSchema = z.object({
     "current-request",
     "current-spec",
   ]),
-  targetUsers: z.array(z.string().trim().min(1)).max(50).default([]),
-  activeGoals: z.array(z.string().trim().min(1)).min(1).max(50),
-  constraints: z.array(z.string().trim().min(1)).max(100).default([]),
-  nonGoals: z.array(z.string().trim().min(1)).max(100).default([]),
+  targetUsers: z.array(z.string().trim().min(1)).max(100).default([]),
+  activeGoals: z.array(z.string().trim().min(1)).min(1).max(100),
+  constraints: z.array(z.string().trim().min(1)).max(200).default([]),
+  nonGoals: z.array(z.string().trim().min(1)).max(200).default([]),
   continuity: z.object({
     previousRunIds: z.array(z.string().uuid()).max(12).default([]),
     carriedForwardDecisions: z.array(z.string().trim().min(1)).max(30).default([]),
@@ -793,6 +793,12 @@ export const RunOptionsSchema = z
     maxRepairLoops: z.number().optional(),
     /** Client-supplied idempotency key (also accepted via Idempotency-Key header). */
     idempotencyKey: z.string().min(1).max(200).optional(),
+    /**
+     * Stable logical app identity for workspace-only/local-only production.
+     * Unlike idempotencyKey, callers reuse this across distinct improvement
+     * requests so durable purpose memory joins them to the same project.
+     */
+    projectId: z.string().trim().min(1).max(200).optional(),
     /** Optional overall run timeout in ms (overrides FACTORY_RUN_TIMEOUT_MS). */
     timeoutMs: z.number().int().positive().max(3_600_000).optional(),
     /**
