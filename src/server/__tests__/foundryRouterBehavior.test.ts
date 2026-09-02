@@ -37,12 +37,24 @@ async function waitFor<T>(fn: () => Promise<T>, pred: (v: T) => boolean, ms = 80
 class TestFoundryAdapters extends FoundryAdapters {
   private completions = new Map<string, Set<StationId>>();
   private calls: Array<{ projectId: string; stationId: StationId }> = [];
-  private held = new Set<StationId>();
+  private held = new Map<StationId, Promise<void>>();
+  private releases = new Map<StationId, () => void>();
   getCalls() {
     return this.calls.slice();
   }
   hold(stationId: StationId) {
-    this.held.add(stationId);
+    if (this.held.has(stationId)) return;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.held.set(stationId, pending);
+    this.releases.set(stationId, release);
+  }
+  release(stationId: StationId) {
+    this.releases.get(stationId)?.();
+    this.releases.delete(stationId);
+    this.held.delete(stationId);
   }
   override descriptors(): AdapterDescriptor[] {
     return STATIONS.map((s) => {
@@ -63,9 +75,8 @@ class TestFoundryAdapters extends FoundryAdapters {
     const done = this.completions.get(project.id) ?? new Set<StationId>();
     this.completions.set(project.id, done);
     this.calls.push({ projectId: project.id, stationId });
-    if (this.held.has(stationId)) {
-      await new Promise<void>(() => {});
-    }
+    const held = this.held.get(stationId);
+    if (held) await held;
     // Complete discovery and Factory Deck quickly; hold Crucible for attention to prove restart dispatch.
     const complete: StationId[] = [
       "scout",
@@ -203,6 +214,100 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     expect(
       project.stations.find((station) => station.stationId === "flexfactor")?.status,
     ).toBe("not_selected");
+  });
+
+  it("rejects a completed RepoRewards event without its typed handoff", async () => {
+    const created = await store.create(
+      intakeFromMarkdown(
+        "# EvidenceRequired\nFind reusable validation patterns.",
+        "C:/Vault/EvidenceRequired.md",
+      ),
+    );
+    adapters.hold("repo-rewards");
+    const started = await fetch(`${baseUrl}/projects/${created.id}/start`, {
+      method: "POST",
+      headers: jsonHeaders(),
+    });
+    expect(started.status).toBe(202);
+    await waitFor(
+      async () => (await store.get(created.id))!,
+      (project) =>
+        project.stations.find((station) => station.stationId === "repo-rewards")
+          ?.status === "active",
+    );
+
+    const response = await fetch(
+      `${baseUrl}/projects/${created.id}/stations/repo-rewards/events`,
+      {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          status: "completed",
+          summary: "legacy reporter omitted structured evidence",
+          artifacts: [],
+          evidence: {},
+        }),
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining("requires a purpose-bound insight"),
+    });
+    expect(
+      (await store.get(created.id))?.stations.find(
+        (station) => station.stationId === "repo-rewards",
+      )?.status,
+    ).toBe("active");
+    adapters.release("repo-rewards");
+  });
+
+  it("routes failed legacy retries through RepoRewards before the failed station", async () => {
+    const project = await store.create(
+      intakeFromMarkdown(
+        "# LegacyRetry\nResume a previously failed build.",
+        "C:/Vault/LegacyRetry.md",
+      ),
+    );
+    const discovery = project.stations.find(
+      (station) => station.stationId === "repo-rewards",
+    )!;
+    const factory = project.stations.find(
+      (station) => station.stationId === "factory-deck",
+    )!;
+    discovery.status = "not_selected";
+    factory.status = "failed";
+    factory.endedAt = Date.now();
+    project.status = "failed";
+    await store.save(project);
+
+    adapters.hold("repo-rewards");
+    const response = await fetch(
+      `${baseUrl}/projects/${project.id}/stations/factory-deck/run`,
+      { method: "POST", headers: jsonHeaders() },
+    );
+    expect(response.status).toBe(202);
+    const migrated = (await store.get(project.id))!;
+    expect(
+      migrated.stations.find((station) => station.stationId === "repo-rewards")?.status,
+    ).toBe("active");
+    expect(
+      migrated.stations.find((station) => station.stationId === "factory-deck")?.status,
+    ).toBe("queued");
+    await waitFor(
+      async () => adapters.getCalls(),
+      (calls) =>
+        calls.some(
+          (call) => call.projectId === project.id && call.stationId === "repo-rewards",
+        ),
+    );
+    expect(
+      adapters
+        .getCalls()
+        .some(
+          (call) => call.projectId === project.id && call.stationId === "factory-deck",
+        ),
+    ).toBe(false);
+    adapters.release("repo-rewards");
   });
 
   it("redispatches an in-flight station after restart without replay or concurrency", async () => {
