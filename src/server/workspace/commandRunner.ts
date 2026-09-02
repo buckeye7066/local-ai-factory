@@ -353,7 +353,8 @@ export function hardenArgs(bin: string, args: string[]): string[] {
 }
 
 /** Executable extensions to probe when resolving a package manager on PATH. */
-const PM_EXT = process.platform === "win32" ? ["", ".cmd", ".exe", ".bat"] : [""];
+const PM_EXT =
+  process.platform === "win32" ? ["", ".cmd", ".exe", ".bat"] : [""];
 
 /**
  * Resolve a package-manager binary to an ABSOLUTE path, searching only PATH
