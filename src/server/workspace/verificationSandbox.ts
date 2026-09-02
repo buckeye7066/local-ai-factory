@@ -164,6 +164,8 @@ export function buildVerificationSandboxPlan(input: {
     "2",
     "--ulimit",
     "nofile=4096:4096",
+    "--shm-size",
+    "512m",
     "--tmpfs",
     "/tmp:rw,nosuid,nodev,size=1073741824",
     "--tmpfs",
