@@ -252,6 +252,9 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
   if (freeConfigured) providersAvailable.push("free");
   if (anthropicConfigured) providersAvailable.push("anthropic");
   if (openaiConfigured) providersAvailable.push("openai");
+  const modelLadder = (
+    config.modelLadder ?? ["anthropic", "openai", "free"]
+  ).filter((name) => providersAvailable.includes(name));
   return {
     freeConfigured,
     freeBaseUrl: config.free.baseUrl,
@@ -275,7 +278,7 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
     fableOrOpusConfigured: brainFloor.fableOrOpusConfigured,
     solModel: brainFloor.solModel,
     fableOrOpusModel: brainFloor.fableOrOpusModel,
-    modelLadder: config.modelLadder ?? ["anthropic", "openai", "free"],
+    modelLadder,
     ownerExternalMatters: "owner-managed-outside-cyberland" as const,
     defaultCodeProvider: config.defaultCodeProvider,
     defaultReviewProvider: config.defaultReviewProvider,
