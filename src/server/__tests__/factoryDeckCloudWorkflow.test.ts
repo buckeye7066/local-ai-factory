@@ -159,6 +159,44 @@ describe("paid cloud workflow contract", () => {
     expect(macosProof).not.toContain("API_KEY");
   });
 
+  it("resumes the same Purpose Foundry candidate after secret-free Windows and macOS proof", () => {
+    expect(foundry).toContain("runs-on: windows-latest");
+    expect(foundry).toContain("runs-on: macos-latest");
+    expect(foundry).toContain("needs: windows");
+    expect(foundry).toContain("needs: macos");
+    expect(foundry).toContain(
+      "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
+    );
+    expect(
+      foundry.match(/pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g),
+    ).toHaveLength(2);
+    expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: seed");
+    expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: resume");
+    expect(foundry).toContain(
+      "purpose-foundry-seed-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(foundry).toContain(
+      "purpose-foundry-windows-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(foundry).toContain(
+      "purpose-foundry-macos-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(foundry).toContain("!workspaces/**/node_modules/**");
+    expect(foundrySmoke).toContain("purpose-foundry-cloud-smoke.json");
+    expect(foundrySmoke).toContain("HELD FOR PLATFORM PROOF");
+
+    const windowsProof = foundry.slice(
+      foundry.indexOf("Execute Windows proof without production secrets"),
+      foundry.indexOf("Preserve Windows evidence"),
+    );
+    const macosProof = foundry.slice(
+      foundry.indexOf("Execute macOS proof without production secrets"),
+      foundry.indexOf("Preserve macOS evidence"),
+    );
+    expect(windowsProof).not.toContain("API_KEY");
+    expect(macosProof).not.toContain("API_KEY");
+  });
+
   it("builds a verifier image with Node, Python, native tools, and no entrypoint", () => {
     expect(dockerfile).toContain(
       "FROM node:20.19.5-bookworm-slim@sha256:9e70124bd00f47dd023e349cd587132ae61892acc0e47ed641416c3e18f401c3",
