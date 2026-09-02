@@ -37,8 +37,12 @@ async function waitFor<T>(fn: () => Promise<T>, pred: (v: T) => boolean, ms = 80
 class TestFoundryAdapters extends FoundryAdapters {
   private completions = new Map<string, Set<StationId>>();
   private calls: Array<{ projectId: string; stationId: StationId }> = [];
+  private held = new Set<StationId>();
   getCalls() {
     return this.calls.slice();
+  }
+  hold(stationId: StationId) {
+    this.held.add(stationId);
   }
   override descriptors(): AdapterDescriptor[] {
     return STATIONS.map((s) => {
@@ -59,6 +63,9 @@ class TestFoundryAdapters extends FoundryAdapters {
     const done = this.completions.get(project.id) ?? new Set<StationId>();
     this.completions.set(project.id, done);
     this.calls.push({ projectId: project.id, stationId });
+    if (this.held.has(stationId)) {
+      await new Promise<void>(() => {});
+    }
     // Complete discovery and Factory Deck quickly; hold Crucible for attention to prove restart dispatch.
     const complete: StationId[] = [
       "scout",
@@ -110,6 +117,8 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
   let adapters!: TestFoundryAdapters;
   let prevOpenAi!: string | undefined;
   let prevAnthropic!: string | undefined;
+  let prevSolModel!: string | undefined;
+  let prevFableModel!: string | undefined;
 
   async function startServer() {
     const app = express();
@@ -127,8 +136,12 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     adapters = new TestFoundryAdapters(store);
     prevOpenAi = process.env.OPENAI_API_KEY;
     prevAnthropic = process.env.ANTHROPIC_API_KEY;
+    prevSolModel = process.env.FACTORY_SOL_MODEL;
+    prevFableModel = process.env.FACTORY_FABLE_OR_OPUS_MODEL;
     process.env.OPENAI_API_KEY = prevOpenAi || "test-openai";
     process.env.ANTHROPIC_API_KEY = prevAnthropic || "test-anthropic";
+    process.env.FACTORY_SOL_MODEL = "gpt-5.5";
+    process.env.FACTORY_FABLE_OR_OPUS_MODEL = "claude-opus-4-8";
     await startServer();
   });
 
@@ -138,14 +151,54 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     else process.env.OPENAI_API_KEY = prevOpenAi;
     if (prevAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
     else process.env.ANTHROPIC_API_KEY = prevAnthropic;
+    if (prevSolModel === undefined) delete process.env.FACTORY_SOL_MODEL;
+    else process.env.FACTORY_SOL_MODEL = prevSolModel;
+    if (prevFableModel === undefined)
+      delete process.env.FACTORY_FABLE_OR_OPUS_MODEL;
+    else process.env.FACTORY_FABLE_OR_OPUS_MODEL = prevFableModel;
   });
 
-  it("router-level start, single-active, stale reject, auto-advance, survives restart, valid evidence chain", async () => {
-    // Create a project (obsidian equivalence)
-    const intake = intakeFromMarkdown(
-      "# GrantFlow\nFind funding.",
-      "C:/Vault/GrantFlow.md",
-    );
+  it("preserves explicit specialist selection for Obsidian intake", async () => {
+    const response = await fetch(`${baseUrl}/obsidian/import`, {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        markdown: "# Imported job\nBuild and promote the product.",
+        sourcePath: "C:/Vault/Imported.md",
+        routingMode: "paid",
+        selectedStations: ["promo-pilot"],
+      }),
+    });
+    expect(response.status).toBe(201);
+    const project = (await response.json()) as Awaited<
+      ReturnType<typeof store.create>
+    >;
+    const queued = project.stations
+      .filter((station) => station.status === "queued")
+      .map((station) => station.stationId);
+    expect(queued).toEqual([
+      "promo-pilot",
+      "factory-deck",
+      "crucible",
+      "watchtower",
+    ]);
+    expect(
+      project.stations.find((station) => station.stationId === "scout")?.status,
+    ).toBe("not_selected");
+    expect(
+      project.stations.find((station) => station.stationId === "flexfactor")
+        ?.status,
+    ).toBe("not_selected");
+  });
+
+  it("redispatches an in-flight station after restart without replay or concurrency", async () => {
+    const intake = {
+      ...intakeFromMarkdown(
+        "# GrantFlow\nFind funding.",
+        "C:/Vault/GrantFlow.md",
+      ),
+      selectedStations: STATIONS.map((station) => station.id),
+    };
     const createdRes = await fetch(`${baseUrl}/projects`, {
       method: "POST",
       headers: jsonHeaders(),
@@ -157,102 +210,88 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     >;
     const projectId = project.id;
 
-    // Start the assembly line via router (exercises readiness brain floor + dispatcher).
+    // Hold Factory Deck in flight. This makes the single-active invariant
+    // observable and leaves a genuinely active station on disk at restart.
+    adapters.hold("factory-deck");
     const startRes = await fetch(`${baseUrl}/projects/${projectId}/start`, {
       method: "POST",
       headers: jsonHeaders(),
     });
     expect(startRes.status).toBe(202);
-
-    const completedBeforeRestart: StationId[] = [
-      "scout",
-      "repo-rewards",
-      "promo-pilot",
-      "factory-deck",
-      "flexfactor",
-    ];
-
-    // Wait until every deterministic pre-Crucible station is durably completed.
-    const beforeRestart = await waitFor(
-      async () => (await store.get(projectId))!,
-      (p) =>
-        completedBeforeRestart.every(
-          (id) => p.stations.find((s) => s.stationId === id)?.status === "completed",
-        ),
-      4000,
+    await waitFor(
+      async () => adapters.getCalls(),
+      (calls) => calls.some((call) => call.stationId === "factory-deck"),
+      4_000,
     );
-    const factoryBeforeRestart = beforeRestart.stations.find(
-      (s) => s.stationId === "factory-deck",
-    )!;
-    const digestBeforeRestart = factoryBeforeRestart.evidenceDigest;
-    const revisionBeforeRestart = factoryBeforeRestart.revision;
-    expect(digestBeforeRestart).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(revisionBeforeRestart).toMatch(/^rev-[0-9a-f]{12}$/);
 
-    // Restart with a fresh adapter instance. Its ledger now contains only post-restart calls.
+    for (let i = 0; i < 20; i++) {
+      const snapshot = (await store.get(projectId))!;
+      const active = snapshot.stations.filter(
+        (station) => station.status === "active",
+      );
+      expect(active.map((station) => station.stationId)).toEqual(["factory-deck"]);
+      await sleep(10);
+    }
+    const beforeRestart = (await store.get(projectId))!;
+    for (const stationId of ["scout", "repo-rewards", "promo-pilot"] as const) {
+      expect(
+        beforeRestart.stations.find((station) => station.stationId === stationId)
+          ?.status,
+      ).toBe("completed");
+    }
 
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store = new FoundryStore(root);
     adapters = new TestFoundryAdapters(store);
     await startServer();
 
+    // Wait for a known post-restart adapter call, not merely old persisted state.
+    await waitFor(
+      async () => adapters.getCalls(),
+      (calls) => calls.some((call) => call.stationId === "factory-deck"),
+      4_000,
+    );
     const afterRestart = await waitFor(
       async () => (await store.get(projectId))!,
-      (p) =>
-        completedBeforeRestart.every(
-          (id) => p.stations.find((s) => s.stationId === id)?.status === "completed",
-        ),
-      4000,
+      (candidate) =>
+        candidate.stations.find((station) => station.stationId === "crucible")
+          ?.status === "needs_attention" &&
+        adapters
+          .getCalls()
+          .some((call) => call.stationId === "crucible"),
+      4_000,
     );
-    // Assert Factory Deck digest/revision preserved across restart.
-    const factoryAfter = afterRestart.stations.find(
-      (s) => s.stationId === "factory-deck",
-    )!;
-    expect(factoryAfter.evidenceDigest).toBe(digestBeforeRestart);
-    expect(factoryAfter.revision).toBe(revisionBeforeRestart);
-    // Also assert no replay for already-completed stations by examining the adapter call ledger post-restart.
-    const callsAfterRestart = adapters.getCalls();
-    const noReplayIds = new Set<StationId>([
+
+    const callsAfterRestart = adapters
+      .getCalls()
+      .filter((call) => call.projectId === projectId)
+      .map((call) => call.stationId);
+    expect(callsAfterRestart).toEqual(["factory-deck", "flexfactor", "crucible"]);
+    for (const stationId of [
       "scout",
       "repo-rewards",
       "promo-pilot",
       "factory-deck",
       "flexfactor",
-    ]);
-    expect(callsAfterRestart.every((c) => !noReplayIds.has(c.stationId))).toBe(true);
-
-    for (const id of completedBeforeRestart) {
-      expect(afterRestart.stations.find((s) => s.stationId === id)?.status).toBe(
-        "completed",
-      );
+    ] as const) {
+      expect(
+        afterRestart.stations.find((station) => station.stationId === stationId)
+          ?.status,
+      ).toBe("completed");
     }
-    const replayedCompletedStations = adapters
-      .getCalls()
-      .filter(
-        (call) =>
-          call.projectId === projectId &&
-          completedBeforeRestart.includes(call.stationId),
-      );
-    expect(replayedCompletedStations).toEqual([]);
+    expect(
+      afterRestart.stations.filter((station) => station.status === "active"),
+    ).toHaveLength(0);
 
-    const factoryAfterRestart = afterRestart.stations.find(
-      (s) => s.stationId === "factory-deck",
+    const factory = afterRestart.stations.find(
+      (station) => station.stationId === "factory-deck",
     )!;
-    expect(factoryAfterRestart.evidenceDigest).toBe(digestBeforeRestart);
-    expect(factoryAfterRestart.revision).toBe(revisionBeforeRestart);
+    const expectedHex = createHash("sha256")
+      .update(JSON.stringify({ projectId, files: ["a.txt", "b.txt"], bytes: 42 }))
+      .digest("hex");
+    expect(factory.evidenceDigest).toBe(`sha256:${expectedHex}`);
+    expect(factory.revision).toBe(`rev-${expectedHex.slice(0, 12)}`);
 
-    // Sample repeatedly to assert at most one concurrent active station throughout.
-    for (let i = 0; i < 40; i++) {
-      const snap = (await store.get(projectId))!;
-      const activeCount = snap.stations.filter((s) => s.status === "active").length;
-      expect(activeCount).toBeLessThanOrEqual(1);
-      await sleep(10);
-    }
-
-    // Stale/duplicate completion is rejected (complete a previously completed station again).
-    const currentAfter = (await store.get(projectId))!;
-    const scout = currentAfter.stations.find((s) => s.stationId === "scout")!;
-    expect(scout.status).toBe("completed");
     const stale = await fetch(
       `${baseUrl}/projects/${projectId}/stations/scout/events`,
       {
@@ -268,28 +307,6 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     );
     expect(stale.status).toBe(409);
 
-    // Verify digest/revision binding from the persisted Factory Deck station.
-    const expectedHex = createHash("sha256")
-      .update(JSON.stringify({ projectId, files: ["a.txt", "b.txt"], bytes: 42 }))
-      .digest("hex");
-    expect(factoryAfterRestart.evidenceDigest).toBe(`sha256:${expectedHex}`);
-    expect(factoryAfterRestart.revision).toBe(`rev-${expectedHex.slice(0, 12)}`);
-
-    // At this point Crucible should be active; restart the server and prove dispatcher runs:
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await startServer();
-    await waitFor(
-      async () => (await store.get(projectId))!,
-      (p) =>
-        Boolean(
-          p.stations.find(
-            (s) => s.stationId === "crucible" && s.status === "needs_attention",
-          ),
-        ),
-      4000,
-    );
-
-    // Evidence ledger cryptographic chain verification (previousHash/hash).
     const lines = (await readFile(join(root, "evidence.jsonl"), "utf8"))
       .trim()
       .split("\n")
@@ -305,24 +322,24 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       previousHash: string | null;
       hash: string;
     };
-    const events = lines.map((l) => JSON.parse(l) as Event);
+    const events = lines.map((line) => JSON.parse(line) as Event);
     for (let i = 0; i < events.length; i++) {
-      const e = events[i];
+      const event = events[i]!;
       const unsigned = {
-        sequence: e.sequence,
-        timestamp: e.timestamp,
-        projectId: e.projectId,
-        stationId: e.stationId,
-        type: e.type,
-        payload: e.payload,
-        previousHash: e.previousHash,
+        sequence: event.sequence,
+        timestamp: event.timestamp,
+        projectId: event.projectId,
+        stationId: event.stationId,
+        type: event.type,
+        payload: event.payload,
+        previousHash: event.previousHash,
       };
       const recomputed = createHash("sha256")
         .update(JSON.stringify(unsigned))
         .digest("hex");
-      expect(e.hash).toBe(recomputed);
-      if (i === 0) expect(e.previousHash).toBeNull();
-      else expect(e.previousHash).toBe(events[i - 1].hash);
+      expect(event.hash).toBe(recomputed);
+      if (i === 0) expect(event.previousHash).toBeNull();
+      else expect(event.previousHash).toBe(events[i - 1]!.hash);
     }
   });
 });
