@@ -521,6 +521,16 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     ],
   };
 
+  const PRODUCT_DISCOVERY_PLAN = {
+    queries: [
+      "Taskwarrior official website",
+      "Todo.txt official website",
+      "Todoist official website",
+      "Things official website",
+      "OmniFocus official website",
+    ],
+  };
+
   it("keeps the base findings and audit when selection fails validation", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");
     const spy = vi
@@ -534,6 +544,8 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           action: "conclude",
           findings: { summary: "base summary", recommendations: [] },
         },
+        // Product discovery planning is a distinct orchestrator call.
+        PRODUCT_DISCOVERY_PLAN,
         // ...then the selection payload is missing `element` -> real ZodError.
         {
           summary: "s",
@@ -591,6 +603,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           action: "conclude",
           findings: { summary: "base summary", recommendations: [] },
         },
+        PRODUCT_DISCOVERY_PLAN,
         {
           summary: "comparison complete",
           comparisons: [
