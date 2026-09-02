@@ -6,5 +6,6 @@ export function nextTestDraftToGenerate(
   hasCheckpointedPlan: boolean,
   checkpointedDraft: number | undefined,
 ): number {
-  return hasCheckpointedPlan ? (checkpointedDraft ?? 1) + 1 : 1;
+  if (checkpointedDraft !== undefined) return checkpointedDraft + 1;
+  return hasCheckpointedPlan ? 2 : 1;
 }
