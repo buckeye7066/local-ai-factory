@@ -94,8 +94,18 @@ function canonicalGitIdentity(raw: string): string {
   }
 }
 
+export interface ProjectIdentityContext {
+  /** Authenticated destination owner resolved before a new remote is planned. */
+  resolvedNewRepoOwner?: string | null;
+  /** Stable within one local-only project; always hashed before persistence. */
+  localProjectId?: string | null;
+}
+
 /** Stable, credential-free identity used to join separate runs for one app. */
-export function projectKeyForOptions(options: RunOptions): string | null {
+export function projectKeyForOptions(
+  options: RunOptions,
+  context: ProjectIdentityContext = {},
+): string | null {
   if (options.mode === "extend" && options.repoSource) {
     return options.repoSource.type === "git"
       ? `git:${canonicalGitIdentity(options.repoSource.location)}`
@@ -104,7 +114,21 @@ export function projectKeyForOptions(options: RunOptions): string | null {
           .digest("hex")}`;
   }
   if (options.mode !== "extend" && options.newRepo?.name) {
-    return `new:${(options.newRepo.owner ?? "default").toLowerCase()}/${options.newRepo.name.toLowerCase()}`;
+    const owner = options.newRepo.owner ?? context.resolvedNewRepoOwner;
+    if (owner) {
+      return `new:${owner.toLowerCase()}/${options.newRepo.name.toLowerCase()}`;
+    }
+    if (options.newRepo.createRemote === false && context.localProjectId) {
+      const localIdentity = createHash("sha256")
+        .update(
+          JSON.stringify({
+            project: context.localProjectId,
+            name: options.newRepo.name.toLowerCase(),
+          }),
+        )
+        .digest("hex");
+      return `new-local-sha256:${localIdentity}`;
+    }
   }
   return null;
 }
@@ -133,11 +157,10 @@ export function continuityFromMemory(
   excludeRunId?: string,
 ): ProjectContinuity | undefined {
   const entries = (memory?.entries ?? []).filter(
-    (entry) => entry.runId !== excludeRunId,
+    (entry) => entry.runId !== excludeRunId && entry.state === "completed",
   );
   const last = entries.at(-1);
   if (!memory || !last) return undefined;
-  const completed = entries.filter((entry) => entry.state === "completed");
   const research = [...entries]
     .reverse()
     .flatMap((entry) => entry.competitiveResearch?.recommendations ?? [])
@@ -153,7 +176,7 @@ export function continuityFromMemory(
       30,
     ),
     priorDecisions: unique(
-      completed.flatMap((entry) => [
+      entries.flatMap((entry) => [
         ...entry.spec.coreFeatures.map((feature) => `Kept feature: ${feature}`),
         ...entry.spec.userFlows.map((flow) => `Kept workflow: ${flow}`),
       ]),
@@ -231,7 +254,7 @@ export function createGoalContract(input: {
   now?: number;
 }): GoalContract {
   const history = (input.memory?.entries ?? []).filter(
-    (entry) => entry.runId !== input.runId,
+    (entry) => entry.runId !== input.runId && entry.state === "completed",
   );
   const previous = history.at(-1);
   const partitioned = partitionGoals(input.goals, input.idea);
@@ -242,26 +265,33 @@ export function createGoalContract(input: {
   const preservePriorPurpose = Boolean(previous && !purposeChanged);
   // Once an owner has accepted a mission, a fresh model inference from the
   // same repository may not silently replace it. Repository evidence is the
-  // source of truth only for the first run (or an explicit repurpose).
+  // source of truth only for the first run; an explicit repurpose uses the
+  // current owner-directed specification.
   const purpose = preservePriorPurpose
     ? previous!.goalContract.purpose
-    : input.purposeProfile
-      ? input.purposeProfile.purpose.text
-      : currentSpecPurpose(input.spec);
+    : purposeChanged
+      ? currentSpecPurpose(input.spec)
+      : input.purposeProfile
+        ? input.purposeProfile.purpose.text
+        : currentSpecPurpose(input.spec);
   const purposeSource: GoalContract["purposeSource"] = preservePriorPurpose
     ? "project-memory"
-    : input.purposeProfile
-      ? "repository"
-      : "current-spec";
+    : purposeChanged
+      ? "current-spec"
+      : input.purposeProfile
+        ? "repository"
+        : "current-spec";
   const targetUsers = preservePriorPurpose
     ? previous!.goalContract.targetUsers
-    : unique(
-        [
-          ...(input.purposeProfile?.intendedUsers.map((claim) => claim.text) ?? []),
-          input.spec.targetUser,
-        ],
-        20,
-      );
+    : purposeChanged
+      ? unique([input.spec.targetUser], 20)
+      : unique(
+          [
+            ...(input.purposeProfile?.intendedUsers.map((claim) => claim.text) ?? []),
+            input.spec.targetUser,
+          ],
+          20,
+        );
   const priorResearch = unique(
     [...history]
       .reverse()
