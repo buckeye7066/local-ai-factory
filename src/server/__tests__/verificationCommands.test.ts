@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  generatedTestsForVerification,
   verificationCommandsForWorkspace,
   verificationPlanForWorkspace,
 } from "../workspace/verificationCommands.js";
@@ -208,6 +209,40 @@ describe("verificationCommandsForWorkspace", () => {
     expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
       true,
     );
+  });
+
+  it("directly proves tests authored by both Builder and Test Writer", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run" },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+    const generatedTests = generatedTestsForVerification([
+      { path: "src/app.ts", contents: "export const app = true;" },
+      {
+        path: "test/taskline.test.ts",
+        contents: "import { it } from 'vitest'; it('builder', () => {});",
+      },
+      {
+        path: "./test/taskline.acceptance.test.ts",
+        contents: "import { it } from 'vitest'; it('acceptance', () => {});",
+      },
+    ]);
+
+    expect(generatedTests.map((file) => file.path)).toEqual([
+      "test/taskline.test.ts",
+      "test/taskline.acceptance.test.ts",
+    ]);
+    const plan = verificationPlanForWorkspace(path, { generatedTests });
+    expect(
+      plan.commands
+        .filter((command) => command.directTestPath)
+        .map((command) => command.directTestPath),
+    ).toEqual(["test/taskline.test.ts", "test/taskline.acceptance.test.ts"]);
   });
 
   it("holds UI verification without a declared Playwright harness", () => {

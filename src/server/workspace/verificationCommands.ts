@@ -24,6 +24,24 @@ export interface GeneratedVerificationTest {
   contents: string;
 }
 
+/**
+ * Select every safe test file currently written by the run, regardless of
+ * whether Builder or Test Writer authored it. The direct-evidence gate later
+ * requires every one of these paths, so planning only Test Writer output makes
+ * a Builder-authored passing test impossible to prove.
+ */
+export function generatedTestsForVerification(
+  files: Iterable<GeneratedVerificationTest>,
+): GeneratedVerificationTest[] {
+  const tests = new Map<string, GeneratedVerificationTest>();
+  for (const file of files) {
+    const path = normalizeTestPath(file.path);
+    if (!path) continue;
+    tests.set(path, { path, contents: file.contents });
+  }
+  return [...tests.values()];
+}
+
 function exists(workspacePath: string, name: string): boolean {
   return existsSync(join(workspacePath, name));
 }
