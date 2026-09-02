@@ -9,14 +9,19 @@ export const PRODUCTION_READINESS_POLICY = Object.freeze({
   mandatory: true,
   purposeBound: true,
   ownerExternalMatters: "owner-managed-outside-cyberland",
-  leadBrain: Object.freeze({ identity: "sol", provider: "openai" }),
+  leadBrain: Object.freeze({ identity: "lead", route: "paid-model-ladder" }),
   independentBrains: Object.freeze([
-    Object.freeze({ identity: "fable", provider: "anthropic" }),
-    Object.freeze({ identity: "opus", provider: "anthropic" }),
+    Object.freeze({ identity: "challenger", route: "paid-model-ladder" }),
   ]),
 });
 
-export type ReadinessBrainIdentity = "sol" | "fable" | "opus";
+export type ReadinessBrainIdentity =
+  | "lead"
+  | "challenger"
+  // Accepted only when reading legacy v1 state; new evaluations never emit them.
+  | "sol"
+  | "fable"
+  | "opus";
 export type ReadinessBlockerCategory =
   | "purpose"
   | "implementation"
@@ -102,10 +107,15 @@ export type ProductionReadinessReceipt = {
   appName: string;
   evidenceDigest: string;
   brainFloor: {
+    lead: boolean;
+    challenger: boolean;
+    independentReviews: boolean;
+    paidModels: boolean;
+    sameEvidence: boolean;
+    /** Legacy diagnostics retained for persisted v1 receipt compatibility. */
     sol: boolean;
     fableOrOpus: boolean;
     independentFamilies: boolean;
-    sameEvidence: boolean;
   };
   blockers: string[];
   ownerExternalMatters: typeof PRODUCTION_READINESS_POLICY.ownerExternalMatters;
@@ -142,6 +152,17 @@ export function isSolReview(review: ReadinessBrainReview): boolean {
   return (
     review.provider === "openai" &&
     review.identity === "sol" &&
+    review.model.trim().length > 0
+  );
+}
+
+function isPaidReviewerSlot(
+  review: ReadinessBrainReview,
+  identity: "lead" | "challenger",
+): boolean {
+  return (
+    review.identity === identity &&
+    (review.provider === "openai" || review.provider === "anthropic") &&
     review.model.trim().length > 0
   );
 }
@@ -246,33 +267,57 @@ export function evaluateProductionReadiness(
   const expectedReviewDigest = options.expectedReviewDigest ?? evidence.evidenceDigest;
   const expectedReviewDigestValid = isReadinessEvidenceDigest(expectedReviewDigest);
   add(expectedReviewDigestValid, "The readiness-review evidence digest is malformed.");
-  const solReviews = evidence.reviews.filter(isSolReview);
-  const secondReviews = evidence.reviews.filter(isFableOrOpusReview);
-  const eligibleReviews = [...solReviews, ...secondReviews];
+  const leadReviews = evidence.reviews.filter((review) =>
+    isPaidReviewerSlot(review, "lead"),
+  );
+  const challengerReviews = evidence.reviews.filter((review) =>
+    isPaidReviewerSlot(review, "challenger"),
+  );
+  const eligibleReviews = [...leadReviews, ...challengerReviews];
+  const independentReviews =
+    leadReviews.length === 1 &&
+    challengerReviews.length === 1 &&
+    eligibleReviews.length === 2;
   const sameEvidence =
     expectedReviewDigestValid &&
-    eligibleReviews.length >= 2 &&
+    independentReviews &&
     eligibleReviews.every((review) => review.evidenceDigest === expectedReviewDigest);
-  const sol =
-    solReviews.length > 0 &&
-    solReviews.every(
+  const lead =
+    leadReviews.length === 1 &&
+    leadReviews.every(
       (review) => review.evidenceDigest === expectedReviewDigest && reviewReady(review),
     );
-  const fableOrOpus =
-    secondReviews.length > 0 &&
-    secondReviews.every(
+  const challenger =
+    challengerReviews.length === 1 &&
+    challengerReviews.every(
       (review) => review.evidenceDigest === expectedReviewDigest && reviewReady(review),
     );
-  const independentFamilies = solReviews.length > 0 && secondReviews.length > 0;
+  const paidModels =
+    independentReviews &&
+    eligibleReviews.every(
+      (review) =>
+        (review.provider === "openai" || review.provider === "anthropic") &&
+        review.model.trim().length > 0,
+    );
+  const independentFamilies =
+    new Set(eligibleReviews.map((review) => review.provider)).size >= 2;
+  const legacySolReviews = evidence.reviews.filter(isSolReview);
+  const legacySecondReviews = evidence.reviews.filter(isFableOrOpusReview);
+  const sol = legacySolReviews.some(reviewReady);
+  const fableOrOpus = legacySecondReviews.some(reviewReady);
 
-  add(sol, "Sol did not unanimously approve the exact readiness evidence.");
+  add(lead, "The lead reviewer did not approve the exact readiness evidence.");
   add(
-    fableOrOpus,
-    "Fable/Opus did not unanimously approve the exact readiness evidence.",
+    challenger,
+    "The challenger reviewer did not approve the exact readiness evidence.",
   );
   add(
-    independentFamilies,
-    "The readiness review did not use independent OpenAI and Anthropic families.",
+    independentReviews,
+    "The readiness review did not contain exactly two independently executed reviewer slots.",
+  );
+  add(
+    paidModels,
+    "The readiness review did not record two actual paid model judgments.",
   );
   add(
     sameEvidence,
@@ -294,10 +339,14 @@ export function evaluateProductionReadiness(
     appName: evidence.appName,
     evidenceDigest: evidence.evidenceDigest,
     brainFloor: {
+      lead,
+      challenger,
+      independentReviews,
+      paidModels,
+      sameEvidence,
       sol,
       fableOrOpus,
       independentFamilies,
-      sameEvidence,
     },
     blockers,
     ownerExternalMatters: PRODUCTION_READINESS_POLICY.ownerExternalMatters,
@@ -309,9 +358,9 @@ export function deterministicProductionBlockers(
 ): string[] {
   const synthetic: ReadinessBrainReview[] = [
     {
-      identity: "sol",
+      identity: "lead",
       provider: "openai",
-      model: "deterministic-sol-preflight",
+      model: "deterministic-paid-preflight",
       evidenceDigest: evidence.evidenceDigest,
       decision: "ready",
       purposeAligned: true,
@@ -320,9 +369,9 @@ export function deterministicProductionBlockers(
       blockers: [],
     },
     {
-      identity: "opus",
-      provider: "anthropic",
-      model: "claude-opus-4-8",
+      identity: "challenger",
+      provider: "openai",
+      model: "deterministic-paid-preflight",
       evidenceDigest: evidence.evidenceDigest,
       decision: "ready",
       purposeAligned: true,
@@ -340,9 +389,9 @@ export function deterministicPreReleaseBlockers(
 ): string[] {
   const synthetic: ReadinessBrainReview[] = [
     {
-      identity: "sol",
+      identity: "lead",
       provider: "openai",
-      model: "deterministic-sol-preflight",
+      model: "deterministic-paid-preflight",
       evidenceDigest: evidence.evidenceDigest,
       decision: "ready",
       purposeAligned: true,
@@ -351,9 +400,9 @@ export function deterministicPreReleaseBlockers(
       blockers: [],
     },
     {
-      identity: "opus",
-      provider: "anthropic",
-      model: "claude-opus-4-8",
+      identity: "challenger",
+      provider: "openai",
+      model: "deterministic-paid-preflight",
       evidenceDigest: evidence.evidenceDigest,
       decision: "ready",
       purposeAligned: true,

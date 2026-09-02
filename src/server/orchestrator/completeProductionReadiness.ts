@@ -100,11 +100,12 @@ export type PreReleaseReadinessApproval = {
  */
 export async function completePreReleaseReadiness(input: {
   facts: ProductionReadinessFacts;
-  solProvider: LLMProvider;
-  solModel: string;
-  secondProvider: LLMProvider;
-  secondIdentity: "fable" | "opus" | (() => "fable" | "opus");
-  secondModel: string | (() => string);
+  leadProvider: LLMProvider;
+  leadProviderName: "openai" | "anthropic" | (() => "openai" | "anthropic");
+  leadModel: string | (() => string);
+  challengerProvider: LLMProvider;
+  challengerProviderName: "openai" | "anthropic" | (() => "openai" | "anthropic");
+  challengerModel: string | (() => string);
 }): Promise<PreReleaseReadinessApproval> {
   const facts = candidateReadinessFacts(input.facts);
   const evidenceDigest = productionReadinessDigest(facts);
@@ -112,11 +113,12 @@ export async function completePreReleaseReadiness(input: {
   let reviews: ReadinessBrainReview[] = [];
   try {
     reviews = await independentProductionReadinessReviews({
-      solProvider: input.solProvider,
-      solModel: input.solModel,
-      secondProvider: input.secondProvider,
-      secondIdentity: input.secondIdentity,
-      secondModel: input.secondModel,
+      leadProvider: input.leadProvider,
+      leadProviderName: input.leadProviderName,
+      leadModel: input.leadModel,
+      challengerProvider: input.challengerProvider,
+      challengerProviderName: input.challengerProviderName,
+      challengerModel: input.challengerModel,
       evidence,
       phase: "pre-release",
     });
@@ -127,7 +129,7 @@ export async function completePreReleaseReadiness(input: {
       approved: false,
       reviews: [],
       blockers: [
-        "Mandatory Sol and Fable/Opus pre-release review failed before both independent decisions completed.",
+        "Mandatory paid-ladder pre-release review failed before both independent decisions completed.",
       ],
     };
   }
@@ -226,11 +228,12 @@ export async function completeProductionReadiness(input: {
   subjectType: "run" | "foundry-project";
   subjectId: string;
   facts: ProductionReadinessFacts;
-  solProvider: LLMProvider;
-  solModel: string;
-  secondProvider: LLMProvider;
-  secondIdentity: "fable" | "opus" | (() => "fable" | "opus");
-  secondModel: string | (() => string);
+  leadProvider: LLMProvider;
+  leadProviderName: "openai" | "anthropic" | (() => "openai" | "anthropic");
+  leadModel: string | (() => string);
+  challengerProvider: LLMProvider;
+  challengerProviderName: "openai" | "anthropic" | (() => "openai" | "anthropic");
+  challengerModel: string | (() => string);
 }): Promise<ProductionReadinessCompletion> {
   const evidenceDigest = productionReadinessDigest(input.facts);
   await markReadinessEvaluating({
@@ -246,11 +249,12 @@ export async function completeProductionReadiness(input: {
   let reviews: ReadinessBrainReview[] = [];
   try {
     reviews = await independentProductionReadinessReviews({
-      solProvider: input.solProvider,
-      solModel: input.solModel,
-      secondProvider: input.secondProvider,
-      secondIdentity: input.secondIdentity,
-      secondModel: input.secondModel,
+      leadProvider: input.leadProvider,
+      leadProviderName: input.leadProviderName,
+      leadModel: input.leadModel,
+      challengerProvider: input.challengerProvider,
+      challengerProviderName: input.challengerProviderName,
+      challengerModel: input.challengerModel,
       evidence: immutableEvidence,
     });
   } catch {
@@ -260,7 +264,7 @@ export async function completeProductionReadiness(input: {
     };
     const receipt = evaluateProductionReadiness(evidence);
     receipt.blockers = [
-      "Mandatory Sol and Fable/Opus review failed before both independent decisions completed.",
+      "Mandatory paid-ladder review failed before both independent decisions completed.",
       ...receipt.blockers,
     ];
     const state = await recordReadinessEvaluation({

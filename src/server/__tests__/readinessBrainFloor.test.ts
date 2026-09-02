@@ -8,7 +8,7 @@ const keys = {
 } as NodeJS.ProcessEnv;
 
 describe("mandatory readiness brain configuration", () => {
-  it("requires both provider families and a Fable/Opus rung in the Anthropic ladder", () => {
+  it("admits the configured paid ladder without imposing a provider-family split", () => {
     const config = loadConfig({
       ...keys,
       FACTORY_SOL_MODEL: "gpt-5.6-pro",
@@ -17,21 +17,29 @@ describe("mandatory readiness brain configuration", () => {
     const secrets = loadSecrets(keys);
     expect(readinessBrainFloor(config, secrets)).toMatchObject({
       configured: true,
+      paidProviders: ["anthropic", "openai"],
       solConfigured: true,
       fableOrOpusConfigured: true,
     });
 
-    const weak = loadConfig({
-      ...keys,
-      ANTHROPIC_MODEL: "claude-haiku",
-      FACTORY_ANTHROPIC_MODEL_LADDER: "claude-haiku",
-      FACTORY_SOL_MODEL: "gpt-5.6-pro",
-      FACTORY_FABLE_OR_OPUS_MODEL: "claude-haiku",
+    const openaiOnly = loadConfig({
+      OPENAI_API_KEY: "openai-test-key",
+      FACTORY_MODEL_LADDER: "openai",
     });
-    expect(readinessBrainFloor(weak, secrets).configured).toBe(false);
+    expect(
+      readinessBrainFloor(
+        openaiOnly,
+        loadSecrets({
+          OPENAI_API_KEY: "openai-test-key",
+        }),
+      ),
+    ).toMatchObject({
+      configured: true,
+      paidProviders: ["openai"],
+    });
   });
 
-  it("does not let a weak readiness preference hide a Fable/Opus ladder rung", () => {
+  it("retains truthful legacy Fable/Opus diagnostics without gating the route", () => {
     const config = loadConfig({
       ...keys,
       FACTORY_SOL_MODEL: "gpt-5.6-pro",
@@ -52,7 +60,7 @@ describe("mandatory readiness brain configuration", () => {
     const secrets = loadSecrets({});
     expect(readinessBrainFloor(config, secrets).configured).toBe(false);
     expect(() => createReadinessBrainProviders(config, secrets)).toThrow(
-      /OPENAI_API_KEY|ANTHROPIC_API_KEY/,
+      /configured paid model/i,
     );
   });
 
@@ -66,6 +74,7 @@ describe("mandatory readiness brain configuration", () => {
     expect(health).toMatchObject({
       mandatoryProductionReadiness: true,
       readinessBrainFloorConfigured: true,
+      readinessPaidProviders: ["anthropic", "openai"],
       solConfigured: true,
       fableOrOpusConfigured: true,
       solModel: "gpt-5.6-pro",
@@ -76,17 +85,20 @@ describe("mandatory readiness brain configuration", () => {
     expect(JSON.stringify(health)).not.toContain("anthropic-test-key");
   });
 
-  it("constructs dedicated provider instances with no cross-family fallback", () => {
+  it("constructs two independent reviewers over the same paid model order", () => {
     const config = loadConfig({
       ...keys,
       FACTORY_SOL_MODEL: "gpt-5.6-pro",
       FACTORY_FABLE_OR_OPUS_MODEL: "claude-opus-4-8",
+      FACTORY_MODEL_LADDER: "openai,anthropic",
     });
     const pair = createReadinessBrainProviders(config, loadSecrets(keys));
-    expect(pair.sol.name).toBe("openai");
-    expect(pair.second.name).toBe("anthropic");
-    expect(pair.secondIdentity()).toBe("opus");
-    expect(pair.solModel).toBe("gpt-5.6-pro");
-    expect(pair.secondModel()).toBe("claude-opus-4-8");
+    expect(pair.lead.provider.name).toBe("openai");
+    expect(pair.challenger.provider.name).toBe("openai");
+    expect(pair.lead.provider).not.toBe(pair.challenger.provider);
+    expect(pair.lead.currentProvider()).toBe("openai");
+    expect(pair.challenger.currentProvider()).toBe("openai");
+    expect(pair.lead.currentModel()).toBe("gpt-5.6-pro");
+    expect(pair.challenger.currentModel()).toBe("gpt-5.6-pro");
   });
 });

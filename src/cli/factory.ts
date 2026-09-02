@@ -32,8 +32,8 @@ function parseArgs(argv: string[]): { idea: string } {
     );
     console.error(
       `${COLORS.dim}  Factory Deck has no demo, mock, simulate, or dry-run mode.\n` +
-        `  Every run does real work. Configure the selected build tier plus both\n` +
-        `  mandatory production brains: OpenAI Sol and Anthropic Fable/Opus.${COLORS.reset}`,
+        `  Every run does real work. Configure at least one paid model in the\n` +
+        `  single ladder used by both mandatory production reviewers.${COLORS.reset}`,
     );
     process.exit(2);
   }
@@ -73,18 +73,17 @@ async function main() {
   );
   console.log(`${COLORS.dim}  idea: ${idea}${COLORS.reset}`);
   console.log(
-    `${COLORS.dim}  readiness brains: Sol=${brainFloor.solModel}; ` +
-      `Fable/Opus=${brainFloor.fableOrOpusModel}${COLORS.reset}\n`,
+    `${COLORS.dim}  readiness paid ladder: ${brainFloor.paidProviders.join(" → ")}${COLORS.reset}\n`,
   );
 
   if (!brainFloor.configured) {
     console.error(
-      `${COLORS.red}✘ Mandatory production brain floor is not configured.${COLORS.reset}`,
+      `${COLORS.red}✘ Mandatory production paid ladder is not configured.${COLORS.reset}`,
     );
     console.error(
-      `${COLORS.dim}  Set OPENAI_API_KEY + FACTORY_SOL_MODEL and ANTHROPIC_API_KEY +\n` +
-        `  FACTORY_FABLE_OR_OPUS_MODEL. The Anthropic model id must contain\n` +
-        `  Fable or Opus. Free/helper models cannot issue readiness receipts.${COLORS.reset}`,
+      `${COLORS.dim}  Configure at least one paid provider named by FACTORY_MODEL_LADDER.\n` +
+        `  Both independent judgments use that same paid-first route; free/helper\n` +
+        `  models cannot issue readiness receipts.${COLORS.reset}`,
     );
     process.exit(1);
   }
