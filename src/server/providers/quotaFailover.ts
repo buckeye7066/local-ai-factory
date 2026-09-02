@@ -6,11 +6,7 @@ import type {
 } from "../../shared/types.js";
 import { noteFailover, noteRoutePrimary, noteServed } from "./freeRoute.js";
 import { ProviderAbortError } from "./types.js";
-import {
-  isModelExhaustion,
-  isQuotaRefusal,
-  modelFailureText,
-} from "./modelExhaustion.js";
+import { isModelExhaustion, modelFailureText } from "./modelExhaustion.js";
 export { isModelExhaustion, isQuotaRefusal } from "./modelExhaustion.js";
 
 /**
