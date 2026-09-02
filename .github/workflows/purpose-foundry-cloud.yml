@@ -1,4 +1,5 @@
 name: purpose-foundry-cloud
+run-name: "Purpose Foundry cloud proof @ ${{ github.sha }}"
 
 on:
   push:
