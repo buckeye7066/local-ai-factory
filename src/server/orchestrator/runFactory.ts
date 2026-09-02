@@ -3532,9 +3532,9 @@ export type ResumeProviderSwitch = {
   reviewProvider?: ProviderName;
 };
 
-/** Resolve a resume-time provider override without allowing a mixed tier. */
+/** Normalize resume-time legacy provider fields to the configured ladder. */
 export function selectResumeRouting(
-  run: Pick<RunRecord, "routingMode" | "codeProvider" | "reviewProvider">,
+  _run: Pick<RunRecord, "routingMode" | "codeProvider" | "reviewProvider">,
   providers: ResumeProviderSwitch | undefined,
   registry: ProviderRegistry,
   config: AppConfig,
@@ -3544,26 +3544,10 @@ export function selectResumeRouting(
   );
   if (requested.some((name) => OFFLINE_PROVIDERS.has(name))) {
     throw new MissingProviderCredentialError([
-      "resume provider switch must use a configured live tier",
+      "resume provider switch must use the automatic live model ladder",
     ]);
   }
-  const asksFree = requested.includes("free");
-  const asksPaid = requested.some(isPaidProvider);
-  if (asksFree && asksPaid) {
-    throw new RunNotResumableError(
-      "Resume provider switch cannot mix Free and Paid tiers in one run.",
-    );
-  }
-  const requestedMode = asksFree ? "free" : asksPaid ? "paid" : run.routingMode;
-  return selectRunRouting(
-    {
-      routingMode: requestedMode,
-      codeProvider: providers?.codeProvider ?? run.codeProvider,
-      reviewProvider: providers?.reviewProvider ?? run.reviewProvider,
-    },
-    registry,
-    config,
-  );
+  return selectRunRouting({ routingMode: "auto" }, registry, config);
 }
 
 async function assertResumeWorkspace(
@@ -3662,7 +3646,7 @@ async function prepareResume(
         run.logs.push(
           makeLog(
             "info",
-            `Provider tier switched on resume: ${routing.routingMode}; code=${routing.codeProvider}, review=${routing.reviewProvider}.`,
+            `Model ladder refreshed on resume: ${routing.ladder?.join(" → ") ?? routing.codeProvider}.`,
             run.currentStage,
           ),
         );
