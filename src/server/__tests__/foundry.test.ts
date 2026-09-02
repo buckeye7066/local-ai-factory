@@ -82,14 +82,18 @@ describe("Purpose Foundry", () => {
 
       expect(project.routingMode).toBe("auto");
       expect((await store.get(project.id))?.routingMode).toBe("auto");
-      for (const stationId of ["factory-deck", "crucible", "watchtower"]) {
+      for (const stationId of [
+        "repo-rewards",
+        "factory-deck",
+        "crucible",
+        "watchtower",
+      ]) {
         expect(
           project.stations.find((station) => station.stationId === stationId)?.status,
         ).toBe("queued");
       }
       for (const stationId of [
         "scout",
-        "repo-rewards",
         "promo-pilot",
         "flexfactor",
         "app-store-publisher",
@@ -501,14 +505,18 @@ describe("Purpose Foundry", () => {
     ).toBeGreaterThan(
       project.stations.findIndex((station) => station.stationId === "promo-pilot"),
     );
-    for (const stationId of ["factory-deck", "crucible", "watchtower"]) {
+    for (const stationId of [
+      "repo-rewards",
+      "factory-deck",
+      "crucible",
+      "watchtower",
+    ]) {
       expect(
         project.stations.find((station) => station.stationId === stationId)?.status,
       ).toBe("queued");
     }
     for (const stationId of [
       "scout",
-      "repo-rewards",
       "promo-pilot",
       "flexfactor",
       "app-store-publisher",
@@ -654,6 +662,18 @@ describe("Purpose Foundry", () => {
     expect(posted).toMatchObject({ lens: "best", sessionId: project.id });
     expect(repoRewardsQuery(project)).toContain("verified live opportunities");
     expect(outcome.artifacts[0]).toContain(join(project.id, "repo-rewards"));
+    expect(outcome.handoff).toMatchObject({
+      insights: [expect.stringContaining("purpose-bound search")],
+      candidates: [
+        {
+          name: "useful/repo",
+          url: null,
+          summary: "",
+          license: null,
+          score: null,
+        },
+      ],
+    });
     expect(JSON.parse(await readFile(outcome.artifacts[0], "utf8"))).toEqual({
       results: [{ name: "useful/repo" }],
     });
