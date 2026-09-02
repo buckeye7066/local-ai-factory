@@ -2142,7 +2142,7 @@ async function executeRun(
         : null;
       const maxTestDrafts = 3;
       const firstDraftToGenerate = nextTestDraftToGenerate(
-        Boolean(testPlan),
+        checkpoint.testPlan !== undefined,
         checkpoint.testPlanDraft,
       );
       for (
