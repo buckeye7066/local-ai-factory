@@ -15,6 +15,7 @@ import {
   EXTEND_PERSISTENCE_CONTRACT,
   withExtendPersistenceGoals,
 } from "../orchestrator/composeExtendIdea.js";
+import { encodeStructuredGoalDirectives } from "../orchestrator/goalDirectives.js";
 import { FoundryStore, STATIONS, intakeFromMarkdown } from "../foundry/model.js";
 import { loadConfig } from "../config.js";
 import type { ProviderRegistry } from "../providers/index.js";
@@ -244,11 +245,25 @@ describe("Purpose Foundry", () => {
   it("forwards the resolved automatic ladder to Factory Deck's run API", async () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
+    const targetUsers = Array.from({ length: 50 }, (_, index) => `User ${index + 1}`);
+    const successCriteria = Array.from(
+      { length: 50 },
+      (_, index) => `Criterion ${index + 1}`,
+    );
+    const constraints = Array.from(
+      { length: 50 },
+      (_, index) => `Constraint ${index + 1}`,
+    );
+    const nonGoals = Array.from({ length: 50 }, (_, index) => `Non-goal ${index + 1}`);
     const project = await store.create({
       ...intakeFromMarkdown(
         "# Metered-Build\nBuild through Factory Deck.",
         "C:/Vault/Metered-Build.md",
       ),
+      targetUsers,
+      successCriteria,
+      constraints,
+      nonGoals,
       routingMode: "paid",
       selectedStations: ["factory-deck", "crucible"],
     });
@@ -288,9 +303,15 @@ describe("Purpose Foundry", () => {
     expect(posted[0]?.options?.goals).toContain(
       `Mission: ${project.constitution.purpose}`,
     );
-    for (const targetUser of project.constitution.targetUsers) {
-      expect(posted[0]?.options?.goals).toContain(`Audience: ${targetUser}`);
-    }
+    expect(posted[0]?.options?.goals).toContain(
+      encodeStructuredGoalDirectives({
+        targetUsers,
+        activeGoals: successCriteria.map((item) => `Success criterion: ${item}`),
+        constraints,
+        nonGoals,
+      }),
+    );
+    expect(posted[0]?.options?.goals?.length).toBeLessThanOrEqual(50);
   });
 
   it("advertises App Store Publisher only with an explicit endpoint", async () => {
