@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("Purpose Foundry intake UI", () => {
-  it("does not force optional or unconfigured bays into a normal job", async () => {
+  it("includes configured bays without forcing unconfigured bays", async () => {
     const stations = stationIds.map((id, order) => ({
       id,
       name: id,
@@ -95,11 +95,13 @@ describe("Purpose Foundry intake UI", () => {
     fireEvent.click(screen.getByRole("button", { name: /Release to the line/i }));
 
     await waitFor(() => expect(posted).not.toBeNull());
-    expect(posted).not.toHaveProperty("selectedStations");
     expect(posted).toMatchObject({
       name: "Paid core job",
       purpose: "Build and verify the core product",
       routingMode: "paid",
+      selectedStations: ["factory-deck", "crucible"],
     });
+    expect(posted?.selectedStations).not.toContain("promo-pilot");
+    expect(posted?.selectedStations).not.toContain("app-store-publisher");
   });
 });
