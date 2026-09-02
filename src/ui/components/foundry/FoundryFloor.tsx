@@ -85,6 +85,13 @@ type Adapter = {
   destination: string;
 };
 
+const REQUIRED_STATIONS: Record<"free" | "paid", ReadonlySet<StationId>> = {
+  free: new Set(["factory-deck", "flexfactor", "crucible", "watchtower"]),
+  paid: new Set(["factory-deck", "crucible", "watchtower"]),
+};
+
+const PAID_UNMETERED_STATIONS = new Set<StationId>(["scout", "flexfactor"]);
+
 const ICONS: Record<StationId, ComponentType<{ className?: string }>> = {
   "factory-deck": Factory,
   scout: Radar,
@@ -163,6 +170,8 @@ export function FoundryFloor() {
   const [routingMode, setRoutingMode] = useState<"free" | "paid">("free");
   const [obsidianNote, setObsidianNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [catalogReady, setCatalogReady] = useState(false);
+  const [selectedStations, setSelectedStations] = useState<StationId[]>([]);
 
   const refresh = useCallback(async () => {
     const [stationResult, adapterResult, projectResult] = await Promise.all([
@@ -172,6 +181,7 @@ export function FoundryFloor() {
     ]);
     setStations(stationResult.stations.sort((a, b) => a.order - b.order));
     setAdapters(adapterResult.adapters);
+    setCatalogReady(true);
     setProjects(projectResult.projects);
     setActiveId((current) => current ?? projectResult.projects[0]?.id ?? null);
   }, []);
@@ -190,6 +200,43 @@ export function FoundryFloor() {
     () => projects.find((project) => project.id === activeId) ?? null,
     [activeId, projects],
   );
+
+  const optionalStations = useMemo(() => {
+    const required = REQUIRED_STATIONS[routingMode];
+    return stations
+      .filter((station) => !required.has(station.id))
+      .map((station) => {
+        const adapter = adapters.find(
+          (candidate) => candidate.stationId === station.id,
+        );
+        const metered =
+          routingMode !== "paid" || !PAID_UNMETERED_STATIONS.has(station.id);
+        return {
+          station,
+          adapter,
+          selectable: Boolean(adapter?.configured && metered),
+        };
+      });
+  }, [adapters, routingMode, stations]);
+
+  useEffect(() => {
+    const selectable = new Set(
+      optionalStations
+        .filter((entry) => entry.selectable)
+        .map((entry) => entry.station.id),
+    );
+    setSelectedStations((current) =>
+      current.filter((stationId) => selectable.has(stationId)),
+    );
+  }, [optionalStations]);
+
+  const toggleStation = (stationId: StationId, checked: boolean) => {
+    setSelectedStations((current) =>
+      checked
+        ? [...new Set([...current, stationId])]
+        : current.filter((candidate) => candidate !== stationId),
+    );
+  };
 
   /* The plant's own reading of the floor: how many bays are running, how many
      have pulled the andon cord, how many have passed. */
@@ -213,7 +260,7 @@ export function FoundryFloor() {
   }, [active]);
 
   const createProject = async () => {
-    if (!name.trim() || !purpose.trim()) return;
+    if (!catalogReady || !name.trim() || !purpose.trim()) return;
     setBusy(true);
     try {
       const created = await request<FoundryProject>("/api/foundry/projects", {
@@ -228,14 +275,7 @@ export function FoundryFloor() {
           targets: split(targets),
           routingMode,
           source: "manual",
-          selectedStations: stations
-            .filter((station) =>
-              adapters.some(
-                (adapter) =>
-                  adapter.stationId === station.id && adapter.configured,
-              ),
-            )
-            .map((station) => station.id),
+          selectedStations,
         }),
       });
       setName("");
@@ -255,7 +295,7 @@ export function FoundryFloor() {
   };
 
   const importObsidian = async () => {
-    if (!obsidianNote.trim()) return;
+    if (!catalogReady || !obsidianNote.trim()) return;
     setBusy(true);
     try {
       const created = await request<FoundryProject>("/api/foundry/obsidian/import", {
@@ -264,6 +304,7 @@ export function FoundryFloor() {
           markdown: obsidianNote,
           sourcePath: "Obsidian/Purpose Foundry.md",
           routingMode,
+          selectedStations,
         }),
       });
       setObsidianNote("");
@@ -444,6 +485,50 @@ export function FoundryFloor() {
                   <option value="paid">Paid — budget-gated routes only</option>
                 </select>
               </Field>
+              <Field
+                label="Optional specialist bays"
+                hint="Required production bays are always included. Specialists run only when you select them."
+              >
+                <div
+                  role="group"
+                  aria-label="Optional specialist bays"
+                  className="space-y-1.5 rounded-[3px] border border-plant-edge bg-plant-night/60 p-2"
+                >
+                  {optionalStations.map(({ station, adapter, selectable }) => (
+                    <label
+                      key={station.id}
+                      className="flex items-start gap-2 text-xs text-plant-paint/75"
+                    >
+                      <input
+                        type="checkbox"
+                        aria-label={`Include ${station.name}`}
+                        checked={selectedStations.includes(station.id)}
+                        disabled={!catalogReady || !selectable}
+                        onChange={(event) =>
+                          toggleStation(station.id, event.target.checked)
+                        }
+                        className="mt-0.5 accent-plant-safety"
+                      />
+                      <span>
+                        <span className="block text-white">{station.name}</span>
+                        <span className="block text-[10px] text-plant-paint/45">
+                          {routingMode === "paid" &&
+                          PAID_UNMETERED_STATIONS.has(station.id)
+                            ? "Unavailable on Paid: this external process is outside the paid-call ledger."
+                            : adapter?.configured
+                              ? adapter.destination
+                              : "Not configured"}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                  {!optionalStations.length && (
+                    <span className="text-[10px] text-plant-paint/45">
+                      No optional bays are available for this route.
+                    </span>
+                  )}
+                </div>
+              </Field>
               <Field label="Repos or programs" hint="Separate with commas">
                 <input
                   value={targets}
@@ -465,7 +550,7 @@ export function FoundryFloor() {
                 variant="line"
                 className="w-full"
                 loading={busy}
-                disabled={!name.trim() || !purpose.trim()}
+                disabled={!catalogReady || !name.trim() || !purpose.trim()}
                 onClick={createProject}
                 icon={<Truck className="h-4 w-4" />}
               >
@@ -500,7 +585,7 @@ export function FoundryFloor() {
                 <PlantButton
                   size="sm"
                   loading={busy}
-                  disabled={!obsidianNote.trim()}
+                  disabled={!catalogReady || !obsidianNote.trim()}
                   onClick={importObsidian}
                 >
                   Take in note
