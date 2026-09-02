@@ -15,5 +15,7 @@ describe("Factory Deck cloud CLI terminal contract", () => {
     expect(source).toContain('run.status === "cancelled"');
     expect(source).toContain("Run was cancelled.");
     expect(source).toContain("Run completed without a final report");
+    expect(source).toContain("process.env.FACTORY_PROJECT_ID?.trim()");
+    expect(source).toContain("projectId ? { projectId } : {}");
   });
 });

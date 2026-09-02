@@ -69,6 +69,7 @@ jobs:
         shell: pwsh
         env:
           FACTORY_IDEA: ${{ inputs.idea || 'Build and verify a minimal TypeScript command-line task checklist. It must be command-line only with no HTML, browser, or web UI; support add, list, complete, and delete commands; persist tasks in a local JSON file; and include automated tests for the complete primary workflow.' }}
+          FACTORY_PROJECT_ID: "factory-deck-cloud-proof"
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: claude-fable-5-1
