@@ -1,4 +1,5 @@
 name: factory-deck-cloud
+run-name: "Factory Deck cloud proof @ ${{ github.sha }}"
 
 on:
   push:
