@@ -321,9 +321,7 @@ export async function recordCurrentPlatformEvidence(
         ),
         allowScriptExecution: input.allowScriptExecution,
         timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
-        ...(command.directTestPath
-          ? { maxCapturedOutputBytes: 32 * 1024 * 1024 }
-          : {}),
+        ...(command.directTestPath ? { maxCapturedOutputBytes: 32 * 1024 * 1024 } : {}),
       },
     );
     const outputTail = `${result.stdout}\n${result.stderr}`.slice(-32_768);
