@@ -600,9 +600,9 @@ export type FinalReport = z.infer<typeof FinalReportSchema>;
 /* ------------------------------------------------------------------ */
 
 /**
- * "free" is the local FCC/Ollama route and is the DEFAULT primary. It is a
- * live provider (it really builds software), it just costs nothing — so unlike
- * mock/stub it is never treated as an offline demo.
+ * "free" is the live FCC/Ollama rung appended to the end of the automatic
+ * ladder. It really builds software and, unlike mock/stub, is never treated as
+ * an offline demo.
  */
 export const ProviderNameSchema = z.enum([
   "free",
