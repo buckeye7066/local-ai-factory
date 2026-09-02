@@ -147,9 +147,7 @@ export function assessRequiredCompetitiveEvidence(
   const productVerifiedCount = verifiedProducts.size;
   const reasons: string[] = [];
   if (!audit) reasons.push("competitive audit is missing");
-  const repoRewards = audit?.sources.find(
-    (source) => source.name === "repo-rewards",
-  );
+  const repoRewards = audit?.sources.find((source) => source.name === "repo-rewards");
   if (!repoRewards) {
     reasons.push("RepoRewards discovery evidence is missing");
   } else if (
