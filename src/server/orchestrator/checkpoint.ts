@@ -149,6 +149,11 @@ export const FactoryCheckpointSchema = z.object({
         .optional(),
       /** SHA-256 receipt for every deliverable path after the last verification pass. */
       fileDigests: z.record(z.string()).optional(),
+      /**
+       * Complete candidate manifest sealed before cross-runner artifact transfer.
+       * Values bind file bytes plus executable intent, or symlink identity.
+       */
+      platformArtifactSnapshot: z.record(z.string()).optional(),
     })
     .optional(),
   testsExecuted: z.boolean().default(false),

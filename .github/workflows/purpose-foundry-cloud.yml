@@ -90,9 +90,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: purpose-foundry-seed-${{ github.run_id }}
+          name: purpose-foundry-seed-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
-          overwrite: true
           include-hidden-files: true
           retention-days: 14
           path: |
@@ -143,7 +142,7 @@ jobs:
       - name: Restore exact candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: purpose-foundry-seed-${{ github.run_id }}
+          name: purpose-foundry-seed-${{ github.run_id }}-${{ github.run_attempt }}
           path: .
 
       - name: Execute Windows proof without production secrets
@@ -158,9 +157,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: purpose-foundry-windows-${{ github.run_id }}
+          name: purpose-foundry-windows-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
-          overwrite: true
           include-hidden-files: true
           retention-days: 14
           path: |
@@ -185,7 +183,7 @@ jobs:
 
   macos:
     name: Verify Purpose Foundry candidate on macOS
-    needs: windows
+    needs: [seed, windows]
     runs-on: macos-latest
     timeout-minutes: 120
 
@@ -211,7 +209,7 @@ jobs:
       - name: Restore Windows-verified candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: purpose-foundry-windows-${{ github.run_id }}
+          name: purpose-foundry-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: .
 
       - name: Execute macOS proof without production secrets
@@ -226,9 +224,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: purpose-foundry-macos-${{ github.run_id }}
+          name: purpose-foundry-macos-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
-          overwrite: true
           include-hidden-files: true
           retention-days: 14
           path: |
@@ -253,7 +250,7 @@ jobs:
 
   verify:
     name: Purpose Foundry end-to-end production verification
-    needs: macos
+    needs: [seed, windows, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -279,7 +276,7 @@ jobs:
       - name: Restore cross-platform candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: purpose-foundry-macos-${{ github.run_id }}
+          name: purpose-foundry-macos-${{ github.run_id }}-${{ github.run_attempt }}
           path: .
 
       - name: Build generated-code verification sandbox
@@ -330,9 +327,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: purpose-foundry-${{ github.run_id }}
+          name: purpose-foundry-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
-          overwrite: true
           include-hidden-files: true
           retention-days: 14
           path: |

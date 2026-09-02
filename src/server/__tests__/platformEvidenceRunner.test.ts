@@ -49,6 +49,9 @@ describe("platformEvidenceRunner", () => {
     expect(platformArtifactFileFingerprint(Buffer.from("same"), 0o644)).not.toBe(
       platformArtifactFileFingerprint(Buffer.from("same"), 0o755),
     );
+    expect(platformArtifactFileFingerprint(Buffer.from("same"), 0o644)).toBe(
+      platformArtifactFileFingerprint(Buffer.from("same"), 0o600),
+    );
   });
 
   it("requires structured passing non-skipped evidence for direct tests", () => {

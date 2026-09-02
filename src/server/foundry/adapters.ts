@@ -24,7 +24,7 @@ import {
   type ResolvedRunRouting,
 } from "../orchestrator/runFactory.js";
 import { platformEvidenceBlockersFromRunError } from "../orchestrator/platformEvidenceHold.js";
-import { getRun } from "../storage/runsStore.js";
+import { getRun, getRunCheckpoint } from "../storage/runsStore.js";
 import {
   loadReadinessState,
   recordReadinessEvaluation,
@@ -793,9 +793,16 @@ export class FoundryAdapters {
     // the station shows WHAT failed and the suggested fix, not just "failed".
     const errorLedger = Array.isArray(run.errorLedger) ? run.errorLedger : [];
     const platformBlockers = platformEvidenceBlockersFromRunError(run.error);
+    const platformCheckpoint = platformBlockers ? await getRunCheckpoint(run.id) : null;
+    const actionablePlatformHold = Boolean(
+      platformCheckpoint?.testWriterComplete &&
+        platformCheckpoint.verification &&
+        Object.keys(platformCheckpoint.verification.fileDigests ?? {}).length > 0,
+    );
     // External platform holds remain visible to Foundry without advertising
-    // the ordinary same-host resume action that cannot satisfy them.
-    if (run.status === "failed" && platformBlockers) {
+    // the ordinary same-host resume action that cannot satisfy them. A missing
+    // or corrupt checkpoint is irrecoverable and must remain an honest failure.
+    if (run.status === "failed" && platformBlockers && actionablePlatformHold) {
       return {
         status: "needs_attention",
         summary: `Factory Deck run ${run.id} is waiting for trusted cross-platform execution: ${platformBlockers.join("; ")}`,

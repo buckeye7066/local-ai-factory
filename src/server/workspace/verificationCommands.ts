@@ -159,7 +159,10 @@ function plainScriptWords(source: string): string[] | null {
       finishWord();
       continue;
     }
-    if (/[;&|<>()$`]/.test(character)) return null;
+    // Package-manager scripts run through a shell. An unquoted `#` starts a
+    // comment on POSIX, which would discard an engine-appended `--root=.` and
+    // let Vitest rediscover configuration above the candidate workspace.
+    if (/[#;&|<>()$`]/.test(character)) return null;
     word += character;
   }
   if (quote || escaped) return null;
@@ -170,6 +173,19 @@ function plainScriptWords(source: string): string[] | null {
 interface VitestScript {
   root: string;
   ownsRoot: boolean;
+}
+
+/** Canonicalize equivalent, contained Vitest root spellings. */
+function normalizeSafeVitestRoot(raw: string): string | null {
+  const slashed = raw.replace(/\\/g, "/");
+  if (slashed.startsWith("/") || /^[A-Za-z]:/.test(slashed)) return null;
+  const withoutPrefix = slashed.replace(/^\.\/+/, "");
+  const withoutTrailingSlash = withoutPrefix.replace(/\/+$/, "");
+  if (!withoutTrailingSlash || withoutTrailingSlash === ".") return ".";
+  const normalized = normalizeSafeRelativePath(withoutTrailingSlash);
+  if (!normalized) return null;
+  const parts = normalized.split("/").filter((part) => part !== ".");
+  return parts.join("/") || ".";
 }
 
 function runnerScriptWords(
@@ -195,7 +211,7 @@ function inspectVitestScript(script: unknown): VitestScript | null {
       candidate = word.slice("--root=".length);
     }
     if (candidate === undefined) continue;
-    const normalized = normalizeSafeRelativePath(candidate);
+    const normalized = normalizeSafeVitestRoot(candidate);
     if (!normalized || root !== undefined) return null;
     root = normalized;
   }

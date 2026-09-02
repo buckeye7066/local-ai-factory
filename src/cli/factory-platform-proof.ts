@@ -1,6 +1,6 @@
 import {
   recordCurrentPlatformEvidence,
-  validatePlatformEvidenceHold,
+  sealPlatformEvidenceHold,
 } from "../server/workspace/platformEvidenceRunner.js";
 import { getConfig } from "../server/config.js";
 
@@ -10,7 +10,7 @@ async function main(): Promise<void> {
   const workspaceRoot = process.env.WORKSPACE_ROOT?.trim() || undefined;
 
   if (mode === "validate") {
-    const held = await validatePlatformEvidenceHold({ runId, workspaceRoot });
+    const held = await sealPlatformEvidenceHold({ runId, workspaceRoot });
     console.log(
       `Validated platform-evidence hold ${held.runId}: ${held.blockers.join("; ")}`,
     );

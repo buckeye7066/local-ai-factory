@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readdir, readFile, readlink } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { lstat, readdir, readlink } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
 import { parseDirectTestEvidence } from "../orchestrator/directTestEvidence.js";
@@ -69,13 +70,24 @@ export function platformArtifactFileFingerprint(
   mode: number,
 ): string {
   const digest = createHash("sha256").update(contents).digest("hex");
-  return `file:${(mode & 0o777).toString(8)}:${digest}`;
+  return `file:${mode & 0o111 ? "executable" : "regular"}:${digest}`;
+}
+
+async function streamedPlatformArtifactFileFingerprint(
+  path: string,
+  mode: number,
+): Promise<string> {
+  const digest = createHash("sha256");
+  for await (const chunk of createReadStream(path)) digest.update(chunk);
+  return `file:${mode & 0o111 ? "executable" : "regular"}:${digest.digest("hex")}`;
 }
 
 export async function capturePlatformArtifactSnapshot(
   workspacePath: string,
 ): Promise<PlatformArtifactSnapshot> {
-  const snapshot: PlatformArtifactSnapshot = {};
+  const snapshot: PlatformArtifactSnapshot = Object.create(
+    null,
+  ) as PlatformArtifactSnapshot;
   const pending = [workspacePath];
   while (pending.length > 0) {
     const directory = pending.pop()!;
@@ -95,10 +107,9 @@ export async function capturePlatformArtifactSnapshot(
           .digest("hex");
       } else if (entry.isFile()) {
         const mode = (await lstat(absolute)).mode;
-        snapshot[path] = platformArtifactFileFingerprint(
-          await readFile(absolute),
-          mode,
-        );
+        snapshot[path] = await streamedPlatformArtifactFileFingerprint(absolute, mode);
+      } else {
+        throw new Error(`Unsupported candidate artifact entry: ${path}.`);
       }
     }
   }
@@ -288,6 +299,33 @@ export async function validatePlatformEvidenceHold(
   return { runId, checkpoint, workspacePath, blockers };
 }
 
+/**
+ * Seal the complete candidate artifact before its first workflow upload. Every
+ * later host must match this manifest, so transport normalization cannot turn
+ * different bytes, executable intent, or symlink identity into valid evidence.
+ */
+export async function sealPlatformEvidenceHold(
+  input: {
+    runId?: string;
+    workspaceRoot?: string;
+  } = {},
+): Promise<PlatformEvidenceHold> {
+  const held = await validatePlatformEvidenceHold(input);
+  const platformArtifactSnapshot = await capturePlatformArtifactSnapshot(
+    held.workspacePath,
+  );
+  const checkpoint: FactoryCheckpoint = {
+    ...held.checkpoint,
+    verification: {
+      ...held.checkpoint.verification!,
+      platformArtifactSnapshot,
+    },
+    updatedAt: Date.now(),
+  };
+  await saveRunCheckpoint(checkpoint);
+  return { ...held, checkpoint };
+}
+
 export async function recordCurrentPlatformEvidence(
   input: {
     runId?: string;
@@ -322,7 +360,21 @@ export async function recordCurrentPlatformEvidence(
       `Candidate bytes changed before ${hostPlatform} verification: ${before.reason ?? "unknown mismatch"}.`,
     );
   }
+  const sealedArtifact = held.checkpoint.verification!.platformArtifactSnapshot;
+  if (!sealedArtifact || Object.keys(sealedArtifact).length === 0) {
+    throw new Error(
+      "Platform proof refused: the Linux seed did not seal a canonical candidate artifact before upload.",
+    );
+  }
   const artifactBefore = await capturePlatformArtifactSnapshot(held.workspacePath);
+  const transferChanges = changedPlatformArtifactPaths(sealedArtifact, artifactBefore);
+  if (transferChanges.length > 0) {
+    throw new Error(
+      `Restored candidate differs from the sealed Linux artifact: ${transferChanges
+        .slice(0, 20)
+        .join(", ")}.`,
+    );
+  }
 
   const generatedTests = generatedTestsForVerification(held.checkpoint.files);
   const plan = verificationPlanForWorkspace(held.workspacePath, { generatedTests });
@@ -386,7 +438,7 @@ export async function recordCurrentPlatformEvidence(
   }
 
   const artifactAfter = await capturePlatformArtifactSnapshot(held.workspacePath);
-  const artifactChanges = changedPlatformArtifactPaths(artifactBefore, artifactAfter);
+  const artifactChanges = changedPlatformArtifactPaths(sealedArtifact, artifactAfter);
   if (artifactChanges.length > 0) {
     throw new Error(
       `Candidate artifact changed during ${hostPlatform} verification outside node_modules: ${artifactChanges

@@ -62,6 +62,10 @@ import {
 } from "../workspace/verificationReceipt.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import {
+  capturePlatformArtifactSnapshot,
+  changedPlatformArtifactPaths,
+} from "../workspace/platformEvidenceRunner.js";
+import {
   generatedTestsForVerification,
   hasPlaywrightHarness,
   verificationPlanForWorkspace,
@@ -3773,6 +3777,26 @@ async function prepareResume(
     }
     if (run.workspacePath) {
       await assertResumeWorkspace(config.workspaceRoot, run.workspacePath);
+    }
+    const sealedArtifact = checkpoint.verification?.platformArtifactSnapshot;
+    if (sealedArtifact !== undefined) {
+      if (!run.workspacePath) {
+        throw new RunNotResumableError(
+          "The sealed platform candidate has no saved workspace path. Restore the exact artifact or start a new run.",
+        );
+      }
+      const restoredArtifact = await capturePlatformArtifactSnapshot(run.workspacePath);
+      const artifactChanges = changedPlatformArtifactPaths(
+        sealedArtifact,
+        restoredArtifact,
+      );
+      if (artifactChanges.length > 0) {
+        throw new RunNotResumableError(
+          `Restored candidate differs from the sealed platform artifact: ${artifactChanges
+            .slice(0, 20)
+            .join(", ")}. Restore the exact artifact or start a new run.`,
+        );
+      }
     }
 
     // Resolve providers before consuming the checkpoint. If credentials or the

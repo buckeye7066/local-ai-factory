@@ -137,8 +137,8 @@ describe("paid cloud workflow contract", () => {
   it("proves one exact CLI candidate on Windows and macOS before paid finalization", () => {
     expect(factory).toContain("runs-on: windows-latest");
     expect(factory).toContain("runs-on: macos-latest");
-    expect(factory).toContain("needs: windows");
-    expect(factory).toContain("needs: macos");
+    expect(factory).toContain("needs: [seed, windows]");
+    expect(factory).toContain("needs: [seed, windows, macos]");
     expect(factory).toContain(
       "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
     );
@@ -168,8 +168,8 @@ describe("paid cloud workflow contract", () => {
   it("resumes the same Purpose Foundry candidate after secret-free Windows and macOS proof", () => {
     expect(foundry).toContain("runs-on: windows-latest");
     expect(foundry).toContain("runs-on: macos-latest");
-    expect(foundry).toContain("needs: windows");
-    expect(foundry).toContain("needs: macos");
+    expect(foundry).toContain("needs: [seed, windows]");
+    expect(foundry).toContain("needs: [seed, windows, macos]");
     expect(foundry).toContain(
       "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
     );
@@ -202,11 +202,24 @@ describe("paid cloud workflow contract", () => {
     ["Purpose Foundry", foundry],
   ])(
     "%s preserves exact artifact identities across failed-job retries",
-    (_name, workflow) => {
-      expect(workflow.match(/overwrite: true/g)).toHaveLength(4);
-      expect(workflow).not.toMatch(
-        /^\s+name: (?:factory-deck|purpose-foundry)[^\n]*github\.run_attempt/m,
+    (name, workflow) => {
+      const prefix = name === "Factory Deck" ? "factory-deck" : "purpose-foundry";
+      const artifactNames = [
+        ...workflow.matchAll(new RegExp(`^\\s+name: (${prefix}[^\\n]+)$`, "gm")),
+      ].map((match) => match[1]);
+      expect(artifactNames.length).toBeGreaterThan(0);
+      for (const artifactName of artifactNames) {
+        expect(artifactName).toContain("${{ github.run_id }}");
+        expect(artifactName).toContain("${{ github.run_attempt }}");
+      }
+      expect(workflow).not.toContain("overwrite: true");
+
+      const sealIndex = workflow.indexOf(
+        "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
       );
+      const seedUploadIndex = workflow.indexOf(`name: ${prefix}-seed-`);
+      expect(sealIndex).toBeGreaterThan(0);
+      expect(seedUploadIndex).toBeGreaterThan(sealIndex);
     },
   );
 
@@ -233,4 +246,3 @@ describe("paid cloud workflow contract", () => {
     expect(dockerfile).toContain("ENTRYPOINT []");
   });
 });
-

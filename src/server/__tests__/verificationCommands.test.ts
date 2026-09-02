@@ -310,6 +310,72 @@ describe("verificationCommandsForWorkspace", () => {
     expect(argsAreShellSafe(direct!.bin, direct!.args)).toBe(true);
   });
 
+  it.each([
+    ["./", ".", "src/root.test.ts", "src/root.test.ts"],
+    [
+      "packages/web/",
+      "packages/web",
+      "packages/web/src/root.test.ts",
+      "src/root.test.ts",
+    ],
+  ])(
+    "canonicalizes the safe Vitest root %s",
+    (scriptRoot, expectedRoot, generatedPath, expectedDirectPath) => {
+      const path = workspace();
+      writeFileSync(
+        join(path, "package.json"),
+        JSON.stringify({
+          scripts: { test: `vitest run --root ${scriptRoot}` },
+          devDependencies: { vitest: "3" },
+        }),
+      );
+      writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+      const plan = verificationPlanForWorkspace(path, {
+        generatedTests: [
+          {
+            path: generatedPath,
+            contents: "import { test } from 'vitest'; test('root', () => {});",
+          },
+        ],
+      });
+
+      expect(plan.incomplete).toEqual([]);
+      expect(plan.commands.find((command) => command.directTestPath)).toMatchObject({
+        args: [
+          "--no-install",
+          "vitest",
+          "run",
+          expectedDirectPath,
+          "--reporter=json",
+          `--root=${expectedRoot}`,
+        ],
+      });
+    },
+  );
+
+  it("rejects unquoted shell comments that can swallow the pinned Vitest root", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run # candidate tests" },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    const plan = verificationPlanForWorkspace(path);
+    expect(plan.incomplete).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "host tests",
+          reason: expect.stringMatching(/cannot be contained/i),
+        }),
+      ]),
+    );
+  });
+
   it("fails closed on a Vitest root that escapes the candidate", () => {
     const path = workspace();
     writeFileSync(
