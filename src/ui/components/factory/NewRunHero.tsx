@@ -16,7 +16,7 @@ import { Input } from "../ui/Input.js";
 import { Badge } from "../ui/Badge.js";
 import { Tabs } from "../ui/Tabs.js";
 import { slideUp, staggerContainer, staggerItem } from "../../lib/motion.js";
-import { ProviderRoutingCards, type ProviderTier } from "./ProviderRoutingCards.js";
+import { ProviderRoutingCards } from "./ProviderRoutingCards.js";
 import { SafetySettingsPreview } from "./SafetySettingsPreview.js";
 import { ExtendExistingPanel } from "./ExtendExistingPanel.js";
 import { api } from "../../lib/api.js";
@@ -43,17 +43,16 @@ export function NewRunHero({
   starting: boolean;
   onStart: (idea: string, options: RunOptions) => void;
 }) {
-  const hasAnyKey =
-    (health?.anthropicConfigured ?? false) || (health?.openaiConfigured ?? false);
+  const hasAnyProvider =
+    (health?.anthropicConfigured ?? false) ||
+    (health?.openaiConfigured ?? false) ||
+    (health?.freeConfigured ?? false);
   const [idea, setIdea] = useState("");
   // Demo/simulate mode is not an owner surface — a run without a provider
   // fails loudly with the real missing-credential error instead of silently
   // producing a mock app. The option no longer exists at all: the server
   // rejects options.demo outright.
   const [runMode, setRunMode] = useState<"new" | "extend">("new");
-  // The owner chooses an economic tier, not a vendor. The server keeps free
-  // and paid routes disjoint, then rotates only inside the selected tier.
-  const [routing, setRouting] = useState<ProviderTier>("free");
   // The owner names a brand-new app/repo up front. Factory Deck never invents
   // one and never buries the build in an anonymous workspace folder.
   const [repoName, setRepoName] = useState("");
@@ -64,11 +63,10 @@ export function NewRunHero({
   const [publish, setPublish] = useState(true);
   const nameCheck = useRepoNameCheck(repoName);
 
-  // EVERY submission path carries the tier explicitly. Omitting it used to
-  // let critical stages silently spend on a configured paid key during an
-  // otherwise free run.
+  // Every owner submission selects the one orchestrated route. Legacy tier
+  // values remain readable on the server but are never emitted by this UI.
   const startWithRouting = (ideaText: string, options: RunOptions) =>
-    onStart(ideaText, { ...options, routingMode: routing });
+    onStart(ideaText, { ...options, routingMode: "auto" });
 
   const start = () => {
     const trimmed = idea.trim();
@@ -101,7 +99,8 @@ export function NewRunHero({
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-pretty text-sm leading-relaxed text-slate-400 sm:text-base">
           Planner, architect, builder, tester, critic, and repair agents work together
-          locally through your selected free or paid provider tier.
+          through one orchestrated model ladder, strongest paid first and free/local
+          last.
         </p>
       </motion.div>
 
@@ -124,16 +123,9 @@ export function NewRunHero({
         />
       </motion.div>
 
-      {/* Provider routing governs BOTH modes — it used to live inside the
-          new-app panel only, so extend-mode runs (the common case for real
-          repos) had no provider control at all. */}
       <motion.div variants={slideUp} className="mx-auto mt-6 max-w-3xl">
-        <p className="mb-2 text-xs font-medium text-slate-400">Provider routing</p>
-        <ProviderRoutingCards
-          health={health}
-          routing={routing}
-          onRoutingChange={setRouting}
-        />
+        <p className="mb-2 text-xs font-medium text-slate-400">Model routing</p>
+        <ProviderRoutingCards health={health} />
       </motion.div>
 
       {runMode === "new" && (
@@ -160,7 +152,7 @@ export function NewRunHero({
       {runMode === "extend" ? (
         <ExtendExistingPanel
           starting={starting}
-          routingMode={routing}
+          routingMode="auto"
           onStart={startWithRouting}
         />
       ) : (
@@ -170,7 +162,7 @@ export function NewRunHero({
           repoName={repoName}
           setRepoName={setRepoName}
           nameCheck={nameCheck}
-          hasAnyKey={hasAnyKey}
+          hasAnyProvider={hasAnyProvider}
           health={health}
           starting={starting}
           start={start}
@@ -257,7 +249,7 @@ function NewAppPanel({
   repoName,
   setRepoName,
   nameCheck,
-  hasAnyKey,
+  hasAnyProvider,
   health,
   starting,
   start,
@@ -267,7 +259,7 @@ function NewAppPanel({
   repoName: string;
   setRepoName: (v: string) => void;
   nameCheck: NameCheck;
-  hasAnyKey: boolean;
+  hasAnyProvider: boolean;
   health: Health | null;
   starting: boolean;
   start: () => void;
@@ -352,10 +344,11 @@ function NewAppPanel({
         {/* Warnings / helpers (provider routing renders above, shared with
             extend mode) */}
         <div className="mt-5 space-y-2">
-          {!hasAnyKey && (
+          {!hasAnyProvider && (
             <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
-              No API keys detected — add keys in <code>.env</code> to build. Every run
-              does real work; there is no demo or test mode.
+              No live model is configured — add a paid key or enable the local
+              fallback in <code>.env</code>. Every run does real work; there is no
+              demo or test mode.
             </Helper>
           )}
         </div>
