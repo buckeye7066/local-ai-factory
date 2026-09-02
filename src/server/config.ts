@@ -60,9 +60,9 @@ function modelLadder(value: string | undefined): ModelLadderProvider[] {
 }
 
 /**
- * The FREE local route — the FCC proxy that "Claude Code - FREE (Ollama)"
- * turns on. Owner-facing runs select a strict Free or Paid tier; this route is
- * the default for legacy callers that do not submit a tier.
+ * The final free/local ladder rung — the FCC proxy that "Claude Code - FREE
+ * (Ollama)" turns on. It is never an owner-selected route and never precedes a
+ * configured paid model.
  */
 export interface FreeRouteSettings {
   enabled: boolean;
@@ -179,12 +179,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     defaultReviewProvider: provider(env.DEFAULT_REVIEW_PROVIDER, "free"),
     maxRepairLoops: num(env.MAX_REPAIR_LOOPS, 3),
     maxModelCallsPerRun: num(env.MAX_MODEL_CALLS_PER_RUN, 30),
-    // Sized for the FREE route, which is the default primary. A single free
-    // call measured 128-302s here (cold start + queue), and a run makes up to
-    // MAX_MODEL_CALLS_PER_RUN of them, so the old 10-minute default would have
-    // killed almost every free run mid-assembly — and the "fix" for that would
-    // have been to go back to paid. 0 disables. Mock/offline journeys finish in
-    // seconds regardless.
+    // Sized for the final free/local rung. A single free call measured
+    // 128-302s here (cold start + queue), and an exhausted paid ladder may make
+    // up to MAX_MODEL_CALLS_PER_RUN of them. 0 disables. Mock/offline journeys
+    // finish in seconds regardless.
     runTimeoutMs: num(env.FACTORY_RUN_TIMEOUT_MS, 14_400_000),
     // Always resolved under the project root; the workspace writer enforces this too.
     workspaceRoot: resolve(process.cwd(), env.WORKSPACE_ROOT || "./workspaces"),
