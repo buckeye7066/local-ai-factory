@@ -69,16 +69,26 @@ describe("platformEvidenceRunner", () => {
     await mkdir(join(root, "build", "coverage"), { recursive: true });
     await writeFile(join(root, "build", "coverage", "coverage-final.json"), "{}\n");
     await writeFile(join(root, "build", "coverage", "lcov.info"), "old\n");
+    await writeFile(
+      join(root, "build", "coverage", "dashboard.ts"),
+      "export const dashboard=true\n",
+    );
 
     const before = await capturePlatformArtifactSnapshot(root);
     expect(before).toHaveProperty("src/coverage/policy.ts");
+    expect(before).toHaveProperty("build/coverage/dashboard.ts");
     expect(before).not.toHaveProperty("build/coverage/coverage-final.json");
 
     await writeFile(join(root, "src", "coverage", "policy.ts"), "export const x=1\n");
     await writeFile(join(root, "build", "coverage", "lcov.info"), "new\n");
+    await writeFile(
+      join(root, "build", "coverage", "dashboard.ts"),
+      "export const dashboard=false\n",
+    );
     const after = await capturePlatformArtifactSnapshot(root);
 
     expect(changedPlatformArtifactPaths(before, after)).toEqual([
+      "build/coverage/dashboard.ts",
       "src/coverage/policy.ts",
     ]);
   });

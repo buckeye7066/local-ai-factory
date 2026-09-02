@@ -61,7 +61,7 @@ const ARTIFACT_EXCLUDED_DIRS = new Set([
 ]);
 const ARTIFACT_EXCLUDED_FILES = [/^\.coverage(?:\..+)?$/, /^.+\.(?:pyc|pyo)$/];
 
-const RUNTIME_REPORT_SENTINELS: Record<string, ReadonlySet<string>> = {
+const RUNTIME_REPORT_ENTRIES: Record<string, ReadonlySet<string>> = {
   coverage: new Set([
     "clover.xml",
     "cobertura-coverage.xml",
@@ -69,27 +69,21 @@ const RUNTIME_REPORT_SENTINELS: Record<string, ReadonlySet<string>> = {
     "lcov-report",
     "lcov.info",
   ]),
-  "playwright-report": new Set(["index.html"]),
+  "playwright-report": new Set(["data", "index.html"]),
   "test-results": new Set([".last-run.json"]),
 };
 
-async function isRecognizedRuntimeReportDirectory(
-  absolute: string,
-  name: string,
-): Promise<boolean> {
-  const sentinels = RUNTIME_REPORT_SENTINELS[name];
-  if (!sentinels) return false;
-  try {
-    return (await readdir(absolute)).some((entry) => sentinels.has(entry));
-  } catch {
-    return false;
-  }
+function isRecognizedRuntimeReportEntry(path: string, name: string): boolean {
+  const parts = path.split("/");
+  const parent = parts.at(-2);
+  return parent ? (RUNTIME_REPORT_ENTRIES[parent]?.has(name) ?? false) : false;
 }
 
 function isExcludedArtifactEntry(path: string, name: string): boolean {
   return (
     path.split("/").some((part) => ARTIFACT_EXCLUDED_DIRS.has(part)) ||
-    ARTIFACT_EXCLUDED_FILES.some((pattern) => pattern.test(name))
+    ARTIFACT_EXCLUDED_FILES.some((pattern) => pattern.test(name)) ||
+    isRecognizedRuntimeReportEntry(path, name)
   );
 }
 
@@ -125,11 +119,7 @@ export async function capturePlatformArtifactSnapshot(
     for (const entry of entries) {
       const absolute = join(directory, entry.name);
       const path = relative(workspacePath, absolute).replace(/\\/g, "/");
-      if (
-        entry.isDirectory() &&
-        (ARTIFACT_EXCLUDED_DIRS.has(entry.name) ||
-          (await isRecognizedRuntimeReportDirectory(absolute, entry.name)))
-      ) {
+      if (entry.isDirectory() && ARTIFACT_EXCLUDED_DIRS.has(entry.name)) {
         continue;
       }
       if (isExcludedArtifactEntry(path, entry.name)) continue;
