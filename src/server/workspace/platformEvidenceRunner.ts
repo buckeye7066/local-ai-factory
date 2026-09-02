@@ -64,6 +64,14 @@ function isExcludedArtifactEntry(path: string, name: string): boolean {
   );
 }
 
+export function platformArtifactFileFingerprint(
+  contents: Buffer,
+  mode: number,
+): string {
+  const digest = createHash("sha256").update(contents).digest("hex");
+  return `file:${(mode & 0o777).toString(8)}:${digest}`;
+}
+
 export async function capturePlatformArtifactSnapshot(
   workspacePath: string,
 ): Promise<PlatformArtifactSnapshot> {
@@ -86,11 +94,11 @@ export async function capturePlatformArtifactSnapshot(
           .update(`symlink\0${await readlink(absolute)}`)
           .digest("hex");
       } else if (entry.isFile()) {
-        const mode = (await lstat(absolute)).mode & 0o777;
-        const digest = createHash("sha256")
-          .update(await readFile(absolute))
-          .digest("hex");
-        snapshot[path] = `file:${mode.toString(8)}:${digest}`;
+        const mode = (await lstat(absolute)).mode;
+        snapshot[path] = platformArtifactFileFingerprint(
+          await readFile(absolute),
+          mode,
+        );
       }
     }
   }
