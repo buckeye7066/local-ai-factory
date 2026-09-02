@@ -519,10 +519,12 @@ export class FoundryAdapters {
       },
       "app-store-publisher": {
         mode: "http",
-        configured: true,
+        configured: Boolean(
+          process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim(),
+        ),
         destination:
           process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim() ||
-          "http://127.0.0.1:4000",
+          "Set PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL to connect the publisher",
       },
       watchtower: {
         mode: "http",
