@@ -7,6 +7,7 @@ import { getConfig, getSecrets, readinessBrainFloor } from "../config.js";
 import { loadReadinessState } from "../storage/readinessStore.js";
 import {
   evaluateFoundryCompletion,
+  REQUIRED_DISCOVERY_STATIONS,
   requiredProductionStations,
   type RequiredProductionStation,
 } from "./readinessPolicy.js";
@@ -124,7 +125,8 @@ export function createFoundryRouter(
     if (
       station.status === event.status &&
       station.summary === event.summary &&
-      JSON.stringify(station.artifacts) === JSON.stringify(event.artifacts)
+      JSON.stringify(station.artifacts) === JSON.stringify(event.artifacts) &&
+      JSON.stringify(station.handoff) === JSON.stringify(event.handoff)
     ) {
       return project;
     }
@@ -153,6 +155,7 @@ export function createFoundryRouter(
     station.status = event.status;
     station.summary = event.summary;
     station.artifacts = event.artifacts;
+    station.handoff = event.handoff;
     const factoryStation = project.stations.find(
       (item) => item.stationId === "factory-deck",
     );
@@ -197,6 +200,7 @@ export function createFoundryRouter(
     await store.appendEvidence(project.id, stationId, `station.${event.status}`, {
       summary: event.summary,
       artifacts: event.artifacts,
+      handoff: event.handoff,
       evidence: event.evidence,
     });
     return project;
@@ -366,6 +370,14 @@ export function createFoundryRouter(
         res.status(404).json({ error: "Purpose Foundry project not found." });
         return;
       }
+      // Upgrade draft/queued legacy records to the current discovery policy
+      // before choosing the first station. Completed history is never rewritten.
+      if (!["completed", "failed", "needs_attention"].includes(project.status)) {
+        for (const stationId of REQUIRED_DISCOVERY_STATIONS) {
+          const station = project.stations.find((item) => item.stationId === stationId);
+          if (station?.status === "not_selected") station.status = "queued";
+        }
+      }
       const brainFloor = readinessBrainFloor(getConfig(), getSecrets());
       if (!brainFloor.configured) {
         res.status(409).json({
@@ -438,6 +450,7 @@ export function createFoundryRouter(
           status: "active",
           summary: "Adapter retry requested.",
           artifacts: station.artifacts,
+          handoff: station.handoff,
           evidence: { retry: true },
         });
       } else if (station.status !== "active") {
