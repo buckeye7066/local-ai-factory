@@ -2043,6 +2043,10 @@ async function executeRun(
       // output, but every entry that already exists here must remain exact.
       const artifactBeforeVerification =
         await capturePlatformArtifactSnapshot(workspacePath);
+      // Persist the seal before the first untrusted command. A crash or
+      // cancellation must never let a changed workspace become the next seal.
+      verification.platformArtifactSnapshot = artifactBeforeVerification;
+      await checkpointNow({ verification });
       const commandReceipt = await withVerificationReceipt(
         workspacePath,
         files.keys(),
@@ -2158,14 +2162,15 @@ async function executeRun(
             }
           }
         },
-      );
-      const artifactAfterCommands =
-        await capturePlatformArtifactSnapshot(workspacePath);
-      await removeAddedPlatformArtifacts(
-        workspacePath,
-        artifactBeforeVerification,
-        artifactAfterCommands,
-      );
+      ).finally(async () => {
+        const artifactAfterCommands =
+          await capturePlatformArtifactSnapshot(workspacePath);
+        await removeAddedPlatformArtifacts(
+          workspacePath,
+          artifactBeforeVerification,
+          artifactAfterCommands,
+        );
+      });
       const cleanedArtifact = await capturePlatformArtifactSnapshot(workspacePath);
       const artifactChanges = changedPlatformArtifactPaths(
         artifactBeforeVerification,
