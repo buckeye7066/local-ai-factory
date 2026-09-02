@@ -61,6 +61,8 @@ describe("generated-code verification sandbox", () => {
         "no-new-privileges:true",
         "--network",
         "none",
+        "--shm-size",
+        "512m",
         "--user",
         "1001:1001",
         "--workdir",
