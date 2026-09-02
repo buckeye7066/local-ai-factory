@@ -65,6 +65,7 @@ import {
   capturePlatformArtifactSnapshot,
   checkpointOutputTail,
   changedPlatformArtifactPaths,
+  runtimeReportArtifactsCreatedDuringVerification,
 } from "../workspace/platformEvidenceRunner.js";
 import {
   generatedTestsForVerification,
@@ -1988,10 +1989,16 @@ async function executeRun(
         verification.fileDigests,
         intendedDigests,
       );
+      const carriedPlatformRuntimeOutputRoots =
+        verification.platformRuntimeOutputRoots ?? [];
+      const carriedPlatformRuntimeReportParents =
+        verification.platformRuntimeReportParents ?? [];
       verification = {
         executed: carriedPlatformEvidence,
         incomplete: [],
         fileDigests: {},
+        platformRuntimeOutputRoots: carriedPlatformRuntimeOutputRoots,
+        platformRuntimeReportParents: carriedPlatformRuntimeReportParents,
       };
       // Distinct from `testExit === null`: a timeout-killed suite legitimately
       // reports a null exit, so null cannot double as "nothing recorded yet".
@@ -2038,6 +2045,8 @@ async function executeRun(
           "No supported project manifest detected; verification is incomplete.",
         );
       }
+      const platformArtifactBeforeVerification =
+        await capturePlatformArtifactSnapshot(workspacePath);
       const commandReceipt = await withVerificationReceipt(
         workspacePath,
         files.keys(),
@@ -2154,6 +2163,33 @@ async function executeRun(
           }
         },
       );
+      const platformArtifactAfterVerification =
+        await capturePlatformArtifactSnapshot(workspacePath);
+      const discoveredRuntimeReports =
+        runtimeReportArtifactsCreatedDuringVerification(
+          platformArtifactBeforeVerification,
+          platformArtifactAfterVerification,
+        );
+      const protectedPaths = Object.keys(intendedDigests);
+      verification.platformRuntimeOutputRoots = [
+        ...new Set([
+          ...carriedPlatformRuntimeOutputRoots,
+          ...discoveredRuntimeReports.roots,
+        ]),
+      ]
+        .filter(
+          (root) =>
+            !protectedPaths.some(
+              (path) => path === root || path.startsWith(`${root}/`),
+            ),
+        )
+        .sort();
+      verification.platformRuntimeReportParents = [
+        ...new Set([
+          ...carriedPlatformRuntimeReportParents,
+          ...discoveredRuntimeReports.parents,
+        ]),
+      ].sort();
       if (checkpoint.testPlan) {
         for (const reason of assessExecutedCoverage(
           checkpoint.testPlan,
@@ -3804,7 +3840,15 @@ async function prepareResume(
           "The sealed platform candidate has no saved workspace path. Restore the exact artifact or start a new run.",
         );
       }
-      const restoredArtifact = await capturePlatformArtifactSnapshot(run.workspacePath);
+      const restoredArtifact = await capturePlatformArtifactSnapshot(
+        run.workspacePath,
+        {
+          excludePaths: checkpoint.verification?.platformRuntimeOutputRoots ?? [],
+          runtimeReportParents:
+            checkpoint.verification?.platformRuntimeReportParents ?? [],
+          sealedSnapshot: sealedArtifact,
+        },
+      );
       const artifactChanges = changedPlatformArtifactPaths(
         sealedArtifact,
         restoredArtifact,

@@ -54,6 +54,12 @@ export interface VerificationEvidence {
   incomplete?: Array<{ command: string; reason: string }>;
   /** Exact checked bytes for every path eligible for delivery. */
   fileDigests?: Record<string, string>;
+  /** Runner-report roots first created by verification, never pre-existing product files. */
+  platformRuntimeOutputRoots?: string[];
+  /** Report parents allowed to produce only new, unsealed runner outputs on other hosts. */
+  platformRuntimeReportParents?: string[];
+  /** Complete candidate manifest sealed before cross-runner artifact transfer. */
+  platformArtifactSnapshot?: Record<string, string>;
 }
 
 /** Cap the per-command evidence carried inside a QA issue. Errors print last. */

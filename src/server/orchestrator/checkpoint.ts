@@ -172,6 +172,10 @@ export const FactoryCheckpointSchema = z.object({
         .optional(),
       /** SHA-256 receipt for every deliverable path after the last verification pass. */
       fileDigests: z.record(z.string()).optional(),
+      /** Report roots first created by verification and excluded from the seal. */
+      platformRuntimeOutputRoots: z.array(z.string().min(1).max(2_000)).optional(),
+      /** Parents in which other hosts may create only new recognized report outputs. */
+      platformRuntimeReportParents: z.array(z.string().min(1).max(2_000)).optional(),
       /**
        * Complete candidate manifest sealed before cross-runner artifact transfer.
        * Values bind file bytes plus executable intent, or symlink identity.

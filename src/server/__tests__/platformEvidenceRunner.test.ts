@@ -15,6 +15,7 @@ import {
   missingDirectPlatformEvidencePaths,
   platformArtifactFileFingerprint,
   remainingPlatformEvidenceBlockers,
+  runtimeReportArtifactsCreatedDuringVerification,
   successfulPlatformCommandEvidence,
 } from "../workspace/platformEvidenceRunner.js";
 
@@ -61,36 +62,76 @@ describe("platformEvidenceRunner", () => {
     );
   });
 
-  it("binds every generic report-named path into the exact artifact", async () => {
+  it("protects pre-existing report paths while isolating current runner output", async () => {
     const root = await mkdtemp(join(tmpdir(), "factory-platform-coverage-"));
     roots.push(root);
     await mkdir(join(root, "src", "coverage"), { recursive: true });
     await writeFile(join(root, "src", "coverage", "policy.ts"), "export {}\n");
     await mkdir(join(root, "build", "coverage"), { recursive: true });
     await writeFile(join(root, "build", "coverage", "coverage-final.json"), "{}\n");
-    await writeFile(join(root, "build", "coverage", "lcov.info"), "old\n");
     await writeFile(
       join(root, "build", "coverage", "dashboard.ts"),
       "export const dashboard=true\n",
     );
 
-    const before = await capturePlatformArtifactSnapshot(root);
-    expect(before).toHaveProperty("src/coverage/policy.ts");
-    expect(before).toHaveProperty("build/coverage/dashboard.ts");
-    expect(before).toHaveProperty("build/coverage/coverage-final.json");
-    expect(before).toHaveProperty("build/coverage/lcov.info");
+    const beforeVerification = await capturePlatformArtifactSnapshot(root);
+    await mkdir(join(root, "build", "coverage", "lcov-report"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(root, "build", "coverage", "lcov-report", "index.html"),
+      "linux runtime report\n",
+    );
+    await mkdir(join(root, "test-results", "attempt-1"), { recursive: true });
+    await writeFile(
+      join(root, "test-results", "attempt-1", "trace.zip"),
+      "linux trace\n",
+    );
+    const afterVerification = await capturePlatformArtifactSnapshot(root);
+    const runtimeReports = runtimeReportArtifactsCreatedDuringVerification(
+      beforeVerification,
+      afterVerification,
+    );
+    expect(runtimeReports).toEqual({
+      parents: ["build/coverage", "test-results"],
+      roots: ["build/coverage/lcov-report", "test-results"],
+    });
+
+    const sealed = await capturePlatformArtifactSnapshot(root, {
+      excludePaths: runtimeReports.roots,
+    });
+    expect(sealed).toHaveProperty("src/coverage/policy.ts");
+    expect(sealed).toHaveProperty("build/coverage/dashboard.ts");
+    expect(sealed).toHaveProperty("build/coverage/coverage-final.json");
+    expect(sealed).not.toHaveProperty("build/coverage/lcov-report/index.html");
 
     await writeFile(join(root, "src", "coverage", "policy.ts"), "export const x=1\n");
-    await writeFile(join(root, "build", "coverage", "lcov.info"), "new\n");
+    await writeFile(
+      join(root, "build", "coverage", "coverage-final.json"),
+      '{"changed":true}\n',
+    );
     await writeFile(
       join(root, "build", "coverage", "dashboard.ts"),
       "export const dashboard=false\n",
     );
-    const after = await capturePlatformArtifactSnapshot(root);
+    await writeFile(
+      join(root, "build", "coverage", "lcov.info"),
+      "platform-only runtime report\n",
+    );
+    await writeFile(
+      join(root, "build", "coverage", "hack.ts"),
+      "export const unexpected=true\n",
+    );
+    const afterPlatform = await capturePlatformArtifactSnapshot(root, {
+      excludePaths: runtimeReports.roots,
+      runtimeReportParents: runtimeReports.parents,
+      sealedSnapshot: sealed,
+    });
 
-    expect(changedPlatformArtifactPaths(before, after)).toEqual([
+    expect(changedPlatformArtifactPaths(sealed, afterPlatform)).toEqual([
+      "build/coverage/coverage-final.json",
       "build/coverage/dashboard.ts",
-      "build/coverage/lcov.info",
+      "build/coverage/hack.ts",
       "src/coverage/policy.ts",
     ]);
   });
