@@ -168,7 +168,7 @@ describe("verificationCommandsForWorkspace", () => {
     expect(verificationCommandsForWorkspace(path)).toEqual([]);
   });
 
-  it("directly selects every generated Vitest file before the host suite", () => {
+  it("pins direct and host Vitest execution to the candidate root", () => {
     const path = workspace();
     writeFileSync(
       join(path, "package.json"),
@@ -202,13 +202,48 @@ describe("verificationCommandsForWorkspace", () => {
     expect(directIndex).toBeLessThan(hostIndex);
     expect(plan.commands[directIndex]).toMatchObject({
       bin: "npx",
-      args: ["--no-install", "vitest", "run", "src/App.test.tsx", "--reporter=json"],
+      args: [
+        "--no-install",
+        "vitest",
+        "run",
+        "src/App.test.tsx",
+        "--reporter=json",
+        "--root=.",
+      ],
       isTest: true,
       runner: "vitest",
+    });
+    expect(plan.commands[hostIndex]).toMatchObject({
+      bin: "npm",
+      args: ["test", "--", "--root=."],
+      isTest: true,
     });
     expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
       true,
     );
+  });
+
+  it("pins a restored pnpm Vitest host suite to its own workspace", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        packageManager: "pnpm@10.17.0",
+        scripts: { test: "vitest run" },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+
+    const hostTest = verificationPlanForWorkspace(path).commands.find(
+      (command) => command.bin === "pnpm" && command.isTest,
+    );
+    expect(hostTest).toEqual({
+      bin: "pnpm",
+      args: ["test", "--root=."],
+      isTest: true,
+    });
+    expect(isAllowed(hostTest!.bin, hostTest!.args)).toBe(true);
   });
 
   it("directly proves tests authored by both Builder and Test Writer", () => {

@@ -112,6 +112,7 @@ describe("engine-owned npx verification grammar", () => {
         "run",
         "src/App.test.tsx",
         "--reporter=json",
+        "--root=.",
       ]),
     ).toBe(true);
     expect(
@@ -140,6 +141,25 @@ describe("engine-owned npx verification grammar", () => {
     ).toBe(false);
     expect(isAllowed("npx", ["--package", "attacker", "evil"])).toBe(false);
     expect(isAllowed("npx", ["--no-install", "evil", "run"])).toBe(false);
+    expect(
+      isAllowedNpxVerification([
+        "--no-install",
+        "vitest",
+        "run",
+        "src/App.test.tsx",
+        "--reporter=json",
+      ]),
+    ).toBe(false);
+    expect(
+      isAllowedNpxVerification([
+        "--no-install",
+        "vitest",
+        "run",
+        "src/App.test.tsx",
+        "--reporter=json",
+        "--root=..",
+      ]),
+    ).toBe(false);
     expect(
       isAllowed("npx", ["--no-install", "vitest", "run", "../escape.test.ts"]),
     ).toBe(false);

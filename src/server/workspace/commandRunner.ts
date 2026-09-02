@@ -135,10 +135,11 @@ export function isAllowedNpxVerification(args: string[]): boolean {
   }
   if (tool === "vitest") {
     return (
-      args.length === 5 &&
+      args.length === 6 &&
       args[2] === "run" &&
       isSafeDirectJsTest(args[3]!) &&
-      args[4] === "--reporter=json"
+      args[4] === "--reporter=json" &&
+      args[5] === "--root=."
     );
   }
   if (tool === "jest") {
