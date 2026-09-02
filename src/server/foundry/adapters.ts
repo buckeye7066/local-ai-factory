@@ -856,8 +856,11 @@ export class FoundryAdapters {
       output,
     );
     return {
-      status: "completed",
-      summary: `${mode === "scout" ? "Scout" : "FlexFactor"} completed for ${target}.`,
+      status: result.exitCode === 0 ? "completed" : "failed",
+      summary:
+        result.exitCode === 0
+          ? `${mode === "scout" ? "Scout" : "FlexFactor"} completed for ${target}.`
+          : `${mode === "scout" ? "Scout" : "FlexFactor"} failed for ${target} with exit code ${result.exitCode}.`,
       artifacts: [artifact],
       evidence: {
         exitCode: result.exitCode,
