@@ -60,6 +60,7 @@ describe("config", () => {
       FACTORY_ANTHROPIC_MODEL_LADDER: "claude-opus-5,claude-sonnet-5",
     });
     expect(cfg.anthropicModels).toEqual(["claude-opus-5", "claude-sonnet-5"]);
+    expect(toHealth(cfg, loadSecrets({})).anthropicModel).toBe("claude-opus-5");
   });
 
   it("detects configured keys", () => {
