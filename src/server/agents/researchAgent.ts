@@ -197,10 +197,7 @@ const CompetitiveSelectionSchema = z
 type CompetitiveSelection = z.infer<typeof CompetitiveSelectionSchema>;
 
 const ProductDiscoveryPlanSchema = z.object({
-  queries: z
-    .array(z.string().trim().min(3).max(180))
-    .min(5)
-    .max(8),
+  queries: z.array(z.string().trim().min(3).max(180)).min(5).max(8),
 });
 
 async function planProductDiscovery(
@@ -208,7 +205,9 @@ async function planProductDiscovery(
   spec: ProductSpec,
   arch: Architecture,
 ): Promise<string[]> {
-  const plan = await deps.provider.generateJson<z.infer<typeof ProductDiscoveryPlanSchema>>({
+  const plan = await deps.provider.generateJson<
+    z.infer<typeof ProductDiscoveryPlanSchema>
+  >({
     system:
       `${SYSTEM_PREAMBLE}\nYou are the PRODUCT DISCOVERY planner. Identify real products that compete with ` +
       `the target app. Return only short web-search queries, one distinct product per query. Each query must name ` +
