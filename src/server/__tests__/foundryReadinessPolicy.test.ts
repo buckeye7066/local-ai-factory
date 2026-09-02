@@ -30,26 +30,34 @@ const stationEvidence = REQUIRED_PRODUCTION_STATIONS.map((stationId) => ({
 }));
 
 describe("Purpose Foundry mandatory production path", () => {
-  it("cannot omit Factory Deck, FlexFactor, Crucible, or Watchtower", () => {
-    expect(normalizeFoundryStations(["promo-pilot"], "free")).toEqual([
+  it("cannot omit the automatic route's internal evidence line", () => {
+    expect(normalizeFoundryStations(["promo-pilot"], "auto")).toEqual([
       "factory-deck",
-      "flexfactor",
       "crucible",
       "watchtower",
       "promo-pilot",
     ]);
   });
 
-  it("keeps Paid mode inside the metered internal station line", () => {
-    const selected = normalizeFoundryStations(
-      ["factory-deck", "scout", "flexfactor"],
-      "paid",
-    );
-    expect(selected).not.toContain("scout");
-    expect(selected).not.toContain("flexfactor");
-    expect(selected).toEqual(
-      expect.arrayContaining(["factory-deck", "crucible", "watchtower"]),
-    );
+  it("allows configured child orchestrators as optional automatic stations", () => {
+    expect(
+      normalizeFoundryStations(["scout", "flexfactor"], "auto"),
+    ).toEqual([
+      "factory-deck",
+      "crucible",
+      "watchtower",
+      "scout",
+      "flexfactor",
+    ]);
+  });
+
+  it("retains the old free station set only for stored legacy records", () => {
+    expect(normalizeFoundryStations([], "free")).toEqual([
+      "factory-deck",
+      "flexfactor",
+      "crucible",
+      "watchtower",
+    ]);
   });
 
   it("does not confuse all station badges with a production-ready project", () => {
