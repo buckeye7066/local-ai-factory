@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { normalizeTestPath } from "./testPaths.js";
+import { normalizeSafeRelativePath, normalizeTestPath } from "./testPaths.js";
 
 export interface VerificationCommand {
   bin: string;
@@ -121,6 +121,110 @@ function packageScriptCommand(
 }
 
 /**
+ * Parse the deliberately small package-script subset whose runner and root we
+ * can prove without invoking a shell. Expansions and compound commands are
+ * rejected because their effective Vitest root cannot be known statically.
+ */
+function plainScriptWords(source: string): string[] | null {
+  const words: string[] = [];
+  let word = "";
+  let quote: '"' | null = null;
+  const finishWord = () => {
+    if (word) words.push(word);
+    word = "";
+  };
+
+  for (const character of source.trim()) {
+    // A package script's CR/LF is a shell command boundary, not ordinary word
+    // spacing. Reject it even after a backslash so containment is unambiguous.
+    if (character === "\r" || character === "\n") return null;
+    // This parser accepts only the intersection of POSIX and cmd.exe quoting.
+    // In particular, a POSIX backslash does not escape &, |, or other command
+    // separators on Windows, and single quotes are not cmd.exe quotes.
+    if (character === "\\") {
+      return null;
+    }
+    if (quote) {
+      if (character === quote) quote = null;
+      else if (/[;&|<>()$`%!^]/.test(character)) return null;
+      else word += character;
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === "'") return null;
+    if (/\s/.test(character)) {
+      finishWord();
+      continue;
+    }
+    // Package-manager scripts run through a shell. An unquoted `#` starts a
+    // comment on POSIX, which would discard an engine-appended `--root=.` and
+    // let Vitest rediscover configuration above the candidate workspace.
+    if (/[#;&|<>()$`%!^]/.test(character)) return null;
+    word += character;
+  }
+  if (quote) return null;
+  finishWord();
+  return words.length > 0 ? words : null;
+}
+
+interface VitestScript {
+  root: string;
+  ownsRoot: boolean;
+}
+
+/** Canonicalize equivalent, contained Vitest root spellings. */
+function normalizeSafeVitestRoot(raw: string): string | null {
+  const slashed = raw.replace(/\\/g, "/");
+  if (slashed.startsWith("/") || /^[A-Za-z]:/.test(slashed)) return null;
+  const withoutPrefix = slashed.replace(/^\.\/+/, "");
+  const withoutTrailingSlash = withoutPrefix.replace(/\/+$/, "");
+  if (!withoutTrailingSlash || withoutTrailingSlash === ".") return ".";
+  const normalized = normalizeSafeRelativePath(withoutTrailingSlash);
+  if (!normalized) return null;
+  const parts = normalized.split("/").filter((part) => part !== ".");
+  return parts.join("/") || ".";
+}
+
+function runnerScriptWords(
+  script: unknown,
+  runner: "vitest" | "jest",
+): string[] | null {
+  if (typeof script !== "string") return null;
+  const words = plainScriptWords(script);
+  return words?.[0] === runner ? words : null;
+}
+
+function inspectVitestScript(script: unknown): VitestScript | null {
+  const words = runnerScriptWords(script, "vitest");
+  if (!words) return null;
+  let root: string | undefined;
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index]!;
+    let candidate: string | undefined;
+    if (word === "--root") {
+      candidate = words[index + 1];
+      index += 1;
+    } else if (word.startsWith("--root=")) {
+      candidate = word.slice("--root=".length);
+    }
+    if (candidate === undefined) continue;
+    const normalized = normalizeSafeVitestRoot(candidate);
+    if (!normalized || root !== undefined) return null;
+    root = normalized;
+  }
+  return { root: root ?? ".", ownsRoot: root !== undefined };
+}
+
+function directVitestPath(path: string, root: string): string | null {
+  if (root === ".") return path;
+  const prefix = `${root}/`;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : null;
+}
+
+/**
  * A restored candidate can live below the Factory Deck checkout. Vitest's
  * config discovery must never escape that candidate and adopt an ancestor
  * `vitest.config.*`, so simple Vitest host scripts receive an explicit root.
@@ -134,12 +238,12 @@ function packageTestCommand(
     scripts && typeof scripts === "object"
       ? (scripts as Record<string, unknown>).test
       : undefined;
-  const simpleVitest =
-    typeof testScript === "string" && /^\s*vitest(?:\s+run)?\s*$/.test(testScript);
+  const vitest = inspectVitestScript(testScript);
+  const pinCandidateRoot = Boolean(vitest && !vitest.ownsRoot);
   const args =
-    simpleVitest && manager === "npm"
+    pinCandidateRoot && manager === "npm"
       ? ["test", "--", "--root=."]
-      : simpleVitest && manager === "pnpm"
+      : pinCandidateRoot && (manager === "pnpm" || manager === "yarn")
         ? ["test", "--root=."]
         : ["test"];
   return { bin: manager, args, isTest: true };
@@ -298,6 +402,202 @@ function dependencies(pkg: Record<string, unknown> | null): Set<string> {
   return out;
 }
 
+type JavascriptRunner = "vitest" | "jest";
+
+type JavascriptToken = {
+  kind: "identifier" | "string" | "literal" | "punctuation";
+  value: string;
+};
+
+const REGEX_PREFIX_KEYWORDS = new Set([
+  "await",
+  "case",
+  "delete",
+  "do",
+  "else",
+  "in",
+  "instanceof",
+  "of",
+  "return",
+  "throw",
+  "typeof",
+  "void",
+  "yield",
+]);
+
+/**
+ * Tokenize only the JavaScript surface needed to identify an actual runner.
+ * Comments, fixture strings, template text, and regex literals never become
+ * API tokens, so examples such as `"vi.mock()"` cannot override a real Jest
+ * import. This is intentionally not a general JavaScript parser.
+ */
+function javascriptRunnerTokens(source: string): JavascriptToken[] {
+  const tokens: JavascriptToken[] = [];
+  let index = 0;
+  let canStartRegex = true;
+  const push = (token: JavascriptToken) => {
+    tokens.push(token);
+    if (token.kind === "identifier") {
+      canStartRegex = REGEX_PREFIX_KEYWORDS.has(token.value);
+    } else if (token.kind === "string" || token.kind === "literal") {
+      canStartRegex = false;
+    } else {
+      canStartRegex = !/[\)\]\}]/.test(token.value);
+    }
+  };
+
+  while (index < source.length) {
+    const character = source[index]!;
+    const next = source[index + 1];
+    if (/\s/.test(character)) {
+      index += 1;
+      continue;
+    }
+    if (character === "/" && next === "/") {
+      index += 2;
+      while (index < source.length && !/[\r\n]/.test(source[index]!)) index += 1;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      index += 2;
+      while (
+        index < source.length &&
+        !(source[index] === "*" && source[index + 1] === "/")
+      ) {
+        index += 1;
+      }
+      index = Math.min(source.length, index + 2);
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      const quote = character;
+      let value = "";
+      index += 1;
+      while (index < source.length) {
+        const current = source[index]!;
+        if (current === "\\") {
+          if (index + 1 < source.length) value += source[index + 1]!;
+          index += 2;
+          continue;
+        }
+        if (current === quote) {
+          index += 1;
+          break;
+        }
+        value += current;
+        index += 1;
+      }
+      push({ kind: "string", value });
+      continue;
+    }
+    if (character === "`") {
+      index += 1;
+      while (index < source.length) {
+        if (source[index] === "\\") {
+          index += 2;
+        } else if (source[index] === "`") {
+          index += 1;
+          break;
+        } else {
+          index += 1;
+        }
+      }
+      push({ kind: "literal", value: "template" });
+      continue;
+    }
+    if (character === "/" && canStartRegex) {
+      let inCharacterClass = false;
+      index += 1;
+      while (index < source.length) {
+        const current = source[index]!;
+        if (current === "\\") {
+          index += 2;
+          continue;
+        }
+        if (current === "[") inCharacterClass = true;
+        if (current === "]") inCharacterClass = false;
+        index += 1;
+        if (current === "/" && !inCharacterClass) break;
+      }
+      while (index < source.length && /[A-Za-z]/.test(source[index]!)) index += 1;
+      push({ kind: "literal", value: "regex" });
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(character)) {
+      const start = index;
+      index += 1;
+      while (index < source.length && /[A-Za-z0-9_$]/.test(source[index]!)) {
+        index += 1;
+      }
+      push({ kind: "identifier", value: source.slice(start, index) });
+      continue;
+    }
+    if (/[0-9]/.test(character)) {
+      const start = index;
+      index += 1;
+      while (index < source.length && /[A-Za-z0-9_.]/.test(source[index]!)) {
+        index += 1;
+      }
+      push({ kind: "literal", value: source.slice(start, index) });
+      continue;
+    }
+    index += 1;
+    push({ kind: "punctuation", value: character });
+  }
+  return tokens;
+}
+
+function runnerDeclaredByTest(contents: string): JavascriptRunner | "ambiguous" | null {
+  const tokens = javascriptRunnerTokens(contents);
+  const modules = new Set<string>();
+  let vitestApi = false;
+  let jestApi = false;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const previous = tokens[index - 1];
+    const first = tokens[index + 1];
+    const second = tokens[index + 2];
+    if (
+      token.kind === "identifier" &&
+      (token.value === "require" || token.value === "import") &&
+      previous?.value !== "." &&
+      first?.value === "(" &&
+      second?.kind === "string"
+    ) {
+      modules.add(second.value);
+    }
+    if (token.kind === "identifier" && token.value === "import") {
+      if (first?.kind === "string") modules.add(first.value);
+      for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
+        const candidate = tokens[cursor]!;
+        if (candidate.value === ";") break;
+        if (
+          candidate.kind === "identifier" &&
+          candidate.value === "from" &&
+          tokens[cursor + 1]?.kind === "string"
+        ) {
+          modules.add(tokens[cursor + 1]!.value);
+          break;
+        }
+      }
+    }
+    if (
+      token.kind === "identifier" &&
+      previous?.value !== "." &&
+      first?.value === "." &&
+      second?.kind === "identifier" &&
+      ["fn", "mock", "spyOn"].includes(second.value)
+    ) {
+      if (token.value === "vi") vitestApi = true;
+      if (token.value === "jest") jestApi = true;
+    }
+  }
+  const vitest = modules.has("vitest") || vitestApi;
+  const jest = modules.has("@jest/globals") || jestApi;
+  if (vitest && jest) return "ambiguous";
+  return vitest ? "vitest" : jest ? "jest" : null;
+}
+
 function hasPlaywrightConfig(workspacePath: string): boolean {
   return ["js", "cjs", "mjs", "ts", "cts", "mts"].some((ext) =>
     exists(workspacePath, `playwright.config.${ext}`),
@@ -342,10 +642,19 @@ export function verificationPlanForWorkspace(
     packageJson?.scripts && typeof packageJson.scripts === "object"
       ? (packageJson.scripts as Record<string, unknown>)
       : {};
+  const testScriptText = typeof scripts.test === "string" ? scripts.test.trim() : "";
+  const vitestScript = inspectVitestScript(scripts.test);
   if (exists(workspacePath, "package.json") && !managerResolution.manager) {
     incomplete.push({
       command: "package manager",
       reason: managerResolution.reason ?? "package manager could not be resolved",
+    });
+  }
+  if (/^vitest(?:\s|$)/i.test(testScriptText) && !vitestScript) {
+    incomplete.push({
+      command: "host tests",
+      reason:
+        "Vitest test script has a compound, absolute, traversing, or ambiguous root that cannot be contained to the candidate",
     });
   }
   const quality = ["lint", "typecheck", "build"]
@@ -358,6 +667,9 @@ export function verificationPlanForWorkspace(
   const direct: VerificationCommand[] = [];
   const browserHarness =
     input.trustedBrowserHarness ?? hasPlaywrightHarness(workspacePath);
+  const jestScript = runnerScriptWords(scripts.test, "jest");
+  const vitestAvailable = deps.has("vitest") || Boolean(vitestScript);
+  const jestAvailable = deps.has("jest") || Boolean(jestScript);
 
   for (const generated of input.generatedTests ?? []) {
     const path = normalizeTestPath(generated.path);
@@ -401,15 +713,70 @@ export function verificationPlanForWorkspace(
       });
       continue;
     }
-    if (deps.has("vitest") || String(scripts.test ?? "").includes("vitest")) {
+    const declaredRunner = runnerDeclaredByTest(generated.contents);
+    let runner: JavascriptRunner | null = null;
+    if (declaredRunner === "ambiguous") {
+      incomplete.push({
+        command: path,
+        reason: "generated test mixes explicit Vitest and Jest APIs",
+      });
+      continue;
+    }
+    if (declaredRunner === "vitest") {
+      if (!vitestAvailable) {
+        incomplete.push({
+          command: path,
+          reason:
+            "generated test explicitly requires Vitest, but no local Vitest runner is declared",
+        });
+        continue;
+      }
+      runner = "vitest";
+    } else if (declaredRunner === "jest") {
+      if (!jestAvailable) {
+        incomplete.push({
+          command: path,
+          reason:
+            "generated test explicitly requires Jest, but no local Jest runner is declared",
+        });
+        continue;
+      }
+      runner = "jest";
+    } else if (vitestAvailable && !jestAvailable) {
+      runner = "vitest";
+    } else if (jestAvailable && !vitestAvailable) {
+      runner = "jest";
+    } else if (vitestAvailable && jestAvailable && vitestScript && !jestScript) {
+      runner = "vitest";
+    } else if (vitestAvailable && jestAvailable && jestScript && !vitestScript) {
+      runner = "jest";
+    }
+
+    if (runner === "vitest") {
+      const root = vitestScript?.root ?? ".";
+      const testPath = directVitestPath(path, root);
+      if (!testPath) {
+        incomplete.push({
+          command: path,
+          reason: `generated Vitest test is outside the candidate-owned root ${root}`,
+        });
+        continue;
+      }
       direct.push({
         bin: "npx",
-        args: ["--no-install", "vitest", "run", path, "--reporter=json", "--root=."],
+        args: [
+          "--no-install",
+          "vitest",
+          "run",
+          testPath,
+          "--reporter=json",
+          `--root=${root}`,
+        ],
         isTest: true,
         runner: "vitest",
         directTestPath: path,
       });
-    } else if (deps.has("jest") || String(scripts.test ?? "").includes("jest")) {
+    } else if (runner === "jest") {
       direct.push({
         bin: "npx",
         args: ["--no-install", "jest", "--runTestsByPath", path, "--json"],
@@ -421,7 +788,9 @@ export function verificationPlanForWorkspace(
       incomplete.push({
         command: path,
         reason:
-          "no declared local Vitest/Jest/Pytest runner can execute this generated test directly",
+          vitestAvailable && jestAvailable
+            ? "both Vitest and Jest are declared, but this generated test has no unambiguous runner identity"
+            : "no declared local Vitest/Jest/Pytest runner can execute this generated test directly",
       });
     }
   }

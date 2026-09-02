@@ -1,7 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
-import { isJavascriptTestPath, isPythonTestPath } from "./testPaths.js";
+import {
+  isJavascriptTestPath,
+  isPythonTestPath,
+  normalizeSafeRelativePath,
+} from "./testPaths.js";
 import {
   buildVerificationSandboxPlan,
   verificationSandboxConfig,
@@ -123,6 +127,11 @@ function isSafeDirectJsTest(arg: string): boolean {
   return isJavascriptTestPath(arg);
 }
 
+function isSafeVitestRoot(arg: string): boolean {
+  if (!arg.startsWith("--root=")) return false;
+  return normalizeSafeRelativePath(arg.slice("--root=".length)) !== null;
+}
+
 /** Engine-authored local-runner forms only; npx may never download a package. */
 export function isAllowedNpxVerification(args: string[]): boolean {
   if (args[0] !== "--no-install") return false;
@@ -139,7 +148,7 @@ export function isAllowedNpxVerification(args: string[]): boolean {
       args[2] === "run" &&
       isSafeDirectJsTest(args[3]!) &&
       args[4] === "--reporter=json" &&
-      args[5] === "--root=."
+      isSafeVitestRoot(args[5]!)
     );
   }
   if (tool === "jest") {
@@ -178,13 +187,49 @@ export interface CommandResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  /** True when bounded capture discarded bytes and structured output is unsafe. */
+  stdoutTruncated?: boolean;
+  /** True when bounded capture discarded bytes and structured output is unsafe. */
+  stderrTruncated?: boolean;
   reason?: string;
 }
 
-const MAX_CAPTURED_OUTPUT = 8_000;
+const DEFAULT_CAPTURED_OUTPUT_BYTES = 8_000;
+const MAX_CAPTURED_OUTPUT_BYTES = 32 * 1024 * 1024;
 
-function appendOutputTail(current: string, chunk: Buffer | string): string {
-  return (current + chunk.toString()).slice(-MAX_CAPTURED_OUTPUT);
+interface OutputCapture {
+  chunks: Buffer[];
+  bytes: number;
+  truncated: boolean;
+}
+
+function appendOutputTail(
+  capture: OutputCapture,
+  chunk: Buffer | string,
+  limit: number,
+): void {
+  const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  capture.chunks.push(data);
+  capture.bytes += data.byteLength;
+  let excess = capture.bytes - limit;
+  if (excess <= 0) return;
+  capture.truncated = true;
+  while (excess > 0 && capture.chunks.length > 0) {
+    const first = capture.chunks[0]!;
+    if (first.byteLength <= excess) {
+      capture.chunks.shift();
+      capture.bytes -= first.byteLength;
+      excess -= first.byteLength;
+    } else {
+      capture.chunks[0] = Buffer.from(first.subarray(excess));
+      capture.bytes -= excess;
+      excess = 0;
+    }
+  }
+}
+
+function capturedOutput(capture: OutputCapture): string {
+  return Buffer.concat(capture.chunks, capture.bytes).toString("utf8");
 }
 
 export function isAllowed(bin: string, args: string[]): boolean {
@@ -213,7 +258,7 @@ export function isScriptExecuting(_bin: string, _args: string[]): boolean {
  * We validate every argv token against a strict character allowlist so no shell
  * metacharacter can ever reach cmd.exe (we spawn cmd with verbatim args).
  */
-const SAFE_ARG = /^[A-Za-z0-9._:@\/=-]+$/;
+const SAFE_ARG = /^[A-Za-z0-9._:@\/= -]+$/;
 
 export function argsAreShellSafe(bin: string, args: string[]): boolean {
   return [bin, ...args].every((a) => SAFE_ARG.test(a));
@@ -404,6 +449,8 @@ export interface RunCommandOptions {
    */
   shouldCancel?: () => boolean;
   timeoutMs?: number;
+  /** Per-stream output ceiling; direct structured runners may request up to 32 MiB. */
+  maxCapturedOutputBytes?: number;
 }
 
 /** Quote a Windows token if it contains a space (our args are metachar-free). */
@@ -487,6 +534,17 @@ export async function runCommand(
     );
   }
 
+  const captureLimit = opts.maxCapturedOutputBytes ?? DEFAULT_CAPTURED_OUTPUT_BYTES;
+  if (
+    !Number.isSafeInteger(captureLimit) ||
+    captureLimit < 1 ||
+    captureLimit > MAX_CAPTURED_OUTPUT_BYTES
+  ) {
+    return refuse(
+      `Refused: output capture limit must be an integer from 1 to ${MAX_CAPTURED_OUTPUT_BYTES} bytes.`,
+    );
+  }
+
   // Cancellation may have been requested between the gate and the spawn.
   if (opts.shouldCancel?.()) {
     return refuse("Refused: run cancelled before command spawn.");
@@ -566,8 +624,16 @@ export async function runCommand(
 
   return new Promise<CommandResult>((resolveP) => {
     const child = spawnPm(absBin, spawnArgs, req.cwd, env);
-    let stdout = "";
-    let stderr = "";
+    const stdoutCapture: OutputCapture = {
+      chunks: [],
+      bytes: 0,
+      truncated: false,
+    };
+    const stderrCapture: OutputCapture = {
+      chunks: [],
+      bytes: 0,
+      truncated: false,
+    };
     let cancelled = false;
     // Kill the whole PROCESS TREE, not just the immediate child. On Windows the
     // immediate child is a cmd.exe wrapper: `child.kill("SIGKILL")` terminates
@@ -630,10 +696,10 @@ export async function runCommand(
     };
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      stdout = appendOutputTail(stdout, chunk);
+      appendOutputTail(stdoutCapture, chunk, captureLimit);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      stderr = appendOutputTail(stderr, chunk);
+      appendOutputTail(stderrCapture, chunk, captureLimit);
     });
     child.on("error", (err) => {
       cleanup();
@@ -642,21 +708,29 @@ export async function runCommand(
         allowed: true,
         executed: false,
         exitCode: null,
-        stdout,
+        stdout: capturedOutput(stdoutCapture),
         stderr: String(err),
+        ...(stdoutCapture.truncated ? { stdoutTruncated: true } : {}),
         reason: "spawn error",
       });
     });
     child.on("close", (code) => {
       cleanup();
+      const stdout = capturedOutput(stdoutCapture);
+      const stderr = capturedOutput(stderrCapture);
+      const truncation = {
+        ...(stdoutCapture.truncated ? { stdoutTruncated: true } : {}),
+        ...(stderrCapture.truncated ? { stderrTruncated: true } : {}),
+      };
       if (cancelled) {
         resolveP({
           command,
           allowed: true,
           executed: false,
           exitCode: code,
-          stdout: stdout.slice(-8000),
-          stderr: stderr.slice(-8000),
+          stdout,
+          stderr,
+          ...truncation,
           reason: "Cancelled: child process killed on cancel request.",
         });
         return;
@@ -667,8 +741,9 @@ export async function runCommand(
           allowed: true,
           executed: false,
           exitCode: code,
-          stdout: stdout.slice(-8000),
-          stderr: stderr.slice(-8000),
+          stdout,
+          stderr,
+          ...truncation,
           reason: "Timed out: child process tree was killed.",
         });
         return;
@@ -678,8 +753,9 @@ export async function runCommand(
         allowed: true,
         executed: true,
         exitCode: code,
-        stdout: stdout.slice(-8000),
-        stderr: stderr.slice(-8000),
+        stdout,
+        stderr,
+        ...truncation,
       });
     });
   });

@@ -7,7 +7,7 @@ import {
   verificationCommandsForWorkspace,
   verificationPlanForWorkspace,
 } from "../workspace/verificationCommands.js";
-import { isAllowed } from "../workspace/commandRunner.js";
+import { argsAreShellSafe, isAllowed } from "../workspace/commandRunner.js";
 
 const workspaces: string[] = [];
 
@@ -244,6 +244,310 @@ describe("verificationCommandsForWorkspace", () => {
       isTest: true,
     });
     expect(isAllowed(hostTest!.bin, hostTest!.args)).toBe(true);
+  });
+
+  it("pins argument-bearing Yarn Vitest scripts to the candidate root", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        packageManager: "yarn@4.9.2",
+        scripts: { test: "vitest run --passWithNoTests --coverage=false" },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "yarn.lock"), "# yarn lockfile\n");
+
+    const hostTest = verificationPlanForWorkspace(path).commands.find(
+      (command) => command.bin === "yarn" && command.isTest,
+    );
+    expect(hostTest).toEqual({
+      bin: "yarn",
+      args: ["test", "--root=."],
+      isTest: true,
+    });
+  });
+
+  it("preserves a candidate-owned Vitest root for host and direct tests", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: {
+          test: 'vitest run --config vitest.config.ts --root "packages/web app" --passWithNoTests',
+        },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "packages/web app/src/profile flow.test.ts",
+          contents: "import { test } from 'vitest'; test('profile', () => {});",
+        },
+      ],
+    });
+    expect(plan.incomplete).toEqual([]);
+    expect(
+      plan.commands.find((command) => command.bin === "npm" && command.isTest),
+    ).toEqual({ bin: "npm", args: ["test"], isTest: true });
+    const direct = plan.commands.find((command) => command.directTestPath);
+    expect(direct).toMatchObject({
+      args: [
+        "--no-install",
+        "vitest",
+        "run",
+        "src/profile flow.test.ts",
+        "--reporter=json",
+        "--root=packages/web app",
+      ],
+      directTestPath: "packages/web app/src/profile flow.test.ts",
+      runner: "vitest",
+    });
+    expect(isAllowed(direct!.bin, direct!.args)).toBe(true);
+    expect(argsAreShellSafe(direct!.bin, direct!.args)).toBe(true);
+  });
+
+  it.each([
+    ["./", ".", "src/root.test.ts", "src/root.test.ts"],
+    [
+      "packages/web/",
+      "packages/web",
+      "packages/web/src/root.test.ts",
+      "src/root.test.ts",
+    ],
+  ])(
+    "canonicalizes the safe Vitest root %s",
+    (scriptRoot, expectedRoot, generatedPath, expectedDirectPath) => {
+      const path = workspace();
+      writeFileSync(
+        join(path, "package.json"),
+        JSON.stringify({
+          scripts: { test: `vitest run --root ${scriptRoot}` },
+          devDependencies: { vitest: "3" },
+        }),
+      );
+      writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+      const plan = verificationPlanForWorkspace(path, {
+        generatedTests: [
+          {
+            path: generatedPath,
+            contents: "import { test } from 'vitest'; test('root', () => {});",
+          },
+        ],
+      });
+
+      expect(plan.incomplete).toEqual([]);
+      expect(plan.commands.find((command) => command.directTestPath)).toMatchObject({
+        args: [
+          "--no-install",
+          "vitest",
+          "run",
+          expectedDirectPath,
+          "--reporter=json",
+          `--root=${expectedRoot}`,
+        ],
+      });
+    },
+  );
+
+  it("rejects unquoted shell comments that can swallow the pinned Vitest root", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run # candidate tests" },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    const plan = verificationPlanForWorkspace(path);
+    expect(plan.incomplete).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "host tests",
+          reason: expect.stringMatching(/cannot be contained/i),
+        }),
+      ]),
+    );
+  });
+
+  it.each(["vitest run\ntrue", "vitest run\r\ntrue"])(
+    "rejects line-break shell commands: %j",
+    (testScript) => {
+      const path = workspace();
+      writeFileSync(
+        join(path, "package.json"),
+        JSON.stringify({
+          scripts: { test: testScript },
+          devDependencies: { vitest: "3" },
+        }),
+      );
+      writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+      const plan = verificationPlanForWorkspace(path);
+      expect(plan.incomplete).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            command: "host tests",
+            reason: expect.stringMatching(/cannot be contained/i),
+          }),
+        ]),
+      );
+    },
+  );
+
+  it.each([
+    "vitest run \\& echo bypassed",
+    "vitest run \\| echo bypassed",
+    "vitest run --root 'packages/web app'",
+  ])(
+    "rejects package scripts whose quoting is not safe on Windows: %j",
+    (testScript) => {
+      const path = workspace();
+      writeFileSync(
+        join(path, "package.json"),
+        JSON.stringify({
+          scripts: { test: testScript },
+          devDependencies: { vitest: "3" },
+        }),
+      );
+      writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+      expect(verificationPlanForWorkspace(path).incomplete).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            command: "host tests",
+            reason: expect.stringMatching(/cannot be contained/i),
+          }),
+        ]),
+      );
+    },
+  );
+
+  it("fails closed on a Vitest root that escapes the candidate", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run --root ../outside" },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    const plan = verificationPlanForWorkspace(path);
+    expect(plan.incomplete).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "host tests",
+          reason: expect.stringMatching(/cannot be contained/i),
+        }),
+      ]),
+    );
+  });
+
+  it("selects each generated test's own runner when Vitest and Jest coexist", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run --passWithNoTests" },
+        devDependencies: { vitest: "3", jest: "30", "@jest/globals": "30" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "tests/vitest-path.test.ts",
+          contents: "import { test } from 'vitest'; test('v', () => {});",
+        },
+        {
+          path: "tests/jest-path.test.ts",
+          contents:
+            "import { test, jest } from '@jest/globals'; test('j', () => jest.fn());",
+        },
+      ],
+    });
+    expect(plan.incomplete).toEqual([]);
+    expect(
+      plan.commands
+        .filter((command) => command.directTestPath)
+        .map((command) => [command.directTestPath, command.runner]),
+    ).toEqual([
+      ["tests/vitest-path.test.ts", "vitest"],
+      ["tests/jest-path.test.ts", "jest"],
+    ]);
+  });
+
+  it("ignores runner-looking comments, fixture strings, templates, and regexes", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "jest" },
+        devDependencies: { jest: "30", "@jest/globals": "30" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "tests/jest-fixtures.test.ts",
+          contents: [
+            "import { test, jest } from '@jest/globals';",
+            "// vi.mock('comment-only')",
+            "const fixture = \"vi.mock('string-only')\";",
+            "const template = `vi.spyOn(templateOnly, 'x')`;",
+            "const pattern = /vi\\.fn\\(regexOnly\\)/;",
+            "test('j', () => jest.fn());",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(plan.incomplete).toEqual([]);
+    expect(plan.commands.find((command) => command.directTestPath)).toMatchObject({
+      directTestPath: "tests/jest-fixtures.test.ts",
+      runner: "jest",
+    });
+  });
+
+  it("fails closed when a dual-runner test has no runner identity", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "node ./scripts/run-tests.mjs" },
+        devDependencies: { vitest: "3", jest: "30" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "tests/ambiguous.test.ts",
+          contents: "test('which runner', () => expect(true).toBe(true));",
+        },
+      ],
+    });
+    expect(plan.incomplete).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "tests/ambiguous.test.ts",
+          reason: expect.stringMatching(/no unambiguous runner identity/i),
+        }),
+      ]),
+    );
+    expect(plan.commands.some((command) => command.directTestPath)).toBe(false);
   });
 
   it("directly proves tests authored by both Builder and Test Writer", () => {

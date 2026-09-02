@@ -1,7 +1,8 @@
 import {
   recordCurrentPlatformEvidence,
-  validatePlatformEvidenceHold,
+  sealPlatformEvidenceHold,
 } from "../server/workspace/platformEvidenceRunner.js";
+import { getConfig } from "../server/config.js";
 
 async function main(): Promise<void> {
   const mode = process.argv[2] ?? "record";
@@ -9,7 +10,7 @@ async function main(): Promise<void> {
   const workspaceRoot = process.env.WORKSPACE_ROOT?.trim() || undefined;
 
   if (mode === "validate") {
-    const held = await validatePlatformEvidenceHold({ runId, workspaceRoot });
+    const held = await sealPlatformEvidenceHold({ runId, workspaceRoot });
     console.log(
       `Validated platform-evidence hold ${held.runId}: ${held.blockers.join("; ")}`,
     );
@@ -19,7 +20,11 @@ async function main(): Promise<void> {
     throw new Error("Usage: factory-platform-proof.ts [validate|record]");
   }
 
-  const proof = await recordCurrentPlatformEvidence({ runId, workspaceRoot });
+  const proof = await recordCurrentPlatformEvidence({
+    runId,
+    workspaceRoot,
+    allowScriptExecution: getConfig().allowUntrustedScripts,
+  });
   console.log(
     `Recorded ${proof.hostPlatform} execution for exact Factory run ${proof.runId}.`,
   );

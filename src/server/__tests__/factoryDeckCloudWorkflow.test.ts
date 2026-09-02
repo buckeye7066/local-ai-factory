@@ -47,6 +47,32 @@ describe("paid cloud workflow contract", () => {
     },
   );
 
+  it.each([
+    ["Factory Deck", factory, "factory-deck-workspaces.tar"],
+    ["Purpose Foundry", foundry, "purpose-foundry-workspaces.tar"],
+  ])(
+    "%s transports one immutable POSIX-metadata candidate across every host",
+    (_name, workflow, archive) => {
+      const packIndex = workflow.indexOf(`tar --create --file ${archive}`);
+      const firstUploadIndex = workflow.indexOf("uses: actions/upload-artifact@");
+      expect(packIndex).toBeGreaterThan(0);
+      expect(firstUploadIndex).toBeGreaterThan(packIndex);
+      expect(
+        workflow.match(new RegExp(archive.replace(".", "\\."), "g")),
+      ).not.toBeNull();
+      expect(workflow.match(/tar --extract --file/g)).toHaveLength(3);
+
+      for (const [start, end] of [
+        ["Preserve Windows evidence", "macos:"],
+        ["Preserve macOS evidence", _name === "Factory Deck" ? "build:" : "verify:"],
+      ]) {
+        const upload = workflow.slice(workflow.indexOf(start), workflow.indexOf(end));
+        expect(upload).toContain(archive);
+        expect(upload).not.toContain("workspaces/**");
+      }
+    },
+  );
+
   it("does not cancel or credential production-readiness checkouts", () => {
     expect(production).toContain(
       "group: production-readiness-${{ github.event_name }}-${{ github.ref }}",
@@ -79,6 +105,20 @@ describe("paid cloud workflow contract", () => {
       expect(workflow).toContain('ALLOW_UNTRUSTED_SCRIPTS: "true"');
       expect(workflow).toContain('FACTORY_RUN_TIMEOUT_MS: "19200000"');
       expect(workflow).not.toContain("21000000");
+    },
+  );
+
+  it.each([
+    ["Factory Deck", factory, "factory-deck-cloud/exact-main-proof"],
+    ["Purpose Foundry", foundry, "purpose-foundry-cloud/exact-main-proof"],
+  ])(
+    "%s publishes a durable status for the exact main SHA",
+    (_name, workflow, context) => {
+      expect(workflow).toContain("statuses: write");
+      expect(workflow).toContain(`PROOF_CONTEXT: ${context}`);
+      expect(workflow).toContain("statuses/${process.env.GITHUB_SHA}");
+      expect(workflow).toContain("PROOF_TARGET_URL:");
+      expect(workflow).toContain("github.event_name == 'workflow_dispatch'");
     },
   );
 
@@ -138,8 +178,8 @@ describe("paid cloud workflow contract", () => {
   it("proves one exact CLI candidate on Windows and macOS before paid finalization", () => {
     expect(factory).toContain("runs-on: windows-latest");
     expect(factory).toContain("runs-on: macos-latest");
-    expect(factory).toContain("needs: windows");
-    expect(factory).toContain("needs: macos");
+    expect(factory).toContain("needs: [seed, windows]");
+    expect(factory).toContain("needs: [seed, windows, macos]");
     expect(factory).toContain(
       "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
     );
@@ -169,8 +209,8 @@ describe("paid cloud workflow contract", () => {
   it("resumes the same Purpose Foundry candidate after secret-free Windows and macOS proof", () => {
     expect(foundry).toContain("runs-on: windows-latest");
     expect(foundry).toContain("runs-on: macos-latest");
-    expect(foundry).toContain("needs: windows");
-    expect(foundry).toContain("needs: macos");
+    expect(foundry).toContain("needs: [seed, windows]");
+    expect(foundry).toContain("needs: [seed, windows, macos]");
     expect(foundry).toContain(
       "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
     );
@@ -203,11 +243,24 @@ describe("paid cloud workflow contract", () => {
     ["Purpose Foundry", foundry],
   ])(
     "%s preserves exact artifact identities across failed-job retries",
-    (_name, workflow) => {
+    (name, workflow) => {
+      const prefix = name === "Factory Deck" ? "factory-deck" : "purpose-foundry";
+      const artifactNames = [
+        ...workflow.matchAll(new RegExp(`^\\s+name: (${prefix}[^\\n]+)$`, "gm")),
+      ].map((match) => match[1]);
+      expect(artifactNames.length).toBeGreaterThan(0);
+      for (const artifactName of artifactNames) {
+        expect(artifactName).toContain("${{ github.run_id }}");
+        expect(artifactName).not.toContain("${{ github.run_attempt }}");
+      }
       expect(workflow.match(/overwrite: true/g)).toHaveLength(4);
-      expect(workflow).not.toMatch(
-        /^\s+name: (?:factory-deck|purpose-foundry)[^\n]*github\.run_attempt/m,
+
+      const sealIndex = workflow.indexOf(
+        "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
       );
+      const seedUploadIndex = workflow.indexOf(`name: ${prefix}-seed-`);
+      expect(sealIndex).toBeGreaterThan(0);
+      expect(seedUploadIndex).toBeGreaterThan(sealIndex);
     },
   );
 

@@ -62,6 +62,11 @@ import {
 } from "../workspace/verificationReceipt.js";
 import { runCommand } from "../workspace/commandRunner.js";
 import {
+  capturePlatformArtifactSnapshot,
+  checkpointOutputTail,
+  changedPlatformArtifactPaths,
+} from "../workspace/platformEvidenceRunner.js";
+import {
   generatedTestsForVerification,
   hasPlaywrightHarness,
   verificationPlanForWorkspace,
@@ -791,14 +796,14 @@ async function executeRun(
   const hasAuthoredDownstream = (): boolean =>
     Boolean(
       checkpoint.build ||
-        checkpoint.files.length > 0 ||
-        checkpoint.testPlan ||
-        checkpoint.testWriterComplete ||
-        checkpoint.verification ||
-        checkpoint.qa ||
-        checkpoint.pendingRepair ||
-        checkpoint.repairComplete ||
-        checkpoint.finalReport,
+      checkpoint.files.length > 0 ||
+      checkpoint.testPlan ||
+      checkpoint.testWriterComplete ||
+      checkpoint.verification ||
+      checkpoint.qa ||
+      checkpoint.pendingRepair ||
+      checkpoint.repairComplete ||
+      checkpoint.finalReport,
     );
 
   /**
@@ -2057,6 +2062,9 @@ async function executeRun(
                 // a Windows zombie grandchild holding the pipes for 19 more
                 // minutes. Installs get 15 minutes; test commands get 45.
                 timeoutMs: cmd.isTest ? 45 * 60_000 : 15 * 60_000,
+                ...(cmd.directTestPath
+                  ? { maxCapturedOutputBytes: 32 * 1024 * 1024 }
+                  : {}),
               },
             );
             log(
@@ -2069,13 +2077,23 @@ async function executeRun(
               commandOutput += `\n$ ${res.command}\n${res.stdout}\n${res.stderr}`;
               const parsedDirect =
                 cmd.directTestPath && cmd.runner
-                  ? parseDirectTestEvidence(cmd.runner, res.stdout, res.stderr)
+                  ? res.stdoutTruncated || res.stderrTruncated
+                    ? {
+                        valid: false,
+                        passedCount: 0,
+                        skippedCount: 0,
+                        passedTestNames: [],
+                        reason: `direct ${cmd.runner} evidence exceeded the structured-output capture limit`,
+                      }
+                    : parseDirectTestEvidence(cmd.runner, res.stdout, res.stderr)
                   : undefined;
               const directEvidenceValid =
                 parsedDirect === undefined
                   ? undefined
                   : res.exitCode === 0 && parsedDirect.valid;
-              const outputTail = `${res.stdout}\n${res.stderr}`;
+              // Direct reporters may need a large in-memory buffer for JSON
+              // parsing, but the durable checkpoint has a strict 32 KiB field.
+              const outputTail = checkpointOutputTail(res.stdout, res.stderr);
               const platformStamp = platformStampForExecutedCommand({
                 command: res.command,
                 exitCode: res.exitCode,
@@ -2869,8 +2887,7 @@ async function executeRun(
     // candidate-byte digest before deliverRun can push a branch/fast-forward
     // trunk, releaseRun can merge, or deployRun can publish anything.
     let preReleaseApproval = checkpoint.preReleaseApproval as
-      | PreReleaseReadinessApproval
-      | undefined;
+      PreReleaseReadinessApproval | undefined;
     if (!run.demo) {
       const candidateFacts = await currentCandidateFacts();
       const candidateDigest = productionReadinessDigest(candidateFacts);
@@ -2879,6 +2896,8 @@ async function executeRun(
         evidenceDigest: candidateDigest,
       });
       if (deterministicBlockers.length > 0) {
+        const externalPlatformEvidenceHold =
+          onlyPlatformEvidenceBlockers(deterministicBlockers);
         const blockedReceipt = evaluateProductionReadiness(
           { ...candidateFacts, evidenceDigest: candidateDigest, reviews: [] },
           { requireDelivery: false },
@@ -2895,7 +2914,10 @@ async function executeRun(
           receipt: blockedReceipt,
         });
         run.status = "failed";
-        run.resumable = onlyPlatformEvidenceBlockers(deterministicBlockers);
+        // Another trusted OS runner, not an ordinary same-host resume, must add
+        // missing platform evidence. The proof runner enables resume only after
+        // every held target has real execution evidence.
+        run.resumable = false;
         run.error = redactSecrets(
           `Production readiness blocked before release review: ${deterministicBlockers.join("; ")}`,
         );
@@ -2906,7 +2928,11 @@ async function executeRun(
         });
         log(
           "warning",
-          `${run.error} No delivery, trunk, release, or deploy action ran.`,
+          `${run.error} ${
+            externalPlatformEvidenceHold
+              ? "Ordinary resume is disabled until the external platform proof completes. "
+              : ""
+          }No delivery, trunk, release, or deploy action ran.`,
         );
         await checkpointNow();
         await flush();
@@ -3764,6 +3790,26 @@ async function prepareResume(
     }
     if (run.workspacePath) {
       await assertResumeWorkspace(config.workspaceRoot, run.workspacePath);
+    }
+    const sealedArtifact = checkpoint.verification?.platformArtifactSnapshot;
+    if (sealedArtifact !== undefined) {
+      if (!run.workspacePath) {
+        throw new RunNotResumableError(
+          "The sealed platform candidate has no saved workspace path. Restore the exact artifact or start a new run.",
+        );
+      }
+      const restoredArtifact = await capturePlatformArtifactSnapshot(run.workspacePath);
+      const artifactChanges = changedPlatformArtifactPaths(
+        sealedArtifact,
+        restoredArtifact,
+      );
+      if (artifactChanges.length > 0) {
+        throw new RunNotResumableError(
+          `Restored candidate differs from the sealed platform artifact: ${artifactChanges
+            .slice(0, 20)
+            .join(", ")}. Restore the exact artifact or start a new run.`,
+        );
+      }
     }
 
     // Resolve providers before consuming the checkpoint. If credentials or the
