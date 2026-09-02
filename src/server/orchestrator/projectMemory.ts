@@ -220,7 +220,7 @@ export function continuityFromMemory(
   };
 }
 
-function completedMemoryFrontier(memory: ProjectMemory | null): string[] {
+function completedMemoryFrontier(memory: ProjectMemory | null | undefined): string[] {
   return (
     memory?.completedFrontier ??
     (memory?.entries ?? [])
