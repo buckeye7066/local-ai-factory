@@ -3744,6 +3744,11 @@ async function failBackgroundRun(run: RunRecord, error: unknown): Promise<void> 
     message: failureMessage,
     error,
   });
+  try {
+    ledger.writeFile();
+  } catch {
+    // The run record retry below remains the second durable copy.
+  }
   run.logs.push(makeLog("error", failureMessage, run.currentStage));
   run.updatedAt = nowMs();
   putRunInMemory(run);
