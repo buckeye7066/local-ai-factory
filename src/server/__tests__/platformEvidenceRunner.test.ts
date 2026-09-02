@@ -61,7 +61,7 @@ describe("platformEvidenceRunner", () => {
     );
   });
 
-  it("preserves product directories named coverage and ignores only recognized reports", async () => {
+  it("binds every generic report-named path into the exact artifact", async () => {
     const root = await mkdtemp(join(tmpdir(), "factory-platform-coverage-"));
     roots.push(root);
     await mkdir(join(root, "src", "coverage"), { recursive: true });
@@ -77,7 +77,8 @@ describe("platformEvidenceRunner", () => {
     const before = await capturePlatformArtifactSnapshot(root);
     expect(before).toHaveProperty("src/coverage/policy.ts");
     expect(before).toHaveProperty("build/coverage/dashboard.ts");
-    expect(before).not.toHaveProperty("build/coverage/coverage-final.json");
+    expect(before).toHaveProperty("build/coverage/coverage-final.json");
+    expect(before).toHaveProperty("build/coverage/lcov.info");
 
     await writeFile(join(root, "src", "coverage", "policy.ts"), "export const x=1\n");
     await writeFile(join(root, "build", "coverage", "lcov.info"), "new\n");
@@ -89,6 +90,7 @@ describe("platformEvidenceRunner", () => {
 
     expect(changedPlatformArtifactPaths(before, after)).toEqual([
       "build/coverage/dashboard.ts",
+      "build/coverage/lcov.info",
       "src/coverage/policy.ts",
     ]);
   });

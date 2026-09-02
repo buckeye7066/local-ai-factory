@@ -61,29 +61,10 @@ const ARTIFACT_EXCLUDED_DIRS = new Set([
 ]);
 const ARTIFACT_EXCLUDED_FILES = [/^\.coverage(?:\..+)?$/, /^.+\.(?:pyc|pyo)$/];
 
-const RUNTIME_REPORT_ENTRIES: Record<string, ReadonlySet<string>> = {
-  coverage: new Set([
-    "clover.xml",
-    "cobertura-coverage.xml",
-    "coverage-final.json",
-    "lcov-report",
-    "lcov.info",
-  ]),
-  "playwright-report": new Set(["data", "index.html"]),
-  "test-results": new Set([".last-run.json"]),
-};
-
-function isRecognizedRuntimeReportEntry(path: string, name: string): boolean {
-  const parts = path.split("/");
-  const parent = parts.at(-2);
-  return parent ? (RUNTIME_REPORT_ENTRIES[parent]?.has(name) ?? false) : false;
-}
-
 function isExcludedArtifactEntry(path: string, name: string): boolean {
   return (
     path.split("/").some((part) => ARTIFACT_EXCLUDED_DIRS.has(part)) ||
-    ARTIFACT_EXCLUDED_FILES.some((pattern) => pattern.test(name)) ||
-    isRecognizedRuntimeReportEntry(path, name)
+    ARTIFACT_EXCLUDED_FILES.some((pattern) => pattern.test(name))
   );
 }
 
