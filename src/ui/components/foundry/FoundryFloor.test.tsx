@@ -136,8 +136,8 @@ describe("Purpose Foundry intake UI", () => {
       target: { value: "Build and verify the core product" },
     });
     expect(
-      screen.getByLabelText("Purpose Foundry model routing"),
-    ).toHaveTextContent(/Strongest configured paid model/i);
+      screen.getByLabelText("Purpose Foundry model routing").textContent,
+    ).toMatch(/Strongest configured paid model/i);
     const promoPilot = await screen.findByLabelText("Include promo-pilot");
     expect((promoPilot as HTMLInputElement).disabled).toBe(false);
     fireEvent.click(promoPilot);
