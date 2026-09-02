@@ -1,3 +1,5 @@
+import ts from "typescript";
+
 export type WindowsProcessPortabilityIssue = {
   path: string;
   line: number;
@@ -5,44 +7,96 @@ export type WindowsProcessPortabilityIssue = {
 };
 
 const JAVASCRIPT_OR_TYPESCRIPT = /\.[cm]?[jt]sx?$/i;
-const WINDOWS_SCRIPT = /["'`][^"'`\r\n]*\.(?:cmd|bat)["'`]/i;
-const WINDOWS_SCRIPT_VARIABLE =
-  /\b(?:const|let|var)\s+([$A-Z_a-z][$\w]*)\s*=\s*[^;\r\n]{0,500}["'`][^"'`\r\n]*\.(?:cmd|bat)["'`]/g;
-const DIRECT_CHILD_PROCESS_CALL =
-  /\b(execFile|spawn)(?:Sync|Async)?\s*\(\s*([^,\r\n]+)/g;
+const WINDOWS_SCRIPT = /\.(?:cmd|bat)$/i;
+const CHILD_PROCESS_MODULES = new Set(["child_process", "node:child_process"]);
+const UTIL_MODULES = new Set(["util", "node:util"]);
+const DIRECT_METHOD = /^(execFile|spawn)(?:Sync|Async)?$/;
 
-function callText(source: string, start: number): string {
-  const open = source.indexOf("(", start);
-  if (open < 0) return source.slice(start, start + 2_000);
-  let depth = 0;
-  let quote: '"' | "'" | "`" | null = null;
-  let escaped = false;
-  for (let index = open; index < Math.min(source.length, open + 8_000); index += 1) {
-    const character = source[index]!;
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'" || character === "`") {
-      quote = character;
-      continue;
-    }
-    if (character === "(") depth += 1;
-    if (character === ")") {
-      depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1);
-    }
+function scriptKind(path: string): ts.ScriptKind {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".tsx")) return ts.ScriptKind.TSX;
+  if (lower.endsWith(".jsx")) return ts.ScriptKind.JSX;
+  if (/\.[cm]?js$/.test(lower)) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
+}
+
+function stringModule(node: ts.Expression | undefined): string | null {
+  return node && ts.isStringLiteralLike(node) ? node.text : null;
+}
+
+function requireModule(expression: ts.Expression | undefined): string | null {
+  if (!expression || !ts.isCallExpression(expression)) return null;
+  if (
+    !ts.isIdentifier(expression.expression) ||
+    expression.expression.text !== "require"
+  ) {
+    return null;
   }
-  return source.slice(start, start + 8_000);
+  return stringModule(expression.arguments[0]);
+}
+
+function importedName(element: ts.ImportSpecifier | ts.BindingElement): string {
+  return (element.propertyName ?? element.name).getText();
+}
+
+function directMethod(name: string): string | null {
+  return DIRECT_METHOD.test(name) ? name : null;
+}
+
+function expressionContainsWindowsScript(
+  expression: ts.Expression,
+  scriptVariables: ReadonlySet<string>,
+): boolean {
+  if (ts.isStringLiteralLike(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    return WINDOWS_SCRIPT.test(expression.text);
+  }
+  if (ts.isIdentifier(expression) && scriptVariables.has(expression.text)) return true;
+
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (
+      (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
+      WINDOWS_SCRIPT.test(node.text)
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(expression);
+  return found;
+}
+
+function hasShellTrue(call: ts.CallExpression): boolean {
+  return call.arguments.some((argument) => {
+    if (!ts.isObjectLiteralExpression(argument)) return false;
+    return argument.properties.some(
+      (property) =>
+        ts.isPropertyAssignment(property) &&
+        property.name.getText().replace(/^["']|["']$/g, "") === "shell" &&
+        property.initializer.kind === ts.SyntaxKind.TrueKeyword,
+    );
+  });
+}
+
+function bindingMethods(
+  name: ts.BindingName,
+  addMethod: (local: string, method: string) => void,
+): void {
+  if (!ts.isObjectBindingPattern(name)) return;
+  for (const element of name.elements) {
+    if (!ts.isIdentifier(element.name)) continue;
+    const method = directMethod(importedName(element));
+    if (method) addMethod(element.name.text, method);
+  }
 }
 
 /**
  * Node cannot directly execute Windows batch wrappers through execFile/spawn.
- * The same generated test may pass on Linux with `npm` and fail on Windows
- * with `spawn EINVAL` after it selects `npm.cmd`; catch that before the exact
- * candidate is sealed and sent to trusted OS runners.
+ * Resolve only real child_process bindings through the TypeScript AST, so
+ * aliases are covered while comments, fixtures, and unrelated functions never
+ * become false portability blockers.
  */
 export function assessWindowsProcessPortability(
   files: Iterable<{ path: string; contents: string }>,
@@ -50,25 +104,119 @@ export function assessWindowsProcessPortability(
   const issues: WindowsProcessPortabilityIssue[] = [];
   for (const file of files) {
     if (!JAVASCRIPT_OR_TYPESCRIPT.test(file.path)) continue;
+    const sourceFile = ts.createSourceFile(
+      file.path,
+      file.contents,
+      ts.ScriptTarget.Latest,
+      true,
+      scriptKind(file.path),
+    );
+    const methods = new Map<string, string>();
+    const namespaces = new Set<string>();
+    const promisifyNames = new Set<string>();
     const scriptVariables = new Set<string>();
-    for (const match of file.contents.matchAll(WINDOWS_SCRIPT_VARIABLE)) {
-      if (match[1]) scriptVariables.add(match[1]);
-    }
-    for (const match of file.contents.matchAll(DIRECT_CHILD_PROCESS_CALL)) {
-      const firstArgument = match[2]?.trim() ?? "";
-      const selectsWindowsScript =
-        WINDOWS_SCRIPT.test(firstArgument) || scriptVariables.has(firstArgument);
-      if (!selectsWindowsScript) continue;
-      const invocation = callText(file.contents, match.index ?? 0);
-      if (/\bshell\s*:\s*true\b/.test(invocation)) continue;
-      issues.push({
-        path: file.path,
-        line: file.contents.slice(0, match.index ?? 0).split(/\r?\n/).length,
-        reason:
-          `${match[1]} directly launches a Windows .cmd/.bat wrapper without shell: true. ` +
-          "Node reports spawn EINVAL for this on Windows. Invoke a real executable such as process.execPath, use a shell-aware command API, or deliberately enable the shell for that invocation.",
-      });
-    }
+    const addMethod = (local: string, method: string) => methods.set(local, method);
+
+    const collectBindings = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)) {
+        const module = stringModule(node.moduleSpecifier);
+        const clause = node.importClause;
+        if (clause && module && CHILD_PROCESS_MODULES.has(module)) {
+          if (clause.name) namespaces.add(clause.name.text);
+          const bindings = clause.namedBindings;
+          if (bindings && ts.isNamespaceImport(bindings)) {
+            namespaces.add(bindings.name.text);
+          } else if (bindings) {
+            for (const element of bindings.elements) {
+              const method = directMethod(importedName(element));
+              if (method) addMethod(element.name.text, method);
+            }
+          }
+        }
+        if (clause && module && UTIL_MODULES.has(module)) {
+          const bindings = clause.namedBindings;
+          if (bindings && ts.isNamedImports(bindings)) {
+            for (const element of bindings.elements) {
+              if (importedName(element) === "promisify") {
+                promisifyNames.add(element.name.text);
+              }
+            }
+          }
+        }
+      }
+
+      if (ts.isVariableDeclaration(node) && node.initializer) {
+        if (ts.isIdentifier(node.name)) {
+          const required = requireModule(node.initializer);
+          if (required && CHILD_PROCESS_MODULES.has(required)) {
+            namespaces.add(node.name.text);
+          }
+          if (expressionContainsWindowsScript(node.initializer, scriptVariables)) {
+            scriptVariables.add(node.name.text);
+          }
+
+          if (ts.isIdentifier(node.initializer)) {
+            const method = methods.get(node.initializer.text);
+            if (method) addMethod(node.name.text, method);
+          } else if (ts.isPropertyAccessExpression(node.initializer)) {
+            if (namespaces.has(node.initializer.expression.getText())) {
+              const method = directMethod(node.initializer.name.text);
+              if (method) addMethod(node.name.text, method);
+            }
+          } else if (
+            ts.isCallExpression(node.initializer) &&
+            ts.isIdentifier(node.initializer.expression) &&
+            promisifyNames.has(node.initializer.expression.text)
+          ) {
+            const target = node.initializer.arguments[0];
+            if (target && ts.isIdentifier(target)) {
+              const method = methods.get(target.text);
+              if (method) addMethod(node.name.text, method);
+            }
+          }
+        } else {
+          const required = requireModule(node.initializer);
+          if (required && CHILD_PROCESS_MODULES.has(required)) {
+            bindingMethods(node.name, addMethod);
+          }
+        }
+      }
+      ts.forEachChild(node, collectBindings);
+    };
+    collectBindings(sourceFile);
+
+    const callMethod = (expression: ts.Expression): string | null => {
+      if (ts.isIdentifier(expression)) return methods.get(expression.text) ?? null;
+      if (!ts.isPropertyAccessExpression(expression)) return null;
+      const method = directMethod(expression.name.text);
+      if (!method) return null;
+      if (namespaces.has(expression.expression.getText())) return method;
+      const required = requireModule(expression.expression);
+      return required && CHILD_PROCESS_MODULES.has(required) ? method : null;
+    };
+
+    const inspectCalls = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const method = callMethod(node.expression);
+        const first = node.arguments[0];
+        if (
+          method &&
+          first &&
+          expressionContainsWindowsScript(first, scriptVariables) &&
+          !hasShellTrue(node)
+        ) {
+          issues.push({
+            path: file.path,
+            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+            reason:
+              `${method} directly launches a Windows .cmd/.bat wrapper without shell: true. ` +
+              "Node reports spawn EINVAL for this on Windows. Invoke a real executable such as process.execPath, use a shell-aware command API, or deliberately enable the shell for that invocation.",
+          });
+        }
+      }
+      ts.forEachChild(node, inspectCalls);
+    };
+    inspectCalls(sourceFile);
   }
   return issues;
 }
