@@ -82,7 +82,9 @@ function canonicalGitIdentity(raw: string): string {
     url.password = "";
     url.search = "";
     url.hash = "";
-    const host = url.hostname.toLowerCase();
+    // Preserve an explicit port: two self-hosted Git services on one hostname
+    // are distinct repositories and must never share durable purpose memory.
+    const host = url.host.toLowerCase();
     const pathname = url.pathname.replace(/\.git$/i, "").replace(/\/+$/g, "");
     return `${host}${host === "github.com" ? pathname.toLowerCase() : pathname}`;
   } catch {
@@ -121,13 +123,6 @@ export function projectKeyForOptions(
       .digest("hex")}`;
   }
   if (options.mode !== "extend" && options.newRepo?.name) {
-    const owner = options.newRepo.owner ?? context.resolvedNewRepoOwner;
-    if (owner) {
-      // Use the same canonical identity a later extend run derives from the
-      // created GitHub remote, so the founding mission is not stranded under
-      // a one-time "new" namespace.
-      return `git:github.com/${owner.toLowerCase()}/${options.newRepo.name.toLowerCase()}`;
-    }
     if (options.newRepo.createRemote === false && context.localProjectId) {
       const localIdentity = createHash("sha256")
         .update(
@@ -138,6 +133,13 @@ export function projectKeyForOptions(
         )
         .digest("hex");
       return `new-local-sha256:${localIdentity}`;
+    }
+    const owner = options.newRepo.owner ?? context.resolvedNewRepoOwner;
+    if (owner) {
+      // Use the same canonical identity a later extend run derives from the
+      // created GitHub remote, so the founding mission is not stranded under
+      // a one-time "new" namespace.
+      return `git:github.com/${owner.toLowerCase()}/${options.newRepo.name.toLowerCase()}`;
     }
     // A requested remote without a resolved owner is not a workspace-only
     // project. Fail closed instead of silently assigning a different identity.
@@ -238,10 +240,10 @@ function partitionGoals(goals: string[], fallback: string) {
   }
   return {
     declaredPurpose: purposes[0] ?? null,
-    declaredTargetUsers: unique(declaredTargetUsers, 20),
-    activeGoals: unique(active.length ? active : [fallback], 20),
-    constraints: unique(constraints, 30),
-    nonGoals: unique(nonGoals, 30),
+    declaredTargetUsers: unique(declaredTargetUsers, 50),
+    activeGoals: unique(active.length ? active : [fallback], 50),
+    constraints: unique(constraints, 50),
+    nonGoals: unique(nonGoals, 50),
   };
 }
 
@@ -252,24 +254,21 @@ function currentSpecPurpose(spec: ProductSpec): string {
 }
 
 function explicitPurposeChange(texts: string[]): boolean {
-  const pattern =
-    /\b(?:(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b[\s\S]{0,80}\b(?:purpose|mission|audience|product)|(?:purpose|mission|audience|product)\b[\s\S]{0,80}\b(?:change|replace|redefine|pivot|repurpose|retarget|shift))\b/gi;
-  const startsWithChange =
-    /^(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b/i;
-  const immediateNegation =
-    /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not|cannot|can't|cant|no)(?:\s+\w+){0,3}\s*$/i;
-  const targetThenNegation =
-    /\b(?:not|never|without)\b[\s\S]{0,40}\b(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b/i;
+  const negatedVerbFirst =
+    /\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not|cannot|can't|cant|without)\b[\s\S]{0,40}?\b(?:chang(?:e|ing)|replac(?:e|ing)|redefin(?:e|ing)|pivot(?:ing)?|repurpos(?:e|ing)|retarget(?:ing)?|shift(?:ing)?)\b[\s\S]{0,80}?\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b/gi;
+  const negatedTargetFirst =
+    /\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[\s\S]{0,40}?\b(?:do\s+not|not|never|must\s+not|should\s+not|cannot|can't|cant)\b[\s\S]{0,40}?\b(?:change|replace|redefine|pivot|repurpose|retarget|shift)\b/gi;
+  const affirmativeChange =
+    /\b(?:(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting)\b[\s\S]{0,80}\b(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)|(?:product\s+(?:purpose|mission)|purpose|mission|audience|product)\b[\s\S]{0,80}\b(?:change|changing|replace|replacing|redefine|redefining|pivot|pivoting|repurpose|repurposing|retarget|retargeting|shift|shifting))\b/i;
   return texts.some((text) => {
-    pattern.lastIndex = 0;
-    for (const match of text.matchAll(pattern)) {
-      const prefix = text.slice(Math.max(0, (match.index ?? 0) - 50), match.index);
-      const negated = startsWithChange.test(match[0])
-        ? immediateNegation.test(prefix)
-        : targetThenNegation.test(match[0]);
-      if (!negated) return true;
-    }
-    return false;
+    // Remove only syntactically negated target-change clauses first. This
+    // prevents a leading unrelated verb ("Change export workflow …") from
+    // reaching across "without changing the product purpose" and authorizing
+    // a mission pivot.
+    const affirmativeOnly = text
+      .replace(negatedVerbFirst, " ")
+      .replace(negatedTargetFirst, " ");
+    return affirmativeChange.test(affirmativeOnly);
   });
 }
 
@@ -380,17 +379,17 @@ export function createGoalContract(input: {
     activeGoals: partitioned.activeGoals,
     constraints: unique(
       [
-        ...(previous && !purposeChanged ? previous.goalContract.constraints : []),
         ...partitioned.constraints,
+        ...(previous && !purposeChanged ? previous.goalContract.constraints : []),
       ],
-      30,
+      100,
     ),
     nonGoals: unique(
       [
-        ...(previous && !purposeChanged ? previous.goalContract.nonGoals : []),
         ...partitioned.nonGoals,
+        ...(previous && !purposeChanged ? previous.goalContract.nonGoals : []),
       ],
-      30,
+      100,
     ),
     continuity: {
       previousRunIds: history.map((entry) => entry.runId).slice(-12),
