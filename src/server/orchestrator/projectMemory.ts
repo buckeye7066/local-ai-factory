@@ -33,6 +33,8 @@ export const ProjectMemorySchema = z.object({
   schemaVersion: z.literal(1),
   projectKey: z.string().min(1).max(500),
   entries: z.array(ProjectMemoryEntrySchema).max(MAX_HISTORY),
+  /** Independent concurrency token; writing a plan must never shrink it. */
+  completedFrontier: z.array(z.string().uuid()).max(MAX_HISTORY).optional(),
   updatedAt: z.number().int().nonnegative(),
 });
 export type ProjectMemory = z.infer<typeof ProjectMemorySchema>;
@@ -190,7 +192,9 @@ export function continuityFromMemory(
       (item) => `${item.name}: ${item.howToIntegrate} (evidence: ${item.sourceUrl})`,
     );
   return {
-    previousRunIds: entries.map((entry) => entry.runId),
+    previousRunIds: completedMemoryFrontier(memory).filter(
+      (runId) => runId !== excludeRunId,
+    ),
     purpose: last.goalContract.purpose,
     targetUsers: last.goalContract.targetUsers,
     priorGoals: unique(
@@ -216,18 +220,23 @@ export function continuityFromMemory(
   };
 }
 
+function completedMemoryFrontier(memory: ProjectMemory | null): string[] {
+  return (
+    memory?.completedFrontier ??
+    (memory?.entries ?? [])
+      .filter((entry) => entry.state === "completed")
+      .map((entry) => entry.runId)
+  ).slice(-MAX_HISTORY);
+}
+
 /** A checkpoint is current only while the completed-history frontier is unchanged. */
 export function goalContractMatchesProjectMemory(
   contract: GoalContract,
   memory: ProjectMemory | null,
 ): boolean {
-  const completedRunIds = (memory?.entries ?? [])
-    .filter(
-      (entry) =>
-        entry.state === "completed" && entry.runId !== contract.createdFromRunId,
-    )
-    .map((entry) => entry.runId)
-    .slice(-12);
+  const completedRunIds = completedMemoryFrontier(memory).filter(
+    (runId) => runId !== contract.createdFromRunId,
+  );
   return (
     completedRunIds.length === contract.continuity.previousRunIds.length &&
     completedRunIds.every(
@@ -435,7 +444,9 @@ export function createGoalContract(input: {
       200,
     ),
     continuity: {
-      previousRunIds: history.map((entry) => entry.runId).slice(-12),
+      previousRunIds: completedMemoryFrontier(input.memory).filter(
+        (runId) => runId !== input.runId,
+      ),
       carriedForwardDecisions,
       priorResearch,
     },
@@ -547,6 +558,7 @@ export async function rememberProjectPlan(input: {
         ...memory.entries.filter((item) => item.runId !== input.runId),
         entry,
       ]),
+      completedFrontier: completedMemoryFrontier(memory),
       updatedAt: now,
     };
   });
@@ -591,6 +603,10 @@ export async function rememberProjectCompletion(input: {
         ...memory.entries.filter((item) => item.runId !== input.runId),
         entry,
       ]),
+      completedFrontier: [
+        ...completedMemoryFrontier(memory).filter((runId) => runId !== input.runId),
+        input.runId,
+      ].slice(-MAX_HISTORY),
       updatedAt: now,
     };
   });
