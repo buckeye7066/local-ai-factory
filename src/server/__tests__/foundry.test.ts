@@ -390,7 +390,7 @@ describe("Purpose Foundry", () => {
     ).rejects.toThrow(/could not be launched/i);
   });
 
-  it("fails closed before launching an unmetered Paid FlexFactor child", async () => {
+  it("lets a legacy Paid record invoke FlexFactor's own orchestrated ladder", async () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
     const project = await store.create({
@@ -413,14 +413,15 @@ describe("Purpose Foundry", () => {
       providerRegistry: () => providerRegistry([callable("free"), callable("openai")]),
       processRunner: async () => {
         processCalls += 1;
-        return { stdout: "unexpected", stderr: "", exitCode: 0 };
+        return { stdout: "completed", stderr: "", exitCode: 0 };
       },
     });
 
-    await expect(adapters.execute(project, "flexfactor")).rejects.toThrow(
-      /external child process cannot participate/i,
-    );
-    expect(processCalls).toBe(0);
+    await expect(adapters.execute(project, "flexfactor")).resolves.toMatchObject({
+      status: "completed",
+      evidence: { provider: "flexfactor-orchestrated" },
+    });
+    expect(processCalls).toBe(1);
   });
 
   it("turns an Obsidian note into a versioned project constitution", async () => {
@@ -442,12 +443,7 @@ describe("Purpose Foundry", () => {
     ).toBeGreaterThan(
       project.stations.findIndex((station) => station.stationId === "promo-pilot"),
     );
-    for (const stationId of [
-      "factory-deck",
-      "flexfactor",
-      "crucible",
-      "watchtower",
-    ]) {
+    for (const stationId of ["factory-deck", "crucible", "watchtower"]) {
       expect(
         project.stations.find((station) => station.stationId === stationId)?.status,
       ).toBe("queued");
@@ -456,6 +452,7 @@ describe("Purpose Foundry", () => {
       "scout",
       "repo-rewards",
       "promo-pilot",
+      "flexfactor",
       "app-store-publisher",
     ]) {
       expect(
