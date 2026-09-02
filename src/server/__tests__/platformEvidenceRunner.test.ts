@@ -56,6 +56,7 @@ describe("platformEvidenceRunner", () => {
     expect(changedPlatformArtifactPaths(before, after)).toEqual([
       "dist/cli.js",
       ...(process.platform === "win32" ? [] : ["launcher"]),
+      "src",
       "tasks.json",
     ]);
     expect(platformArtifactFileFingerprint(Buffer.from("same"), 0o644)).not.toBe(
