@@ -242,6 +242,11 @@ describe("competitive discovery", () => {
       "https://www.npmjs.com/package/task-cli",
       "https://www.codemag.com/Article/1/A-CLI",
       "https://weeklyjs.io/typescript/a-cli",
+      "https://www.linuxlinks.com/taskell-command-line-kanban-board-task-manager/",
+      "https://aur.archlinux.org/packages/taskell-bin",
+      "https://in.pinterest.com/pin/boards--94294185934002813/",
+      "https://pkg.go.dev/github.com/example/task",
+      "https://deepwiki.com/example/task",
     ]) {
       expect(
         productCandidateKey({ title: "Implementation article", url, snippet: "" }),
