@@ -613,8 +613,12 @@ export const ProviderNameSchema = z.enum([
 ]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
-/** Provider-neutral economic boundary selected by the owner. */
-export const RoutingModeSchema = z.enum(["free", "paid"]);
+/**
+ * One orchestrated provider ladder. "free" and "paid" remain accepted only so
+ * stored records and older API clients still load; live routing normalizes both
+ * legacy values to "auto" and never creates separate economic paths.
+ */
+export const RoutingModeSchema = z.enum(["auto", "free", "paid"]);
 export type RoutingMode = z.infer<typeof RoutingModeSchema>;
 
 /**
@@ -731,10 +735,10 @@ export type RunDestination = z.infer<typeof RunDestinationSchema>;
 export const RunOptionsSchema = z
   .object({
     /**
-     * Owner-facing provider control is deliberately provider-neutral:
-     * "free" never spends, "paid" selects a configured paid route and may
-     * rotate only among paid routes. Explicit provider fields remain for API
-     * compatibility and imply "paid" when they name a paid provider.
+     * Live work always uses one orchestrated strongest-to-weakest model
+     * ladder. "free"/"paid" and explicit provider fields are accepted only for
+     * backward compatibility; the server normalizes them to the same "auto"
+     * route and does not expose a second execution path.
      */
     routingMode: RoutingModeSchema.optional(),
     codeProvider: ProviderNameSchema.optional(),
@@ -862,7 +866,7 @@ export const RunRecordSchema = z.object({
   /** True only when a private durable checkpoint can continue this run. */
   resumable: z.boolean().optional(),
   demo: z.boolean(),
-  /** Provider-neutral tier selected for this run; absent on legacy records. */
+  /** "auto" for current runs; legacy "free"/"paid" records remain readable. */
   routingMode: RoutingModeSchema.optional(),
   codeProvider: ProviderNameSchema,
   reviewProvider: ProviderNameSchema,
