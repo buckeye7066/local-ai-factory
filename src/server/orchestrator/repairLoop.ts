@@ -16,11 +16,14 @@ export interface RepairLoopOptions {
   reverify: () => Promise<QaReport>;
   /** Called at the start of each repair iteration (1-based). */
   onLoop?: (loopNumber: number) => void | Promise<void>;
+  /** Re-evaluated before every paid repair; true stops without spending another call. */
+  shouldStop?: (qa: QaReport) => boolean;
 }
 
 export interface RepairLoopResult {
   loops: number;
   finalQa: QaReport;
+  stoppedEarly: boolean;
 }
 
 export async function runRepairLoop(
@@ -28,8 +31,13 @@ export async function runRepairLoop(
 ): Promise<RepairLoopResult> {
   let qa = opts.initialQa;
   let loops = 0;
+  let stoppedEarly = false;
 
   while (!qa.passed && loops < opts.maxLoops) {
+    if (opts.shouldStop?.(qa)) {
+      stoppedEarly = true;
+      break;
+    }
     loops += 1;
     await opts.onLoop?.(loops);
     await opts.repair(qa);
@@ -37,5 +45,5 @@ export async function runRepairLoop(
     qa = await opts.reverify();
   }
 
-  return { loops, finalQa: qa };
+  return { loops, finalQa: qa, stoppedEarly };
 }
