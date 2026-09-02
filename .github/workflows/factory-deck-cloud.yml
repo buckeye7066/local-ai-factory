@@ -112,8 +112,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: factory-deck-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          name: factory-deck-seed-${{ github.run_id }}
           if-no-files-found: error
+          overwrite: true
           include-hidden-files: true
           retention-days: 14
           path: |
@@ -164,7 +165,7 @@ jobs:
       - name: Restore exact candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: factory-deck-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          name: factory-deck-seed-${{ github.run_id }}
           path: .
 
       - name: Execute Windows proof without production secrets
@@ -179,8 +180,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: factory-deck-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: factory-deck-windows-${{ github.run_id }}
           if-no-files-found: error
+          overwrite: true
           include-hidden-files: true
           retention-days: 14
           path: |
@@ -231,7 +233,7 @@ jobs:
       - name: Restore Windows-verified candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: factory-deck-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          name: factory-deck-windows-${{ github.run_id }}
           path: .
 
       - name: Execute macOS proof without production secrets
@@ -246,8 +248,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: factory-deck-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: factory-deck-macos-${{ github.run_id }}
           if-no-files-found: error
+          overwrite: true
           include-hidden-files: true
           retention-days: 14
           path: |
@@ -303,14 +306,14 @@ jobs:
         if: needs.seed.outputs.platform_hold == 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: factory-deck-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: factory-deck-macos-${{ github.run_id }}
           path: .
 
       - name: Restore candidate already finalized on Linux
         if: needs.seed.outputs.platform_hold != 'true'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: factory-deck-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          name: factory-deck-seed-${{ github.run_id }}
           path: .
 
       - name: Confirm Linux-finalized candidate
@@ -345,8 +348,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: factory-deck-${{ github.run_id }}-${{ github.run_attempt }}
+          name: factory-deck-${{ github.run_id }}
           if-no-files-found: error
+          overwrite: true
           include-hidden-files: true
           retention-days: 14
           path: |
