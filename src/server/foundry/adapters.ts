@@ -998,6 +998,16 @@ export class FoundryAdapters {
         row.repo && typeof row.repo === "object" && !Array.isArray(row.repo)
           ? (row.repo as Record<string, unknown>)
           : {};
+      const nestedLicense =
+        nested.license &&
+        typeof nested.license === "object" &&
+        !Array.isArray(nested.license)
+          ? (nested.license as Record<string, unknown>)
+          : {};
+      const rowLicense =
+        row.license && typeof row.license === "object" && !Array.isArray(row.license)
+          ? (row.license as Record<string, unknown>)
+          : {};
       const name = firstText(
         [nested.fullName, nested.full_name, row.fullName, row.full_name, row.name],
         500,
@@ -1032,9 +1042,16 @@ export class FoundryAdapters {
             [
               nested.licenseSpdx,
               nested.license_spdx,
-              nested.license,
+              nestedLicense.spdxId,
+              nestedLicense.spdx_id,
+              nestedLicense.name,
+              typeof nested.license === "string" ? nested.license : null,
               row.licenseSpdx,
-              row.license,
+              row.license_spdx,
+              rowLicense.spdxId,
+              rowLicense.spdx_id,
+              rowLicense.name,
+              typeof row.license === "string" ? row.license : null,
             ],
             200,
           ),
