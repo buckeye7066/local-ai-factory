@@ -1495,23 +1495,18 @@ async function executeRun(
       arch = await architectAgent({ provider: critical }, spec, purposeProfile);
       await checkpointNow({ architecture: arch });
     }
-    // Real research — "if there's a tool out there that can help build this,
-    // find it and use it" — genuine keyless web search + fetch, not a
-    // decorative aside. Runs after architecture (so it knows what's being
-    // built) and before the plan commits to an approach. Skipped for demo
-    // (offline by definition) and when explicitly disabled (tests; see
-    // vitest.config.ts) — everywhere else it's on by default. Checkpointed so
-    // a resume never replays it.
+    // Current competitive discovery is a required production input, not an
+    // optional prompt flourish. It runs after architecture and before planning,
+    // calls RepoRewards plus web discovery, and is checkpointed for safe retry.
     let research: Awaited<ReturnType<typeof researchAgent>> | undefined =
       checkpoint.research;
-    const comparativeEvidenceRequired = requiresCompetitiveEvidence([
-      checkpoint.idea,
-      ...goalsForSpec,
-    ]);
+    const competitiveEvidenceRequired =
+      productionIntelligenceRequired ||
+      requiresCompetitiveEvidence([checkpoint.idea, ...requestedGoals]);
     const architectureComplete = stageDone("architect");
     const researchAttemptNeeded = shouldAttemptResearch(
       architectureComplete,
-      comparativeEvidenceRequired,
+      competitiveEvidenceRequired,
       research,
     );
     if (!architectureComplete || researchAttemptNeeded) {
@@ -1519,7 +1514,7 @@ async function executeRun(
         startStage(run, "architect");
         log(
           "info",
-          "Retrying competitive research from the durable architecture checkpoint.",
+          "Retrying competitive and RepoRewards discovery from the durable architecture checkpoint.",
         );
       } else {
         log(
@@ -1530,18 +1525,8 @@ async function executeRun(
       if (!run.demo && config.enableResearch && researchAttemptNeeded) {
         log(
           "model_call",
-          `Research agent (${critical.name}) — searching for tools/APIs that could help…`,
+          `Research agent (${critical.name}) — querying RepoRewards, market competitors, and implementation evidence…`,
         );
-        // Research is advisory for ordinary goals. Comparative goals opt into
-        // a deterministic five-product gate below: failure remains a named
-        // research result, but the run may not build or release a superiority
-        // claim without the evidence the owner explicitly requested.
-        // Live GrantFlow slice 2026-08-16: a schema-validation failure inside
-        // competitive selection escaped here and killed the whole run before
-        // the builder ever started (after ~$10 of billed retries). An
-        // advisory stage failing is a LOUD, NAMED skip — never a dead slice.
-        // A deliberate cancel still propagates (continuing a run the owner
-        // cancelled would be worse than any research gap).
         try {
           research = await researchAgent({ provider: critical }, spec, arch, {
             competitive: true,
@@ -1550,8 +1535,8 @@ async function executeRun(
           log(
             research.recommendations.length ? "success" : "info",
             research.recommendations.length
-              ? `Research: ${research.recommendations.length} candidate(s) — ${research.recommendations.map((r) => r.name).join(", ")}.`
-              : `Research: nothing external recommended — ${research.summary}`,
+              ? `Research: ${research.recommendations.length} evidence-linked implementation candidate(s) — ${research.recommendations.map((item) => item.name).join(", ")}.`
+              : `Research: no external implementation selected — ${research.summary}`,
           );
         } catch (err) {
           if (err instanceof ProviderAbortError) throw err;
@@ -1559,32 +1544,39 @@ async function executeRun(
           const msg = safeErrorMessage(err);
           log(
             "warning",
-            comparativeEvidenceRequired
-              ? `Research FAILED for a comparison-required goal: ${msg.slice(0, 300)}.`
-              : `Research FAILED and was SKIPPED (advisory stage): ${msg.slice(0, 300)} — continuing the build without external recommendations.`,
+            competitiveEvidenceRequired
+              ? `Required competitive/RepoRewards discovery FAILED: ${msg.slice(0, 300)}.`
+              : `Research FAILED and was SKIPPED: ${msg.slice(0, 300)}.`,
           );
         }
       } else if (research) {
-        log("info", "Research restored from its durable checkpoint.");
+        log("info", "Competitive research restored from its durable checkpoint.");
       } else {
-        log("info", "Research skipped (demo mode or FACTORY_RESEARCH_ENABLED=0).");
+        log(
+          productionIntelligenceRequired ? "warning" : "info",
+          productionIntelligenceRequired
+            ? "Required competitive discovery is disabled."
+            : "Research skipped (demo mode or hermetic test run).",
+        );
       }
       finishStage(run, "architect", "completed");
       await flush();
     }
 
-    if (!run.demo && comparativeEvidenceRequired) {
+    if (!run.demo && competitiveEvidenceRequired) {
       if (!config.enableResearch) {
         throw new Error(
-          "Competitive evidence gate blocked the run: the goal makes a comparative claim, but FACTORY_RESEARCH_ENABLED=0.",
+          productionIntelligenceRequired
+            ? "Production intelligence gate blocked the run: FACTORY_RESEARCH_ENABLED=0, but every production build must query RepoRewards and verify five product competitors before planning."
+            : "Competitive evidence gate blocked the run: the goal makes a comparative claim, but FACTORY_RESEARCH_ENABLED=0.",
         );
       }
       const gate = assessRequiredCompetitiveEvidence(research);
       if (!gate.ok) {
         throw new Error(
-          "Competitive evidence gate blocked the run: " +
+          "Production intelligence gate blocked the run: " +
             `${gate.reasons.join("; ")}. ` +
-            "No builder, commit, merge, deployment, or superiority claim is allowed until five product competitors are verified, compared, and mapped to selected advantages.",
+            "No planner, builder, commit, merge, deployment, or competitive claim is allowed until RepoRewards is queried and five product competitors are verified, compared, and converted into selected advantages.",
         );
       }
       if (research) {
@@ -1600,7 +1592,30 @@ async function executeRun(
       }
       log(
         "success",
-        `Competitive evidence gate passed: ${gate.productVerifiedCount} verified, ${gate.productComparedCount} compared, and ${gate.productSelectedCount} selected product competitors (target ${gate.productTarget}).`,
+        `Production intelligence gate passed: RepoRewards queried; ${gate.productVerifiedCount} verified, ${gate.productComparedCount} compared, and ${gate.productSelectedCount} selected product competitors (target ${gate.productTarget}).`,
+      );
+    }
+
+    const durableCompetitiveResearch: CompetitiveResearchSummary | undefined =
+      research?.competitiveAudit
+        ? summarizeCompetitiveEvidence(research, competitiveEvidenceRequired)
+        : undefined;
+    if (productionIntelligenceRequired) {
+      if (!goalContract || !durableCompetitiveResearch) {
+        throw new Error(
+          "Production intelligence gate blocked the run: durable goal or competitive evidence is missing.",
+        );
+      }
+      await rememberProjectPlan({
+        projectKey,
+        runId: run.id,
+        goalContract,
+        spec,
+        competitiveResearch: durableCompetitiveResearch,
+      });
+      log(
+        "success",
+        `Durable project context recorded before planning: goal ${goalContract.digest.slice(0, 19)}… from ${goalContract.purposeSource}, ${goalContract.continuity.previousRunIds.length} prior run(s), and ${durableCompetitiveResearch.productSelectedCount} competitor advantage(s).`,
       );
     }
 
