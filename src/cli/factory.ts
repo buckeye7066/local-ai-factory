@@ -6,6 +6,7 @@ import {
 import { loadReadinessState } from "../server/storage/readinessStore.js";
 import { getRun } from "../server/storage/runsStore.js";
 import type { RunOptions } from "../shared/schemas.js";
+import { factoryIdeaFromInputs } from "./factoryInput.js";
 
 /**
  * cli/factory.ts — run the assembly line from the terminal.
@@ -36,11 +37,7 @@ function parseArgs(argv: string[]): { idea: string } {
     );
     process.exit(2);
   }
-  const idea = args
-    .filter((a) => !a.startsWith("--"))
-    .join(" ")
-    .trim();
-  return { idea };
+  return { idea: factoryIdeaFromInputs(argv) };
 }
 
 const COLORS: Record<string, string> = {
@@ -66,8 +63,7 @@ function paint(kind: string, msg: string): string {
 }
 
 async function main() {
-  const { idea: parsedIdea } = parseArgs(process.argv);
-  const idea = parsedIdea || "Build a Bible reading habit tracker";
+  const { idea } = parseArgs(process.argv);
   const config = getConfig();
   const secrets = getSecrets();
   const brainFloor = readinessBrainFloor(config, secrets);
