@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { Readable } from "node:stream";
 import {
@@ -480,6 +480,7 @@ export class FoundryAdapters {
 
   descriptors(): AdapterDescriptor[] {
     const flexScript = flexfactorDirectedScript();
+    const flexConfigured = existsSync(flexScript);
     const liveProviderConfigured =
       this.dependencies.providerRegistry().availableLive().length > 0;
     const map: Record<StationId, Omit<AdapterDescriptor, "stationId">> = {
@@ -490,7 +491,7 @@ export class FoundryAdapters {
       },
       scout: {
         mode: "process",
-        configured: Boolean(flexScript),
+        configured: flexConfigured,
         destination: flexScript,
       },
       "repo-rewards": {
@@ -509,7 +510,7 @@ export class FoundryAdapters {
       },
       flexfactor: {
         mode: "process",
-        configured: Boolean(flexScript),
+        configured: flexConfigured,
         destination: flexScript,
       },
       crucible: {
