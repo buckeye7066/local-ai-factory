@@ -120,6 +120,7 @@ import {
 } from "./cancellation.js";
 import { runRepairLoop } from "./repairLoop.js";
 import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
+import { shouldSkipRepairForIncompleteVerification } from "./repairEligibility.js";
 import { reportRouteQuality } from "../rotation/rotatingProvider.js";
 import { assessExecutedCoverage, assessGeneratedTests } from "./acceptanceGate.js";
 import { parseDirectTestEvidence } from "./directTestEvidence.js";
@@ -2356,6 +2357,13 @@ async function executeRun(
       // EXECUTED commands' real output — never model judgment.
       const envFailure = qa.passed ? null : classifyEnvironmentFailure(verification);
       const incompleteVerification = verification.incomplete?.length ?? 0;
+      const skipRepairForIncompleteVerification =
+        !run.demo &&
+        shouldSkipRepairForIncompleteVerification({
+          qa,
+          testExit,
+          incompleteVerification,
+        });
       // PURPOSE EFFECTIVENESS feeds back into rotation: the route that
       // authored this build is credited or debited in the shared rotation
       // state for this run's purpose. An environment failure is not the
@@ -2374,13 +2382,6 @@ async function executeRun(
       if (qa.passed) {
         log("success", "No high-severity issues — repair loop skipped.");
         finishStage(run, "repair", "skipped");
-      } else if (!run.demo && incompleteVerification > 0) {
-        log(
-          "warning",
-          `Verification is incomplete in ${incompleteVerification} required place(s); file repair cannot manufacture missing execution evidence, so no paid repair loop will run.`,
-          "repair",
-        );
-        finishStage(run, "repair", "skipped");
       } else if (envFailure) {
         log(
           "warning",
@@ -2395,6 +2396,13 @@ async function executeRun(
             `not a defect in the generated files; ${envFailure.remedy}] ` +
             qa.summary,
         };
+        finishStage(run, "repair", "skipped");
+      } else if (skipRepairForIncompleteVerification) {
+        log(
+          "warning",
+          `Verification is incomplete in ${incompleteVerification} required place(s), and missing execution evidence is the only blocker; file repair cannot manufacture that evidence, so no paid repair loop will run.`,
+          "repair",
+        );
         finishStage(run, "repair", "skipped");
       } else {
         const loopResult = await runRepairLoop({
