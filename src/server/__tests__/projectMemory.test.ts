@@ -79,6 +79,34 @@ describe("durable project purpose memory", () => {
     });
     expect(local).toMatch(/^path-sha256:[a-f0-9]{64}$/);
     expect(local).not.toContain("/private/work");
+
+    const remote = projectKeyForOptions(
+      {
+        mode: "new",
+        newRepo: { name: "GrantFlow", private: true, createRemote: true },
+      },
+      { resolvedNewRepoOwner: "Buckeye7066", localProjectId: "ignored" },
+    );
+    expect(remote).toBe("new:buckeye7066/grantflow");
+    expect(
+      projectKeyForOptions(
+        {
+          mode: "new",
+          newRepo: { name: "GrantFlow", private: true, createRemote: true },
+        },
+        { localProjectId: "not-a-remote-owner" },
+      ),
+    ).toBeNull();
+
+    const localNew = projectKeyForOptions(
+      {
+        mode: "new",
+        newRepo: { name: "GrantFlow", private: true, createRemote: false },
+      },
+      { localProjectId: "purpose-foundry:project-1" },
+    );
+    expect(localNew).toMatch(/^new-local-sha256:[a-f0-9]{64}$/);
+    expect(localNew).not.toContain("purpose-foundry");
   });
 
   it("keeps one digest-verified mission unless the owner explicitly changes it", () => {
@@ -198,5 +226,26 @@ describe("durable project purpose memory", () => {
     });
     expect(repurposed.purpose).toBe("Help funders publish opportunities");
     expect(repurposed.purposeSource).toBe("current-spec");
+
+    await rememberProjectPlan({
+      projectKey,
+      runId: repurposed.createdFromRunId,
+      goalContract: repurposed,
+      spec: withGoalContract(spec("Help funders publish opportunities"), repurposed),
+      now: 40,
+    });
+    const withAbandonedPivot = await loadProjectMemory(projectKey);
+    const followUp = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "Improve export reliability",
+      goals: ["Improve export reliability"],
+      spec: spec("Another fresh inference"),
+      purposeProfile: purposeProfile("Another fresh repository inference"),
+      memory: withAbandonedPivot,
+      now: 50,
+    });
+    expect(followUp.purpose).toBe(firstContract.purpose);
+    expect(followUp.continuity.previousRunIds).toEqual([firstRun]);
   });
 });
