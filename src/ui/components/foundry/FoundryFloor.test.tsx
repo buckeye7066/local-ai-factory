@@ -2,7 +2,13 @@
  * @vitest-environment happy-dom
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { FoundryFloor } from "./FoundryFloor.js";
 
 const stationIds = [
@@ -84,7 +90,10 @@ describe("Purpose Foundry intake UI", () => {
           return json(created, 201);
         }
         if (url === "/api/foundry/obsidian/import" && init?.method === "POST") {
-          obsidianPosted = JSON.parse(String(init.body)) as Record<string, unknown>;
+          obsidianPosted = JSON.parse(String(init.body)) as Record<
+            string,
+            unknown
+          >;
           return json(
             {
               id: "dfa82a9c-c89d-4ce7-b35f-bf6389900b9f",
@@ -126,9 +135,12 @@ describe("Purpose Foundry intake UI", () => {
     fireEvent.change(screen.getByLabelText("What this job is for"), {
       target: { value: "Build and verify the core product" },
     });
-    fireEvent.change(screen.getByLabelText("Purpose Foundry provider routing"), {
-      target: { value: "paid" },
-    });
+    fireEvent.change(
+      screen.getByLabelText("Purpose Foundry provider routing"),
+      {
+        target: { value: "paid" },
+      },
+    );
     const promoPilot = await screen.findByLabelText("Include promo-pilot");
     expect((promoPilot as HTMLInputElement).disabled).toBe(false);
     fireEvent.click(promoPilot);
@@ -139,7 +151,9 @@ describe("Purpose Foundry intake UI", () => {
       (screen.getByLabelText("Include flexfactor") as HTMLInputElement)
         .disabled,
     ).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: /Release to the line/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Release to the line/i }),
+    );
 
     await waitFor(() => expect(posted.current).not.toBeNull());
     expect(posted.current).toMatchObject({
