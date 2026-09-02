@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { QuotaFailoverProvider, isQuotaRefusal } from "../providers/quotaFailover.js";
+import {
+  QuotaFailoverProvider,
+  isModelExhaustion,
+  isQuotaRefusal,
+} from "../providers/quotaFailover.js";
 import type { LLMProvider } from "../../shared/types.js";
+import { resetRouteState, snapshotRoute } from "../providers/freeRoute.js";
 
 /**
  * Owner rule 2026-08-16: errors are to be FIXED, not blocked. A provider
@@ -51,8 +56,17 @@ describe("isQuotaRefusal", () => {
   });
 });
 
+describe("isModelExhaustion", () => {
+  it("demotes on capacity and model availability without hiding bad input", () => {
+    expect(isModelExhaustion({ status: 429, message: "busy" })).toBe(true);
+    expect(isModelExhaustion(new Error("model is temporarily unavailable"))).toBe(true);
+    expect(isModelExhaustion(new Error("400 invalid model parameter"))).toBe(false);
+  });
+});
+
 describe("QuotaFailoverProvider", () => {
   it("continues on the funded alternate when the primary is out of credit", async () => {
+    resetRouteState();
     const primary = fake("openai", "quota");
     const alt = fake("anthropic", "ok");
     const events: string[] = [];
@@ -63,6 +77,30 @@ describe("QuotaFailoverProvider", () => {
     expect(out.served).toBe("anthropic");
     expect(events).toEqual(["openai->anthropic"]);
     expect(alt.calls).toBe(1);
+    expect(snapshotRoute()).toMatchObject({
+      primary: "openai",
+      serving: "anthropic",
+      counts: { free: 0, anthropic: 1, openai: 0 },
+      events: [
+        expect.objectContaining({
+          kind: "failover",
+          from: "openai",
+          to: "anthropic",
+        }),
+      ],
+    });
+  });
+
+  it("keeps the run on the lower rung after the upper account is exhausted", async () => {
+    const primary = fake("anthropic", "quota");
+    const alternate = fake("openai", "ok");
+    const ladder = new QuotaFailoverProvider(primary, [alternate]);
+
+    await ladder.generateText({ prompt: "first" } as never);
+    await ladder.generateText({ prompt: "second" } as never);
+
+    expect(primary.calls).toBe(1);
+    expect(alternate.calls).toBe(2);
   });
 
   it("does not fail over a genuine bad request — that would hide a real bug", async () => {

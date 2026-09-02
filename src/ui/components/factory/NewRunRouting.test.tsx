@@ -21,9 +21,17 @@ const health: Health = {
   freeConfigured: true,
   freeBaseUrl: "http://127.0.0.1:8082",
   freeModel: "free-model",
-  anthropicConfigured: false,
+  anthropicConfigured: true,
   openaiConfigured: true,
-  providersAvailable: ["free", "openai"],
+  mandatoryProductionReadiness: true,
+  readinessBrainFloorConfigured: true,
+  solConfigured: true,
+  fableOrOpusConfigured: true,
+  solModel: "gpt",
+  fableOrOpusModel: "claude",
+  ownerExternalMatters: "owner-managed-outside-cyberland",
+  providersAvailable: ["free", "anthropic", "openai"],
+  modelLadder: ["anthropic", "openai", "free"],
   anthropicModel: "claude",
   openaiModel: "gpt",
   defaultCodeProvider: "free",
@@ -39,35 +47,55 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("provider tier UI wiring", () => {
-  it.each(["free", "paid"] as const)(
-    "sends the selected %s tier when clarification starts",
-    async (routingMode) => {
-      vi.mocked(api.startClarify).mockResolvedValue({
-        sessionId: "session-1",
-        confident: true,
-        question: null,
-        refinedGoals: ["Keep the selected tier"],
-      });
-      render(<NewRunHero health={health} starting={false} onStart={vi.fn()} />);
+describe("automatic model ladder UI wiring", () => {
+  it("warns when the mandatory brain floor is missing despite a live free rung", () => {
+    render(
+      <NewRunHero
+        health={{
+          ...health,
+          anthropicConfigured: false,
+          openaiConfigured: false,
+          readinessBrainFloorConfigured: false,
+          solConfigured: false,
+          fableOrOpusConfigured: false,
+          modelLadder: ["free"],
+          providersAvailable: ["free"],
+        }}
+        starting={false}
+        onStart={vi.fn()}
+      />,
+    );
 
-      if (routingMode === "paid") {
-        fireEvent.click(screen.getByRole("button", { name: /Paid rotation/i }));
-      }
-      fireEvent.click(screen.getByRole("tab", { name: /Extend an Existing Program/i }));
-      fireEvent.click(screen.getByRole("tab", { name: /Ask Me Yes\/No Questions/i }));
-      fireEvent.change(
-        screen.getByLabelText(/Describe what you want at a high level/i),
-        { target: { value: "Clarify this existing app" } },
-      );
-      fireEvent.click(screen.getByRole("button", { name: /Start Clarifying/i }));
+    expect(screen.getByText(/Production admission requires both/i)).toBeTruthy();
+  });
 
-      await waitFor(() =>
-        expect(api.startClarify).toHaveBeenCalledWith(
-          "Clarify this existing app",
-          routingMode,
-        ),
-      );
-    },
-  );
+  it("shows one ordered ladder and sends only automatic routing", async () => {
+    vi.mocked(api.startClarify).mockResolvedValue({
+      sessionId: "session-1",
+      confident: true,
+      question: null,
+      refinedGoals: ["Keep the unified route"],
+    });
+    render(<NewRunHero health={health} starting={false} onStart={vi.fn()} />);
+
+    expect(screen.getByLabelText("Automatic model ladder").textContent).toMatch(
+      /Anthropic.*OpenAI.*Free \/ local/s,
+    );
+    expect(screen.queryByRole("button", { name: /Paid rotation/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Free$/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Extend an Existing Program/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /Ask Me Yes\/No Questions/i }));
+    fireEvent.change(screen.getByLabelText(/Describe what you want at a high level/i), {
+      target: { value: "Clarify this existing app" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Start Clarifying/i }));
+
+    await waitFor(() =>
+      expect(api.startClarify).toHaveBeenCalledWith(
+        "Clarify this existing app",
+        "auto",
+      ),
+    );
+  });
 });

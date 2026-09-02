@@ -55,15 +55,15 @@ function foundryProviderRegistry() {
   );
 }
 
-/** Resolve every Foundry model call through Factory Deck's strict tier contract. */
+/** Resolve every Foundry model call through Factory Deck's shared model ladder. */
 export function createFoundryTierProvider(
   routingMode: RoutingMode | undefined,
   registry: ProviderRegistry,
   config: AppConfig,
   role: "code" | "review" = "review",
 ): { routing: ResolvedRunRouting; provider: LLMProvider } {
-  // Omitted mode deliberately keeps the documented legacy/default inference;
-  // once resolved, the call is still strict Free or strict Paid.
+  // Legacy mode values are accepted at the boundary, then normalized to the
+  // same automatic ladder before any model call.
   const routing = selectRunRouting({ routingMode }, registry, config);
   const selected = role === "code" ? routing.codeProvider : routing.reviewProvider;
   return {
@@ -393,11 +393,7 @@ export function defaultProcessRunner(
       },
       (error, stdout, stderr) => {
         if (error) {
-          if (
-            typeof error.code === "number" &&
-            !error.killed &&
-            error.signal == null
-          ) {
+          if (typeof error.code === "number" && !error.killed && error.signal == null) {
             resolvePromise({
               stdout: String(stdout),
               stderr: String(stderr),
@@ -473,6 +469,12 @@ function compactOutput(value: string): string {
 
 export class FoundryAdapters {
   private readonly dependencies: AdapterDependencies;
+  /**
+   * Purpose Foundry owns one sticky model ladder per project. A quota or
+   * capacity wall demotes the whole assembly line; later station retries must
+   * not recreate a fresh ladder and hammer the exhausted rung again.
+   */
+  private readonly modelProviders = new Map<string, LLMProvider>();
 
   constructor(
     private readonly store: FoundryStore,
@@ -486,6 +488,20 @@ export class FoundryAdapters {
       config: dependencies.config ?? getConfig,
       providerRegistry: dependencies.providerRegistry ?? foundryProviderRegistry,
     };
+  }
+
+  private modelProvider(project: FoundryProject): LLMProvider {
+    const cached = this.modelProviders.get(project.id);
+    if (cached) return cached;
+    const config = this.dependencies.config();
+    const { provider } = createFoundryTierProvider(
+      project.routingMode,
+      this.dependencies.providerRegistry(),
+      config,
+      "review",
+    );
+    this.modelProviders.set(project.id, provider);
+    return provider;
   }
 
   descriptors(): AdapterDescriptor[] {
@@ -526,7 +542,7 @@ export class FoundryAdapters {
       crucible: {
         mode: "internal",
         configured: liveProviderConfigured,
-        destination: "independent adversarial review on the project's strict tier",
+        destination: "independent adversarial review on the shared automatic ladder",
       },
       "app-store-publisher": {
         mode: "http",
@@ -636,6 +652,13 @@ export class FoundryAdapters {
       this.dependencies.providerRegistry(),
       config,
     );
+    // The ladder is orchestration state, not a client-selectable RunOptions
+    // field. Factory Deck recomputes it from the same config and credentials.
+    const forwardedRouting = {
+      routingMode: routing.routingMode,
+      codeProvider: routing.codeProvider,
+      reviewProvider: routing.reviewProvider,
+    };
     const target = firstTarget(project);
     const repoSource = target ? repoSourceFromTarget(target) : null;
     const upstreamEvidence = project.stations
@@ -665,7 +688,7 @@ export class FoundryAdapters {
     const options = target
       ? RunOptionsSchema.parse({
           mode: "extend",
-          ...routing,
+          ...forwardedRouting,
           ...(repoSource ? { repoSource } : {}),
           goals: extendGoals,
           pushToOrigin: true,
@@ -679,7 +702,7 @@ export class FoundryAdapters {
           }
           return RunOptionsSchema.parse({
             mode: "new",
-            ...routing,
+            ...forwardedRouting,
             goals: extendGoals,
             newRepo: {
               name: project.name,
@@ -808,21 +831,9 @@ export class FoundryAdapters {
     }
     const script = flexfactorDirectedScript();
     const python = process.env.PURPOSE_FOUNDRY_PYTHON?.trim() || "python";
-    const config = this.dependencies.config();
-    const routing = selectRunRouting(
-      { routingMode: project.routingMode },
-      this.dependencies.providerRegistry(),
-      config,
-    );
-    if (routing.routingMode === "paid") {
-      throw new Error(
-        "Paid Purpose Foundry Scout/FlexFactor is blocked: the external child process cannot participate in Factory Deck's per-call paid reservation ledger. Select Free for these stations or run a metered internal station; no untracked paid process was started.",
-      );
-    }
-    // Free is a hard boundary. The child process is always pinned to Ollama;
-    // environment defaults must never promote it to a paid API.
-    const provider = "ollama";
-    const args = [script, mode, "--program", target, "--provider", provider];
+    // FlexFactor owns its own strongest-to-weakest model ladder. Purpose
+    // Foundry deliberately does not pin a provider or create a second route.
+    const args = [script, mode, "--program", target];
     if (mode === "scout") {
       args.push("--top", String(numberEnv("PURPOSE_FOUNDRY_SCOUT_TOP", 8)));
       const rewardsUrl =
@@ -843,9 +854,9 @@ export class FoundryAdapters {
         String(numberEnv("PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST", 150)),
       );
     }
-    // The external child receives only process-bootstrap and local-Ollama
-    // settings. It must not inherit Factory Deck, Foundry, GitHub, provider,
-    // publisher, or proxy credentials from the parent service.
+    // The external child receives only process-bootstrap and local model
+    // settings. FlexFactor may load its own paid credentials and ladder from
+    // its working directory; unrelated Factory/Foundry secrets are not copied.
     const childEnv: NodeJS.ProcessEnv = {};
     for (const name of [
       "PATH",
@@ -900,7 +911,7 @@ export class FoundryAdapters {
       artifacts: [artifact],
       evidence: {
         exitCode: result.exitCode,
-        provider,
+        provider: "flexfactor-orchestrated",
         target,
         outputTail: output.slice(-2_000),
       },
@@ -993,7 +1004,6 @@ export class FoundryAdapters {
   }
 
   private async crucible(project: FoundryProject): Promise<AdapterOutcome> {
-    const config = this.dependencies.config();
     const result = await underWorkTheme(
       {
         idea: `Purpose Foundry crucible for ${project.name}`,
@@ -1002,14 +1012,8 @@ export class FoundryAdapters {
         issue:
           "Disprove every success claim using only supplied evidence; stay on this project's open release risks",
       },
-      () => {
-        const { provider } = createFoundryTierProvider(
-          project.routingMode,
-          this.dependencies.providerRegistry(),
-          config,
-          "review",
-        );
-        return provider.generateJson({
+      () =>
+        this.modelProvider(project).generateJson({
           system:
             "You are The Crucible, an independent adversarial release verifier. Assume the project is not ready. Try to disprove every success claim using only supplied evidence. Never reward effort, optimism, or unsupported claims. A claim without evidence is a finding.",
           prompt: `Review this Purpose Foundry project.\n\nPROJECT:\n${JSON.stringify({
@@ -1026,8 +1030,7 @@ export class FoundryAdapters {
           schemaName: "CrucibleResult",
           temperature: 0.1,
           maxTokens: 12_000,
-        });
-      },
+        }),
     );
     const artifact = await this.store.writeArtifact(
       project.id,
@@ -1048,8 +1051,7 @@ export class FoundryAdapters {
   }
 
   private async appStorePublisher(project: FoundryProject): Promise<AdapterOutcome> {
-    const configuredUrl =
-      process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim();
+    const configuredUrl = process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL?.trim();
     if (!configuredUrl) {
       throw new Error(
         "App Store Publisher is not configured. Set PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL before selecting this station; no request was sent.",

@@ -14,7 +14,7 @@ const MAX_QUESTIONS = 8;
 export interface ClarificationSession {
   id: string;
   initialRequest: string;
-  /** Economic tier pinned when the session starts; answers cannot cross it. */
+  /** Normalized automatic route retained for every answer in the session. */
   routingMode: RoutingMode;
   history: ClarificationHistoryItem[];
   status: "active" | "confident" | "abandoned";

@@ -18,17 +18,14 @@ const SAFE_CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
 function pathWithin(root: string, candidate: string): boolean {
   const rel = relative(resolve(root), resolve(candidate));
   return (
-    rel === "" ||
-    (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
+    rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))
   );
 }
 
 function validateMountPath(value: string, label: string): string {
   const absolute = resolve(value);
   if (/[,\u0000\r\n]/.test(absolute)) {
-    throw new Error(
-      `${label} contains a character Docker --mount cannot encode.`,
-    );
+    throw new Error(`${label} contains a character Docker --mount cannot encode.`);
   }
   if (resolve(absolute, "..") === absolute) {
     throw new Error(`${label} cannot be a filesystem root.`);
@@ -78,9 +75,7 @@ export function verificationNetwork(
     bin === "npx" &&
     args[0] === "--no-install" &&
     ((args[1] === "prisma" && args[2] === "generate") ||
-      (args[1] === "playwright" &&
-        args[2] === "install" &&
-        args[3] === "chromium"))
+      (args[1] === "playwright" && args[2] === "install" && args[3] === "chromium"))
   ) {
     return "bridge";
   }
@@ -101,41 +96,25 @@ export function buildVerificationSandboxPlan(input: {
   if (!SAFE_IMAGE.test(input.image)) {
     throw new Error("Verification sandbox image has an invalid reference.");
   }
-  const workspaceRoot = validateMountPath(
-    input.workspaceRoot,
-    "Workspace root",
-  );
+  const workspaceRoot = validateMountPath(input.workspaceRoot, "Workspace root");
   const cwd = resolve(input.cwd);
   const stateRoot = validateMountPath(input.stateRoot, "Sandbox state root");
   if (!pathWithin(workspaceRoot, cwd)) {
     throw new Error("Verification cwd is outside the workspace root.");
   }
-  if (
-    pathWithin(workspaceRoot, stateRoot) ||
-    pathWithin(stateRoot, workspaceRoot)
-  ) {
-    throw new Error(
-      "Sandbox state and generated workspace mounts must not overlap.",
-    );
+  if (pathWithin(workspaceRoot, stateRoot) || pathWithin(stateRoot, workspaceRoot)) {
+    throw new Error("Sandbox state and generated workspace mounts must not overlap.");
   }
 
-  const containerName =
-    input.containerName ?? `factory-verification-${randomUUID()}`;
+  const containerName = input.containerName ?? `factory-verification-${randomUUID()}`;
   if (!SAFE_CONTAINER_NAME.test(containerName)) {
     throw new Error("Verification sandbox container name is invalid.");
   }
 
   const uid = input.uid ?? 65532;
   const gid = input.gid ?? 65532;
-  if (
-    !Number.isSafeInteger(uid) ||
-    uid < 0 ||
-    !Number.isSafeInteger(gid) ||
-    gid < 0
-  ) {
-    throw new Error(
-      "Verification sandbox uid/gid must be non-negative integers.",
-    );
+  if (!Number.isSafeInteger(uid) || uid < 0 || !Number.isSafeInteger(gid) || gid < 0) {
+    throw new Error("Verification sandbox uid/gid must be non-negative integers.");
   }
 
   const network = verificationNetwork(input.bin, input.args);
@@ -175,9 +154,9 @@ export function buildVerificationSandboxPlan(input: {
     "--workdir",
     "/workspace",
     "--mount",
-    `type=bind,src=${cwd},dst=/workspace,rw`,
+    `type=bind,src=${cwd},dst=/workspace`,
     "--mount",
-    `type=bind,src=${stateRoot},dst=/sandbox-state,rw`,
+    `type=bind,src=${stateRoot},dst=/sandbox-state`,
     "--env",
     "HOME=/sandbox-state/home",
     "--env",

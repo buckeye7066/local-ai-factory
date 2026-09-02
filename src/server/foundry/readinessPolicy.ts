@@ -4,30 +4,22 @@ import type { StationId } from "./model.js";
 
 export const REQUIRED_PRODUCTION_STATIONS = Object.freeze([
   "factory-deck",
-  "flexfactor",
   "crucible",
   "watchtower",
 ] as const satisfies readonly StationId[]);
 
 export type RequiredProductionStation = (typeof REQUIRED_PRODUCTION_STATIONS)[number];
 
-export const UNMETERED_CHILD_STATIONS = Object.freeze([
-  "scout",
-  "flexfactor",
-] as const satisfies readonly StationId[]);
-
 /**
- * Paid Purpose Foundry may not dispatch external, unmetered children outside
- * its per-call reservation ledger. Free projects still require FlexFactor;
- * Paid projects retain Factory Deck, Crucible, and Watchtower as the binding
- * internal production evidence line.
+ * One internal evidence line applies to every project, including records that
+ * still carry a legacy free/paid value: Factory Deck, Crucible, and Watchtower.
+ * FlexFactor remains an optional specialist because its child orchestrator owns
+ * its own single model ladder and call ledger.
  */
 export function requiredProductionStations(
-  routingMode?: RoutingMode,
+  _routingMode?: RoutingMode,
 ): RequiredProductionStation[] {
-  return REQUIRED_PRODUCTION_STATIONS.filter(
-    (station) => routingMode !== "paid" || station !== "flexfactor",
-  );
+  return [...REQUIRED_PRODUCTION_STATIONS];
 }
 
 export function normalizeFoundryStations(
@@ -36,16 +28,7 @@ export function normalizeFoundryStations(
 ): StationId[] {
   const out: StationId[] = [];
   const seen = new Set<StationId>();
-  const allowed =
-    routingMode === "paid"
-      ? selected.filter(
-          (station) =>
-            !UNMETERED_CHILD_STATIONS.includes(
-              station as (typeof UNMETERED_CHILD_STATIONS)[number],
-            ),
-        )
-      : selected;
-  for (const station of [...requiredProductionStations(routingMode), ...allowed]) {
+  for (const station of [...requiredProductionStations(routingMode), ...selected]) {
     if (!seen.has(station)) {
       seen.add(station);
       out.push(station);

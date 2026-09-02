@@ -178,7 +178,7 @@ function respondProviderUnavailable(res: Response, err: unknown): boolean {
     error: err.message,
     missing: err.missing,
     blocked: true,
-    hint: "Enable the selected Free route or configure at least one Paid provider, then retry. Factory Deck will not cross economic tiers automatically.",
+    hint: "Enable the final free/local rung or configure a paid provider. Live work follows one paid-first automatic ladder; mock/stub are never used.",
   });
   return true;
 }
@@ -196,7 +196,10 @@ app.post(
     }
     const parsedMode = RoutingModeSchema.optional().safeParse(req.body?.routingMode);
     if (!parsedMode.success) {
-      res.status(400).json({ error: "Field 'routingMode' must be 'free' or 'paid'." });
+      res.status(400).json({
+        error:
+          "Field 'routingMode' must be 'auto' (legacy 'free'/'paid' values are accepted and normalized).",
+      });
       return;
     }
     let selected;
@@ -206,8 +209,8 @@ app.post(
       if (respondProviderUnavailable(res, err)) return;
       throw err;
     }
-    // Persist the resolved tier, including legacy/default inference when an
-    // older client omitted routingMode. Every later answer stays in this tier.
+    // Persist only the normalized automatic route. Legacy client values do not
+    // create a second clarification path.
     const session = createSession(initialRequest, selected.routingMode);
     const turn = await clarificationAgent(
       { provider: selected.provider },

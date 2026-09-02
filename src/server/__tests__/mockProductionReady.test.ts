@@ -19,8 +19,9 @@ const { runFactory } = await import("../orchestrator/runFactory.js");
 const { loadConfig, loadSecrets, toHealth } = await import("../config.js");
 const { createProviderRegistry } = await import("../providers/index.js");
 const { MockProvider } = await import("../providers/mockProvider.js");
-const { verifyAuditChain, _resetAuditCursorForTests } =
-  await import("../storage/auditLog.js");
+const { verifyAuditChain, _resetAuditCursorForTests } = await import(
+  "../storage/auditLog.js"
+);
 const { rollbackWorkspace } = await import("../workspace/cleanup.js");
 const { loadReadinessState } = await import("../storage/readinessStore.js");
 const { ProductSpecSchema, QaReportSchema } = await import("../../shared/schemas.js");

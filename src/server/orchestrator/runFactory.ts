@@ -379,9 +379,11 @@ export class RunTimeoutError extends Error {
 }
 
 export interface ResolvedRunRouting {
-  routingMode: "free" | "paid";
+  routingMode: "auto";
   codeProvider: ProviderName;
   reviewProvider: ProviderName;
+  /** Ordered once per run: strongest paid model first, free/local last. */
+  ladder?: ProviderName[];
 }
 
 function isPaidProvider(
@@ -413,64 +415,43 @@ class StaleCheckpointSpecificationError extends Error {
 }
 
 /**
- * Resolve the owner's provider-neutral tier into concrete internal providers.
+ * Resolve every live request to one orchestrated model ladder.
  *
- * Free mode is a hard economic boundary: every role stays on the $0 rotator
- * and no paid rescue is attached. Paid mode selects only configured paid
- * providers; quota failover may rotate among those paid providers later.
+ * `free` and `paid` remain valid only while old records and clients age out.
+ * They no longer select separate economic routes: current execution always starts
+ * at the first configured paid rung and appends free/local capacity last.
  */
 export function selectRunRouting(
-  options: RunOptions,
+  _options: RunOptions,
   registry: ProviderRegistry,
   config: AppConfig,
 ): ResolvedRunRouting {
-  const hasExplicitProvider = Boolean(options.codeProvider || options.reviewProvider);
-  const inferredPaid =
-    isPaidProvider(options.codeProvider) ||
-    isPaidProvider(options.reviewProvider) ||
-    (!hasExplicitProvider &&
-      (isPaidProvider(config.defaultCodeProvider) ||
-        isPaidProvider(config.defaultReviewProvider)));
-  const routingMode = options.routingMode ?? (inferredPaid ? "paid" : "free");
-
-  if (routingMode === "free") {
-    if (!registry.get("free").isConfigured()) {
-      throw new MissingProviderCredentialError([
-        "FACTORY_FREE_ENABLED / FACTORY_FREE_BASE_URL",
-      ]);
-    }
-    return { routingMode, codeProvider: "free", reviewProvider: "free" };
+  const preferred: ProviderName[] = config.modelLadder ?? [
+    "anthropic",
+    "openai",
+    "free",
+  ];
+  const ladder = [...new Set(preferred)].filter((name) =>
+    registry.get(name).isConfigured(),
+  );
+  if (ladder.length === 0) {
+    throw new MissingProviderCredentialError(registry.missingCredentialNames());
   }
-
-  const paid = registry.availablePaid().filter(isPaidProvider);
-  if (paid.length === 0) {
-    throw new MissingProviderCredentialError([
-      "ANTHROPIC_API_KEY or OPENAI_API_KEY (paid mode selected)",
-    ]);
-  }
-  const choose = (
-    requested: ProviderName | undefined,
-    fallback: ProviderName,
-  ): "anthropic" | "openai" => {
-    for (const candidate of [requested, fallback, ...paid]) {
-      if (isPaidProvider(candidate) && paid.includes(candidate)) return candidate;
-    }
-    return paid[0]!;
-  };
+  const primary = ladder[0]!;
   return {
-    routingMode,
-    codeProvider: choose(options.codeProvider, config.defaultCodeProvider),
-    reviewProvider: choose(options.reviewProvider, config.defaultReviewProvider),
+    routingMode: "auto",
+    codeProvider: primary,
+    reviewProvider: primary,
+    ladder,
   };
 }
 
 /**
- * Build one provider role from an already-resolved economic tier.
+ * Build the single run-scoped provider ladder.
  *
- * This is the single choke point for non-demo calls outside and inside a run:
- * Free returns only the $0 route; Paid budget-gates every concrete provider
- * before quota failover can reach it. `decorate` lets a run attach its own
- * call counter to each attempted provider, including paid alternates.
+ * Every concrete paid rung is budget-gated before it is attempted. The
+ * QuotaFailoverProvider owns a sticky cursor, so quota/capacity exhaustion
+ * demotes the entire run instead of making each stage hammer the spent model.
  */
 export function createTierProvider(
   routing: ResolvedRunRouting,
@@ -494,22 +475,21 @@ export function createTierProvider(
     return decorate(budgeted);
   };
 
-  if (routing.routingMode === "free") {
-    return buildConcrete("free");
+  const candidates: ProviderName[] = routing.ladder ?? [
+    selected,
+    ...registry.availablePaid().filter(isPaidProvider),
+    "free",
+  ];
+  const ladder = [...new Set(candidates)].filter(
+    (name) => !OFFLINE_PROVIDERS.has(name) && registry.get(name).isConfigured(),
+  );
+  if (ladder.length === 0) {
+    throw new MissingProviderCredentialError(registry.missingCredentialNames());
   }
-  if (!isPaidProvider(selected)) {
-    throw new MissingProviderCredentialError([
-      `paid routing cannot use non-paid provider "${selected}"`,
-    ]);
-  }
-  const alternates = registry
-    .availablePaid()
-    .filter(isPaidProvider)
-    .filter((name) => name !== selected)
-    .map(buildConcrete);
+  const [primary, ...alternates] = ladder;
   return new QuotaFailoverProvider(
-    buildConcrete(selected),
-    alternates,
+    buildConcrete(primary!),
+    alternates.map(buildConcrete),
     options.onFailover,
   );
 }
@@ -518,12 +498,11 @@ export function createTierProvider(
 function createRecord(args: StartRunArgs): RunRecord {
   const { config, secrets, options } = args;
   const registry = createProviderRegistry(config, secrets);
-  // Explicit demo only. Missing paid keys must NOT silently coerce to mock success.
+  // Explicit demo only. Missing live capacity must never coerce to mock success.
   const demo = options.demo === true;
 
-  // A live run needs ONE usable live provider — and the free route counts.
-  // Requiring a paid key here would have made "no credit card" mean "no
-  // factory", which is exactly backwards for a free-primary deck.
+  // A live run needs at least one usable rung. Paid providers are ordered first;
+  // the final free/local rung still permits work after all paid capacity is gone.
   if (!demo && registry.availableLive().length === 0) {
     throw new MissingProviderCredentialError(registry.missingCredentialNames());
   }
@@ -542,9 +521,10 @@ function createRecord(args: StartRunArgs): RunRecord {
 
   const routing = demo
     ? {
-        routingMode: options.routingMode ?? ("free" as const),
+        routingMode: "auto" as const,
         codeProvider: "mock" as const,
         reviewProvider: "mock" as const,
+        ladder: ["mock" as const],
       }
     : selectRunRouting(options, registry, config);
 
@@ -734,21 +714,14 @@ async function executeRun(
     callSignal,
   );
 
-  // Resolve strict-tier providers. The outer CountingProvider enforces the
-  // run call cap before inner paid providers reserve each SDK attempt.
-  const routingMode: "free" | "paid" =
-    run.routingMode ??
-    (run.codeProvider === "anthropic" ||
-    run.codeProvider === "openai" ||
-    run.reviewProvider === "anthropic" ||
-    run.reviewProvider === "openai"
-      ? "paid"
-      : "free");
+  // Resolve one shared, run-scoped ladder. The outer CountingProvider
+  // enforces the run call cap before inner paid providers reserve an attempt.
+  // Legacy stored routing values are deliberately normalized here.
   const liveRouting = run.demo
     ? null
     : selectRunRouting(
         {
-          routingMode,
+          routingMode: "auto",
           codeProvider: run.codeProvider,
           reviewProvider: run.reviewProvider,
         },
@@ -762,35 +735,28 @@ async function executeRun(
   }
   const countProvider = (provider: LLMProvider): LLMProvider =>
     new CountingProvider(provider, run, config.maxModelCallsPerRun, "declared");
-  const onPaidFailover = (from: string, to: string, reason: string) =>
+  const onModelFailover = (from: string, to: string, reason: string) =>
     log(
       "warning",
-      `${from} refused on quota — continuing on ${to}. (${reason.slice(0, 120)})`,
+      `${from} model rung exhausted — continuing on ${to}. (${reason.slice(0, 120)})`,
     );
 
-  // Demo stays on mock. Every live role goes through the same strict tier
-  // builder: Free has no paid rescue; Paid gates and counts every attempted
-  // concrete provider, including a quota-failover alternate.
-  const code: LLMProvider = run.demo
+  const modelProvider: LLMProvider = run.demo
     ? countProvider(registry.get("mock"))
     : createTierProvider(liveRouting!, liveRouting!.codeProvider, registry, {
         decorate: countProvider,
-        onFailover: onPaidFailover,
+        onFailover: onModelFailover,
       });
-  const review: LLMProvider = run.demo
-    ? countProvider(registry.get("mock"))
-    : createTierProvider(liveRouting!, liveRouting!.reviewProvider, registry, {
-        decorate: countProvider,
-        onFailover: onPaidFailover,
-      });
-  const critical: LLMProvider = run.demo
-    ? countProvider(registry.get("mock"))
-    : createTierProvider(liveRouting!, liveRouting!.codeProvider, registry, {
-        decorate: countProvider,
-        onFailover: onPaidFailover,
-      });
-  if (!run.demo && routingMode === "free") {
-    log("info", "Critical stages: free mode — $0 rotation only; paid rescue disabled.");
+  // All roles share the same QuotaFailoverProvider instance. Its cursor is the
+  // orchestrator's source of truth for the remainder of the run.
+  const code = modelProvider;
+  const review = modelProvider;
+  const critical = modelProvider;
+  if (liveRouting) {
+    log(
+      "info",
+      `Model ladder: ${liveRouting.ladder!.join(" → ")}. Exhausted rungs stay demoted for this run.`,
+    );
   }
   // The live in-memory view of the workspace, restored from the private
   // checkpoint so a resumed run never needs the redacted API copy.
@@ -853,14 +819,14 @@ async function executeRun(
   const hasAuthoredDownstream = (): boolean =>
     Boolean(
       checkpoint.build ||
-      checkpoint.files.length > 0 ||
-      checkpoint.testPlan ||
-      checkpoint.testWriterComplete ||
-      checkpoint.verification ||
-      checkpoint.qa ||
-      checkpoint.pendingRepair ||
-      checkpoint.repairComplete ||
-      checkpoint.finalReport,
+        checkpoint.files.length > 0 ||
+        checkpoint.testPlan ||
+        checkpoint.testWriterComplete ||
+        checkpoint.verification ||
+        checkpoint.qa ||
+        checkpoint.pendingRepair ||
+        checkpoint.repairComplete ||
+        checkpoint.finalReport,
     );
 
   /**
@@ -2205,31 +2171,19 @@ async function executeRun(
         : undefined;
       if (!testPlan) {
         log("model_call", `Test Writer agent (${review.name})…`);
-        testPlan = await testWriterAgent(
-          { provider: review },
-          spec,
-          testWriterBuild,
-          {
-            manifestExcerpt:
-              repoAnalysis?.manifestExcerpts
-                .map(
-                  (manifest) =>
-                    `----- ${manifest.path} -----\n${manifest.excerpt}`,
-                )
-                .join("\n\n") ?? "",
-          },
-        );
+        testPlan = await testWriterAgent({ provider: review }, spec, testWriterBuild, {
+          manifestExcerpt:
+            repoAnalysis?.manifestExcerpts
+              .map((manifest) => `----- ${manifest.path} -----\n${manifest.excerpt}`)
+              .join("\n\n") ?? "",
+        });
       }
       if (!testPlan.files.length && !run.demo) {
         throw new Error(
           "Test Writer produced no change-specific tests; a live build cannot be verified or delivered.",
         );
       }
-      const testAssessment = assessGeneratedTests(
-        spec,
-        testWriterBuild,
-        testPlan,
-      );
+      const testAssessment = assessGeneratedTests(spec, testWriterBuild, testPlan);
       if (!run.demo && !testAssessment.ok) {
         throw new Error(
           "Generated acceptance tests are not valid evidence: " +
@@ -3564,9 +3518,9 @@ export type ResumeProviderSwitch = {
   reviewProvider?: ProviderName;
 };
 
-/** Resolve a resume-time provider override without allowing a mixed tier. */
+/** Normalize resume-time legacy provider fields to the configured ladder. */
 export function selectResumeRouting(
-  run: Pick<RunRecord, "routingMode" | "codeProvider" | "reviewProvider">,
+  _run: Pick<RunRecord, "routingMode" | "codeProvider" | "reviewProvider">,
   providers: ResumeProviderSwitch | undefined,
   registry: ProviderRegistry,
   config: AppConfig,
@@ -3576,26 +3530,10 @@ export function selectResumeRouting(
   );
   if (requested.some((name) => OFFLINE_PROVIDERS.has(name))) {
     throw new MissingProviderCredentialError([
-      "resume provider switch must use a configured live tier",
+      "resume provider switch must use the automatic live model ladder",
     ]);
   }
-  const asksFree = requested.includes("free");
-  const asksPaid = requested.some(isPaidProvider);
-  if (asksFree && asksPaid) {
-    throw new RunNotResumableError(
-      "Resume provider switch cannot mix Free and Paid tiers in one run.",
-    );
-  }
-  const requestedMode = asksFree ? "free" : asksPaid ? "paid" : run.routingMode;
-  return selectRunRouting(
-    {
-      routingMode: requestedMode,
-      codeProvider: providers?.codeProvider ?? run.codeProvider,
-      reviewProvider: providers?.reviewProvider ?? run.reviewProvider,
-    },
-    registry,
-    config,
-  );
+  return selectRunRouting({ routingMode: "auto" }, registry, config);
 }
 
 async function assertResumeWorkspace(
@@ -3694,7 +3632,7 @@ async function prepareResume(
         run.logs.push(
           makeLog(
             "info",
-            `Provider tier switched on resume: ${routing.routingMode}; code=${routing.codeProvider}, review=${routing.reviewProvider}.`,
+            `Model ladder refreshed on resume: ${routing.ladder?.join(" → ") ?? routing.codeProvider}.`,
             run.currentStage,
           ),
         );

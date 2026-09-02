@@ -183,9 +183,7 @@ describe("launcher wiring — the guard is actually used", () => {
     expect(launcher).toContain("node_modules\\.bin\\vite.cmd");
     expect(launcher).toContain("Invoke-Pnpm install --frozen-lockfile");
     expect(launcher).not.toMatch(/^\\s*&\\s*corepack\\s+enable/m);
-    expect(launcher).not.toContain(
-      "-ExecutionPolicy Bypass -File $PSCommandPath",
-    );
+    expect(launcher).not.toContain("-ExecutionPolicy Bypass -File $PSCommandPath");
     const guardIndex = launcher.indexOf("# --- 0. Idempotency guard");
     const updateIndex = launcher.indexOf("Checking for Factory Deck updates");
     expect(guardIndex).toBeGreaterThanOrEqual(0);

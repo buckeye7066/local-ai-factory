@@ -600,9 +600,9 @@ export type FinalReport = z.infer<typeof FinalReportSchema>;
 /* ------------------------------------------------------------------ */
 
 /**
- * "free" is the local FCC/Ollama route and is the DEFAULT primary. It is a
- * live provider (it really builds software), it just costs nothing — so unlike
- * mock/stub it is never treated as an offline demo.
+ * "free" is the live FCC/Ollama rung appended to the end of the automatic
+ * ladder. It really builds software and, unlike mock/stub, is never treated as
+ * an offline demo.
  */
 export const ProviderNameSchema = z.enum([
   "free",
@@ -613,8 +613,12 @@ export const ProviderNameSchema = z.enum([
 ]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
-/** Provider-neutral economic boundary selected by the owner. */
-export const RoutingModeSchema = z.enum(["free", "paid"]);
+/**
+ * One orchestrated provider ladder. "free" and "paid" remain accepted only so
+ * stored records and older API clients still load; live routing normalizes both
+ * legacy values to "auto" and never creates separate economic paths.
+ */
+export const RoutingModeSchema = z.enum(["auto", "free", "paid"]);
 export type RoutingMode = z.infer<typeof RoutingModeSchema>;
 
 /**
@@ -731,10 +735,10 @@ export type RunDestination = z.infer<typeof RunDestinationSchema>;
 export const RunOptionsSchema = z
   .object({
     /**
-     * Owner-facing provider control is deliberately provider-neutral:
-     * "free" never spends, "paid" selects a configured paid route and may
-     * rotate only among paid routes. Explicit provider fields remain for API
-     * compatibility and imply "paid" when they name a paid provider.
+     * Live work always uses one orchestrated strongest-to-weakest model
+     * ladder. "free"/"paid" and explicit provider fields are accepted only for
+     * backward compatibility; the server normalizes them to the same "auto"
+     * route and does not expose a second execution path.
      */
     routingMode: RoutingModeSchema.optional(),
     codeProvider: ProviderNameSchema.optional(),
@@ -862,7 +866,7 @@ export const RunRecordSchema = z.object({
   /** True only when a private durable checkpoint can continue this run. */
   resumable: z.boolean().optional(),
   demo: z.boolean(),
-  /** Provider-neutral tier selected for this run; absent on legacy records. */
+  /** "auto" for current runs; legacy "free"/"paid" records remain readable. */
   routingMode: RoutingModeSchema.optional(),
   codeProvider: ProviderNameSchema,
   reviewProvider: ProviderNameSchema,
@@ -941,10 +945,8 @@ export type RunSummary = z.infer<typeof RunSummarySchema>;
 /* ------------------------------------------------------------------ */
 
 /**
- * The live routing picture. This exists so a silent demotion to a PAID
- * provider is impossible: the deck always shows who is serving right now, why
- * it failed over, how many times it nearly paid but waited instead, and what
- * the rescue has cost today.
+ * The live routing picture. The deck always shows the current ladder rung,
+ * demotion reason, provider call counts, and locally estimated paid usage.
  */
 export const RouteEventSchema = z.object({
   ts: z.number(),
@@ -1009,13 +1011,23 @@ export const HealthSchema = z.object({
   service: z.literal("factory-deck").optional(),
   /** Deterministic offline provider is always available. */
   mockConfigured: z.boolean(),
-  /** The FREE local route (FCC proxy / Ollama). The default primary. */
+  /** The final free/local ladder rung (FCC proxy / Ollama). */
   freeConfigured: z.boolean(),
   freeBaseUrl: z.string(),
   freeModel: z.string(),
   anthropicConfigured: z.boolean(),
   openaiConfigured: z.boolean(),
+  /** Production admission requires both the Sol and Fable/Opus brain roles. */
+  mandatoryProductionReadiness: z.literal(true).optional(),
+  readinessBrainFloorConfigured: z.boolean().optional(),
+  solConfigured: z.boolean().optional(),
+  fableOrOpusConfigured: z.boolean().optional(),
+  solModel: z.string().optional(),
+  fableOrOpusModel: z.string().optional(),
+  ownerExternalMatters: z.literal("owner-managed-outside-cyberland").optional(),
   providersAvailable: z.array(ProviderNameSchema),
+  /** Current strongest-to-weakest execution order. */
+  modelLadder: z.array(ProviderNameSchema).optional(),
   anthropicModel: z.string(),
   openaiModel: z.string(),
   /** Live routing + cost picture. Optional so older clients still parse. */

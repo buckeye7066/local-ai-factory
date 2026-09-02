@@ -241,14 +241,10 @@ Write-Host "App: $launchUrl  (single process; browser opens when ready)"
 Write-Host "(Close this window to stop the factory.)"
 Write-Host ""
 
-# --- 2b. FREE route preflight. ----------------------------------------------
-# Factory Deck runs FREE-PRIMARY: every model call goes through the local FCC
-# proxy (the same free route the "Claude Code - FREE (Ollama)" shortcut turns
-# on) at zero cost. Paid keys are a rescue tier only.
-#
-# Bring the proxy up here rather than letting the first model call discover it
-# is dead: a dead free backend is precisely the condition that spends money, so
-# it is worth 90 seconds up front to avoid it.
+# --- 2b. Final free/local rung preflight. -----------------------------------
+# Factory Deck starts at the strongest configured paid model and demotes only
+# when a rung is exhausted. The FCC proxy is the one final free/local rung.
+# Bring it up now so an exhausted paid ladder still has working capacity.
 $freeBase = if ($env:FACTORY_FREE_BASE_URL) { $env:FACTORY_FREE_BASE_URL } else { "http://127.0.0.1:8082" }
 
 function Test-FreeRouteUp([string]$base) {
@@ -261,13 +257,13 @@ function Test-FreeRouteUp([string]$base) {
 }
 
 if (Test-FreeRouteUp $freeBase) {
-    Write-Host "FREE route: fcc-server is up at $freeBase - all model calls are free." -ForegroundColor Green
+    Write-Host "Final free/local rung: fcc-server is ready at $freeBase." -ForegroundColor Green
 } else {
-    Write-Host "FREE route: proxy not answering at $freeBase - starting fcc-server ..." -ForegroundColor Yellow
+    Write-Host "Final free/local rung: proxy not answering at $freeBase - starting fcc-server ..." -ForegroundColor Yellow
     $fcc = Get-Command fcc-server -CommandType Application -ErrorAction SilentlyContinue
     if ($null -eq $fcc) {
-        Write-Host "  fcc-server is not on PATH. The deck will start, but until the free" -ForegroundColor Red
-        Write-Host "  route is up, calls can fall through to the PAID rescue tier." -ForegroundColor Red
+        Write-Host "  fcc-server is not on PATH. Paid ladder rungs can run, but the final" -ForegroundColor Red
+        Write-Host "  free/local fallback is unavailable until the proxy is installed." -ForegroundColor Red
         Write-Host "  Run the 'Claude Code - FREE (Ollama)' shortcut to bring it up." -ForegroundColor Red
     } else {
         $fccHome = if ($env:FCC_HOME) { $env:FCC_HOME } else { Join-Path $HOME ".fcc" }
@@ -293,10 +289,10 @@ if (Test-FreeRouteUp $freeBase) {
             if (Test-FreeRouteUp $freeBase) { break }
         }
         if (Test-FreeRouteUp $freeBase) {
-            Write-Host "  FREE route is up at $freeBase." -ForegroundColor Green
+            Write-Host "  Final free/local rung is ready at $freeBase." -ForegroundColor Green
         } else {
-            Write-Host "  fcc-server did not answer within 90s. Starting anyway - the deck" -ForegroundColor Red
-            Write-Host "  keeps retrying free and only pays if the route is PROVEN wedged." -ForegroundColor Red
+            Write-Host "  fcc-server did not answer within 90s. Starting anyway; paid rungs" -ForegroundColor Red
+            Write-Host "  remain usable, but the final free/local rung is not ready yet." -ForegroundColor Red
         }
     }
 }

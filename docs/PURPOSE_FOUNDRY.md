@@ -71,12 +71,12 @@ Mechanical guards (Factory Deck, not GrantFlow):
   appends it to every extend idea, and the Factory Deck station also appends it
   to posted `goals` (plus a one-line `idea` pointer) when a target exists
 
-Free Foundry projects pin the external Scout and FlexFactor child process to
-local Ollama. New Paid projects omit those two stations because the child
-process cannot participate in Factory Deck's per-SDK-attempt reservation
-ledger; existing Paid projects that still contain either station fail closed
-before starting it. Paid Factory Deck and Crucible calls remain available and
-use the project's strict, budget-gated internal tier.
+Every Foundry project uses one automatic internal model ladder: strongest
+configured paid capacity first, weaker paid capacity next, and free/local last.
+Legacy `free` and `paid` record values normalize to that same behavior. Scout
+and FlexFactor are optional child stations; when selected, FlexFactor runs its
+own equivalent orchestrator and chooses its own ladder instead of being pinned
+by Purpose Foundry to a second route.
 
 ## Adapter configuration
 
@@ -102,8 +102,8 @@ PURPOSE_FOUNDRY_WATCH_URLS=https://example.app/health,https://api.example.app/he
 ```
 
 The `PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST` flag remains FlexFactor's own child
-process guard; it does not replace Factory Deck's per-call ledger and therefore
-does not authorize Paid Foundry child routes. Cloud Scout does not send program context unless
+process guard; it does not replace Factory Deck's per-call ledger. Cloud Scout
+does not send program context unless
 `PURPOSE_FOUNDRY_ALLOW_REMOTE_PROGRAM_CONTEXT=1` is explicitly configured.
 
 No Purpose Foundry/Publisher shared secret is required. Foundry sends a fixed

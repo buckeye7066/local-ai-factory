@@ -1,8 +1,4 @@
-import {
-  getConfig,
-  getSecrets,
-  readinessBrainFloor,
-} from "../server/config.js";
+import { getConfig, getSecrets, readinessBrainFloor } from "../server/config.js";
 import {
   startRun,
   MissingProviderCredentialError,
@@ -127,10 +123,7 @@ async function main() {
     ) {
       if (run.status === "completed" && run.finalReport) {
         const readiness = await loadReadinessState(run.id);
-        if (
-          readiness?.status !== "ready" ||
-          readiness.receipt?.ready !== true
-        ) {
+        if (readiness?.status !== "ready" || readiness.receipt?.ready !== true) {
           console.log(
             `\n${COLORS.red}✘ Pipeline ended, but the app is NOT production-ready.${COLORS.reset}`,
           );
@@ -151,15 +144,11 @@ async function main() {
           `\n${COLORS.green}✔ ${r.appName} — PRODUCTION READY${COLORS.reset}`,
         );
         console.log(`  ${r.summary}`);
-        console.log(
-          `\n  ${COLORS.cyan}How to run:${COLORS.reset} ${r.howToRun}`,
-        );
+        console.log(`\n  ${COLORS.cyan}How to run:${COLORS.reset} ${r.howToRun}`);
         console.log(
           `  ${COLORS.cyan}Tests:${COLORS.reset} ${r.testStatus}  ${COLORS.cyan}Repair loops:${COLORS.reset} ${r.repairLoops}`,
         );
-        console.log(
-          `  ${COLORS.cyan}Workspace:${COLORS.reset} ${r.workspacePath}`,
-        );
+        console.log(`  ${COLORS.cyan}Workspace:${COLORS.reset} ${r.workspacePath}`);
         console.log(
           `  ${COLORS.cyan}Readiness evidence:${COLORS.reset} ${readiness.evidenceDigest}`,
         );

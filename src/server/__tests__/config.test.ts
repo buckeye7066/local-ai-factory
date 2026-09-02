@@ -21,15 +21,36 @@ describe("config", () => {
   });
 
   it("parses numbers and booleans from env", () => {
-    const cfg = loadConfig({ MAX_REPAIR_LOOPS: "5", ALLOW_UNTRUSTED_SCRIPTS: "1" });
+    const cfg = loadConfig({
+      MAX_REPAIR_LOOPS: "5",
+      ALLOW_UNTRUSTED_SCRIPTS: "1",
+    });
     expect(cfg.maxRepairLoops).toBe(5);
     expect(cfg.allowUntrustedScripts).toBe(true);
   });
 
   it("detects configured keys", () => {
-    const secrets = loadSecrets({ ANTHROPIC_API_KEY: "sk-abc", OPENAI_API_KEY: "" });
+    const secrets = loadSecrets({
+      ANTHROPIC_API_KEY: "sk-abc",
+      OPENAI_API_KEY: "",
+    });
     expect(isAnthropicConfigured(secrets)).toBe(true);
     expect(isOpenAiConfigured(secrets)).toBe(false);
+  });
+
+  it("exposes only configured rungs in paid-first order", () => {
+    const cfg = loadConfig({
+      FACTORY_FREE_ENABLED: "true",
+      FACTORY_MODEL_LADDER: "anthropic,openai",
+    });
+    expect(
+      toHealth(cfg, loadSecrets({ ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "sk-openai" }))
+        .modelLadder,
+    ).toEqual(["openai", "free"]);
+    expect(
+      toHealth(loadConfig({ FACTORY_FREE_ENABLED: "false" }), loadSecrets({}))
+        .modelLadder,
+    ).toEqual([]);
   });
 
   it("NEVER leaks key values through the health view", () => {

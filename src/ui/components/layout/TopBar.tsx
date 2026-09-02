@@ -8,7 +8,6 @@ import {
   WifiOff,
   Gift,
   CreditCard,
-  PauseCircle,
 } from "lucide-react";
 import { Badge } from "../ui/Badge.js";
 import { Tooltip } from "../ui/Tooltip.js";
@@ -17,11 +16,10 @@ import type { Health } from "../../../shared/schemas.js";
 import type { Theme } from "../../lib/useTheme.js";
 
 /**
- * LiveRouteBadge — who is serving RIGHT NOW, always on screen.
+ * LiveRouteBadge — the rung serving RIGHT NOW, always on screen.
  *
- * Paid service can never happen quietly. Green means a $0 route is serving;
- * amber means a paid route is serving (whether explicitly selected or reached
- * by a legacy compatibility path); slate means nothing has run yet.
+ * Amber identifies billable paid capacity; green identifies the final
+ * free/local rung; idle means no model call has completed yet.
  */
 function LiveRouteBadge({ health }: { health: Health | null }) {
   const route = health?.route;
@@ -32,23 +30,22 @@ function LiveRouteBadge({ health }: { health: Health | null }) {
   const spend = route.paidBudget.usdLastDay;
 
   const label = onPaid
-    ? `PAID: ${serving}`
+    ? `LADDER: ${serving}`
     : serving === "free"
-      ? "FREE (Ollama/FCC)"
-      : route.holdActive
-        ? "free on hold"
-        : "FREE — idle";
+      ? "LADDER: free/local"
+      : "LADDER — idle";
 
   const tip = onPaid
-    ? `A paid provider is serving this call. Strict Free runs never attach a paid fallback. ` +
-      `${route.lastFailoverReason ? `Recorded failover reason: ${route.lastFailoverReason}. ` : ""}` +
-      `Local estimated paid usage in the last 24h: $${spend.toFixed(4)} of ` +
-      `$${route.paidBudget.limits.usdPerDay.toFixed(2)} admission guard. ` +
+    ? `${serving} is the strongest currently usable rung. ` +
+      `${route.lastFailoverReason ? `Previous rung demotion: ${route.lastFailoverReason}. ` : ""}` +
+      `Local estimated paid usage in the last 24h: USD ${spend.toFixed(4)} of ` +
+      `USD ${route.paidBudget.limits.usdPerDay.toFixed(2)} admission guard. ` +
       `Use provider-native account caps for a hard actual-spend limit.`
-    : `Running on the FREE local route at zero cost. ` +
-      `Free calls: ${route.counts.free}, paid rescues: ` +
-      `${route.counts.anthropic + route.counts.openai}. ` +
-      `Nearly failed over ${route.wouldHaveFailedOver} time(s) and waited instead.`;
+    : serving === "free"
+      ? `Paid rungs are unavailable, exhausted, or not configured; the final free/local rung is serving. ` +
+        `Free calls: ${route.counts.free}; paid calls before demotion: ` +
+        `${route.counts.anthropic + route.counts.openai}.`
+      : "No model call has completed yet. New work starts at the first configured paid rung and demotes toward free/local only on exhaustion.";
 
   return (
     <Tooltip content={tip}>
@@ -57,15 +54,11 @@ function LiveRouteBadge({ health }: { health: Health | null }) {
           "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium",
           onPaid
             ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
-            : route.holdActive
-              ? "border-amber-400/25 bg-amber-400/5 text-amber-200/80"
-              : "border-aurora-emerald/25 bg-aurora-emerald/10 text-aurora-emerald",
+            : "border-aurora-emerald/25 bg-aurora-emerald/10 text-aurora-emerald",
         )}
       >
         {onPaid ? (
           <CreditCard className="h-3.5 w-3.5" />
-        ) : route.holdActive ? (
-          <PauseCircle className="h-3.5 w-3.5" />
         ) : (
           <Gift className="h-3.5 w-3.5" />
         )}
@@ -121,8 +114,7 @@ export function TopBar({
           </span>
         </Tooltip>
 
-        {/* ALWAYS-ON routing indicator. A paid call can never be silent:
-            this turns amber the moment a call is served by a paid tier. */}
+        {/* ALWAYS-ON ladder indicator: amber while a paid rung is serving. */}
         <LiveRouteBadge health={health} />
       </div>
 
