@@ -13,6 +13,7 @@ import {
   PlusCircle,
   ShieldCheck,
   Sparkles,
+  Target,
   Terminal,
   XCircle,
 } from "lucide-react";
@@ -143,6 +144,18 @@ function buildSummaryText(report: FinalReportType): string {
     report.caveats.length > 0
       ? report.caveats.map((c) => `  - ${c}`).join("\n")
       : "  - None noted";
+  const goal = report.goalContract
+    ? [
+        "",
+        "## Durable goal contract",
+        report.goalContract.purpose,
+        `Source: ${report.goalContract.purposeSource}; digest: ${report.goalContract.digest}`,
+        ...report.goalContract.activeGoals.map((item) => `  - Goal: ${item}`),
+        ...report.goalContract.constraints.map((item) => `  - Constraint: ${item}`),
+        ...report.goalContract.nonGoals.map((item) => `  - Non-goal: ${item}`),
+        `Continuity: ${report.goalContract.continuity.previousRunIds.length} prior run(s), ${report.goalContract.continuity.carriedForwardDecisions.length} carried decision(s), ${report.goalContract.continuity.priorResearch.length} prior research item(s)`,
+      ]
+    : [];
   const purpose = report.purposeProfile
     ? [
         "",
@@ -178,6 +191,7 @@ function buildSummaryText(report: FinalReportType): string {
     "",
     `## Test status`,
     `${label} (${report.repairLoops} repair loop${report.repairLoops === 1 ? "" : "s"})`,
+    ...goal,
     ...purpose,
     ...competitive,
     "",
@@ -281,6 +295,77 @@ export function FinalReport({
             <BulletList items={report.whatWasBuilt} empty="Nothing recorded." />
           </Card>
         </motion.div>
+
+        {/* Orchestrator-owned mission and continuity (every production run). */}
+        {report.goalContract && (
+          <motion.div {...sectionProps} className="md:col-span-2">
+            <Card className="h-full">
+              <CardHeader
+                title="Durable goal contract"
+                icon={<Target className="h-4 w-4" />}
+                action={
+                  <Badge tone="cyan">
+                    {report.goalContract.purposeSource.replace("-", " ")}
+                  </Badge>
+                }
+              />
+              <p className="text-sm leading-relaxed text-slate-200">
+                {report.goalContract.purpose}
+              </p>
+              <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <UsageRow
+                  label="Active goals"
+                  value={report.goalContract.activeGoals.length}
+                />
+                <UsageRow
+                  label="Prior runs"
+                  value={report.goalContract.continuity.previousRunIds.length}
+                />
+                <UsageRow
+                  label="Carried decisions"
+                  value={report.goalContract.continuity.carriedForwardDecisions.length}
+                />
+                <UsageRow
+                  label="Prior research"
+                  value={report.goalContract.continuity.priorResearch.length}
+                />
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Current obligations
+                  </p>
+                  <BulletList
+                    items={report.goalContract.activeGoals}
+                    empty="No active goals recorded."
+                  />
+                </div>
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Boundaries
+                  </p>
+                  <BulletList
+                    items={[
+                      ...report.goalContract.constraints.map(
+                        (item) => `Constraint: ${item}`,
+                      ),
+                      ...report.goalContract.nonGoals.map(
+                        (item) => `Non-goal: ${item}`,
+                      ),
+                    ]}
+                    empty="No additional constraints or non-goals recorded."
+                  />
+                </div>
+              </div>
+              <div className="mt-4">
+                <CodeBlock
+                  value={report.goalContract.digest}
+                  label="goal contract digest"
+                />
+              </div>
+            </Card>
+          </motion.div>
+        )}
 
         {/* Citation-linked purpose evidence (extend runs). */}
         {report.purposeProfile && (
