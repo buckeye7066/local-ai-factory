@@ -27,7 +27,9 @@ describe("paid cloud workflow contract", () => {
   it("pins the current strongest Anthropic model for paid production", () => {
     for (const workflow of [factory, foundry]) {
       expect(workflow).toContain("ANTHROPIC_MODEL: claude-fable-5-1");
-      expect(workflow).toContain("FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1");
+      expect(workflow).toContain(
+        "FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1",
+      );
       expect(workflow).not.toContain("claude-opus-4-8");
     }
   });
@@ -69,7 +71,9 @@ describe("paid cloud workflow contract", () => {
       const firstSecretIndex = workflow.indexOf("ANTHROPIC_API_KEY:");
       expect(buildIndex).toBeGreaterThan(0);
       expect(firstSecretIndex).toBeGreaterThan(buildIndex);
-      expect(workflow).toContain("--file scripts/ci/verification-sandbox.Dockerfile");
+      expect(workflow).toContain(
+        "--file scripts/ci/verification-sandbox.Dockerfile",
+      );
       expect(workflow).toContain(
         'FACTORY_VERIFICATION_SANDBOX_IMAGE: "local-ai-factory-verifier:${{ github.sha }}"',
       );
@@ -123,7 +127,9 @@ describe("paid cloud workflow contract", () => {
   });
 
   it("uses greenfield proofs whose tests can be independently executed", () => {
-    expect(factory).toContain("command-line only with no HTML, browser, or web UI");
+    expect(factory).toContain(
+      "command-line only with no HTML, browser, or web UI",
+    );
     expect(foundrySmoke).toContain(
       "Command-line only; do not generate HTML, browser, or web UI code.",
     );
@@ -143,20 +149,16 @@ describe("paid cloud workflow contract", () => {
       "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
     );
     expect(
-      factory.match(/pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g),
+      factory.match(
+        /pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g,
+      ),
     ).toHaveLength(2);
     expect(factory).toContain("pnpm exec tsx src/cli/factory-resume.ts");
     expect(factory).toContain("continue-on-error: true");
     expect(factory).toContain("${{ steps.candidate.outcome }}");
-    expect(factory).toContain(
-      "factory-deck-seed-${{ github.run_id }}",
-    );
-    expect(factory).toContain(
-      "factory-deck-windows-${{ github.run_id }}",
-    );
-    expect(factory).toContain(
-      "factory-deck-macos-${{ github.run_id }}",
-    );
+    expect(factory).toContain("factory-deck-seed-${{ github.run_id }}");
+    expect(factory).toContain("factory-deck-windows-${{ github.run_id }}");
+    expect(factory).toContain("factory-deck-macos-${{ github.run_id }}");
     expect(factory).toContain("!workspaces/**/node_modules/**");
 
     const windowsProof = factory.slice(
@@ -180,19 +182,15 @@ describe("paid cloud workflow contract", () => {
       "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
     );
     expect(
-      foundry.match(/pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g),
+      foundry.match(
+        /pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g,
+      ),
     ).toHaveLength(2);
     expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: seed");
     expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: resume");
-    expect(foundry).toContain(
-      "purpose-foundry-seed-${{ github.run_id }}",
-    );
-    expect(foundry).toContain(
-      "purpose-foundry-windows-${{ github.run_id }}",
-    );
-    expect(foundry).toContain(
-      "purpose-foundry-macos-${{ github.run_id }}",
-    );
+    expect(foundry).toContain("purpose-foundry-seed-${{ github.run_id }}");
+    expect(foundry).toContain("purpose-foundry-windows-${{ github.run_id }}");
+    expect(foundry).toContain("purpose-foundry-macos-${{ github.run_id }}");
     expect(foundry).toContain("!workspaces/**/node_modules/**");
     expect(foundrySmoke).toContain("purpose-foundry-cloud-smoke.json");
     expect(foundrySmoke).toContain("HELD FOR PLATFORM PROOF");
