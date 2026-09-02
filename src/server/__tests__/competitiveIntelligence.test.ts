@@ -9,6 +9,7 @@ import {
   detectLicenseFromText,
   MAX_PRODUCT_INSPECTION_ATTEMPTS,
   MIN_PRODUCT_COMPETITORS,
+  normalizeProductDiscoveryQueries,
   parseGitHubRepoUrl,
   productCandidateKey,
   rankRelevantPaths,
@@ -156,6 +157,26 @@ describe("competitive discovery", () => {
     expect(queries.some((query) => !query.includes("open source"))).toBe(true);
     expect(queries.filter(isCompetitorQuery)).toHaveLength(4);
     expect(queries.slice(0, 4).every((query) => query.length < 320)).toBe(true);
+  });
+
+  it("normalizes orchestrator product queries without weakening classification", () => {
+    const queries = normalizeProductDiscoveryQueries([
+      "Taskwarrior official website",
+      "Todo.txt",
+      "  Todo.txt  ",
+      "",
+      "TickTick official product",
+      "Todoist official website",
+      "Things official website",
+      "OmniFocus official website",
+      "Ultralist official website",
+      "Todoman official website",
+      "extra product",
+    ]);
+    expect(queries).toHaveLength(8);
+    expect(queries.every(isCompetitorQuery)).toBe(true);
+    expect(queries).toContain("official product website Todo.txt");
+    expect(new Set(queries).size).toBe(queries.length);
   });
 
   it("deduplicates product subdomains and rejects aggregators as competitors", () => {
