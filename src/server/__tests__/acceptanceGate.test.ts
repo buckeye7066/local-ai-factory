@@ -279,6 +279,15 @@ describe("assessGeneratedTests", () => {
         cliSpec,
         cliBuild,
         withSource(
+          "  const assertResult = async () => { const result = run(); expect(result.exitCode).toBe(0); }; await assertResult();",
+        ),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
           "  const deferred = () => { const result = run(); expect(result.exitCode).toBe(0); };",
         ),
       ).ok,
@@ -292,6 +301,62 @@ describe("assessGeneratedTests", () => {
         ),
       ).ok,
     ).toBe(false);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withSource(
+          "  const floating = async () => { await Promise.resolve(); const result = run(); expect(result.exitCode).toBe(0); }; floating();",
+        ),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("recognizes awaited Vitest rejection assertions as executable evidence", () => {
+    const cliSpec: ProductSpec = {
+      ...spec,
+      userFlows: [],
+      acceptanceCriteria: ["Blank tasks are rejected with a friendly message"],
+    };
+    const cliBuild: FileBuild = {
+      files: [
+        {
+          path: "src/commands.ts",
+          purpose: "CLI commands",
+          contents: "export async function runCommand() { throw new Error('blank'); }",
+          edits: [],
+        },
+      ],
+    };
+    const path = "test/workflow.test.ts";
+    const testName = "rejects a blank task description with a clear next step";
+    const result = assessGeneratedTests(cliSpec, cliBuild, {
+      testPlan: "CLI acceptance",
+      coverage: [
+        {
+          requirementId: "AC-1",
+          testPath: path,
+          testName,
+          kind: "unit",
+        },
+      ],
+      files: [
+        {
+          path,
+          purpose: "acceptance",
+          contents: [
+            'import { expect, it } from "vitest";',
+            `it("${testName}", async () => {`,
+            '  await expect(runCommand(["add", "   "])).rejects.toThrow(',
+            '    "Please type a task description.",',
+            "  );",
+            "});",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ ok: true, errors: [] });
   });
 
   it("requires the exact mapped title to appear in valid direct runner evidence", () => {

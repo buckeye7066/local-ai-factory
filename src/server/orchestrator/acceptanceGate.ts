@@ -60,6 +60,11 @@ interface FileEvidence {
   tests: Map<string, TestEvidence>;
 }
 
+type JavascriptHelper =
+  | ts.ArrowFunction
+  | ts.FunctionExpression
+  | ts.FunctionDeclaration;
+
 export interface GeneratedTestAssessment {
   ok: boolean;
   errors: string[];
@@ -105,6 +110,7 @@ function isPrimitiveLiteral(node: ts.Expression | undefined): boolean {
 
 function analyzeCallback(
   callback: ts.ArrowFunction | ts.FunctionExpression,
+  helpers: ReadonlyMap<string, JavascriptHelper>,
 ): Omit<TestEvidence, "name" | "browser"> {
   let meaningfulAssertion = false;
   let gotoApp = false;
@@ -176,6 +182,27 @@ function analyzeCallback(
     );
   };
 
+  const isAsyncHelper = (helper: JavascriptHelper): boolean =>
+    helper.modifiers?.some(
+      (modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword,
+    ) === true;
+
+  const asyncHelperResultIsObserved = (call: ts.CallExpression): boolean => {
+    let parent: ts.Node = call.parent;
+    while (ts.isParenthesizedExpression(parent)) parent = parent.parent;
+    return (
+      ts.isAwaitExpression(parent) ||
+      ts.isReturnStatement(parent) ||
+      callback.body === call
+    );
+  };
+
+  // Generated tests often centralize repeated error assertions in a small
+  // same-file helper. A declaration alone is still not evidence, but a helper
+  // directly reached from the active test is. Async helpers must be awaited or
+  // returned so a floating promise cannot masquerade as executed acceptance.
+  const activeHelpers = new Set<JavascriptHelper>();
+
   const visit = (node: ts.Node, root = false): void => {
     if (
       !root &&
@@ -189,8 +216,8 @@ function analyzeCallback(
     }
     if (ts.isBlock(node)) {
       for (const statement of node.statements) {
-        if (ts.isReturnStatement(statement)) break;
         visit(statement);
+        if (ts.isReturnStatement(statement)) break;
       }
       return;
     }
@@ -207,7 +234,22 @@ function analyzeCallback(
       if (node.elseStatement) visit(node.elseStatement);
       return;
     }
-    if (ts.isCallExpression(node)) inspectCall(node);
+    if (ts.isCallExpression(node)) {
+      inspectCall(node);
+      if (ts.isIdentifier(node.expression)) {
+        const helper = helpers.get(node.expression.text);
+        if (
+          helper &&
+          helper.body &&
+          !activeHelpers.has(helper) &&
+          (!isAsyncHelper(helper) || asyncHelperResultIsObserved(node))
+        ) {
+          activeHelpers.add(helper);
+          visit(helper.body, true);
+          activeHelpers.delete(helper);
+        }
+      }
+    }
     ts.forEachChild(node, (child) => visit(child));
   };
   visit(callback.body, true);
@@ -231,6 +273,23 @@ function analyzeJavascript(source: string): FileEvidence {
   let browserImport = false;
   let skippedOrTodo = false;
   const tests = new Map<string, TestEvidence>();
+  const helpers = new Map<string, JavascriptHelper>();
+
+  const collectHelpers = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      helpers.set(node.name.text, node);
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      (ts.isArrowFunction(node.initializer) ||
+        ts.isFunctionExpression(node.initializer))
+    ) {
+      helpers.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, collectHelpers);
+  };
+  collectHelpers(file);
 
   const visit = (node: ts.Node): void => {
     if (
@@ -268,7 +327,7 @@ function analyzeJavascript(source: string): FileEvidence {
           tests.set(title.text, {
             name: title.text,
             browser: browserImport,
-            ...analyzeCallback(callback),
+            ...analyzeCallback(callback, helpers),
           });
         }
       }
