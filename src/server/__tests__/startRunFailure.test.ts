@@ -30,7 +30,7 @@ describe("Factory Deck background startup", () => {
     await vi.waitFor(() => expect(run.status).toBe("failed"));
 
     expect(run.resumable).toBe(false);
-    expect(run.error).toContain("Run could not start:");
+    expect(run.error).toContain("Run could not start or persist:");
     expect(run.error).not.toContain("sk-test-startup-secret-0123456789");
     expect(run.error).toContain("[REDACTED");
     expect(run.logs.at(-1)?.kind).toBe("error");
