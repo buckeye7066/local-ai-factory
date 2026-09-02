@@ -103,11 +103,10 @@ if ($null -eq $script:PnpmMode) {
     throw "Factory Deck could not find pnpm or Corepack for pinned pnpm 10.17.0."
 }
 function Invoke-Pnpm {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
     if ($script:PnpmMode -eq "direct") {
-        & $script:PnpmExe @Arguments
+        & $script:PnpmExe @args
     } else {
-        & $script:PnpmExe pnpm @Arguments
+        & $script:PnpmExe pnpm @args
     }
 }
 
