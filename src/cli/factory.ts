@@ -109,12 +109,22 @@ async function main() {
   let printed = 0;
   for (;;) {
     const run = await getRun(started.id);
-    if (!run) break;
+    if (!run) {
+      console.error(
+        `${COLORS.red}✘ Run record ${started.id} disappeared before a terminal result.${COLORS.reset}`,
+      );
+      process.exitCode = 1;
+      break;
+    }
     for (; printed < run.logs.length; printed++) {
       const l = run.logs[printed];
       console.log(paint(l.kind, `  • ${l.message}`));
     }
-    if (run.status === "completed" || run.status === "failed") {
+    if (
+      run.status === "completed" ||
+      run.status === "failed" ||
+      run.status === "cancelled"
+    ) {
       if (run.status === "completed" && run.finalReport) {
         const readiness = await loadReadinessState(run.id);
         if (readiness?.status !== "ready" || readiness.receipt?.ready !== true) {
@@ -150,8 +160,16 @@ async function main() {
           console.log(`\n  ${COLORS.yellow}Caveats:${COLORS.reset}`);
           r.caveats.forEach((c) => console.log(`    - ${c}`));
         }
+      } else if (run.status === "completed") {
+        console.log(
+          `\n${COLORS.red}✘ Run completed without a final report and cannot be accepted.${COLORS.reset}`,
+        );
+        process.exitCode = 1;
       } else if (run.status === "failed") {
         console.log(`\n${COLORS.red}✘ Run failed: ${run.error}${COLORS.reset}`);
+        process.exitCode = 1;
+      } else {
+        console.log(`\n${COLORS.red}✘ Run was cancelled.${COLORS.reset}`);
         process.exitCode = 1;
       }
       break;
