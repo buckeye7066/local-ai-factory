@@ -110,8 +110,19 @@ function flowScannerInertRanges(source: string, relPath: string): SourceRange[] 
   return ranges;
 }
 
-function positionInRanges(position: number, ranges: readonly SourceRange[]): boolean {
-  return ranges.some((range) => position >= range.start && position < range.end);
+function maskSourceRanges(
+  source: string,
+  ranges: readonly SourceRange[],
+): string {
+  const characters = [...source];
+  for (const range of ranges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      if (characters[index] !== "\n" && characters[index] !== "\r") {
+        characters[index] = " ";
+      }
+    }
+  }
+  return characters.join("");
 }
 
 /**
@@ -123,13 +134,20 @@ function flowTypeofImportSpecifiers(
   source: string,
   relPath: string,
 ): ImportedSpecifier[] {
+  // A raw scanner cannot distinguish a regex-closing slash from the start of
+  // a line comment without parser-directed rescans. Mask parser-recognized
+  // template, regex, and JSX ranges first while preserving byte positions, so
+  // one fixture cannot hide or fabricate a later real Flow declaration.
+  const scanSource = maskSourceRanges(
+    source,
+    flowScannerInertRanges(source, relPath),
+  );
   const scanner = ts.createScanner(
     ts.ScriptTarget.Latest,
     true,
     ts.LanguageVariant.Standard,
-    source,
+    scanSource,
   );
-  const inertRanges = flowScannerInertRanges(source, relPath);
   const tokens: ScannedToken[] = [];
   let depth = 0;
   for (
@@ -154,7 +172,6 @@ function flowTypeofImportSpecifiers(
     const token = tokens[index]!;
     if (
       token.depth !== 0 ||
-      positionInRanges(token.start, inertRanges) ||
       token.kind !== ts.SyntaxKind.ImportKeyword ||
       tokens[index + 1]?.kind !== ts.SyntaxKind.TypeOfKeyword
     ) {
