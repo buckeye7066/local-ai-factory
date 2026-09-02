@@ -38,8 +38,8 @@ function LiveRouteBadge({ health }: { health: Health | null }) {
   const tip = onPaid
     ? `${serving} is the strongest currently usable rung. ` +
       `${route.lastFailoverReason ? `Previous rung demotion: ${route.lastFailoverReason}. ` : ""}` +
-      `Local estimated paid usage in the last 24h: ${spend.toFixed(4)} of ` +
-      `${route.paidBudget.limits.usdPerDay.toFixed(2)} admission guard. ` +
+      `Local estimated paid usage in the last 24h: USD ${spend.toFixed(4)} of ` +
+      `USD ${route.paidBudget.limits.usdPerDay.toFixed(2)} admission guard. ` +
       `Use provider-native account caps for a hard actual-spend limit.`
     : serving === "free"
       ? `Paid rungs are unavailable, exhausted, or not configured; the final free/local rung is serving. ` +
