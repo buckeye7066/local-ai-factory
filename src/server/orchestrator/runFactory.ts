@@ -121,6 +121,7 @@ import {
 import { runRepairLoop } from "./repairLoop.js";
 import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
 import { shouldSkipRepairForIncompleteVerification } from "./repairEligibility.js";
+import { isForbiddenRepairPath } from "./repairScope.js";
 import { reportRouteQuality } from "../rotation/rotatingProvider.js";
 import { assessExecutedCoverage, assessGeneratedTests } from "./acceptanceGate.js";
 import { parseDirectTestEvidence } from "./directTestEvidence.js";
@@ -312,47 +313,6 @@ export function partitionRepairFiles<T extends { path: string }>(
   );
   const accepted: T[] = [];
   const refusals: Array<{ path: string; reason: string }> = [];
-  const forbiddenRepairPath = (path: string) => {
-    const base = path.split("/").pop()?.toLowerCase() ?? "";
-    const testPath =
-      /(^|\/)(?:__tests__|tests?|spec)(\/|$)/i.test(path) ||
-      /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(path) ||
-      /(^|\/)test_[^/]+\.py$/i.test(path) ||
-      /_test\.py$/i.test(path);
-    const protectedBuildFile = new Set([
-      "package.json",
-      "package-lock.json",
-      "npm-shrinkwrap.json",
-      "pnpm-lock.yaml",
-      "yarn.lock",
-      "requirements.txt",
-      "requirements-dev.txt",
-      "pyproject.toml",
-      "setup.py",
-      "setup.cfg",
-      "pipfile",
-      "pipfile.lock",
-      "poetry.lock",
-      "pytest.ini",
-      "tox.ini",
-      ".coveragerc",
-      "go.mod",
-      "go.sum",
-      "cargo.toml",
-      "cargo.lock",
-      "pom.xml",
-      "build.gradle",
-      "build.gradle.kts",
-      "composer.json",
-      "composer.lock",
-    ]).has(base);
-    const toolConfig =
-      /(^|\/)(?:vitest|jest|playwright|vite)(?:\.[\w-]+)?\.config\.[cm]?[jt]s$/i.test(
-        path,
-      ) ||
-      /(^|\/)(?:tsconfig(?:\.[\w-]+)?\.json|eslint\.config\.[cm]?[jt]s)$/i.test(path);
-    return testPath || protectedBuildFile || toolConfig;
-  };
   for (const file of proposed) {
     const path = norm(file.path);
     const canonical = allowed.get(path);
@@ -361,7 +321,7 @@ export function partitionRepairFiles<T extends { path: string }>(
         path: file.path,
         reason: "repair scope — the run did not create or modify this file",
       });
-    } else if (forbiddenRepairPath(path)) {
+    } else if (isForbiddenRepairPath(path)) {
       refusals.push({
         path: file.path,
         reason:
