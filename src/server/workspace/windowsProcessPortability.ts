@@ -50,8 +50,29 @@ function requireModule(expression: ts.Expression | undefined): string | null {
   return stringModule(value.arguments[0]);
 }
 
+function importEqualsModule(declaration: ts.ImportEqualsDeclaration): string | null {
+  const reference = declaration.moduleReference;
+  return ts.isExternalModuleReference(reference)
+    ? stringModule(reference.expression)
+    : null;
+}
+
 function importedName(element: ts.ImportSpecifier | ts.BindingElement): string {
   return (element.propertyName ?? element.name).getText();
+}
+
+function propertyName(name: ts.PropertyName): string | null {
+  if (
+    ts.isIdentifier(name) ||
+    ts.isStringLiteralLike(name) ||
+    ts.isNumericLiteral(name)
+  ) {
+    return name.text;
+  }
+  if (ts.isComputedPropertyName(name)) {
+    return stringModule(name.expression);
+  }
+  return null;
 }
 
 function directMethod(name: string): string | null {
@@ -82,7 +103,10 @@ function lexicalScopeFor(declaration: ts.Node): ts.Node | null {
       ts.isBlock(node) ||
       ts.isSourceFile(node) ||
       ts.isCaseBlock(node) ||
-      ts.isCatchClause(node),
+      ts.isCatchClause(node) ||
+      ts.isForStatement(node) ||
+      ts.isForOfStatement(node) ||
+      ts.isForInStatement(node),
   );
 }
 
@@ -119,6 +143,8 @@ function registerLexicalBindings(
       } else if (bindings) {
         for (const element of bindings.elements) add(sourceFile, element.name);
       }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      add(sourceFile, node.name);
     } else if (ts.isParameter(node)) {
       const scope = nearestAncestor(node, ts.isFunctionLike);
       for (const identifier of bindingIdentifiers(node.name)) add(scope, identifier);
@@ -162,14 +188,33 @@ function hasShellTrue(call: ts.CallExpression): boolean {
   return call.arguments.some((argument) => {
     const value = unwrapTransparent(argument);
     if (!ts.isObjectLiteralExpression(value)) return false;
-    return value.properties.some((property) => {
-      if (!ts.isPropertyAssignment(property)) return false;
-      const name = property.name.getText().replace(/^["']|["']$/g, "");
-      return (
-        name === "shell" &&
-        unwrapTransparent(property.initializer).kind === ts.SyntaxKind.TrueKeyword
-      );
-    });
+    let shellIsDefinitelyTrue = false;
+    for (const property of value.properties) {
+      if (ts.isSpreadAssignment(property)) {
+        // A later spread can replace shell. Stay fail-closed unless a later
+        // explicit property restores a literal true value.
+        shellIsDefinitelyTrue = false;
+        continue;
+      }
+      if (
+        ts.isPropertyAssignment(property) &&
+        propertyName(property.name) === "shell"
+      ) {
+        shellIsDefinitelyTrue =
+          unwrapTransparent(property.initializer).kind === ts.SyntaxKind.TrueKeyword;
+        continue;
+      }
+      if (
+        (ts.isShorthandPropertyAssignment(property) ||
+          ts.isMethodDeclaration(property) ||
+          ts.isGetAccessorDeclaration(property) ||
+          ts.isSetAccessorDeclaration(property)) &&
+        propertyName(property.name) === "shell"
+      ) {
+        shellIsDefinitelyTrue = false;
+      }
+    }
+    return shellIsDefinitelyTrue;
   });
 }
 
@@ -196,7 +241,9 @@ export function assessWindowsProcessPortability(
     const methodBindings = new Map<ts.Identifier, string>();
     const namespaceBindings = new Set<ts.Identifier>();
     const promisifyBindings = new Set<ts.Identifier>();
+    const utilNamespaceBindings = new Set<ts.Identifier>();
     const scriptBindings = new Set<ts.Identifier>();
+    const scriptPropertyBindings = new Map<ts.Identifier, Map<string, boolean>>();
 
     const bindingFor = (identifier: ts.Identifier): ts.Identifier | null =>
       resolveBinding(identifier, scopes);
@@ -219,10 +266,66 @@ export function assessWindowsProcessPortability(
       return required && CHILD_PROCESS_MODULES.has(required) ? method : null;
     };
 
+    const isNamespaceExpression = (
+      expression: ts.Expression,
+      modules: ReadonlySet<string>,
+      bindings: ReadonlySet<ts.Identifier>,
+    ): boolean => {
+      const value = unwrapTransparent(expression);
+      const required = requireModule(value);
+      if (required && modules.has(required)) return true;
+      if (!ts.isIdentifier(value)) return false;
+      const binding = bindingFor(value);
+      return Boolean(binding && bindings.has(binding));
+    };
+
+    const isPromisifyExpression = (expression: ts.Expression): boolean => {
+      const value = unwrapTransparent(expression);
+      if (ts.isIdentifier(value)) {
+        const binding = bindingFor(value);
+        return Boolean(binding && promisifyBindings.has(binding));
+      }
+      if (!ts.isPropertyAccessExpression(value) || value.name.text !== "promisify") {
+        return false;
+      }
+      return isNamespaceExpression(
+        value.expression,
+        UTIL_MODULES,
+        utilNamespaceBindings,
+      );
+    };
+
     const expressionContainsWindowsScript = (expression: ts.Expression): boolean => {
       let found = false;
       const visit = (node: ts.Node): void => {
         if (found) return;
+        if (ts.isPropertyAccessExpression(node)) {
+          const receiver = unwrapTransparent(node.expression);
+          if (ts.isIdentifier(receiver)) {
+            const binding = bindingFor(receiver);
+            const properties = binding
+              ? scriptPropertyBindings.get(binding)
+              : undefined;
+            if (properties) {
+              found = properties.get(node.name.text) ?? false;
+              return;
+            }
+          }
+        }
+        if (ts.isElementAccessExpression(node)) {
+          const receiver = unwrapTransparent(node.expression);
+          const selected = stringModule(node.argumentExpression);
+          if (ts.isIdentifier(receiver) && selected !== null) {
+            const binding = bindingFor(receiver);
+            const properties = binding
+              ? scriptPropertyBindings.get(binding)
+              : undefined;
+            if (properties) {
+              found = properties.get(selected) ?? false;
+              return;
+            }
+          }
+        }
         if (
           (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) &&
           WINDOWS_SCRIPT.test(node.text)
@@ -243,6 +346,47 @@ export function assessWindowsProcessPortability(
       return found;
     };
 
+    const recordScriptProperties = (
+      binding: ts.Identifier,
+      expression: ts.Expression,
+    ): boolean => {
+      const value = unwrapTransparent(expression);
+      if (!ts.isObjectLiteralExpression(value)) return false;
+      const properties = new Map<string, boolean>();
+      for (const property of value.properties) {
+        if (ts.isSpreadAssignment(property)) {
+          const spread = unwrapTransparent(property.expression);
+          if (ts.isIdentifier(spread)) {
+            const spreadBinding = bindingFor(spread);
+            const inherited = spreadBinding
+              ? scriptPropertyBindings.get(spreadBinding)
+              : undefined;
+            if (inherited) {
+              for (const [name, isWindowsScript] of inherited) {
+                properties.set(name, isWindowsScript);
+              }
+            }
+          }
+          continue;
+        }
+        if (ts.isPropertyAssignment(property)) {
+          const name = propertyName(property.name);
+          if (name !== null) {
+            properties.set(name, expressionContainsWindowsScript(property.initializer));
+          }
+          continue;
+        }
+        if (ts.isShorthandPropertyAssignment(property)) {
+          properties.set(
+            property.name.text,
+            expressionContainsWindowsScript(property.name),
+          );
+        }
+      }
+      scriptPropertyBindings.set(binding, properties);
+      return true;
+    };
+
     const collectSemantics = (node: ts.Node): void => {
       if (ts.isImportDeclaration(node) && node.importClause) {
         const module = stringModule(node.moduleSpecifier);
@@ -260,8 +404,11 @@ export function assessWindowsProcessPortability(
           }
         }
         if (module && UTIL_MODULES.has(module)) {
+          if (clause.name) utilNamespaceBindings.add(clause.name);
           const bindings = clause.namedBindings;
-          if (bindings && ts.isNamedImports(bindings)) {
+          if (bindings && ts.isNamespaceImport(bindings)) {
+            utilNamespaceBindings.add(bindings.name);
+          } else if (bindings) {
             for (const element of bindings.elements) {
               if (importedName(element) === "promisify") {
                 promisifyBindings.add(element.name);
@@ -271,12 +418,32 @@ export function assessWindowsProcessPortability(
         }
       }
 
+      if (ts.isImportEqualsDeclaration(node)) {
+        const module = importEqualsModule(node);
+        if (module && CHILD_PROCESS_MODULES.has(module)) {
+          namespaceBindings.add(node.name);
+        }
+        if (module && UTIL_MODULES.has(module)) {
+          utilNamespaceBindings.add(node.name);
+        }
+      }
+
       if (ts.isVariableDeclaration(node) && node.initializer) {
         if (ts.isIdentifier(node.name)) {
           const binding = node.name;
-          const required = requireModule(node.initializer);
-          if (required && CHILD_PROCESS_MODULES.has(required)) {
+          if (
+            isNamespaceExpression(
+              node.initializer,
+              CHILD_PROCESS_MODULES,
+              namespaceBindings,
+            )
+          ) {
             namespaceBindings.add(binding);
+          }
+          if (
+            isNamespaceExpression(node.initializer, UTIL_MODULES, utilNamespaceBindings)
+          ) {
+            utilNamespaceBindings.add(binding);
           }
 
           const direct = methodFromExpression(node.initializer);
@@ -285,24 +452,29 @@ export function assessWindowsProcessPortability(
           const initializer = unwrapTransparent(node.initializer);
           if (ts.isCallExpression(initializer)) {
             const callee = unwrapTransparent(initializer.expression);
-            if (ts.isIdentifier(callee)) {
-              const promisifyBinding = bindingFor(callee);
-              if (promisifyBinding && promisifyBindings.has(promisifyBinding)) {
-                const target = initializer.arguments[0];
-                if (target) {
-                  const method = methodFromExpression(target);
-                  if (method) methodBindings.set(binding, method);
-                }
+            if (isPromisifyExpression(callee)) {
+              const target = initializer.arguments[0];
+              if (target) {
+                const method = methodFromExpression(target);
+                if (method) methodBindings.set(binding, method);
               }
             }
           }
 
-          if (expressionContainsWindowsScript(node.initializer)) {
+          if (
+            !recordScriptProperties(binding, node.initializer) &&
+            expressionContainsWindowsScript(node.initializer)
+          ) {
             scriptBindings.add(binding);
           }
         } else {
-          const required = requireModule(node.initializer);
-          if (required && CHILD_PROCESS_MODULES.has(required)) {
+          if (
+            isNamespaceExpression(
+              node.initializer,
+              CHILD_PROCESS_MODULES,
+              namespaceBindings,
+            )
+          ) {
             for (const element of node.name.elements) {
               if (ts.isOmittedExpression(element) || !ts.isIdentifier(element.name)) {
                 continue;
