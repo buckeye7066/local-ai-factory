@@ -268,6 +268,7 @@ describe("Purpose Foundry", () => {
       const project = await store.create(
         intakeFromMarkdown(
           "# Publisher guard\nPublish only through an explicitly configured service.",
+          "C:/Vault/Publisher-guard.md",
         ),
       );
       await expect(
