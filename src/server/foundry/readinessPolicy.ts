@@ -11,22 +11,17 @@ export const REQUIRED_PRODUCTION_STATIONS = Object.freeze([
 
 export type RequiredProductionStation = (typeof REQUIRED_PRODUCTION_STATIONS)[number];
 
-export const UNMETERED_CHILD_STATIONS = Object.freeze([
-  "scout",
-  "flexfactor",
-] as const satisfies readonly StationId[]);
-
 /**
- * The current automatic route has one metered internal evidence line:
- * Factory Deck, Crucible, and Watchtower. FlexFactor remains an optional
- * specialist because its child orchestrator owns a separate call ledger.
- * Legacy free records retain their historical required FlexFactor station.
+ * One internal evidence line applies to every project, including records that
+ * still carry a legacy free/paid value: Factory Deck, Crucible, and Watchtower.
+ * FlexFactor remains an optional specialist because its child orchestrator owns
+ * its own single model ladder and call ledger.
  */
 export function requiredProductionStations(
-  routingMode?: RoutingMode,
+  _routingMode?: RoutingMode,
 ): RequiredProductionStation[] {
   return REQUIRED_PRODUCTION_STATIONS.filter(
-    (station) => routingMode === "free" || station !== "flexfactor",
+    (station) => station !== "flexfactor",
   );
 }
 
@@ -36,16 +31,10 @@ export function normalizeFoundryStations(
 ): StationId[] {
   const out: StationId[] = [];
   const seen = new Set<StationId>();
-  const allowed =
-    routingMode === "paid"
-      ? selected.filter(
-          (station) =>
-            !UNMETERED_CHILD_STATIONS.includes(
-              station as (typeof UNMETERED_CHILD_STATIONS)[number],
-            ),
-        )
-      : selected;
-  for (const station of [...requiredProductionStations(routingMode), ...allowed]) {
+  for (const station of [
+    ...requiredProductionStations(routingMode),
+    ...selected,
+  ]) {
     if (!seen.has(station)) {
       seen.add(station);
       out.push(station);
