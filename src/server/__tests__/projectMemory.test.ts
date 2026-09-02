@@ -144,6 +144,17 @@ describe("durable project purpose memory", () => {
     expect(localNew).toMatch(/^new-local-sha256:[a-f0-9]{64}$/);
     expect(localNew).not.toContain("purpose-foundry");
     expect(
+      projectKeyForOptions({
+        mode: "new",
+        newRepo: {
+          name: "GrantFlow",
+          owner: "Buckeye7066",
+          private: true,
+          createRemote: false,
+        },
+      }),
+    ).toBeNull();
+    expect(
       projectKeyForOptions(
         {
           mode: "new",
@@ -319,6 +330,29 @@ describe("durable project purpose memory", () => {
     });
     expect(trailingProtection.purpose).toBe(firstContract.purpose);
     expect(trailingProtection.purposeSource).toBe("project-memory");
+
+    const terseProtection = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "No change to the product purpose; improve export reliability",
+      goals: ["Improve export reliability"],
+      spec: spec("A third model-authored replacement that must be ignored"),
+      memory,
+      now: 31,
+    });
+    expect(terseProtection.purpose).toBe(firstContract.purpose);
+
+    const contrastedPivot = createGoalContract({
+      projectKey,
+      runId: randomUUID(),
+      idea: "Do not change the export format, but change the product purpose to help funders",
+      goals: ["Change the product purpose and audience"],
+      spec: spec("Help funders publish opportunities"),
+      memory,
+      now: 31,
+    });
+    expect(contrastedPivot.purpose).toBe("Help funders publish opportunities");
+    expect(contrastedPivot.purposeSource).toBe("current-spec");
 
     const audienceUpdate = createGoalContract({
       projectKey,
