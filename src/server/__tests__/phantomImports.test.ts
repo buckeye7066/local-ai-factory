@@ -58,6 +58,45 @@ describe("importedPackages", () => {
       "legacy-package",
     ]);
   });
+
+  it("reads JSDoc and Flow type imports without matching fixtures or comments", () => {
+    const src = [
+      '/** @type {import("jsdoc-package").Thing} */',
+      "const thing = null;",
+      'import typeof FlowThing from "flow-package";',
+      "const fixture = 'import typeof Fake from \"fixture-package\";';",
+      '// import typeof Commented from "comment-package";',
+    ].join(BR);
+    expect(importedPackages(src, "src/example.js")).toEqual([
+      "jsdoc-package",
+      "flow-package",
+    ]);
+  });
+
+  it("preserves UTF-16 offsets while masking syntax before a Flow import", () => {
+    const src = [
+      'const astral = "🚀";',
+      'const template = `🚀 import typeof Fake from "template-package"`;',
+      'const regex = /🚀 import typeof Fake from "regex-package"/;',
+      'const element = <div>🚀 import typeof Fake from "jsx-package"</div>;',
+      'import typeof RealType from "real-flow-package";',
+    ].join(BR);
+    expect(importedPackages(src, "src/example.jsx")).toEqual(["real-flow-package"]);
+  });
+
+  it("reads JSDoc @import tags and masks template, regex, and JSX fixtures", () => {
+    const src = [
+      '/** @import {SomeType} from "jsdoc-tag-package" */',
+      'const template = `${prefix} import typeof Fake from "template-package"`;',
+      'const regex = /import typeof Fake from "regex-package"/;',
+      'const element = <div>import typeof Fake from "jsx-package"</div>;',
+      'import typeof RealType from "real-flow-package";',
+    ].join(BR);
+    expect(importedPackages(src, "src/example.jsx")).toEqual([
+      "jsdoc-tag-package",
+      "real-flow-package",
+    ]);
+  });
 });
 
 describe("declaredDependencies", () => {
@@ -121,6 +160,18 @@ describe("assessPhantomImports (the SermonSmith failure, twice over)", () => {
     );
     expect(out.contents).toContain('from "react-router"');
     expect(out.contents).toContain('forbiddenPackage = "react-router-dom"');
+  });
+
+  it("refuses undeclared JSDoc and Flow-only dependencies", () => {
+    const root = repo({ "": { dependencies: { react: "19" } } });
+    for (const source of [
+      '/** @type {import("left-pad").Thing} */\nconst x = null;',
+      'import typeof LeftPad from "left-pad";',
+    ]) {
+      const verdict = assessPhantomImports(root, "src/a.js", source);
+      expect(verdict.refused).toBe(true);
+      expect(verdict.reason).toContain("left-pad");
+    }
   });
 
   it("still refuses an import with NO declared counterpart (the build must declare it)", () => {

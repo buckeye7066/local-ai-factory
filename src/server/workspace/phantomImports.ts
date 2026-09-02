@@ -73,6 +73,124 @@ interface ImportedSpecifier {
   end: number;
 }
 
+type ScannedToken = {
+  kind: ts.SyntaxKind;
+  start: number;
+  end: number;
+  text: string;
+  depth: number;
+};
+
+type SourceRange = { start: number; end: number };
+
+function flowScannerInertRanges(source: string, relPath: string): SourceRange[] {
+  const sourceFile = ts.createSourceFile(
+    relPath,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    scriptKind(relPath),
+  );
+  const ranges: SourceRange[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isTemplateExpression(node) ||
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      ts.isRegularExpressionLiteral(node) ||
+      ts.isJsxElement(node) ||
+      ts.isJsxSelfClosingElement(node) ||
+      ts.isJsxFragment(node)
+    ) {
+      ranges.push({ start: node.getStart(sourceFile), end: node.getEnd() });
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return ranges;
+}
+
+function maskSourceRanges(source: string, ranges: readonly SourceRange[]): string {
+  const characters = source.split("");
+  for (const range of ranges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      if (characters[index] !== "\n" && characters[index] !== "\r") {
+        characters[index] = " ";
+      }
+    }
+  }
+  return characters.join("");
+}
+
+/**
+ * TypeScript's parser deliberately rejects Flow's `import typeof` syntax.
+ * Scan tokens instead: comments and string fixtures remain single tokens, and
+ * only a top-level import/typeof/from/string sequence becomes a dependency.
+ */
+function flowTypeofImportSpecifiers(
+  source: string,
+  relPath: string,
+): ImportedSpecifier[] {
+  // A raw scanner cannot distinguish a regex-closing slash from the start of
+  // a line comment without parser-directed rescans. Mask parser-recognized
+  // template, regex, and JSX ranges first while preserving UTF-16 offsets, so
+  // one fixture cannot hide or fabricate a later real Flow declaration.
+  const scanSource = maskSourceRanges(source, flowScannerInertRanges(source, relPath));
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    true,
+    ts.LanguageVariant.Standard,
+    scanSource,
+  );
+  const tokens: ScannedToken[] = [];
+  let depth = 0;
+  for (
+    let kind = scanner.scan();
+    kind !== ts.SyntaxKind.EndOfFileToken;
+    kind = scanner.scan()
+  ) {
+    const token: ScannedToken = {
+      kind,
+      start: scanner.getTokenPos(),
+      end: scanner.getTextPos(),
+      text: scanner.getTokenValue(),
+      depth,
+    };
+    tokens.push(token);
+    if (kind === ts.SyntaxKind.OpenBraceToken) depth += 1;
+    if (kind === ts.SyntaxKind.CloseBraceToken) depth = Math.max(0, depth - 1);
+  }
+
+  const specs: ImportedSpecifier[] = [];
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const token = tokens[index]!;
+    if (
+      token.depth !== 0 ||
+      token.kind !== ts.SyntaxKind.ImportKeyword ||
+      tokens[index + 1]?.kind !== ts.SyntaxKind.TypeOfKeyword
+    ) {
+      continue;
+    }
+    for (let cursor = index + 2; cursor < tokens.length; cursor += 1) {
+      const candidate = tokens[cursor]!;
+      if (candidate.kind === ts.SyntaxKind.SemicolonToken) break;
+      if (
+        candidate.kind === ts.SyntaxKind.FromKeyword &&
+        tokens[cursor + 1]?.kind === ts.SyntaxKind.StringLiteral
+      ) {
+        const literal = tokens[cursor + 1]!;
+        specs.push({
+          text: literal.text,
+          start: literal.start + 1,
+          end: literal.end - 1,
+        });
+        break;
+      }
+    }
+  }
+  return specs;
+}
+
 function scriptKind(relPath: string): ts.ScriptKind {
   const lower = relPath.toLowerCase();
   if (lower.endsWith(".tsx")) return ts.ScriptKind.TSX;
@@ -98,6 +216,7 @@ function importedSpecifiers(
     scriptKind(relPath),
   );
   const specs: ImportedSpecifier[] = [];
+  const visitedJsDocs = new Set<ts.JSDoc>();
   const add = (literal: ts.StringLiteralLike | undefined) => {
     if (!literal) return;
     specs.push({
@@ -107,6 +226,15 @@ function importedSpecifiers(
     });
   };
   const visit = (node: ts.Node): void => {
+    // JSDoc nodes are attached metadata rather than normal source children.
+    // Traverse them explicitly so @type {import("pkg").Type} is enforced.
+    const jsDocs = (node as ts.Node & { jsDoc?: ts.NodeArray<ts.JSDoc> }).jsDoc;
+    for (const jsDoc of jsDocs ?? []) {
+      if (visitedJsDocs.has(jsDoc)) continue;
+      visitedJsDocs.add(jsDoc);
+      visit(jsDoc);
+    }
+
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       if (node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
         add(node.moduleSpecifier);
@@ -119,6 +247,12 @@ function importedSpecifiers(
       if ((isRequire || isDynamicImport) && first && ts.isStringLiteralLike(first)) {
         add(first);
       }
+    } else if (
+      ts.isJSDocImportTag(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      add(node.moduleSpecifier);
     } else if (
       ts.isImportTypeNode(node) &&
       ts.isLiteralTypeNode(node.argument) &&
@@ -135,6 +269,7 @@ function importedSpecifiers(
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
+  specs.push(...flowTypeofImportSpecifiers(source, relPath));
   return specs;
 }
 
