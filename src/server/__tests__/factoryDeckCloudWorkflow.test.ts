@@ -24,6 +24,16 @@ const foundrySmoke = readFileSync(
 );
 
 describe("paid cloud workflow contract", () => {
+  it("pins the current strongest Anthropic model for paid production", () => {
+    for (const workflow of [factory, foundry]) {
+      expect(workflow).toContain("ANTHROPIC_MODEL: claude-fable-5-1");
+      expect(workflow).toContain(
+        "FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1",
+      );
+      expect(workflow).not.toContain("claude-opus-4-8");
+    }
+  });
+
   it.each([
     ["Factory Deck", factory],
     ["Purpose Foundry", foundry],

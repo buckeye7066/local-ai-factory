@@ -146,7 +146,7 @@ export interface AppSecrets {
 
 /** Build the typed config from process.env (pure — easy to test). */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const anthropicModel = env.ANTHROPIC_MODEL || "claude-opus-4-8";
+  const anthropicModel = env.ANTHROPIC_MODEL || "claude-fable-5-1";
   const openaiModel = env.OPENAI_MODEL || "gpt-5.5";
   return {
     free: {

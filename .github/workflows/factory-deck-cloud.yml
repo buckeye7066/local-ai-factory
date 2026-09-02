@@ -71,10 +71,10 @@ jobs:
           FACTORY_IDEA: ${{ inputs.idea || 'Build and verify a minimal TypeScript command-line task checklist. It must be command-line only with no HTML, browser, or web UI; support add, list, complete, and delete commands; persist tasks in a local JSON file; and include automated tests for the complete primary workflow.' }}
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
-          ANTHROPIC_MODEL: claude-opus-4-8
+          ANTHROPIC_MODEL: claude-fable-5-1
           OPENAI_MODEL: gpt-5.5
           FACTORY_SOL_MODEL: gpt-5.5
-          FACTORY_FABLE_OR_OPUS_MODEL: claude-opus-4-8
+          FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
           FACTORY_FREE_ENABLED: "0"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
@@ -254,10 +254,10 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
-          ANTHROPIC_MODEL: claude-opus-4-8
+          ANTHROPIC_MODEL: claude-fable-5-1
           OPENAI_MODEL: gpt-5.5
           FACTORY_SOL_MODEL: gpt-5.5
-          FACTORY_FABLE_OR_OPUS_MODEL: claude-opus-4-8
+          FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
           FACTORY_FREE_ENABLED: "0"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
