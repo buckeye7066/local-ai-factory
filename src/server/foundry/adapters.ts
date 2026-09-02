@@ -978,8 +978,10 @@ export class FoundryAdapters {
       "repo-rewards.json",
       result,
     );
-    const resultRows = Array.isArray((result as { results?: unknown }).results)
-      ? (result as { results: unknown[] }).results
+    const resultObject =
+      result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+    const resultRows = Array.isArray(resultObject.results)
+      ? resultObject.results
       : null;
     const rows = (resultRows ?? []).filter(
       (row): row is Record<string, unknown> =>
@@ -1045,9 +1047,11 @@ export class FoundryAdapters {
     const handoff: StationHandoff = {
       insights: [
         `RepoRewards completed a purpose-bound search for ${project.name}${count === null ? "" : ` and returned ${count} result(s)`}.`,
-        ...topCandidates.map(
-          (candidate) =>
-            `${candidate.name}${candidate.score === null ? "" : ` (score ${candidate.score})`}: ${candidate.summary || "candidate repository for implementation review"}`,
+        ...topCandidates.map((candidate) =>
+          `${candidate.name}${candidate.score === null ? "" : ` (score ${candidate.score})`}: ${candidate.summary || "candidate repository for implementation review"}`.slice(
+            0,
+            4_000,
+          ),
         ),
       ],
       sources: [
