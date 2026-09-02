@@ -88,7 +88,8 @@ async function main() {
     process.exit(1);
   }
 
-  const options: RunOptions = {};
+  const projectId = process.env.FACTORY_PROJECT_ID?.trim();
+  const options: RunOptions = projectId ? { projectId } : {};
   let started;
   try {
     started = startRun({ idea, options, config, secrets });
