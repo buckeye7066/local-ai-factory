@@ -233,3 +233,4 @@ describe("paid cloud workflow contract", () => {
     expect(dockerfile).toContain("ENTRYPOINT []");
   });
 });
+

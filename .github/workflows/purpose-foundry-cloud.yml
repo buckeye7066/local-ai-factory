@@ -100,6 +100,20 @@ jobs:
             .factory/**
             workspaces/**
             !workspaces/**/node_modules/**
+            !workspaces/**/__pycache__/**
+            !workspaces/**/*.pyc
+            !workspaces/**/*.pyo
+            !workspaces/**/.coverage*
+            !workspaces/**/.pytest_cache/**
+            !workspaces/**/.mypy_cache/**
+            !workspaces/**/.ruff_cache/**
+            !workspaces/**/.hypothesis/**
+            !workspaces/**/.tox/**
+            !workspaces/**/.nox/**
+            !workspaces/**/.nyc_output/**
+            !workspaces/**/coverage/**
+            !workspaces/**/playwright-report/**
+            !workspaces/**/test-results/**
 
   windows:
     name: Verify Purpose Foundry candidate on Windows
@@ -154,6 +168,20 @@ jobs:
             .factory/**
             workspaces/**
             !workspaces/**/node_modules/**
+            !workspaces/**/__pycache__/**
+            !workspaces/**/*.pyc
+            !workspaces/**/*.pyo
+            !workspaces/**/.coverage*
+            !workspaces/**/.pytest_cache/**
+            !workspaces/**/.mypy_cache/**
+            !workspaces/**/.ruff_cache/**
+            !workspaces/**/.hypothesis/**
+            !workspaces/**/.tox/**
+            !workspaces/**/.nox/**
+            !workspaces/**/.nyc_output/**
+            !workspaces/**/coverage/**
+            !workspaces/**/playwright-report/**
+            !workspaces/**/test-results/**
 
   macos:
     name: Verify Purpose Foundry candidate on macOS
@@ -208,6 +236,20 @@ jobs:
             .factory/**
             workspaces/**
             !workspaces/**/node_modules/**
+            !workspaces/**/__pycache__/**
+            !workspaces/**/*.pyc
+            !workspaces/**/*.pyo
+            !workspaces/**/.coverage*
+            !workspaces/**/.pytest_cache/**
+            !workspaces/**/.mypy_cache/**
+            !workspaces/**/.ruff_cache/**
+            !workspaces/**/.hypothesis/**
+            !workspaces/**/.tox/**
+            !workspaces/**/.nox/**
+            !workspaces/**/.nyc_output/**
+            !workspaces/**/coverage/**
+            !workspaces/**/playwright-report/**
+            !workspaces/**/test-results/**
 
   verify:
     name: Purpose Foundry end-to-end production verification
@@ -299,3 +341,17 @@ jobs:
             .factory/**
             workspaces/**
             !workspaces/**/node_modules/**
+            !workspaces/**/__pycache__/**
+            !workspaces/**/*.pyc
+            !workspaces/**/*.pyo
+            !workspaces/**/.coverage*
+            !workspaces/**/.pytest_cache/**
+            !workspaces/**/.mypy_cache/**
+            !workspaces/**/.ruff_cache/**
+            !workspaces/**/.hypothesis/**
+            !workspaces/**/.tox/**
+            !workspaces/**/.nox/**
+            !workspaces/**/.nyc_output/**
+            !workspaces/**/coverage/**
+            !workspaces/**/playwright-report/**
+            !workspaces/**/test-results/**

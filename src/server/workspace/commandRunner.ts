@@ -1,7 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
-import { isJavascriptTestPath, isPythonTestPath } from "./testPaths.js";
+import {
+  isJavascriptTestPath,
+  isPythonTestPath,
+  normalizeSafeRelativePath,
+} from "./testPaths.js";
 import {
   buildVerificationSandboxPlan,
   verificationSandboxConfig,
@@ -123,6 +127,11 @@ function isSafeDirectJsTest(arg: string): boolean {
   return isJavascriptTestPath(arg);
 }
 
+function isSafeVitestRoot(arg: string): boolean {
+  if (!arg.startsWith("--root=")) return false;
+  return normalizeSafeRelativePath(arg.slice("--root=".length)) !== null;
+}
+
 /** Engine-authored local-runner forms only; npx may never download a package. */
 export function isAllowedNpxVerification(args: string[]): boolean {
   if (args[0] !== "--no-install") return false;
@@ -139,7 +148,7 @@ export function isAllowedNpxVerification(args: string[]): boolean {
       args[2] === "run" &&
       isSafeDirectJsTest(args[3]!) &&
       args[4] === "--reporter=json" &&
-      args[5] === "--root=."
+      isSafeVitestRoot(args[5]!)
     );
   }
   if (tool === "jest") {
@@ -213,7 +222,7 @@ export function isScriptExecuting(_bin: string, _args: string[]): boolean {
  * We validate every argv token against a strict character allowlist so no shell
  * metacharacter can ever reach cmd.exe (we spawn cmd with verbatim args).
  */
-const SAFE_ARG = /^[A-Za-z0-9._:@\/=-]+$/;
+const SAFE_ARG = /^[A-Za-z0-9._:@\/= -]+$/;
 
 export function argsAreShellSafe(bin: string, args: string[]): boolean {
   return [bin, ...args].every((a) => SAFE_ARG.test(a));
