@@ -274,7 +274,17 @@ describe("verificationCommandsForWorkspace", () => {
       uiAcceptanceRequired: true,
     });
     expect(plan.incomplete).toEqual([]);
-    expect(plan.commands.find((command) => command.isBrowser)).toMatchObject({
+    const browserSetupIndex = plan.commands.findIndex(
+      (command) =>
+        command.bin === "npx" &&
+        command.args.join(" ") === "--no-install playwright install chromium",
+    );
+    const browserTestIndex = plan.commands.findIndex(
+      (command) => command.isBrowser,
+    );
+    expect(browserSetupIndex).toBeGreaterThan(-1);
+    expect(browserSetupIndex).toBeLessThan(browserTestIndex);
+    expect(plan.commands[browserTestIndex]).toMatchObject({
       args: [
         "--no-install",
         "playwright",
@@ -284,6 +294,9 @@ describe("verificationCommandsForWorkspace", () => {
       ],
       directTestPath: "tests/profile.spec.ts",
     });
+    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
+      true,
+    );
   });
 });
 
