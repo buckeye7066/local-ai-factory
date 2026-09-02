@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { builtinModules } from "node:module";
+import { join } from "node:path";
+import ts from "typescript";
 import { JS_TS_SOURCE_EXTENSION_RX } from "./sourceExtensions.js";
 
 /**
@@ -65,21 +66,94 @@ export function declaredDependencies(workspacePath: string): Set<string> {
   return names;
 }
 
-/** Bare package specifiers imported by a JS/TS source file. */
-export function importedPackages(source: string): string[] {
-  const specs = new Set<string>();
-  const add = (raw?: string) => {
-    if (!raw) return;
-    if (raw.startsWith(".") || raw.startsWith("/") || raw.startsWith("#")) return;
-    if (/^[a-zA-Z]+:/.test(raw) && !raw.startsWith("node:")) return; // http:, data:
-    const parts = raw.split("/");
-    const pkg = raw.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
-    if (pkg) specs.add(pkg);
+interface ImportedSpecifier {
+  text: string;
+  /** Character range inside the specifier's quotes. */
+  start: number;
+  end: number;
+}
+
+function scriptKind(relPath: string): ts.ScriptKind {
+  const lower = relPath.toLowerCase();
+  if (lower.endsWith(".tsx")) return ts.ScriptKind.TSX;
+  if (lower.endsWith(".jsx")) return ts.ScriptKind.JSX;
+  if (/\.[cm]?js$/.test(lower)) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
+}
+
+/**
+ * Return only module specifiers attached to actual syntax nodes. A regex over
+ * arbitrary source also matches comments, error messages, and test fixtures
+ * such as `const forbidden = ["react", "express"]`.
+ */
+function importedSpecifiers(
+  source: string,
+  relPath = "generated.tsx",
+): ImportedSpecifier[] {
+  const sourceFile = ts.createSourceFile(
+    relPath,
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    scriptKind(relPath),
+  );
+  const specs: ImportedSpecifier[] = [];
+  const add = (literal: ts.StringLiteralLike | undefined) => {
+    if (!literal) return;
+    specs.push({
+      text: literal.text,
+      start: literal.getStart(sourceFile) + 1,
+      end: literal.getEnd() - 1,
+    });
   };
-  for (const m of source.matchAll(/\bfrom\s+["']([^"']+)["']/g)) add(m[1]);
-  for (const m of source.matchAll(/\bimport\s+["']([^"']+)["']/g)) add(m[1]);
-  for (const m of source.matchAll(/\brequire\(\s*["']([^"']+)["']\s*\)/g)) add(m[1]);
-  for (const m of source.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g)) add(m[1]);
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+        add(node.moduleSpecifier);
+      }
+    } else if (ts.isCallExpression(node)) {
+      const isRequire =
+        ts.isIdentifier(node.expression) && node.expression.text === "require";
+      const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const first = node.arguments[0];
+      if ((isRequire || isDynamicImport) && first && ts.isStringLiteralLike(first)) {
+        add(first);
+      }
+    } else if (
+      ts.isImportTypeNode(node) &&
+      ts.isLiteralTypeNode(node.argument) &&
+      ts.isStringLiteralLike(node.argument.literal)
+    ) {
+      add(node.argument.literal);
+    } else if (
+      ts.isExternalModuleReference(node) &&
+      node.expression &&
+      ts.isStringLiteralLike(node.expression)
+    ) {
+      add(node.expression);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return specs;
+}
+
+function packageName(raw: string): string | null {
+  if (!raw || raw.startsWith(".") || raw.startsWith("/") || raw.startsWith("#")) {
+    return null;
+  }
+  if (/^[a-zA-Z]+:/.test(raw) && !raw.startsWith("node:")) return null;
+  const parts = raw.split("/");
+  return raw.startsWith("@") ? parts.slice(0, 2).join("/") || null : parts[0] || null;
+}
+
+/** Bare package specifiers imported by a JS/TS source file. */
+export function importedPackages(source: string, relPath = "generated.tsx"): string[] {
+  const specs = new Set<string>();
+  for (const imported of importedSpecifiers(source, relPath)) {
+    const pkg = packageName(imported.text);
+    if (pkg) specs.add(pkg);
+  }
   return [...specs];
 }
 
@@ -112,22 +186,28 @@ export interface PhantomVerdict {
 export function correctPhantomImports(
   contents: string,
   declared: Set<string>,
+  relPath = "generated.tsx",
 ): { contents: string; corrections: string[] } {
-  const corrections: string[] = [];
-  let out = contents;
-  for (const pkg of importedPackages(contents)) {
-    if (BUILTINS.has(pkg) || declared.has(pkg)) continue;
+  const replacements: Array<{ start: number; end: number; text: string }> = [];
+  const corrections = new Set<string>();
+  for (const specifier of importedSpecifiers(contents, relPath)) {
+    const pkg = packageName(specifier.text);
+    if (!pkg || BUILTINS.has(pkg) || declared.has(pkg)) continue;
     const near = nearestDeclared(pkg, declared);
     if (!near) continue;
-    // Replace the specifier inside its quotes, preserving any deep path
-    // ("react-router-dom/server" -> "react-router/server").
-    for (const quote of ['"', "'"]) {
-      out = out.split(`${quote}${pkg}${quote}`).join(`${quote}${near}${quote}`);
-      out = out.split(`${quote}${pkg}/`).join(`${quote}${near}/`);
-    }
-    corrections.push(`${pkg} -> ${near}`);
+    replacements.push({
+      start: specifier.start,
+      end: specifier.end,
+      text: `${near}${specifier.text.slice(pkg.length)}`,
+    });
+    corrections.add(`${pkg} -> ${near}`);
   }
-  return { contents: out, corrections };
+  let out = contents;
+  for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
+    out =
+      out.slice(0, replacement.start) + replacement.text + out.slice(replacement.end);
+  }
+  return { contents: out, corrections: [...corrections] };
 }
 
 /**
@@ -145,9 +225,9 @@ export function assessPhantomImports(
   if (declared.size === 0) return { refused: false };
 
   // FIX FIRST: correct every specifier that has a known right answer.
-  const fixed = correctPhantomImports(contents, declared);
+  const fixed = correctPhantomImports(contents, declared, relPath);
   const remaining: string[] = [];
-  for (const pkg of importedPackages(fixed.contents)) {
+  for (const pkg of importedPackages(fixed.contents, relPath)) {
     if (BUILTINS.has(pkg) || declared.has(pkg)) continue;
     remaining.push(pkg);
   }
