@@ -252,7 +252,10 @@ describe("Purpose Foundry", () => {
       routingMode: "paid",
       selectedStations: ["factory-deck", "crucible"],
     });
-    const posted: Array<{ options?: Record<string, unknown> }> = [];
+    const posted: Array<{
+      idea?: string;
+      options?: { goals?: string[] } & Record<string, unknown>;
+    }> = [];
     const adapters = new FoundryAdapters(store, {
       config: () =>
         loadConfig({
@@ -263,7 +266,8 @@ describe("Purpose Foundry", () => {
       fetch: async (_url, init) => {
         posted.push(
           JSON.parse(String(init?.body)) as {
-            options?: Record<string, unknown>;
+            idea?: string;
+            options?: { goals?: string[] } & Record<string, unknown>;
           },
         );
         return new Response("{}", {
@@ -281,6 +285,12 @@ describe("Purpose Foundry", () => {
       codeProvider: "openai",
       reviewProvider: "openai",
     });
+    expect(posted[0]?.options?.goals).toContain(
+      `Mission: ${project.constitution.purpose}`,
+    );
+    for (const targetUser of project.constitution.targetUsers) {
+      expect(posted[0]?.options?.goals).toContain(`Audience: ${targetUser}`);
+    }
   });
 
   it("advertises App Store Publisher only with an explicit endpoint", async () => {
