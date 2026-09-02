@@ -17,7 +17,6 @@ jobs:
   verify:
     name: Purpose Foundry end-to-end production verification
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[foundry-smoke]'))
-    environment: paid-production-main-automated
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
