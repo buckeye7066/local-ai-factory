@@ -2210,10 +2210,13 @@ async function executeRun(
           spec,
           testWriterBuild,
           {
-          manifestExcerpt:
-            repoAnalysis?.manifestExcerpts
-              .map((manifest) => `----- ${manifest.path} -----\n${manifest.excerpt}`)
-              .join("\n\n") ?? "",
+            manifestExcerpt:
+              repoAnalysis?.manifestExcerpts
+                .map(
+                  (manifest) =>
+                    `----- ${manifest.path} -----\n${manifest.excerpt}`,
+                )
+                .join("\n\n") ?? "",
           },
         );
       }
@@ -2222,7 +2225,11 @@ async function executeRun(
           "Test Writer produced no change-specific tests; a live build cannot be verified or delivered.",
         );
       }
-      const testAssessment = assessGeneratedTests(spec, testWriterBuild, testPlan);
+      const testAssessment = assessGeneratedTests(
+        spec,
+        testWriterBuild,
+        testPlan,
+      );
       if (!run.demo && !testAssessment.ok) {
         throw new Error(
           "Generated acceptance tests are not valid evidence: " +
