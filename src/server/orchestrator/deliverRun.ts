@@ -57,7 +57,8 @@ import { planTrunkAdvance } from "./releasePlan.js";
  *     rejected fast-forward is reported, not overridden);
  *   - new-repo      → git init, commit, `gh repo create owner/name --private
  *     --source . --push`;
- *   - workspace-only→ nothing to deliver; say so plainly.
+ *   - workspace-only→ initialize a local Git artifact, commit only the exact
+ *     receipt-bound files, and verify the committed tree. Nothing is pushed.
  *
  * Failure is REPORTED, never swallowed and never fatal: a completed build whose
  * push was rejected must still show as completed with a destination that says
@@ -301,12 +302,59 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
 
   try {
     if (dest.kind === "workspace-only") {
+      const init = await initRepo(input.workspacePath);
+      if (init && init.code !== 0) {
+        return {
+          ...dest,
+          status: "failed",
+          detail: `Local artifact git init failed — ${failureText(init)}`,
+          deliveredAt: now,
+        };
+      }
+      for (const [key, value] of [
+        ["user.name", "Factory Deck"],
+        ["user.email", "factory-deck@local.invalid"],
+      ] as const) {
+        const configured = await git(
+          ["config", "--local", key, value],
+          input.workspacePath,
+          15_000,
+        );
+        if (configured.code !== 0) {
+          return {
+            ...dest,
+            status: "failed",
+            detail: `Local artifact git identity failed — ${failureText(configured)}`,
+            deliveredAt: now,
+          };
+        }
+      }
+      const commit = await commitRunFiles(
+        input.workspacePath,
+        input.filePaths,
+        commitMessage(input),
+      );
+      const verifiedCommit = await resolveVerifiedCommit(commit);
+      if (!verifiedCommit.sha) {
+        return {
+          ...dest,
+          status: "failed",
+          detail:
+            `REFUSED: ${verifiedCommit.reason ?? "local committed tree is not verified"}; ` +
+            "no production artifact was recorded.",
+          deliveredAt: now,
+        };
+      }
+      const changedDuringCommit = await receiptStillValid();
+      if (changedDuringCommit) return changedDuringCommit;
       return {
         ...dest,
-        status: "skipped",
+        status: "delivered",
         detail:
-          dest.detail ??
-          "No repo attached — the finished work is in the workspace folder.",
+          `${verifiedCommit.detail} Receipt-bound local Git artifact ` +
+          `${verifiedCommit.sha.slice(0, 12)} is preserved at ${input.workspacePath}; ` +
+          "no remote push was requested.",
+        commitSha: verifiedCommit.sha,
         deliveredAt: now,
       };
     }

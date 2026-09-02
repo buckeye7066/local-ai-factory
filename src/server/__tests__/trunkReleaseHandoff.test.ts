@@ -240,8 +240,8 @@ describe("planRelease — the decision itself", () => {
         destination: {
           kind: "workspace-only",
           branch: null,
-          commitSha: null,
-          status: "skipped",
+          commitSha: "a".repeat(40),
+          status: "delivered",
         },
         demo: false,
         releaseToMainEnabled: true,

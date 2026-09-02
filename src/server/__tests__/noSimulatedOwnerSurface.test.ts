@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -7,6 +14,10 @@ import { randomUUID } from "node:crypto";
 
 import { findRemovedRunOption, REMOVED_RUN_OPTIONS } from "../removedOptions.js";
 import { deliverRun } from "../orchestrator/deliverRun.js";
+import {
+  captureFileDigests,
+  verifyCommitFileDigests,
+} from "../workspace/verificationReceipt.js";
 import type { RunDestination } from "../../shared/schemas.js";
 
 /**
@@ -142,5 +153,78 @@ describe("deliverRun — a simulated run never writes into a real repo", () => {
     expect(before).toContain("owner-real-app");
     expect(git(["branch", "--list"])).not.toMatch(/factory-deck/);
     expect(git(["log", "--oneline"]).trim().split("\n")).toHaveLength(1);
+  });
+});
+
+describe("deliverRun — workspace-only output is a verified local artifact", () => {
+  let workspace: string;
+
+  beforeEach(() => {
+    workspace = mkdtempSync(join(tmpdir(), "fd-local-artifact-"));
+    mkdirSync(join(workspace, "src"), { recursive: true });
+    writeFileSync(
+      join(workspace, "package.json"),
+      '{"scripts":{"test":"node test.js"}}\n',
+    );
+    writeFileSync(join(workspace, "src", "index.js"), "export const ready = true;\n");
+  });
+
+  afterEach(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it("commits the exact receipt-bound bytes without requiring a remote", async () => {
+    const runId = randomUUID();
+    const paths = ["package.json", "src/index.js"];
+    const fileDigests = await captureFileDigests(workspace, paths);
+    const result = await deliverRun({
+      destination: {
+        kind: "workspace-only",
+        target: "(no repo attached)",
+        branch: null,
+        status: "planned",
+        detail: null,
+        url: null,
+        deliveredAt: null,
+      },
+      workspacePath: workspace,
+      filePaths: paths,
+      runId,
+      appName: "Verified local app",
+      options: {},
+      verification: {
+        qaPassed: true,
+        testStatus: "passing",
+        writeRefusals: 0,
+        incompleteCommands: 0,
+        fileDigests,
+      },
+    });
+
+    expect(result.status).toBe("delivered");
+    expect(result.commitSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(result.detail).toMatch(/receipt-bound local git artifact/i);
+    expect(existsSync(join(workspace, ".git"))).toBe(true);
+    expect(
+      verifyCommitFileDigests(workspace, result.commitSha!, paths, fileDigests).ok,
+    ).toBe(true);
+    expect(
+      execFileSync("git", ["show", "HEAD:src/index.js"], {
+        cwd: workspace,
+        encoding: "utf8",
+      }),
+    ).toBe("export const ready = true;\n");
+    expect(
+      execFileSync("git", ["log", "-1", "--format=%B%n%an <%ae>"], {
+        cwd: workspace,
+        encoding: "utf8",
+      }),
+    ).toContain(`Factory-Deck-Run: ${runId}`);
+    expect(
+      execFileSync("git", ["log", "-1", "--format=%an <%ae>"], {
+        cwd: workspace,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("Factory Deck <factory-deck@local.invalid>");
   });
 });
