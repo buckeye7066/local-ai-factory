@@ -2764,6 +2764,8 @@ async function executeRun(
         evidenceDigest: candidateDigest,
       });
       if (deterministicBlockers.length > 0) {
+        const externalPlatformEvidenceHold =
+          onlyPlatformEvidenceBlockers(deterministicBlockers);
         const blockedReceipt = evaluateProductionReadiness(
           { ...candidateFacts, evidenceDigest: candidateDigest, reviews: [] },
           { requireDelivery: false },
@@ -2780,7 +2782,10 @@ async function executeRun(
           receipt: blockedReceipt,
         });
         run.status = "failed";
-        run.resumable = onlyPlatformEvidenceBlockers(deterministicBlockers);
+        // Another trusted OS runner, not an ordinary same-host resume, must add
+        // missing platform evidence. The proof runner enables resume only after
+        // every held target has real execution evidence.
+        run.resumable = false;
         run.error = redactSecrets(
           `Production readiness blocked before release review: ${deterministicBlockers.join("; ")}`,
         );
@@ -2791,7 +2796,11 @@ async function executeRun(
         });
         log(
           "warning",
-          `${run.error} No delivery, trunk, release, or deploy action ran.`,
+          `${run.error} ${
+            externalPlatformEvidenceHold
+              ? "Ordinary resume is disabled until the external platform proof completes. "
+              : ""
+          }No delivery, trunk, release, or deploy action ran.`,
         );
         await checkpointNow();
         await flush();
