@@ -172,6 +172,14 @@ jobs:
           CI: "true"
         run: pnpm exec tsx src/cli/factory-platform-proof.ts record
 
+      - name: Stage Windows evidence layout
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force platform-evidence -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path platform-evidence | Out-Null
+          Copy-Item -Path .factory -Destination platform-evidence/.factory -Recurse -Force
+
       - name: Preserve Windows evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -182,7 +190,7 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           path: |
-            .factory/**
+            platform-evidence/**
 
   macos:
     name: Verify Purpose Foundry candidate on macOS
@@ -234,6 +242,14 @@ jobs:
           CI: "true"
         run: pnpm exec tsx src/cli/factory-platform-proof.ts record
 
+      - name: Stage macOS evidence layout
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force platform-evidence -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path platform-evidence | Out-Null
+          Copy-Item -Path .factory -Destination platform-evidence/.factory -Recurse -Force
+
       - name: Preserve macOS evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -244,7 +260,7 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           path: |
-            .factory/**
+            platform-evidence/**
 
   verify:
     name: Purpose Foundry end-to-end production verification

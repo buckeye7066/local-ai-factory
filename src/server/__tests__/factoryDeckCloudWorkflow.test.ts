@@ -87,9 +87,15 @@ describe("paid cloud workflow contract", () => {
       ]) {
         const upload = workflow.slice(workflow.indexOf(start), workflow.indexOf(end));
         expect(upload).not.toContain(archive);
-        expect(upload).toContain(".factory/**");
+        expect(upload).toContain("platform-evidence/**");
         expect(upload).not.toContain("workspaces/**");
       }
+
+      expect(
+        workflow.match(
+          /Copy-Item -Path \.factory -Destination platform-evidence\/\.factory/g,
+        ),
+      ).toHaveLength(2);
 
       const macRestore = workflow.slice(
         workflow.indexOf(
