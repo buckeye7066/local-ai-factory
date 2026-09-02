@@ -1,140 +1,81 @@
 import { motion } from "framer-motion";
-import { Sparkles, Check, AlertTriangle, Gift } from "lucide-react";
-import { cn } from "../../lib/cn.js";
+import { AlertTriangle, Check, Sparkles } from "lucide-react";
+import type { Health, ProviderName } from "../../../shared/schemas.js";
+import { staggerItem } from "../../lib/motion.js";
 import { Badge } from "../ui/Badge.js";
-import { staggerContainer, staggerItem } from "../../lib/motion.js";
-import type { Health } from "../../../shared/schemas.js";
 
-/** Provider-neutral owner control: spend no money, or use paid rotation. */
-export type ProviderTier = "free" | "paid";
+const LABELS: Record<ProviderName, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  free: "Free / local",
+  mock: "Mock",
+  stub: "Stub",
+};
 
 /**
- * ProviderRoutingCards exposes exactly the economic choice the owner asked
- * for. Vendor choice stays inside the server's rotator and quota failover.
- * Selecting Free is a hard boundary: paid rescue is disabled for that run.
+ * One owner-facing route. Vendor order stays inside the orchestrator; quota,
+ * capacity, or model exhaustion advances a sticky run-scoped cursor.
  */
-export function ProviderRoutingCards({
-  health,
-  routing,
-  onRoutingChange,
-}: {
-  health: Health | null;
-  routing: ProviderTier;
-  onRoutingChange: (routing: ProviderTier) => void;
-}) {
-  const freeReady = health?.freeConfigured ?? false;
-  const anthropicReady = health?.anthropicConfigured ?? false;
-  const openaiReady = health?.openaiConfigured ?? false;
-  const paidReady = anthropicReady || openaiReady;
+export function ProviderRoutingCards({ health }: { health: Health | null }) {
+  const inferred: ProviderName[] = [
+    ...(health?.anthropicConfigured ? (["anthropic"] as const) : []),
+    ...(health?.openaiConfigured ? (["openai"] as const) : []),
+    ...(health?.freeConfigured ? (["free"] as const) : []),
+  ];
+  const ladder = (health?.modelLadder ?? inferred).filter(
+    (name) => name !== "mock" && name !== "stub",
+  );
+  const ready = ladder.length > 0;
   const serving = health?.route?.serving ?? null;
   const counts = health?.route?.counts;
-
-  const cards = [
-    {
-      key: "free",
-      title: "Free",
-      role: routing === "free" ? "$0 rotation only" : "Click to disable paid routes",
-      icon: Gift,
-      ready: freeReady,
-      selected: routing === "free",
-      accent: "emerald" as const,
-      serving: serving === "free",
-      calls: counts?.free,
-      onClick: () => {
-        if (freeReady) onRoutingChange("free");
-      },
-    },
-    {
-      key: "paid",
-      title: "Paid rotation",
-      role:
-        routing === "paid"
-          ? "Paid tier — call-gated; USD estimated"
-          : "Click to use configured paid routes",
-      icon: Sparkles,
-      ready: paidReady,
-      selected: routing === "paid",
-      accent: "violet" as const,
-      serving: serving === "anthropic" || serving === "openai",
-      calls: (counts?.anthropic ?? 0) + (counts?.openai ?? 0),
-      onClick: () => {
-        if (paidReady) onRoutingChange("paid");
-      },
-    },
-  ];
-  // There is no "Mock Demo" card and no demo prop: no test-run or simulate
-  // modes exist in owner tooling. The mock/stub providers remain an internal
-  // unit-test substrate only, never an owner surface.
+  const calls =
+    (counts?.anthropic ?? 0) + (counts?.openai ?? 0) + (counts?.free ?? 0);
 
   return (
     <motion.div
-      variants={staggerContainer}
+      variants={staggerItem}
       initial="hidden"
       animate="show"
-      className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+      className="glass-soft relative overflow-hidden border-aurora-cyan/35 p-4 ring-1 ring-aurora-cyan/20"
+      aria-label="Automatic model ladder"
     >
-      {cards.map((c) => {
-        const Icon = c.icon;
-        const selected = c.selected;
-        const disabled = !c.ready;
-        return (
-          <motion.button
-            key={c.key}
-            variants={staggerItem}
-            type="button"
-            onClick={c.onClick}
-            disabled={disabled}
-            whileHover={disabled ? undefined : { y: -3 }}
-            className={cn(
-              "glass-soft relative overflow-hidden p-4 text-left transition-colors",
-              selected
-                ? "border-aurora-cyan/40 ring-1 ring-aurora-cyan/30"
-                : "hover:border-white/20",
-              disabled && "cursor-not-allowed opacity-55",
-            )}
-            aria-pressed={selected}
-          >
-            <div className="flex items-center justify-between">
-              <span
-                className={cn(
-                  "grid h-9 w-9 place-items-center rounded-lg",
-                  c.accent === "violet" && "bg-aurora-violet/15 text-aurora-violet",
-                  c.accent === "emerald" && "bg-aurora-emerald/15 text-aurora-emerald",
-                )}
-              >
-                <Icon className="h-4.5 w-4.5" />
-              </span>
-              {selected && (
-                <span className="grid h-5 w-5 place-items-center rounded-full bg-aurora-cyan text-deck-bg">
-                  <Check className="h-3 w-3" strokeWidth={3} />
-                </span>
-              )}
-            </div>
-            <p className="mt-3 text-sm font-semibold text-white">{c.title}</p>
-            <p className="text-xs text-slate-400">{c.role}</p>
-            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-              {c.ready ? (
-                <Badge tone="emerald" icon={<Check className="h-3 w-3" />}>
-                  {c.key === "free" ? "Free route ready" : "Paid route ready"}
-                </Badge>
-              ) : (
-                <Badge
-                  tone={c.key === "free" ? "amber" : "neutral"}
-                  icon={<AlertTriangle className="h-3 w-3" />}
-                >
-                  {c.key === "free" ? "Free route off" : "No paid key"}
-                </Badge>
-              )}
-              {c.serving && <Badge tone="cyan">serving now</Badge>}
-              {typeof c.calls === "number" && c.calls > 0 && (
-                <Badge tone={c.key === "free" ? "emerald" : "amber"}>
-                  {c.calls} call{c.calls === 1 ? "" : "s"}
-                </Badge>
-              )}
-            </div>
-          </motion.button>
-        );
-      })}
+      <div className="flex items-start justify-between gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-aurora-violet/15 text-aurora-violet">
+          <Sparkles className="h-4.5 w-4.5" />
+        </span>
+        {ready ? (
+          <Badge tone="emerald" icon={<Check className="h-3 w-3" />}>
+            Ladder ready
+          </Badge>
+        ) : (
+          <Badge tone="amber" icon={<AlertTriangle className="h-3 w-3" />}>
+            No live model
+          </Badge>
+        )}
+      </div>
+
+      <p className="mt-3 text-sm font-semibold text-white">Automatic model ladder</p>
+      <p className="mt-0.5 text-xs leading-relaxed text-slate-400">
+        Strongest configured paid model first. Quota or capacity exhaustion moves the
+        whole run down the ladder; free/local capacity is last.
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {ladder.map((name, index) => (
+          <span key={name} className="inline-flex items-center gap-1.5">
+            {index > 0 && <span className="text-xs text-slate-600">→</span>}
+            <Badge tone={name === serving ? "cyan" : name === "free" ? "emerald" : "violet"}>
+              {LABELS[name]}
+              {name === serving ? " · serving" : ""}
+            </Badge>
+          </span>
+        ))}
+        {calls > 0 && (
+          <Badge tone="neutral">
+            {calls} call{calls === 1 ? "" : "s"}
+          </Badge>
+        )}
+      </div>
     </motion.div>
   );
 }
