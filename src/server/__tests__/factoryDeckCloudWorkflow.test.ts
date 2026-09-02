@@ -149,13 +149,13 @@ describe("paid cloud workflow contract", () => {
     expect(factory).toContain("continue-on-error: true");
     expect(factory).toContain("${{ steps.candidate.outcome }}");
     expect(factory).toContain(
-      "factory-deck-seed-${{ github.run_id }}-${{ github.run_attempt }}",
+      "factory-deck-seed-${{ github.run_id }}",
     );
     expect(factory).toContain(
-      "factory-deck-windows-${{ github.run_id }}-${{ github.run_attempt }}",
+      "factory-deck-windows-${{ github.run_id }}",
     );
     expect(factory).toContain(
-      "factory-deck-macos-${{ github.run_id }}-${{ github.run_attempt }}",
+      "factory-deck-macos-${{ github.run_id }}",
     );
     expect(factory).toContain("!workspaces/**/node_modules/**");
 
@@ -185,13 +185,13 @@ describe("paid cloud workflow contract", () => {
     expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: seed");
     expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: resume");
     expect(foundry).toContain(
-      "purpose-foundry-seed-${{ github.run_id }}-${{ github.run_attempt }}",
+      "purpose-foundry-seed-${{ github.run_id }}",
     );
     expect(foundry).toContain(
-      "purpose-foundry-windows-${{ github.run_id }}-${{ github.run_attempt }}",
+      "purpose-foundry-windows-${{ github.run_id }}",
     );
     expect(foundry).toContain(
-      "purpose-foundry-macos-${{ github.run_id }}-${{ github.run_attempt }}",
+      "purpose-foundry-macos-${{ github.run_id }}",
     );
     expect(foundry).toContain("!workspaces/**/node_modules/**");
     expect(foundrySmoke).toContain("purpose-foundry-cloud-smoke.json");
@@ -208,6 +208,19 @@ describe("paid cloud workflow contract", () => {
     expect(windowsProof).not.toContain("API_KEY");
     expect(macosProof).not.toContain("API_KEY");
   });
+
+  it.each([
+    ["Factory Deck", factory],
+    ["Purpose Foundry", foundry],
+  ])(
+    "%s preserves exact artifact identities across failed-job retries",
+    (_name, workflow) => {
+      expect(workflow.match(/overwrite: true/g)).toHaveLength(4);
+      expect(workflow).not.toMatch(
+        /^\s+name: (?:factory-deck|purpose-foundry)[^\n]*github\.run_attempt/m,
+      );
+    },
+  );
 
   it("builds a verifier image with Node, Python, native tools, and no entrypoint", () => {
     expect(dockerfile).toContain(
