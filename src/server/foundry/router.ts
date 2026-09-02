@@ -119,17 +119,50 @@ export function createFoundryRouter(
               station.handoff.sources.length === 0))),
     );
 
+  const stationIsDownstreamOf = (
+    project: FoundryProject,
+    stationId: z.infer<typeof StationIdSchema>,
+    prerequisiteId: z.infer<typeof StationIdSchema>,
+  ): boolean => {
+    const stationIndex = project.stations.findIndex(
+      (station) => station.stationId === stationId,
+    );
+    const prerequisiteIndex = project.stations.findIndex(
+      (station) => station.stationId === prerequisiteId,
+    );
+    return prerequisiteIndex >= 0 && stationIndex > prerequisiteIndex;
+  };
+
+  const missingDiscoveryBeforeStation = (
+    project: FoundryProject,
+    stationId: z.infer<typeof StationIdSchema>,
+  ): boolean => {
+    const missing = missingRequiredDiscovery(project);
+    return Boolean(
+      missing && stationIsDownstreamOf(project, stationId, missing.stationId),
+    );
+  };
+
   const activateRequiredDiscovery = async (
     project: FoundryProject,
     resumeStationId?: z.infer<typeof StationIdSchema>,
   ): Promise<boolean> => {
     const discovery = missingRequiredDiscovery(project);
     if (!discovery || project.status === "completed") return false;
+    if (
+      resumeStationId &&
+      !stationIsDownstreamOf(project, resumeStationId, discovery.stationId)
+    ) {
+      return false;
+    }
     const activeOther = project.stations.find(
       (station) =>
         station.status === "active" && station.stationId !== discovery.stationId,
     );
     if (activeOther) {
+      if (!stationIsDownstreamOf(project, activeOther.stationId, discovery.stationId)) {
+        return false;
+      }
       // A pre-policy restart may have a downstream adapter active even though
       // mandatory discovery is absent. Requeue it before any dispatch so it
       // cannot complete ahead of RepoRewards.
@@ -203,7 +236,7 @@ export function createFoundryRouter(
     if (
       stationId !== "repo-rewards" &&
       event.status === "completed" &&
-      missingRequiredDiscovery(project)
+      missingDiscoveryBeforeStation(project, stationId)
     ) {
       throw new FoundryRouteError(
         409,
