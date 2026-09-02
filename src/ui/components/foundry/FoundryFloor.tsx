@@ -230,6 +230,15 @@ export function FoundryFloor() {
     );
   }, [optionalStations]);
 
+  const intakeStations = useMemo(() => {
+    const selectable = new Set(
+      optionalStations
+        .filter((entry) => entry.selectable)
+        .map((entry) => entry.station.id),
+    );
+    return selectedStations.filter((stationId) => selectable.has(stationId));
+  }, [optionalStations, selectedStations]);
+
   const toggleStation = (stationId: StationId, checked: boolean) => {
     setSelectedStations((current) =>
       checked
@@ -275,7 +284,7 @@ export function FoundryFloor() {
           targets: split(targets),
           routingMode,
           source: "manual",
-          selectedStations,
+          selectedStations: intakeStations,
         }),
       });
       setName("");
@@ -304,7 +313,7 @@ export function FoundryFloor() {
           markdown: obsidianNote,
           sourcePath: "Obsidian/Purpose Foundry.md",
           routingMode,
-          selectedStations,
+          selectedStations: intakeStations,
         }),
       });
       setObsidianNote("");
@@ -502,7 +511,7 @@ export function FoundryFloor() {
                       <input
                         type="checkbox"
                         aria-label={`Include ${station.name}`}
-                        checked={selectedStations.includes(station.id)}
+                        checked={intakeStations.includes(station.id)}
                         disabled={!catalogReady || !selectable}
                         onChange={(event) =>
                           toggleStation(station.id, event.target.checked)
