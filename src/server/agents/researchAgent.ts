@@ -3,7 +3,10 @@ import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 import { ProviderAbortError } from "../providers/types.js";
 import { webSearch } from "../tools/webSearch.js";
 import { webFetchTool } from "../tools/webFetch.js";
-import { canonicalEvidenceUrlSet, matchingEvidenceUrls } from "../tools/evidenceUrl.js";
+import {
+  canonicalEvidenceUrlSet,
+  matchingEvidenceUrls,
+} from "../tools/evidenceUrl.js";
 import {
   buildCompetitiveDossier,
   MIN_PRODUCT_COMPETITORS,
@@ -48,7 +51,9 @@ const RecommendationSchema = z.object({
   reuseMode: ReuseModeSchema.default("api-integration"),
   evidenceUrls: z.array(z.string()).default([]),
   score: z.number().min(0).max(100).default(0),
-  origin: z.enum(["tool-research", "competitive-selection"]).default("tool-research"),
+  origin: z
+    .enum(["tool-research", "competitive-selection"])
+    .default("tool-research"),
 });
 export type ResearchRecommendation = z.infer<typeof RecommendationSchema>;
 
@@ -62,7 +67,9 @@ const CandidateComparisonSchema = z.object({
   evidenceUrls: z.array(z.string()).default([]),
   decision: z.enum(["integrate", "adapt", "reference", "reject"]),
   rationale: z.string().default(""),
-  origin: z.enum(["tool-research", "competitive-selection"]).default("tool-research"),
+  origin: z
+    .enum(["tool-research", "competitive-selection"])
+    .default("tool-research"),
 });
 
 const CompetitiveAuditSchema = z.object({
@@ -73,7 +80,9 @@ const CompetitiveAuditSchema = z.object({
       z.object({
         name: z.string(),
         ok: z.boolean(),
-        status: z.enum(["ok", "partial", "empty", "failed", "skipped"]).default("ok"),
+        status: z
+          .enum(["ok", "partial", "empty", "failed", "skipped"])
+          .default("ok"),
         detail: z.string(),
         attempts: z.number().int().nonnegative().default(0),
         succeeded: z.number().int().nonnegative().default(0),
@@ -118,7 +127,11 @@ const CompetitiveAuditSchema = z.object({
         /** URLs actually fetched while verifying this candidate. */
         evidenceUrls: z.array(z.string()).default([]),
         licenseSpdx: z.string(),
-        licensePolicy: z.enum(["direct-use", "conditional-review", "reference-only"]),
+        licensePolicy: z.enum([
+          "direct-use",
+          "conditional-review",
+          "reference-only",
+        ]),
         inspectedFiles: z.number().int().nonnegative(),
         inspectionError: z.string().default(""),
       }),
@@ -136,7 +149,9 @@ export type ResearchFindings = z.infer<typeof ResearchFindingsSchema>;
 
 const ToolResearchFindingsSchema = z.object({
   summary: z.string().default(""),
-  recommendations: z.array(RecommendationSchema.omit({ origin: true })).default([]),
+  recommendations: z
+    .array(RecommendationSchema.omit({ origin: true }))
+    .default([]),
 });
 
 const ACTIONS = ["web_search", "web_fetch", "conclude"] as const;
@@ -197,10 +212,7 @@ const CompetitiveSelectionSchema = z
 type CompetitiveSelection = z.infer<typeof CompetitiveSelectionSchema>;
 
 const ProductDiscoveryPlanSchema = z.object({
-  queries: z
-    .array(z.string().trim().min(3).max(180))
-    .min(5)
-    .max(8),
+  queries: z.array(z.string().trim().min(3).max(180)).min(5).max(8),
 });
 
 async function planProductDiscovery(
@@ -241,7 +253,11 @@ export interface ResearchOptions {
 
 const MAX_STEPS = 5;
 
-function buildPrompt(spec: ProductSpec, arch: Architecture, toolLog: string[]): string {
+function buildPrompt(
+  spec: ProductSpec,
+  arch: Architecture,
+  toolLog: string[],
+): string {
   return [
     `You are deciding whether any EXISTING tool, library, or public API would genuinely help build this app, rather than writing everything from scratch.`,
     `SPEC:\n${JSON.stringify(spec)}`,
@@ -284,24 +300,26 @@ async function runToolResearch(
         summary: "No specific external tool identified.",
         recommendations: [],
       };
-      const recommendations = findings.recommendations.flatMap((recommendation) => {
-        const matchedSource = matchingEvidenceUrls(
-          [recommendation.sourceUrl],
-          observedUrls,
-        )[0];
-        if (!matchedSource) return [];
-        return [
-          {
-            ...recommendation,
-            sourceUrl: matchedSource,
-            evidenceUrls: matchingEvidenceUrls(
-              [recommendation.sourceUrl, ...recommendation.evidenceUrls],
-              observedUrls,
-            ),
-            origin: "tool-research" as const,
-          },
-        ];
-      });
+      const recommendations = findings.recommendations.flatMap(
+        (recommendation) => {
+          const matchedSource = matchingEvidenceUrls(
+            [recommendation.sourceUrl],
+            observedUrls,
+          )[0];
+          if (!matchedSource) return [];
+          return [
+            {
+              ...recommendation,
+              sourceUrl: matchedSource,
+              evidenceUrls: matchingEvidenceUrls(
+                [recommendation.sourceUrl, ...recommendation.evidenceUrls],
+                observedUrls,
+              ),
+              origin: "tool-research" as const,
+            },
+          ];
+        },
+      );
       const dropped = findings.recommendations.length - recommendations.length;
       return ResearchFindingsSchema.parse({
         summary:
@@ -325,7 +343,9 @@ async function runToolResearch(
         `web_search("${q}") -> status=${searched.status} provider=${searched.provider ?? "none"}; ` +
           (searched.results.length
             ? searched.results
-                .map((r) => `${r.title} — ${r.url} — ${r.snippet.slice(0, 200)}`)
+                .map(
+                  (r) => `${r.title} — ${r.url} — ${r.snippet.slice(0, 200)}`,
+                )
                 .join(" | ")
             : `no results; ${searched.attempts
                 .map(
@@ -344,7 +364,10 @@ async function runToolResearch(
       }
       const res = await webFetchTool(turn.url);
       if (res.ok) {
-        for (const canonical of canonicalEvidenceUrlSet([turn.url, res.finalUrl])) {
+        for (const canonical of canonicalEvidenceUrlSet([
+          turn.url,
+          res.finalUrl,
+        ])) {
           observedUrls.add(canonical);
         }
       }
@@ -397,8 +420,9 @@ function auditFrom(dossier: CompetitiveDossier) {
         (candidate) => candidate.sourceEvidence.length > 0,
       ).length,
       productCoverageMet:
-        fallbackProducts.filter((candidate) => candidate.sourceEvidence.length > 0)
-          .length >= MIN_PRODUCT_COMPETITORS,
+        fallbackProducts.filter(
+          (candidate) => candidate.sourceEvidence.length > 0,
+        ).length >= MIN_PRODUCT_COMPETITORS,
       repositoryDiscoveredCount: fallbackRepositories.length,
       repositoryInspectedCount: fallbackRepositories.length,
       repositoryVerifiedCount: fallbackRepositories.filter(
@@ -517,7 +541,9 @@ function mergeCompetitiveResults(
   }
   const actionableComparisonIds = new Set(
     [...comparisonGroups.entries()].flatMap(([candidateId, group]) =>
-      group.length === 1 && group[0]?.decision !== "reject" ? [candidateId] : [],
+      group.length === 1 && group[0]?.decision !== "reject"
+        ? [candidateId]
+        : [],
     ),
   );
   const competitiveRecommendations: ResearchRecommendation[] = [];
@@ -533,7 +559,8 @@ function mergeCompetitiveResults(
     );
     if (selectedEvidence.length === 0) continue;
     const reuseMode = enforceReuseMode(selected.reuseMode, candidate);
-    if (candidate.kind === "product" && reuseMode === "reference-only") continue;
+    if (candidate.kind === "product" && reuseMode === "reference-only")
+      continue;
     const legalPrefix =
       reuseMode !== selected.reuseMode
         ? `License gate changed requested ${selected.reuseMode} to ${reuseMode}. `
