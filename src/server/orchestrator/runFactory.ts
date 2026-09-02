@@ -3725,12 +3725,37 @@ export async function resumeFactory(
   return prepared.run;
 }
 
+async function failBackgroundStart(run: RunRecord, error: unknown): Promise<void> {
+  const detail = redactSecrets(
+    error instanceof Error ? error.message : "Unknown startup error.",
+  );
+  const failureMessage = `Run could not start or persist: ${detail}`;
+  const checkpoint = await getRunCheckpoint(run.id).catch(() => null);
+  run.status = "failed";
+  run.resumable = Boolean(checkpoint);
+  run.error = run.error ?? failureMessage;
+  run.logs.push(makeLog("error", failureMessage, run.currentStage));
+  run.updatedAt = nowMs();
+  putRunInMemory(run);
+  await appendAuditEvent({
+    type: "run.failed",
+    runId: run.id,
+    detail: failureMessage,
+  }).catch(() => {});
+  // A failed initial save may still be transient. Retry once so the terminal
+  // state survives a restart, but never allow that retry to create another
+  // unhandled rejection or leave the in-memory run queued.
+  await saveRun(run).catch(() => {});
+}
+
 /** Fire-and-forget: returns the queued record immediately, runs in background. */
 export function startRun(args: StartRunArgs): RunRecord {
   const run = createRecord(args);
   putRunInMemory(run);
   void appendAuditEvent({ type: "run.queued", runId: run.id });
-  void saveRun(run).then(() => executeRun(run, args));
+  void saveRun(run)
+    .then(() => executeRun(run, args))
+    .catch((error: unknown) => failBackgroundStart(run, error));
   return run;
 }
 
