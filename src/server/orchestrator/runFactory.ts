@@ -2339,13 +2339,15 @@ async function executeRun(
       // EXECUTED commands' real output — never model judgment.
       const envFailure = qa.passed ? null : classifyEnvironmentFailure(verification);
       const incompleteVerification = verification.incomplete?.length ?? 0;
-      const skipRepairForIncompleteVerification =
+      const shouldStopForIncompleteVerification = (report: QaReport): boolean =>
         !run.demo &&
         shouldSkipRepairForIncompleteVerification({
-          qa,
+          qa: report,
           testExit,
-          incompleteVerification,
+          incompleteVerification: verification.incomplete?.length ?? 0,
         });
+      const skipRepairForIncompleteVerification =
+        shouldStopForIncompleteVerification(qa);
       // PURPOSE EFFECTIVENESS feeds back into rotation: the route that
       // authored this build is credited or debited in the shared rotation
       // state for this run's purpose. An environment failure is not the
@@ -2390,6 +2392,7 @@ async function executeRun(
         const loopResult = await runRepairLoop({
           maxLoops: remainingLoops,
           initialQa: qa,
+          shouldStop: shouldStopForIncompleteVerification,
           onLoop: async () => {
             run.repairLoops += 1;
             await checkpointNow({ repairLoops: run.repairLoops });
@@ -2443,8 +2446,18 @@ async function executeRun(
           },
         });
         qa = loopResult.finalQa;
-        finishStage(run, "repair", qa.passed ? "completed" : "failed");
-        if (!qa.passed) {
+        if (qa.passed) {
+          finishStage(run, "repair", "completed");
+        } else if (loopResult.stoppedEarly) {
+          const remainingIncomplete = verification.incomplete?.length ?? 0;
+          log(
+            "warning",
+            `Fresh verification left ${remainingIncomplete} evidence-only blocker(s); stopping before another paid file-repair call.`,
+            "repair",
+          );
+          finishStage(run, "repair", "skipped");
+        } else {
+          finishStage(run, "repair", "failed");
           log(
             "warning",
             `Reached max repair loops (${maxLoops}); residual issues remain.`,
