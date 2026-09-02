@@ -37,7 +37,8 @@ describe("Factory Deck cloud workflow", () => {
   it(
     "verifies generated work only on an isolated runner and preserves evidence",
     () => {
-      expect(workflow).toContain("runs-on: windows-latest");
+      expect(workflow).toContain("runs-on: ubuntu-latest");
+      expect(workflow).toContain("cancel-in-progress: true");
       expect(workflow).toContain('ALLOW_UNTRUSTED_SCRIPTS: "true"');
       expect(workflow).toContain("if: always()");
       expect(workflow).toContain(".factory/**");
