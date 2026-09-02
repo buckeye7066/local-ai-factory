@@ -664,7 +664,7 @@ export function buildDiscoveryQueries(spec: ProductSpec): string[] {
   return [
     `${mission} software competitors`,
     `best software for ${spec.targetUser} to ${activeOutcome}`,
-    `top ${primary} product alternatives`,
+    `top alternatives for ${primary}`,
     `${mission} open source GitHub`,
     `${activeOutcome} open source GitHub implementation`,
     `${spec.targetUser} software open source GitHub`,
