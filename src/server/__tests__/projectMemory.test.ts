@@ -87,7 +87,16 @@ describe("durable project purpose memory", () => {
       },
       { resolvedNewRepoOwner: "Buckeye7066", localProjectId: "ignored" },
     );
-    expect(remote).toBe("new:buckeye7066/grantflow");
+    expect(remote).toBe("git:github.com/buckeye7066/grantflow");
+    expect(remote).toBe(
+      projectKeyForOptions({
+        mode: "extend",
+        repoSource: {
+          type: "git",
+          location: "git@github.com:Buckeye7066/GrantFlow.git",
+        },
+      }),
+    );
     expect(
       projectKeyForOptions(
         {
