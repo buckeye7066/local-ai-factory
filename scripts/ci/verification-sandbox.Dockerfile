@@ -7,6 +7,8 @@ RUN apt-get update \
       build-essential \
       ca-certificates \
       chromium \
+      fonts-liberation \
+      fonts-noto-color-emoji \
       git \
       python3 \
       python3-pip \
