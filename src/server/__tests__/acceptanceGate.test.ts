@@ -93,6 +93,70 @@ describe("assessGeneratedTests", () => {
     }
   });
 
+  it("rejects ambiguous negative substrings and short unbounded regex alternatives", () => {
+    const cliSpec: ProductSpec = {
+      ...spec,
+      userFlows: [],
+      acceptanceCriteria: ["CLI errors are friendly and contain no stack trace"],
+    };
+    const cliBuild: FileBuild = {
+      files: [
+        {
+          path: "src/cli.ts",
+          purpose: "CLI",
+          contents: "export const run = () => 'friendly error';",
+          edits: [],
+        },
+      ],
+    };
+    const testPath = "tests/cli.test.ts";
+    const testName = "reports a friendly error without implementation leakage";
+    const withAssertion = (assertion: string): TestPlan => ({
+      testPlan: "CLI failure behavior",
+      coverage: [{ requirementId: "AC-1", testPath, testName, kind: "unit" }],
+      files: [
+        {
+          path: testPath,
+          purpose: "CLI acceptance",
+          contents: [
+            'import { expect, it } from "vitest";',
+            `it(${JSON.stringify(testName)}, () => {`,
+            "  const output = run();",
+            `  ${assertion}`,
+            '  expect(output).toContain("friendly");',
+            "});",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    const substring = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion('expect(output).not.toContain("at ");'),
+    );
+    expect(substring.ok).toBe(false);
+    expect(substring.errors.join("\n")).toMatch(/brittle negated substring/i);
+
+    const regex = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion("expect(output).not.toMatch(/vite|next|http-server/i);"),
+    );
+    expect(regex.ok).toBe(false);
+    expect(regex.errors.join("\n")).toMatch(/unbounded negated regex/i);
+
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion(
+          "expect(output).not.toMatch(/^\\s*at\\s+/m); expect(output).not.toMatch(/\\bvite\\b|\\bnext\\b/i);",
+        ),
+      ).ok,
+    ).toBe(true);
+  });
+
   it("ignores comments, dead false branches, and code after an unconditional return", () => {
     const fake = [
       "import { test, expect } from '@playwright/test';",

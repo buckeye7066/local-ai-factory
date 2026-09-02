@@ -47,6 +47,7 @@ export interface AcceptanceRequirement {
 interface TestEvidence {
   name: string;
   meaningfulAssertion: boolean;
+  brittleAssertions: string[];
   browser: boolean;
   gotoApp: boolean;
   interaction: boolean;
@@ -108,17 +109,73 @@ function isPrimitiveLiteral(node: ts.Expression | undefined): boolean {
   );
 }
 
+/**
+ * Reject negative assertions whose matcher is broader than the thing it is
+ * supposed to exclude. These are especially dangerous in generated tests:
+ * `"at "` matches the ordinary word `that`, and `/vite/` matches the allowed
+ * test runner `vitest`. Require a specific token or line boundary instead of
+ * letting a false positive send product repair after working source code.
+ */
+function brittleNegatedMatcher(call: ts.CallExpression): string | null {
+  if (!ts.isPropertyAccessExpression(call.expression)) return null;
+  const matcher = call.expression.name.text;
+  const negated = call.expression.expression;
+  if (
+    !ts.isPropertyAccessExpression(negated) ||
+    negated.name.text !== "not" ||
+    !ts.isCallExpression(negated.expression) ||
+    !ts.isIdentifier(negated.expression.expression) ||
+    negated.expression.expression.text !== "expect"
+  ) {
+    return null;
+  }
+
+  const expected = call.arguments[0];
+  if (
+    matcher === "toContain" &&
+    expected &&
+    ts.isStringLiteralLike(expected) &&
+    expected.text.trim().length < 4
+  ) {
+    return (
+      `brittle negated substring ${JSON.stringify(expected.text)}; ` +
+      "use a token-, line-, or structure-specific assertion"
+    );
+  }
+
+  if (matcher === "toMatch" && expected && ts.isRegularExpressionLiteral(expected)) {
+    const literal = expected.getText();
+    const finalSlash = literal.lastIndexOf("/");
+    const pattern = finalSlash > 0 ? literal.slice(1, finalSlash) : "";
+    const shortBareAlternative = pattern
+      .split("|")
+      .find((alternative) => /^[A-Za-z][A-Za-z0-9_-]{1,3}$/.test(alternative));
+    if (shortBareAlternative) {
+      return (
+        `brittle unbounded negated regex alternative ${JSON.stringify(shortBareAlternative)}; ` +
+        "use explicit token boundaries or exact dependency/command checks"
+      );
+    }
+  }
+  return null;
+}
+
 function analyzeCallback(
   callback: ts.ArrowFunction | ts.FunctionExpression,
   helpers: ReadonlyMap<string, JavascriptHelper>,
 ): Omit<TestEvidence, "name" | "browser"> {
   let meaningfulAssertion = false;
+  const brittleAssertions: string[] = [];
   let gotoApp = false;
   let interaction = false;
   let reload = false;
   let forbiddenBrowserFixture = false;
 
   const inspectCall = (call: ts.CallExpression): void => {
+    const brittle = brittleNegatedMatcher(call);
+    if (brittle && !brittleAssertions.includes(brittle)) {
+      brittleAssertions.push(brittle);
+    }
     const name = expressionName(call.expression);
     if (name === "setContent") forbiddenBrowserFixture = true;
     if (name === "goto") {
@@ -255,6 +312,7 @@ function analyzeCallback(
   visit(callback.body, true);
   return {
     meaningfulAssertion,
+    brittleAssertions,
     gotoApp,
     interaction,
     reload,
@@ -371,6 +429,7 @@ function analyzePython(source: string): FileEvidence {
     tests.set(match[1]!, {
       name: match[1]!,
       meaningfulAssertion,
+      brittleAssertions: [],
       browser: false,
       gotoApp: false,
       interaction: false,
@@ -450,6 +509,11 @@ export function assessGeneratedTests(
     }
     if (![...evidence.tests.values()].some((test) => test.meaningfulAssertion)) {
       errors.push(`${file.path}: no meaningful executable assertion was found`);
+    }
+    for (const test of evidence.tests.values()) {
+      for (const issue of test.brittleAssertions) {
+        errors.push(`${file.path}: test ${JSON.stringify(test.name)} uses ${issue}`);
+      }
     }
     if (evidence.browserImport) browserTestPaths.push(path);
   }
