@@ -95,18 +95,22 @@ describe("paid cloud workflow contract", () => {
       factory.match(
         /secrets\.PAID_PRODUCTION_ANTHROPIC_KEY \|\| secrets\.ANTHROPIC_API_KEY/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(
       factory.match(
         /secrets\.PAID_PRODUCTION_OPENAI_KEY \|\| secrets\.OPENAI_API_KEY/g,
       ),
+    ).toHaveLength(3);
+    expect(
+      foundry.match(
+        /secrets\.PAID_PRODUCTION_ANTHROPIC_KEY \|\| secrets\.ANTHROPIC_API_KEY/g,
+      ),
     ).toHaveLength(2);
-    expect(foundry).toContain(
-      "secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY",
-    );
-    expect(foundry).toContain(
-      "secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY",
-    );
+    expect(
+      foundry.match(
+        /secrets\.PAID_PRODUCTION_OPENAI_KEY \|\| secrets\.OPENAI_API_KEY/g,
+      ),
+    ).toHaveLength(2);
   });
 
   it("keeps Purpose Foundry's real paid end-to-end smoke and upload reserve", () => {
