@@ -111,7 +111,7 @@ function flowScannerInertRanges(source: string, relPath: string): SourceRange[] 
 }
 
 function maskSourceRanges(source: string, ranges: readonly SourceRange[]): string {
-  const characters = [...source];
+  const characters = source.split("");
   for (const range of ranges) {
     for (let index = range.start; index < range.end; index += 1) {
       if (characters[index] !== "\n" && characters[index] !== "\r") {
@@ -133,7 +133,7 @@ function flowTypeofImportSpecifiers(
 ): ImportedSpecifier[] {
   // A raw scanner cannot distinguish a regex-closing slash from the start of
   // a line comment without parser-directed rescans. Mask parser-recognized
-  // template, regex, and JSX ranges first while preserving byte positions, so
+  // template, regex, and JSX ranges first while preserving UTF-16 offsets, so
   // one fixture cannot hide or fabricate a later real Flow declaration.
   const scanSource = maskSourceRanges(source, flowScannerInertRanges(source, relPath));
   const scanner = ts.createScanner(
