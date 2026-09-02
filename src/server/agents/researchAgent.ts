@@ -210,18 +210,18 @@ async function planProductDiscovery(
 ): Promise<string[]> {
   const plan = await deps.provider.generateJson<z.infer<typeof ProductDiscoveryPlanSchema>>({
     system:
-      `${SYSTEM_PREAMBLE}\\nYou are the PRODUCT DISCOVERY planner. Identify real products that compete with ` +
+      `${SYSTEM_PREAMBLE}\nYou are the PRODUCT DISCOVERY planner. Identify real products that compete with ` +
       `the target app. Return only short web-search queries, one distinct product per query. Each query must name ` +
       `a real competitor and ask for its official website. Prefer direct competitors; use adjacent products only ` +
       `when the niche does not contain eight credible products. Never query for roundups, reviews, comparison ` +
       `sites, source repositories, packages, articles, forums, or implementation tutorials. Do not evaluate or ` +
       `cite products here: downstream search and page inspection provide the evidence.`,
     prompt: [
-      `TARGET SPEC:\\n${JSON.stringify(spec)}`,
-      `TARGET ARCHITECTURE:\\n${JSON.stringify(arch)}`,
+      `TARGET SPEC:\n${JSON.stringify(spec)}`,
+      `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
       `Return 8 distinct official-product website search queries. A niche command-line or open-source app still ` +
         `competes with real products; name those products rather than searching for generic lists.`,
-    ].join("\\n\\n"),
+    ].join("\n\n"),
     schema: ProductDiscoveryPlanSchema,
     schemaName: "ProductDiscoveryPlan",
     intent: { role: "researcher", needs: ["structured_json"] },
