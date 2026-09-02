@@ -122,9 +122,32 @@ describe("competitive discovery", () => {
       dataModel: [],
       userFlows: [],
       acceptanceCriteria: ["works"],
+      goalContract: {
+        schema: "factory.goal-contract.v1",
+        projectKey: "git:github.com/example/privacy-desk",
+        purpose: "Protect family identities across everyday communications",
+        purposeSource: "project-memory",
+        targetUsers: ["families"],
+        activeGoals: ["Reduce identity exposure"],
+        constraints: [],
+        nonGoals: [],
+        continuity: {
+          previousRunIds: [],
+          carriedForwardDecisions: [],
+          priorResearch: [],
+        },
+        createdFromRunId: "00000000-0000-4000-8000-000000000001",
+        createdAt: 1,
+        digest: `sha256:${"a".repeat(64)}`,
+      },
     };
     const queries = buildDiscoveryQueries(spec);
     expect(queries.length).toBeGreaterThanOrEqual(5);
+    expect(queries[0]).toContain(
+      "Protect family identities across everyday communications",
+    );
+    expect(queries[0]).not.toContain("Privacy Desk");
+    expect(queries[1]).toContain("families");
     expect(queries.join(" ")).toContain("email aliases");
     // Owner directive 2026-08-15: hunt real COMPETITOR PRODUCTS first, then
     // open-source implementations - never only the latter.
