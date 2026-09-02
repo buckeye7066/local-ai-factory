@@ -26,7 +26,9 @@ function pathWithin(root: string, candidate: string): boolean {
 function validateMountPath(value: string, label: string): string {
   const absolute = resolve(value);
   if (/[,\u0000\r\n]/.test(absolute)) {
-    throw new Error(`${label} contains a character Docker --mount cannot encode.`);
+    throw new Error(
+      `${label} contains a character Docker --mount cannot encode.`,
+    );
   }
   if (resolve(absolute, "..") === absolute) {
     throw new Error(`${label} cannot be a filesystem root.`);
@@ -38,8 +40,7 @@ export function verificationSandboxConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): VerificationSandboxConfig | null {
   const image = env.FACTORY_VERIFICATION_SANDBOX_IMAGE?.trim() ?? "";
-  const stateRoot =
-    env.FACTORY_VERIFICATION_SANDBOX_STATE_ROOT?.trim() ?? "";
+  const stateRoot = env.FACTORY_VERIFICATION_SANDBOX_STATE_ROOT?.trim() ?? "";
   if (!image && !stateRoot) return null;
   if (!image || !stateRoot) {
     throw new Error(
@@ -98,14 +99,22 @@ export function buildVerificationSandboxPlan(input: {
   if (!SAFE_IMAGE.test(input.image)) {
     throw new Error("Verification sandbox image has an invalid reference.");
   }
-  const workspaceRoot = validateMountPath(input.workspaceRoot, "Workspace root");
+  const workspaceRoot = validateMountPath(
+    input.workspaceRoot,
+    "Workspace root",
+  );
   const cwd = resolve(input.cwd);
   const stateRoot = validateMountPath(input.stateRoot, "Sandbox state root");
   if (!pathWithin(workspaceRoot, cwd)) {
     throw new Error("Verification cwd is outside the workspace root.");
   }
-  if (pathWithin(workspaceRoot, stateRoot) || pathWithin(stateRoot, workspaceRoot)) {
-    throw new Error("Sandbox state and generated workspace mounts must not overlap.");
+  if (
+    pathWithin(workspaceRoot, stateRoot) ||
+    pathWithin(stateRoot, workspaceRoot)
+  ) {
+    throw new Error(
+      "Sandbox state and generated workspace mounts must not overlap.",
+    );
   }
 
   const containerName =
@@ -127,7 +136,9 @@ export function buildVerificationSandboxPlan(input: {
     !Number.isSafeInteger(gid) ||
     gid < 0
   ) {
-    throw new Error("Verification sandbox uid/gid must be non-negative integers.");
+    throw new Error(
+      "Verification sandbox uid/gid must be non-negative integers.",
+    );
   }
 
   const network = verificationNetwork(input.bin, input.args);
