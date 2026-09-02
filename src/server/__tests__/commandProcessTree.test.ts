@@ -23,10 +23,9 @@ describe("POSIX command process-tree cleanup", () => {
         const { mkdirSync } = await import("node:fs");
         mkdirSync(workspace);
         mkdirSync(trusted);
-        const grandchild =
-          `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(
-            sentinel,
-          )}, "survived"), 800); setTimeout(() => {}, 5000);`;
+        const grandchild = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(
+          sentinel,
+        )}, "survived"), 800); setTimeout(() => {}, 5000);`;
         const shim = join(trusted, "pnpm");
         writeFileSync(
           shim,
