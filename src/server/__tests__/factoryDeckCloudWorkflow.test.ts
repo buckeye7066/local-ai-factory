@@ -113,6 +113,8 @@ describe("paid cloud workflow contract", () => {
     for (const tool of [
       "build-essential",
       "chromium",
+      "fonts-liberation",
+      "fonts-noto-color-emoji",
       "git",
       "python3",
       "python3-pip",
