@@ -107,23 +107,35 @@ export function createFoundryRouter(
       await enqueueTransition(() => handler(req, res));
     });
 
+  const missingRequiredDiscovery = (project: FoundryProject) =>
+    REQUIRED_DISCOVERY_STATIONS.map((stationId) =>
+      project.stations.find((station) => station.stationId === stationId),
+    ).find(
+      (station) =>
+        station &&
+        (station.status !== "completed" ||
+          (station.stationId === "repo-rewards" &&
+            (station.handoff.insights.length === 0 ||
+              station.handoff.sources.length === 0))),
+    );
+
   const activateRequiredDiscovery = async (
     project: FoundryProject,
     resumeStationId?: z.infer<typeof StationIdSchema>,
   ): Promise<boolean> => {
-    const discovery = REQUIRED_DISCOVERY_STATIONS.map((stationId) =>
-      project.stations.find((station) => station.stationId === stationId),
-    ).find((station) => station && station.status !== "completed");
+    const discovery = missingRequiredDiscovery(project);
     if (!discovery || project.status === "completed") return false;
     const activeOther = project.stations.find(
       (station) =>
         station.status === "active" && station.stationId !== discovery.stationId,
     );
     if (activeOther) {
-      throw new FoundryRouteError(
-        409,
-        `Cannot start ${discovery.stationId} while ${activeOther.stationId} is active.`,
-      );
+      // A pre-policy restart may have a downstream adapter active even though
+      // mandatory discovery is absent. Requeue it before any dispatch so it
+      // cannot complete ahead of RepoRewards.
+      activeOther.status = "queued";
+      activeOther.startedAt = null;
+      activeOther.endedAt = null;
     }
     const resumeStation = resumeStationId
       ? project.stations.find((station) => station.stationId === resumeStationId)
@@ -137,6 +149,13 @@ export function createFoundryRouter(
       resumeStation.endedAt = null;
     }
     if (discovery.status !== "active") {
+      if (discovery.status === "completed") {
+        discovery.summary = "";
+        discovery.artifacts = [];
+        discovery.handoff = { insights: [], sources: [], candidates: [] };
+        discovery.evidenceDigest = null;
+        discovery.revision = null;
+      }
       discovery.status = "active";
       discovery.attempt += 1;
       discovery.startedAt = Date.now();
@@ -179,6 +198,16 @@ export function createFoundryRouter(
       throw new FoundryRouteError(
         409,
         "RepoRewards completion requires a purpose-bound insight and queried source.",
+      );
+    }
+    if (
+      stationId !== "repo-rewards" &&
+      event.status === "completed" &&
+      missingRequiredDiscovery(project)
+    ) {
+      throw new FoundryRouteError(
+        409,
+        "Mandatory RepoRewards discovery must complete with a typed handoff before a downstream station can complete.",
       );
     }
     if (
@@ -267,7 +296,20 @@ export function createFoundryRouter(
 
   const dispatchActive = (projectId: string): void => {
     void (async () => {
-      const project = await store.get(projectId);
+      // This is the final dispatch boundary for startup recovery, automatic
+      // advancement, retries, and manual callbacks. Reconcile the mandatory
+      // discovery route here so no downstream adapter can bypass it.
+      const project = await enqueueTransition(async () => {
+        const current = await store.get(projectId);
+        const currentActive = current?.stations.find(
+          (station) => station.status === "active",
+        );
+        if (current && currentActive && currentActive.stationId !== "repo-rewards") {
+          await activateRequiredDiscovery(current, currentActive.stationId);
+          return (await store.get(projectId)) ?? current;
+        }
+        return current;
+      });
       const active = project?.stations.find((station) => station.status === "active");
       if (!project || !active) return;
       const key = `${projectId}:${active.stationId}`;
