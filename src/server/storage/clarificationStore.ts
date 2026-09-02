@@ -52,9 +52,7 @@ export function getSession(id: string): ClarificationSession | null {
 
 export function updateSession(
   id: string,
-  patch: Partial<
-    Omit<ClarificationSession, "id" | "createdAt" | "routingMode">
-  >,
+  patch: Partial<Omit<ClarificationSession, "id" | "createdAt" | "routingMode">>,
 ): ClarificationSession | null {
   const s = sessions.get(id);
   if (!s) return null;

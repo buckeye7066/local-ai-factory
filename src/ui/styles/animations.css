@@ -90,8 +90,11 @@
    a shadowed bottom edge so panels read as sheet metal, not glass. */
 .plant-steel {
   background-color: #15181d;
-  background-image:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0) 12%),
+  background-image: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.05),
+      rgba(0, 0, 0, 0) 12%
+    ),
     linear-gradient(0deg, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0) 18%),
     repeating-linear-gradient(
       90deg,
@@ -106,8 +109,7 @@
 /* Tread plate — the receiving dock deck. */
 .plant-plate {
   background-color: #12151a;
-  background-image:
-    repeating-linear-gradient(
+  background-image: repeating-linear-gradient(
       45deg,
       rgba(255, 255, 255, 0.03) 0 2px,
       rgba(0, 0, 0, 0) 2px 9px
@@ -131,16 +133,18 @@
 
 /* Painted aisle lines on grey concrete. */
 .plant-aisle {
-  background-image:
-    linear-gradient(to right, rgba(242, 195, 0, 0.1) 2px, transparent 2px),
+  background-image: linear-gradient(
+      to right,
+      rgba(242, 195, 0, 0.1) 2px,
+      transparent 2px
+    ),
     linear-gradient(to bottom, rgba(242, 195, 0, 0.06) 2px, transparent 2px);
   background-size: 132px 132px;
 }
 
 /* Coarse concrete grain under the light pools. */
 .plant-concrete {
-  background-image:
-    repeating-linear-gradient(
+  background-image: repeating-linear-gradient(
       27deg,
       rgba(255, 255, 255, 0.012) 0 1px,
       rgba(0, 0, 0, 0) 1px 3px

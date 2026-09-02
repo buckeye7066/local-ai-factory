@@ -44,10 +44,8 @@ describe("config", () => {
       FACTORY_MODEL_LADDER: "anthropic,openai",
     });
     expect(
-      toHealth(
-        cfg,
-        loadSecrets({ ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "sk-openai" }),
-      ).modelLadder,
+      toHealth(cfg, loadSecrets({ ANTHROPIC_API_KEY: "", OPENAI_API_KEY: "sk-openai" }))
+        .modelLadder,
     ).toEqual(["openai", "free"]);
     expect(
       toHealth(loadConfig({ FACTORY_FREE_ENABLED: "false" }), loadSecrets({}))

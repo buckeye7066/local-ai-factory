@@ -35,16 +35,13 @@ function registry(free: boolean, paid: ProviderName[]): ProviderRegistry {
 }
 
 function liveRegistry(providers: LLMProvider[]): ProviderRegistry {
-  const byName = new Map(
-    providers.map((provider) => [provider.name, provider]),
-  );
+  const byName = new Map(providers.map((provider) => [provider.name, provider]));
   const unavailable = (name: ProviderName) =>
     ({ name, isConfigured: () => false }) as LLMProvider;
   const get = (name: ProviderName) => byName.get(name) ?? unavailable(name);
   const configured = providers.map((provider) => provider.name);
   const paid = configured.filter(
-    (name): name is "anthropic" | "openai" =>
-      name === "anthropic" || name === "openai",
+    (name): name is "anthropic" | "openai" => name === "anthropic" || name === "openai",
   );
   return {
     get,
@@ -158,16 +155,8 @@ describe("one automatic model ladder", () => {
       provider: "free",
     }));
     const providers = liveRegistry([anthropic, openai, free]);
-    const routing = selectRunRouting(
-      { routingMode: "free" },
-      providers,
-      config,
-    );
-    const selected = createTierProvider(
-      routing,
-      routing.codeProvider,
-      providers,
-    );
+    const routing = selectRunRouting({ routingMode: "free" }, providers, config);
+    const selected = createTierProvider(routing, routing.codeProvider, providers);
 
     await expect(
       selected.generateText({ system: "test", prompt: "first" }),
@@ -199,12 +188,10 @@ describe("one automatic model ladder", () => {
     const routing = selectRunRouting({}, providers, openaiFirst);
 
     await expect(
-      createTierProvider(routing, routing.codeProvider, providers).generateText(
-        {
-          system: "test",
-          prompt: "x",
-        },
-      ),
+      createTierProvider(routing, routing.codeProvider, providers).generateText({
+        system: "test",
+        prompt: "x",
+      }),
     ).resolves.toMatchObject({ provider: "free" });
     expect(paid.calls).toBe(0);
     expect(free.calls).toBe(1);

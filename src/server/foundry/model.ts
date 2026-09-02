@@ -55,8 +55,7 @@ export const STATIONS: StationDefinition[] = [
     id: "repo-rewards",
     name: "Repo Rewards",
     department: "Discovery Wing",
-    purpose:
-      "Find and evaluate reusable open-source repositories and components.",
+    purpose: "Find and evaluate reusable open-source repositories and components.",
     standalone: true,
     order: 20,
     color: "violet",
@@ -65,8 +64,7 @@ export const STATIONS: StationDefinition[] = [
     id: "promo-pilot",
     name: "PromoPilot",
     department: "Market Laboratory",
-    purpose:
-      "Supply market, campaign, attribution, and advertisement evidence.",
+    purpose: "Supply market, campaign, attribution, and advertisement evidence.",
     standalone: true,
     order: 30,
     color: "amber",
@@ -85,8 +83,7 @@ export const STATIONS: StationDefinition[] = [
     id: "flexfactor",
     name: "FlexFactor",
     department: "Engineering Floor",
-    purpose:
-      "Inspect, improve, test, repair, and align implementation with purpose.",
+    purpose: "Inspect, improve, test, repair, and align implementation with purpose.",
     standalone: true,
     order: 50,
     color: "emerald",
@@ -95,8 +92,7 @@ export const STATIONS: StationDefinition[] = [
     id: "crucible",
     name: "The Crucible",
     department: "Adversarial Chamber",
-    purpose:
-      "Assume the work is wrong and independently try to disprove readiness.",
+    purpose: "Assume the work is wrong and independently try to disprove readiness.",
     standalone: false,
     order: 60,
     color: "rose",
@@ -391,8 +387,7 @@ export class FoundryStore {
       );
       if (
         existing &&
-        existing.source.contentHash ===
-          hashText(input.sourceMarkdown ?? input.purpose)
+        existing.source.contentHash === hashText(input.sourceMarkdown ?? input.purpose)
       )
         return existing;
     }
@@ -416,9 +411,7 @@ export class FoundryStore {
       source: {
         kind: input.source,
         path: input.sourcePath,
-        contentHash: input.sourceMarkdown
-          ? hashText(input.sourceMarkdown)
-          : null,
+        contentHash: input.sourceMarkdown ? hashText(input.sourceMarkdown) : null,
       },
       stations: STATIONS.map((station) => ({
         stationId: station.id,
@@ -439,9 +432,7 @@ export class FoundryStore {
       source: project.source,
       constitution: project.constitution,
       routingMode: project.routingMode ?? "legacy-default",
-      requiredProductionStations: requiredProductionStations(
-        project.routingMode,
-      ),
+      requiredProductionStations: requiredProductionStations(project.routingMode),
       blockedUnmeteredStations: [],
     });
     return project;
@@ -468,8 +459,7 @@ export class FoundryStore {
     type: string,
     payload: unknown,
   ): Promise<EvidenceEvent> {
-    const previousWrite =
-      ledgerWriteQueues.get(this.ledgerPath) ?? Promise.resolve();
+    const previousWrite = ledgerWriteQueues.get(this.ledgerPath) ?? Promise.resolve();
     const write = previousWrite.then(() =>
       this.appendEvidenceUnlocked(projectId, stationId, type, payload),
     );
@@ -498,8 +488,7 @@ export class FoundryStore {
         .trim()
         .split("\n")
         .filter(Boolean);
-      if (lines.length)
-        previous = JSON.parse(lines[lines.length - 1]) as EvidenceEvent;
+      if (lines.length) previous = JSON.parse(lines[lines.length - 1]) as EvidenceEvent;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
@@ -528,8 +517,7 @@ export class FoundryStore {
   ): Promise<{ imported: number; unchanged: number; errors: string[] }> {
     const root = resolve(inbox);
     const info = await stat(root);
-    if (!info.isDirectory())
-      throw new Error("Obsidian inbox is not a directory.");
+    if (!info.isDirectory()) throw new Error("Obsidian inbox is not a directory.");
     let imported = 0;
     let unchanged = 0;
     const errors: string[] = [];
@@ -537,15 +525,11 @@ export class FoundryStore {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.name.toLowerCase().endsWith(".md")) continue;
       if (!entry.isFile() || entry.isSymbolicLink()) {
-        errors.push(
-          `${entry.name}: symbolic links and non-files are not imported`,
-        );
+        errors.push(`${entry.name}: symbolic links and non-files are not imported`);
         continue;
       }
       const path = resolve(root, entry.name);
-      if (
-        !path.startsWith(`${root}${process.platform === "win32" ? "\\" : "/"}`)
-      )
+      if (!path.startsWith(`${root}${process.platform === "win32" ? "\\" : "/"}`))
         continue;
       try {
         const markdown = await readFile(path, "utf8");

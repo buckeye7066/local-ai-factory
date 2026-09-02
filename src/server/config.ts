@@ -30,10 +30,7 @@ function bool(value: string | undefined, fallback: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(value.trim());
 }
 
-function provider(
-  value: string | undefined,
-  fallback: ProviderName,
-): ProviderName {
+function provider(value: string | undefined, fallback: ProviderName): ProviderName {
   return value === "free" ||
     value === "anthropic" ||
     value === "openai" ||
@@ -246,11 +243,7 @@ export function isFreeConfigured(config: AppConfig): boolean {
   return config.free.enabled && config.free.baseUrl.length > 0;
 }
 
-export function toHealth(
-  config: AppConfig,
-  secrets: AppSecrets,
-  route?: unknown,
-) {
+export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown) {
   const anthropicConfigured = isAnthropicConfigured(secrets);
   const openaiConfigured = isOpenAiConfigured(secrets);
   const freeConfigured = isFreeConfigured(config);
@@ -259,9 +252,9 @@ export function toHealth(
   if (freeConfigured) providersAvailable.push("free");
   if (anthropicConfigured) providersAvailable.push("anthropic");
   if (openaiConfigured) providersAvailable.push("openai");
-  const modelLadder = (
-    config.modelLadder ?? ["anthropic", "openai", "free"]
-  ).filter((name) => providersAvailable.includes(name));
+  const modelLadder = (config.modelLadder ?? ["anthropic", "openai", "free"]).filter(
+    (name) => providersAvailable.includes(name),
+  );
   return {
     freeConfigured,
     freeBaseUrl: config.free.baseUrl,

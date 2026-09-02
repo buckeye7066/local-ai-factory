@@ -61,9 +61,7 @@ describe("paid cloud workflow contract", () => {
       const firstSecretIndex = workflow.indexOf("ANTHROPIC_API_KEY:");
       expect(buildIndex).toBeGreaterThan(0);
       expect(firstSecretIndex).toBeGreaterThan(buildIndex);
-      expect(workflow).toContain(
-        "--file scripts/ci/verification-sandbox.Dockerfile",
-      );
+      expect(workflow).toContain("--file scripts/ci/verification-sandbox.Dockerfile");
       expect(workflow).toContain(
         'FACTORY_VERIFICATION_SANDBOX_IMAGE: "local-ai-factory-verifier:${{ github.sha }}"',
       );
@@ -113,9 +111,7 @@ describe("paid cloud workflow contract", () => {
   });
 
   it("uses greenfield proofs whose tests can be independently executed", () => {
-    expect(factory).toContain(
-      "command-line only with no HTML, browser, or web UI",
-    );
+    expect(factory).toContain("command-line only with no HTML, browser, or web UI");
     expect(foundrySmoke).toContain(
       "Command-line only; do not generate HTML, browser, or web UI code.",
     );

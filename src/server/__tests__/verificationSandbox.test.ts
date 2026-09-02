@@ -71,9 +71,7 @@ describe("generated-code verification sandbox", () => {
     );
 
     const mounts = plan.dockerArgs
-      .map((value, index) =>
-        plan.dockerArgs[index - 1] === "--mount" ? value : null,
-      )
+      .map((value, index) => (plan.dockerArgs[index - 1] === "--mount" ? value : null))
       .filter((value): value is string => value !== null);
     expect(mounts).toEqual([
       `type=bind,src=${workspace},dst=/workspace`,
@@ -84,9 +82,7 @@ describe("generated-code verification sandbox", () => {
     const imageIndex = plan.dockerArgs.indexOf(image);
     expect(plan.dockerArgs.slice(imageIndex)).toEqual([image, "pnpm", "test"]);
     const serialized = JSON.stringify(plan.dockerArgs);
-    expect(serialized).not.toMatch(
-      /OPENAI|ANTHROPIC|GITHUB_TOKEN|DOCKER_HOST/i,
-    );
+    expect(serialized).not.toMatch(/OPENAI|ANTHROPIC|GITHUB_TOKEN|DOCKER_HOST/i);
     expect(plan.dockerArgs).toContain(
       "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     );
@@ -107,21 +103,14 @@ describe("generated-code verification sandbox", () => {
         "requirements.txt",
       ]),
     ).toBe("bridge");
+    expect(verificationNetwork("npx", ["--no-install", "prisma", "generate"])).toBe(
+      "bridge",
+    );
     expect(
-      verificationNetwork("npx", ["--no-install", "prisma", "generate"]),
-    ).toBe("bridge");
-    expect(
-      verificationNetwork("npx", [
-        "--no-install",
-        "playwright",
-        "install",
-        "chromium",
-      ]),
+      verificationNetwork("npx", ["--no-install", "playwright", "install", "chromium"]),
     ).toBe("bridge");
     expect(verificationNetwork("pnpm", ["test"])).toBe("none");
-    expect(verificationNetwork("npx", ["--no-install", "vitest", "run"])).toBe(
-      "none",
-    );
+    expect(verificationNetwork("npx", ["--no-install", "vitest", "run"])).toBe("none");
   });
 
   it("rejects a state mount that overlaps generated workspaces", () => {

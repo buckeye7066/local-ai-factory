@@ -2,13 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NewRunHero } from "./NewRunHero.js";
 import { api } from "../../lib/api.js";
 import type { Health } from "../../../shared/schemas.js";
@@ -72,9 +66,7 @@ describe("automatic model ladder UI wiring", () => {
       />,
     );
 
-    expect(
-      screen.getByText(/Production admission requires both/i),
-    ).toBeTruthy();
+    expect(screen.getByText(/Production admission requires both/i)).toBeTruthy();
   });
 
   it("shows one ordered ladder and sends only automatic routing", async () => {
@@ -92,16 +84,11 @@ describe("automatic model ladder UI wiring", () => {
     expect(screen.queryByRole("button", { name: /Paid rotation/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Free$/i })).toBeNull();
 
-    fireEvent.click(
-      screen.getByRole("tab", { name: /Extend an Existing Program/i }),
-    );
-    fireEvent.click(
-      screen.getByRole("tab", { name: /Ask Me Yes\/No Questions/i }),
-    );
-    fireEvent.change(
-      screen.getByLabelText(/Describe what you want at a high level/i),
-      { target: { value: "Clarify this existing app" } },
-    );
+    fireEvent.click(screen.getByRole("tab", { name: /Extend an Existing Program/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /Ask Me Yes\/No Questions/i }));
+    fireEvent.change(screen.getByLabelText(/Describe what you want at a high level/i), {
+      target: { value: "Clarify this existing app" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /Start Clarifying/i }));
 
     await waitFor(() =>

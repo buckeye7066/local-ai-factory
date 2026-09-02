@@ -19,9 +19,9 @@ describe("Factory Deck cloud prompt input", () => {
   });
 
   it("retains positional and default behavior outside cloud verification", () => {
-    expect(
-      factoryIdeaFromInputs(["node", "factory.ts", "Build", "locally"], {}),
-    ).toBe("Build locally");
+    expect(factoryIdeaFromInputs(["node", "factory.ts", "Build", "locally"], {})).toBe(
+      "Build locally",
+    );
     expect(factoryIdeaFromInputs(["node", "factory.ts"], {})).toBe(
       "Build a Bible reading habit tracker",
     );

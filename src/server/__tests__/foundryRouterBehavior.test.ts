@@ -153,8 +153,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     else process.env.ANTHROPIC_API_KEY = prevAnthropic;
     if (prevSolModel === undefined) delete process.env.FACTORY_SOL_MODEL;
     else process.env.FACTORY_SOL_MODEL = prevSolModel;
-    if (prevFableModel === undefined)
-      delete process.env.FACTORY_FABLE_OR_OPUS_MODEL;
+    if (prevFableModel === undefined) delete process.env.FACTORY_FABLE_OR_OPUS_MODEL;
     else process.env.FACTORY_FABLE_OR_OPUS_MODEL = prevFableModel;
   });
 
@@ -170,33 +169,22 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       }),
     });
     expect(response.status).toBe(201);
-    const project = (await response.json()) as Awaited<
-      ReturnType<typeof store.create>
-    >;
+    const project = (await response.json()) as Awaited<ReturnType<typeof store.create>>;
     const queued = project.stations
       .filter((station) => station.status === "queued")
       .map((station) => station.stationId);
-    expect(queued).toEqual([
-      "promo-pilot",
-      "factory-deck",
-      "crucible",
-      "watchtower",
-    ]);
+    expect(queued).toEqual(["promo-pilot", "factory-deck", "crucible", "watchtower"]);
     expect(
       project.stations.find((station) => station.stationId === "scout")?.status,
     ).toBe("not_selected");
     expect(
-      project.stations.find((station) => station.stationId === "flexfactor")
-        ?.status,
+      project.stations.find((station) => station.stationId === "flexfactor")?.status,
     ).toBe("not_selected");
   });
 
   it("redispatches an in-flight station after restart without replay or concurrency", async () => {
     const intake = {
-      ...intakeFromMarkdown(
-        "# GrantFlow\nFind funding.",
-        "C:/Vault/GrantFlow.md",
-      ),
+      ...intakeFromMarkdown("# GrantFlow\nFind funding.", "C:/Vault/GrantFlow.md"),
       selectedStations: STATIONS.map((station) => station.id),
     };
     const createdRes = await fetch(`${baseUrl}/projects`, {
@@ -226,9 +214,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
 
     for (let i = 0; i < 20; i++) {
       const snapshot = (await store.get(projectId))!;
-      const active = snapshot.stations.filter(
-        (station) => station.status === "active",
-      );
+      const active = snapshot.stations.filter((station) => station.status === "active");
       expect(active.map((station) => station.stationId)).toEqual(["factory-deck"]);
       await sleep(10);
     }
@@ -256,9 +242,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       (candidate) =>
         candidate.stations.find((station) => station.stationId === "crucible")
           ?.status === "needs_attention" &&
-        adapters
-          .getCalls()
-          .some((call) => call.stationId === "crucible"),
+        adapters.getCalls().some((call) => call.stationId === "crucible"),
       4_000,
     );
 

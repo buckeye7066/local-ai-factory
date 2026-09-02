@@ -60,9 +60,7 @@ interface PackageManagerResolution {
  * must not silently switch verification to another dependency graph. Without
  * a declaration, one lockfile is unambiguous; conflicting locks fail closed.
  */
-function packageManagerResolution(
-  workspacePath: string,
-): PackageManagerResolution {
+function packageManagerResolution(workspacePath: string): PackageManagerResolution {
   const declared = readPackage(workspacePath)?.packageManager;
   if (typeof declared === "string" && declared.trim()) {
     const match = /^(npm|pnpm|yarn)@/i.exec(declared.trim());
@@ -251,8 +249,7 @@ function dependencies(pkg: Record<string, unknown> | null): Set<string> {
   ]) {
     const map = pkg[key];
     if (map && typeof map === "object") {
-      for (const name of Object.keys(map as Record<string, unknown>))
-        out.add(name);
+      for (const name of Object.keys(map as Record<string, unknown>)) out.add(name);
     }
   }
   return out;
@@ -305,8 +302,7 @@ export function verificationPlanForWorkspace(
   if (exists(workspacePath, "package.json") && !managerResolution.manager) {
     incomplete.push({
       command: "package manager",
-      reason:
-        managerResolution.reason ?? "package manager could not be resolved",
+      reason: managerResolution.reason ?? "package manager could not be resolved",
     });
   }
   const quality = ["lint", "typecheck", "build"]
@@ -370,10 +366,7 @@ export function verificationPlanForWorkspace(
         runner: "vitest",
         directTestPath: path,
       });
-    } else if (
-      deps.has("jest") ||
-      String(scripts.test ?? "").includes("jest")
-    ) {
+    } else if (deps.has("jest") || String(scripts.test ?? "").includes("jest")) {
       direct.push({
         bin: "npx",
         args: ["--no-install", "jest", "--runTestsByPath", path, "--json"],
@@ -433,8 +426,5 @@ export function verificationPlanForWorkspace(
 export function verificationCommandsForWorkspace(
   workspacePath: string,
 ): VerificationCommand[] {
-  return [
-    ...javascriptCommands(workspacePath),
-    ...pythonCommands(workspacePath),
-  ];
+  return [...javascriptCommands(workspacePath), ...pythonCommands(workspacePath)];
 }

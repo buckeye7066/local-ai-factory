@@ -26,8 +26,7 @@ function fake(
       p.calls += 1;
       if (behavior === "quota")
         throw new Error("429 You have no credits remaining. Add funds");
-      if (behavior === "badRequest")
-        throw new Error("400 invalid model parameter");
+      if (behavior === "badRequest") throw new Error("400 invalid model parameter");
       return { text: `served by ${name}`, provider: name };
     },
     async generateJson<T>() {
@@ -43,9 +42,7 @@ function fake(
 
 describe("isQuotaRefusal", () => {
   it("recognizes the real refusals seen in production", () => {
-    expect(
-      isQuotaRefusal(new Error("429 You have no credits remaining.")),
-    ).toBe(true);
+    expect(isQuotaRefusal(new Error("429 You have no credits remaining."))).toBe(true);
     expect(isQuotaRefusal(new Error("insufficient_quota"))).toBe(true);
     expect(
       isQuotaRefusal(
@@ -54,9 +51,7 @@ describe("isQuotaRefusal", () => {
     ).toBe(true);
   });
   it("does NOT treat a real bad request as a quota problem", () => {
-    expect(isQuotaRefusal(new Error("400 invalid model parameter"))).toBe(
-      false,
-    );
+    expect(isQuotaRefusal(new Error("400 invalid model parameter"))).toBe(false);
     expect(isQuotaRefusal(new Error("anchor not found"))).toBe(false);
   });
 });
@@ -64,12 +59,8 @@ describe("isQuotaRefusal", () => {
 describe("isModelExhaustion", () => {
   it("demotes on capacity and model availability without hiding bad input", () => {
     expect(isModelExhaustion({ status: 429, message: "busy" })).toBe(true);
-    expect(
-      isModelExhaustion(new Error("model is temporarily unavailable")),
-    ).toBe(true);
-    expect(isModelExhaustion(new Error("400 invalid model parameter"))).toBe(
-      false,
-    );
+    expect(isModelExhaustion(new Error("model is temporarily unavailable"))).toBe(true);
+    expect(isModelExhaustion(new Error("400 invalid model parameter"))).toBe(false);
   });
 });
 
@@ -136,9 +127,7 @@ describe("QuotaFailoverProvider", () => {
     const primary = fake("openai", "quota");
     const alt = fake("anthropic", "quota");
     const p = new QuotaFailoverProvider(primary, [alt]);
-    await expect(p.generateJson({} as never)).rejects.toThrow(
-      /no credits|quota/i,
-    );
+    await expect(p.generateJson({} as never)).rejects.toThrow(/no credits|quota/i);
     expect(alt.calls).toBe(1);
   });
 

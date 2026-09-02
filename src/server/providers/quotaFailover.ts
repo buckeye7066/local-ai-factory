@@ -82,11 +82,7 @@ export class QuotaFailoverProvider implements LLMProvider {
   constructor(
     primary: LLMProvider,
     alternates: LLMProvider[],
-    private onFailover: (
-      from: string,
-      to: string,
-      reason: string,
-    ) => void = () => {},
+    private onFailover: (from: string, to: string, reason: string) => void = () => {},
   ) {
     this.name = primary.name;
     const seen = new Set([primary.name]);
@@ -112,9 +108,7 @@ export class QuotaFailoverProvider implements LLMProvider {
     return null;
   }
 
-  private async execute<T>(
-    invoke: (provider: LLMProvider) => Promise<T>,
-  ): Promise<T> {
+  private async execute<T>(invoke: (provider: LLMProvider) => Promise<T>): Promise<T> {
     let firstExhaustion: unknown = null;
     for (let index = this.cursor; index < this.providers.length; index += 1) {
       const provider = this.providers[index]!;

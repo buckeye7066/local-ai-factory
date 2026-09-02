@@ -96,9 +96,7 @@ export function TopBar({
 
       {/* Backend / provider status */}
       <div className="flex items-center gap-2">
-        <Tooltip
-          content={online ? "Local backend connected" : "Backend not reachable"}
-        >
+        <Tooltip content={online ? "Local backend connected" : "Backend not reachable"}>
           <span
             className={cn(
               "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium",
