@@ -228,9 +228,6 @@ export function FoundryFloor() {
           targets: split(targets),
           routingMode,
           source: "manual",
-          ...(stations.length
-            ? { selectedStations: stations.map((station) => station.id) }
-            : {}),
         }),
       });
       setName("");
