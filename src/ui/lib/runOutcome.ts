@@ -9,13 +9,9 @@ export function runIsReady(
   const destination = run.destination;
   // Legacy records without a destination predate receipt-bound delivery.
   if (!destination) return false;
-  // Ready means receipt-bound delivery, not merely a completed narrative.
-  // Workspace-only and legacy destinations have no commit/tree receipt.
-  if (
-    destination.kind === "workspace-only" ||
-    destination.status !== "delivered" ||
-    !destination.commitSha
-  ) {
+  // Every destination kind, including workspace-only, earns readiness only
+  // through a successful receipt-bound delivery with a verified commit.
+  if (destination.status !== "delivered" || !destination.commitSha) {
     return false;
   }
   if (run.release && !run.release.released) return false;
