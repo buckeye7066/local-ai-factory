@@ -554,6 +554,87 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     }
   });
 
+  it("keeps valid comparisons when one selected item omits integration prose", async () => {
+    const ci = await import("../tools/competitiveIntelligence.js");
+    const productUrl = "https://rival.example/product";
+    const productDossier = {
+      ...DOSSIER,
+      coverage: {
+        productTarget: 5,
+        productDiscoveredCount: 1,
+        productInspectedCount: 1,
+        productVerifiedCount: 1,
+        productCoverageMet: false,
+        repositoryDiscoveredCount: 0,
+        repositoryInspectedCount: 0,
+        repositoryVerifiedCount: 0,
+      },
+      candidates: [
+        {
+          ...DOSSIER.candidates[0],
+          id: "product:rival.example",
+          kind: "product",
+          url: productUrl,
+          sourceEvidence: [
+            { path: "product-page", url: productUrl, excerpt: "Verified behavior." },
+          ],
+        },
+      ],
+    };
+    const spy = vi
+      .spyOn(ci, "buildCompetitiveDossier")
+      .mockResolvedValue(productDossier as never);
+    try {
+      const provider = new ScriptedProvider([
+        {
+          thought: "nothing external needed",
+          action: "conclude",
+          findings: { summary: "base summary", recommendations: [] },
+        },
+        {
+          summary: "comparison complete",
+          comparisons: [
+            {
+              candidateId: "product:rival.example",
+              name: "Rival",
+              score: 90,
+              matchedFeatures: ["fast add"],
+              strengths: ["fast capture"],
+              gaps: ["no local JSON export"],
+              evidenceUrls: [productUrl],
+              decision: "adapt",
+              rationale: "Useful behavior",
+            },
+          ],
+          selected: [
+            {
+              candidateId: "product:rival.example",
+              element: "single-command task capture",
+              why: "reduces input friction",
+              reuseMode: "clean-room-pattern",
+              evidenceUrls: [productUrl],
+              score: 90,
+            },
+          ],
+        },
+      ]);
+      const findings = await researchAgent({ provider }, spec, arch, {
+        competitive: true,
+      });
+      expect(findings.summary).not.toContain("FAILED and was SKIPPED");
+      expect(findings.comparisons).toHaveLength(1);
+      expect(findings.recommendations).toHaveLength(1);
+      expect(findings.recommendations[0].howToIntegrate).toContain(
+        "single-command task capture",
+      );
+      expect(findings.recommendations[0].howToIntegrate).toContain(
+        "direct acceptance tests",
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("a deliberate abort still propagates — a cancelled run is never continued", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");
     const spy = vi

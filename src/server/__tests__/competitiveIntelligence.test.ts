@@ -154,6 +154,8 @@ describe("competitive discovery", () => {
     expect(queries[0]).toMatch(/competitors/);
     expect(queries.some((query) => query.includes("open source"))).toBe(true);
     expect(queries.some((query) => !query.includes("open source"))).toBe(true);
+    expect(queries.filter(isCompetitorQuery)).toHaveLength(4);
+    expect(queries.slice(0, 4).every((query) => query.length < 320)).toBe(true);
   });
 
   it("deduplicates product subdomains and rejects aggregators as competitors", () => {
@@ -213,6 +215,17 @@ describe("competitive discovery", () => {
         snippet: "source",
       }),
     ).toBeNull();
+    for (const url of [
+      "https://stackoverflow.com/questions/1",
+      "https://dev.to/example/a-cli",
+      "https://www.npmjs.com/package/task-cli",
+      "https://www.codemag.com/Article/1/A-CLI",
+      "https://weeklyjs.io/typescript/a-cli",
+    ]) {
+      expect(
+        productCandidateKey({ title: "Implementation article", url, snippet: "" }),
+      ).toBeNull();
+    }
   });
 
   it("does not verify an empty or non-text 200 response as product evidence", () => {
