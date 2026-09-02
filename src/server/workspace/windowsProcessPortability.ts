@@ -47,7 +47,10 @@ function expressionContainsWindowsScript(
   expression: ts.Expression,
   scriptVariables: ReadonlySet<string>,
 ): boolean {
-  if (ts.isStringLiteralLike(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+  if (
+    ts.isStringLiteralLike(expression) ||
+    ts.isNoSubstitutionTemplateLiteral(expression)
+  ) {
     return WINDOWS_SCRIPT.test(expression.text);
   }
   if (ts.isIdentifier(expression) && scriptVariables.has(expression.text)) return true;
@@ -207,7 +210,9 @@ export function assessWindowsProcessPortability(
         ) {
           issues.push({
             path: file.path,
-            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+            line:
+              sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line +
+              1,
             reason:
               `${method} directly launches a Windows .cmd/.bat wrapper without shell: true. ` +
               "Node reports spawn EINVAL for this on Windows. Invoke a real executable such as process.execPath, use a shell-aware command API, or deliberately enable the shell for that invocation.",
