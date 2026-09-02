@@ -84,6 +84,7 @@ describe("paid cloud workflow contract", () => {
 
   it("keeps option-like Factory prompts out of positional CLI parsing", () => {
     expect(factory).toContain("FACTORY_IDEA:");
+    expect(factory).toContain('FACTORY_PROJECT_ID: "factory-deck-cloud-proof"');
     expect(factory).toContain("run: pnpm exec tsx src/cli/factory.ts");
     expect(factory).not.toContain(
       'run: pnpm exec tsx src/cli/factory.ts "$env:FACTORY_IDEA"',
