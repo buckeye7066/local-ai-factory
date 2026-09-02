@@ -1346,12 +1346,34 @@ async function executeRun(
     const productionIntelligenceRequired = requiresProductionCompetitiveEvidence(
       run.demo,
     );
-    let projectKey = checkpoint.projectKey ?? projectKeyForOptions(checkpoint.options);
-    if (!projectKey && productionIntelligenceRequired) {
+    const newRepoOptions =
+      checkpoint.options.mode !== "extend" ? checkpoint.options.newRepo : undefined;
+    const resolvedNewRepoOwner =
+      newRepoOptions?.owner ??
+      (newRepoOptions &&
+      newRepoOptions.createRemote !== false &&
+      productionIntelligenceRequired
+        ? await githubLogin(process.cwd())
+        : null);
+    const derivedProjectKey = projectKeyForOptions(checkpoint.options, {
+      resolvedNewRepoOwner,
+      localProjectId: checkpoint.options.idempotencyKey ?? run.id,
+    });
+    if (productionIntelligenceRequired && !derivedProjectKey) {
       throw new Error(
-        "Production run requires a stable project identity. Select an existing repository or name the new repository before Factory Deck plans or builds.",
+        "Production run requires a stable project identity. Select an existing repository, resolve the authenticated owner for a new remote, or assign a distinct local-only project identity before Factory Deck plans or builds.",
       );
     }
+    if (
+      checkpoint.projectKey &&
+      derivedProjectKey &&
+      checkpoint.projectKey !== derivedProjectKey
+    ) {
+      throw new StaleCheckpointSpecificationError(
+        "Checkpoint project identity no longer matches the resolved delivery destination.",
+      );
+    }
+    let projectKey = checkpoint.projectKey ?? derivedProjectKey;
     // Hermetic tests and explicit demo runs do not write shared project memory,
     // but still receive an immutable per-run goal contract.
     projectKey ??= `run:${run.id}`;
@@ -1679,9 +1701,7 @@ async function executeRun(
         run.destination = planDestination({
           mode: "new",
           options: checkpoint.options,
-          githubOwner: newRepo
-            ? (newRepo.owner ?? (await githubLogin(process.cwd())))
-            : null,
+          githubOwner: newRepo ? resolvedNewRepoOwner : null,
         });
         log("info", `Work will be saved to: ${describeDestination(run.destination)}`);
       }
