@@ -42,6 +42,7 @@ import {
   evaluateProductionReadiness,
   readinessDeliveryKind,
 } from "./productionReadinessPolicy.js";
+import { onlyPlatformEvidenceBlockers } from "./platformEvidenceHold.js";
 import { recordReadinessEvaluation } from "../storage/readinessStore.js";
 export { MissingProviderCredentialError };
 import { createWorkspace } from "../workspace/createWorkspace.js";
@@ -2783,7 +2784,7 @@ async function executeRun(
           receipt: blockedReceipt,
         });
         run.status = "failed";
-        run.resumable = false;
+        run.resumable = onlyPlatformEvidenceBlockers(deterministicBlockers);
         run.error = redactSecrets(
           `Production readiness blocked before release review: ${deterministicBlockers.join("; ")}`,
         );

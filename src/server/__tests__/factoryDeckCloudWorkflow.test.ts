@@ -87,12 +87,12 @@ describe("paid cloud workflow contract", () => {
       factory.match(
         /secrets\.PAID_PRODUCTION_ANTHROPIC_KEY \|\| secrets\.ANTHROPIC_API_KEY/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(
       factory.match(
         /secrets\.PAID_PRODUCTION_OPENAI_KEY \|\| secrets\.OPENAI_API_KEY/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(foundry).toContain(
       "secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY",
     );
@@ -120,6 +120,43 @@ describe("paid cloud workflow contract", () => {
     );
     expect(factory).not.toContain("accessible single-page task checklist");
     expect(foundrySmoke).not.toContain("minimal accessible task checklist");
+  });
+
+  it("proves one exact CLI candidate on Windows and macOS before paid finalization", () => {
+    expect(factory).toContain("runs-on: windows-latest");
+    expect(factory).toContain("runs-on: macos-latest");
+    expect(factory).toContain("needs: windows");
+    expect(factory).toContain("needs: macos");
+    expect(factory).toContain(
+      "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
+    );
+    expect(
+      factory.match(/pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g),
+    ).toHaveLength(2);
+    expect(factory).toContain("pnpm exec tsx src/cli/factory-resume.ts");
+    expect(factory).toContain("continue-on-error: true");
+    expect(factory).toContain("${{ steps.candidate.outcome }}");
+    expect(factory).toContain(
+      "factory-deck-seed-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(factory).toContain(
+      "factory-deck-windows-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(factory).toContain(
+      "factory-deck-macos-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(factory).toContain("!workspaces/**/node_modules/**");
+
+    const windowsProof = factory.slice(
+      factory.indexOf("Execute Windows proof without production secrets"),
+      factory.indexOf("Preserve Windows evidence"),
+    );
+    const macosProof = factory.slice(
+      factory.indexOf("Execute macOS proof without production secrets"),
+      factory.indexOf("Preserve macOS evidence"),
+    );
+    expect(windowsProof).not.toContain("API_KEY");
+    expect(macosProof).not.toContain("API_KEY");
   });
 
   it("builds a verifier image with Node, Python, native tools, and no entrypoint", () => {
