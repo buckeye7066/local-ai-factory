@@ -24,12 +24,9 @@ describe("Foundry evidence ledger concurrency", () => {
 
     await Promise.all(
       stores.map((store, index) =>
-        store.appendEvidence(
-          projectId,
-          "factory-deck",
-          `concurrent.${index}`,
-          { index },
-        ),
+        store.appendEvidence(projectId, "factory-deck", `concurrent.${index}`, {
+          index,
+        }),
       ),
     );
 
@@ -44,9 +41,7 @@ describe("Foundry evidence ledger concurrency", () => {
     for (const [index, event] of events.entries()) {
       const { hash, ...unsigned } = event;
       expect(event.sequence).toBe(index + 1);
-      expect(event.previousHash).toBe(
-        index === 0 ? null : events[index - 1].hash,
-      );
+      expect(event.previousHash).toBe(index === 0 ? null : events[index - 1].hash);
       expect(hash).toBe(hashText(JSON.stringify(unsigned)));
     }
   });
