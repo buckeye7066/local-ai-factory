@@ -199,15 +199,31 @@ function partitionGoals(goals: string[], fallback: string) {
   const active: string[] = [];
   const constraints: string[] = [];
   const nonGoals: string[] = [];
+  const declaredPurposes: string[] = [];
+  const declaredTargetUsers: string[] = [];
   for (const raw of goals.length ? goals : [fallback]) {
     const value = clip(raw);
     const constraint = value.match(/^constraint\s*:\s*(.+)$/i);
     const nonGoal = value.match(/^non[- ]?goal\s*:\s*(.+)$/i);
-    if (constraint) constraints.push(constraint[1]!);
+    const declaredPurpose = value.match(/^(?:mission|purpose)\s*:\s*(.+)$/i);
+    const declaredAudience = value.match(
+      /^(?:audience|target[- ]?users?)\s*:\s*(.+)$/i,
+    );
+    if (declaredPurpose) declaredPurposes.push(declaredPurpose[1]!);
+    else if (declaredAudience) declaredTargetUsers.push(declaredAudience[1]!);
+    else if (constraint) constraints.push(constraint[1]!);
     else if (nonGoal) nonGoals.push(nonGoal[1]!);
     else active.push(value);
   }
+  const purposes = unique(declaredPurposes, 2);
+  if (purposes.length > 1) {
+    throw new Error(
+      "Conflicting Mission/Purpose directives were supplied for one Factory run.",
+    );
+  }
   return {
+    declaredPurpose: purposes[0] ?? null,
+    declaredTargetUsers: unique(declaredTargetUsers, 20),
     activeGoals: unique(active.length ? active : [fallback], 20),
     constraints: unique(constraints, 30),
     nonGoals: unique(nonGoals, 30),
@@ -261,40 +277,51 @@ export function createGoalContract(input: {
   );
   const previous = history.at(-1);
   const partitioned = partitionGoals(input.goals, input.idea);
-  const purposeChanged = explicitPurposeChange([
-    input.idea,
-    ...partitioned.activeGoals,
-  ]);
-  const preservePriorPurpose = Boolean(previous && !purposeChanged);
+  const purposeChanged =
+    explicitPurposeChange([input.idea, ...partitioned.activeGoals]) ||
+    Boolean(
+      previous &&
+        partitioned.declaredPurpose &&
+        partitioned.declaredPurpose.trim() !== previous.goalContract.purpose.trim(),
+    );
+  const preservePriorPurpose = Boolean(
+    previous && !purposeChanged && !partitioned.declaredPurpose,
+  );
   // Once an owner has accepted a mission, a fresh model inference from the
   // same repository may not silently replace it. Repository evidence is the
   // source of truth only for the first run; an explicit repurpose uses the
   // current owner-directed specification.
   const purpose = preservePriorPurpose
     ? previous!.goalContract.purpose
-    : purposeChanged
-      ? currentSpecPurpose(input.spec)
-      : input.purposeProfile
-        ? input.purposeProfile.purpose.text
-        : currentSpecPurpose(input.spec);
+    : partitioned.declaredPurpose
+      ? partitioned.declaredPurpose
+      : purposeChanged
+        ? currentSpecPurpose(input.spec)
+        : input.purposeProfile
+          ? input.purposeProfile.purpose.text
+          : currentSpecPurpose(input.spec);
   const purposeSource: GoalContract["purposeSource"] = preservePriorPurpose
     ? "project-memory"
-    : purposeChanged
-      ? "current-spec"
-      : input.purposeProfile
-        ? "repository"
-        : "current-spec";
+    : partitioned.declaredPurpose
+      ? "current-request"
+      : purposeChanged
+        ? "current-spec"
+        : input.purposeProfile
+          ? "repository"
+          : "current-spec";
   const targetUsers = preservePriorPurpose
     ? previous!.goalContract.targetUsers
-    : purposeChanged
-      ? unique([input.spec.targetUser], 20)
-      : unique(
-          [
-            ...(input.purposeProfile?.intendedUsers.map((claim) => claim.text) ?? []),
-            input.spec.targetUser,
-          ],
-          20,
-        );
+    : partitioned.declaredTargetUsers.length > 0
+      ? partitioned.declaredTargetUsers
+      : purposeChanged
+        ? unique([input.spec.targetUser], 20)
+        : unique(
+            [
+              ...(input.purposeProfile?.intendedUsers.map((claim) => claim.text) ?? []),
+              input.spec.targetUser,
+            ],
+            20,
+          );
   const priorResearch = unique(
     [...history]
       .reverse()
