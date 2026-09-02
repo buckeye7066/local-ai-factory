@@ -16,7 +16,10 @@ RUN apt-get update \
       python-is-python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install --global pnpm@10.17.0 yarn@1.22.22 \
+# The pinned official Node image already supplies Yarn Classic. Reinstalling Yarn
+# through npm collides with its existing /usr/local/bin/yarn executable.
+RUN npm install --global pnpm@10.17.0 \
+    && test "$(yarn --version)" = "1.22.22" \
     && npm cache clean --force
 
 ENV CI=true \
