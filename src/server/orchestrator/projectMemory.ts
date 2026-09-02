@@ -122,6 +122,9 @@ export async function loadProjectMemory(
   if (parsed.projectKey !== projectKey) {
     throw new Error("Project memory identity mismatch.");
   }
+  for (const entry of parsed.entries) {
+    assertGoalContractIntegrity(entry.goalContract);
+  }
   return parsed;
 }
 
@@ -205,6 +208,14 @@ function digestGoalContract(
   return `sha256:${createHash("sha256")
     .update(JSON.stringify(contract))
     .digest("hex")}`;
+}
+
+/** Refuse a checkpoint or memory entry whose mission bytes were altered. */
+export function assertGoalContractIntegrity(contract: GoalContract): void {
+  const { digest, ...withoutDigest } = contract;
+  if (digestGoalContract(withoutDigest) !== digest) {
+    throw new Error("Goal contract digest mismatch.");
+  }
 }
 
 /**
