@@ -71,7 +71,9 @@ describe("#1 sanitizeChildEnv drops credential URLs / DSNs (allowlist)", () => {
 
   it("strips workspace directories out of PATH", () => {
     const ws = resolve("/tmp/ws-xyz");
-    const path = ["/usr/bin", join(ws, "node_modules/.bin"), "/bin"].join(delimiter);
+    const path = ["/usr/bin", join(ws, "node_modules/.bin"), "/bin"].join(
+      delimiter,
+    );
     const clean = sanitizeChildEnv({ PATH: path }, ws);
     expect(clean.PATH).not.toContain(ws);
     expect(clean.PATH).toContain("/usr/bin");
@@ -205,7 +207,9 @@ describe("#6 Factory Deck health signature", () => {
   it("rejects foreign / missing-marker payloads", () => {
     expect(isFactoryHealthPayload({ ok: true })).toBe(false); // no service marker
     expect(isFactoryHealthPayload({ status: "ok" })).toBe(false);
-    expect(isFactoryHealthPayload({ ok: true, service: "grafana" })).toBe(false);
+    expect(isFactoryHealthPayload({ ok: true, service: "grafana" })).toBe(
+      false,
+    );
     expect(isFactoryHealthPayload(null)).toBe(false);
     expect(isFactoryHealthPayload("factory-deck")).toBe(false);
   });
