@@ -11,10 +11,7 @@ import {
   type PurposeProfile,
   type RunOptions,
 } from "../../shared/schemas.js";
-import {
-  loadProjectMemoryJson,
-  saveProjectMemoryJson,
-} from "../storage/runsStore.js";
+import { loadProjectMemoryJson, saveProjectMemoryJson } from "../storage/runsStore.js";
 
 const MAX_HISTORY = 12;
 
@@ -73,14 +70,11 @@ function clip(value: string, max = 2_000): string {
 }
 
 function canonicalGitIdentity(raw: string): string {
-  const scp = raw
-    .trim()
-    .match(/^(?:[^@\s]+@)?([^:\s/]+):(.+)$/);
+  const scp = raw.trim().match(/^(?:[^@\s]+@)?([^:\s/]+):(.+)$/);
   if (scp && !raw.includes("://") && !/^[A-Za-z]:[\\/]/.test(raw)) {
-    return `${scp[1]!.toLowerCase()}/${scp[2]!
-      .replace(/\.git$/i, "")
-      .replace(/^\/+|\/+$/g, "")
-      .toLowerCase()}`;
+    const host = scp[1]!.toLowerCase();
+    const pathname = scp[2]!.replace(/\.git$/i, "").replace(/^\/+|\/+$/g, "");
+    return `${host}/${host === "github.com" ? pathname.toLowerCase() : pathname}`;
   }
   try {
     const url = new URL(raw);
@@ -88,10 +82,9 @@ function canonicalGitIdentity(raw: string): string {
     url.password = "";
     url.search = "";
     url.hash = "";
-    return `${url.hostname.toLowerCase()}${url.pathname
-      .replace(/\.git$/i, "")
-      .replace(/\/+$/g, "")
-      .toLowerCase()}`;
+    const host = url.hostname.toLowerCase();
+    const pathname = url.pathname.replace(/\.git$/i, "").replace(/\/+$/g, "");
+    return `${host}${host === "github.com" ? pathname.toLowerCase() : pathname}`;
   } catch {
     return raw
       .trim()
@@ -106,7 +99,9 @@ export function projectKeyForOptions(options: RunOptions): string | null {
   if (options.mode === "extend" && options.repoSource) {
     return options.repoSource.type === "git"
       ? `git:${canonicalGitIdentity(options.repoSource.location)}`
-      : `path:${resolve(options.repoSource.location)}`;
+      : `path-sha256:${createHash("sha256")
+          .update(resolve(options.repoSource.location))
+          .digest("hex")}`;
   }
   if (options.mode !== "extend" && options.newRepo?.name) {
     return `new:${(options.newRepo.owner ?? "default").toLowerCase()}/${options.newRepo.name.toLowerCase()}`;
@@ -144,8 +139,7 @@ export function continuityFromMemory(
     .reverse()
     .flatMap((entry) => entry.competitiveResearch?.recommendations ?? [])
     .map(
-      (item) =>
-        `${item.name}: ${item.howToIntegrate} (evidence: ${item.sourceUrl})`,
+      (item) => `${item.name}: ${item.howToIntegrate} (evidence: ${item.sourceUrl})`,
     );
   return {
     previousRunIds: entries.map((entry) => entry.runId),
@@ -278,9 +272,7 @@ export function createGoalContract(input: {
     activeGoals: partitioned.activeGoals,
     constraints: unique(
       [
-        ...(previous && !purposeChanged
-          ? previous.goalContract.constraints
-          : []),
+        ...(previous && !purposeChanged ? previous.goalContract.constraints : []),
         ...partitioned.constraints,
       ],
       30,
@@ -317,8 +309,7 @@ export function withGoalContract(
   const additions = [
     `[MISSION] The primary delivered workflow advances this purpose: ${contract.purpose}`,
     ...contract.activeGoals.map(
-      (goal, index) =>
-        `[GOAL-${index + 1}] Deliver and directly verify: ${goal}`,
+      (goal, index) => `[GOAL-${index + 1}] Deliver and directly verify: ${goal}`,
     ),
     ...contract.constraints.map(
       (constraint, index) =>
@@ -421,7 +412,10 @@ export async function rememberProjectCompletion(input: {
       spec: input.spec,
       competitiveResearch: input.competitiveResearch,
       finalSummary: clip(input.finalSummary, 20_000),
-      nextImprovements: unique(input.nextImprovements.map((item) => clip(item)), 30),
+      nextImprovements: unique(
+        input.nextImprovements.map((item) => clip(item)),
+        30,
+      ),
       revision: input.revision,
       startedAt: prior?.startedAt ?? now,
       completedAt: now,
