@@ -171,6 +171,7 @@ import {
   assertGoalContractIntegrity,
   continuityFromMemory,
   createGoalContract,
+  goalContractMatchesProjectMemory,
   loadProjectMemory,
   projectKeyForOptions,
   rememberProjectCompletion,
@@ -1361,11 +1362,11 @@ async function executeRun(
     const derivedProjectKey = projectKeyForOptions(checkpoint.options, {
       resolvedNewRepoOwner,
       resolvedRepoOrigin: resolvedExistingRepoOrigin,
-      localProjectId: checkpoint.options.idempotencyKey,
+      localProjectId: checkpoint.options.projectId,
     });
     if (productionIntelligenceRequired && !derivedProjectKey) {
       throw new Error(
-        "Production run requires a stable project identity. Select an existing repository, resolve the authenticated owner for a new remote, or assign a distinct local-only project identity before Factory Deck plans or builds.",
+        "Production run requires a stable project identity. Select an existing repository, resolve the authenticated owner for a new remote, or set options.projectId for a local-only project before Factory Deck plans or builds.",
       );
     }
     if (
@@ -1398,6 +1399,11 @@ async function executeRun(
       ) {
         throw new StaleCheckpointSpecificationError(
           "Checkpoint goal contract does not belong to this run and project.",
+        );
+      }
+      if (!goalContractMatchesProjectMemory(goalContract, projectMemory)) {
+        throw new StaleCheckpointSpecificationError(
+          "Checkpoint goal contract is stale because another run completed for this project. Start a fresh run so the latest mission and decisions are authoritative.",
         );
       }
     }
@@ -3462,13 +3468,11 @@ async function executeRun(
             }) — ${spec.appName} is NOT ready.${releaseNote} Workspace: ${workspacePath}.`,
     );
     await flush();
-    await deleteRunCheckpoint(run.id).catch(() => {
-      log("warning", "Completed run checkpoint cleanup will be retried by retention.");
-    });
     // Publish authoritative continuity only after the terminal run, audit, and
     // attribution have all been durably flushed. Any earlier write could let a
     // later persistence failure turn this run into `failed` while memory still
     // advertised it as a successful precedent.
+    let projectMemoryFinalized = !productionIntelligenceRequired;
     if (productionIntelligenceRequired && goalContract) {
       try {
         await rememberProjectCompletion({
@@ -3481,6 +3485,7 @@ async function executeRun(
           nextImprovements: report.nextImprovements,
           revision: run.release?.mergedSha ?? run.destination?.commitSha ?? null,
         });
+        projectMemoryFinalized = true;
         log(
           "success",
           `Project memory finalized for run ${run.id.slice(0, 8)}; the next run will inherit this mission, decisions, research, and outcome.`,
@@ -3493,10 +3498,23 @@ async function executeRun(
           `Project memory completion update failed; this run will not become authoritative continuity: ${safeErrorMessage(err).slice(0, 300)}.`,
         );
       }
-      // Persist only the informational memory log. A failure here cannot
-      // retroactively invalidate the already-durable terminal outcome.
-      await flush().catch(() => {});
     }
+    if (projectMemoryFinalized) {
+      await deleteRunCheckpoint(run.id).catch(() => {
+        log(
+          "warning",
+          "Completed run checkpoint cleanup will be retried by retention.",
+        );
+      });
+    } else {
+      log(
+        "warning",
+        "Completed run checkpoint retained because authoritative project-memory finalization did not succeed.",
+      );
+    }
+    // Persist only informational memory/cleanup logs. A failure here cannot
+    // retroactively invalidate the already-durable terminal outcome.
+    await flush().catch(() => {});
   } catch (rawErr) {
     // A provider call aborted mid-flight because the deadline fired or the
     // run was cancelled — reuse the exact same, already-tested
