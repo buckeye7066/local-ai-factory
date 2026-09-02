@@ -170,6 +170,34 @@ export const PurposeProfileSchema = z.object({
 });
 export type PurposeProfile = z.infer<typeof PurposeProfileSchema>;
 
+/**
+ * Orchestrator-owned mission carried through every model call. Unlike a prompt,
+ * this is a typed, digest-bound contract: the current request, repository
+ * purpose, and prior successful work are reconciled once and then reused.
+ */
+export const GoalContractSchema = z.object({
+  schema: z.literal("factory.goal-contract.v1"),
+  projectKey: z.string().min(1).max(500),
+  purpose: z.string().trim().min(1).max(20_000),
+  purposeSource: z.enum(["repository", "project-memory", "current-spec"]),
+  targetUsers: z.array(z.string().trim().min(1)).max(20).default([]),
+  activeGoals: z.array(z.string().trim().min(1)).min(1).max(20),
+  constraints: z.array(z.string().trim().min(1)).max(30).default([]),
+  nonGoals: z.array(z.string().trim().min(1)).max(30).default([]),
+  continuity: z.object({
+    previousRunIds: z.array(z.string().uuid()).max(12).default([]),
+    carriedForwardDecisions: z
+      .array(z.string().trim().min(1))
+      .max(30)
+      .default([]),
+    priorResearch: z.array(z.string().trim().min(1)).max(30).default([]),
+  }),
+  createdFromRunId: z.string().uuid(),
+  createdAt: z.number().int().nonnegative(),
+  digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+});
+export type GoalContract = z.infer<typeof GoalContractSchema>;
+
 /** Durable, operator-visible competitive evidence retained after checkpoints expire. */
 export const CompetitiveResearchSummarySchema = z.object({
   required: z.boolean(),
@@ -353,6 +381,8 @@ export const ProductSpecSchema = z.object({
   acceptanceCriteria: NonEmptyStringListSchema,
   /** Present on extend runs so every downstream agent receives the constitution. */
   purposeProfile: PurposeProfileSchema.optional(),
+  /** Present on every orchestrated run; stamped by code, never trusted from a model. */
+  goalContract: GoalContractSchema.optional(),
 });
 export type ProductSpec = z.infer<typeof ProductSpecSchema>;
 
@@ -588,6 +618,8 @@ export const FinalReportSchema = z.object({
   providerUsage: ProviderUsageSchema,
   /** Durable evidence bundle explaining the standing purpose of an extended app. */
   purposeProfile: PurposeProfileSchema.optional(),
+  /** Durable mission, active goals, and cross-run continuity for every app. */
+  goalContract: GoalContractSchema.optional(),
   /** Durable evidence for comparative claims; retained after checkpoint cleanup. */
   competitiveResearch: CompetitiveResearchSummarySchema.optional(),
   /** Rendered error ledger — one readable line per recorded error. */
