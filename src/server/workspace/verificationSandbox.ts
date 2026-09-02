@@ -6,6 +6,13 @@ export type VerificationSandboxConfig = {
   stateRoot: string;
 };
 
+export type HostVerificationSandboxConfig = {
+  user: string;
+  stateRoot: string;
+  windowsLauncher?: string;
+  windowsPassword?: string;
+};
+
 export type VerificationSandboxPlan = {
   containerName: string;
   dockerArgs: string[];
@@ -14,6 +21,14 @@ export type VerificationSandboxPlan = {
 
 const SAFE_IMAGE = /^[A-Za-z0-9][A-Za-z0-9._/@:-]{0,254}$/;
 const SAFE_CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
+const SAFE_HOST_USER = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+const PRIVILEGED_HOST_USERS = new Set([
+  "administrator",
+  "nobody",
+  "root",
+  "runneradmin",
+  "system",
+]);
 
 function pathWithin(root: string, candidate: string): boolean {
   const rel = relative(resolve(root), resolve(candidate));
@@ -23,6 +38,9 @@ function pathWithin(root: string, candidate: string): boolean {
 }
 
 function validateMountPath(value: string, label: string): string {
+  if (!isAbsolute(value)) {
+    throw new Error(`${label} must be absolute.`);
+  }
   const absolute = resolve(value);
   if (/[,\u0000\r\n]/.test(absolute)) {
     throw new Error(`${label} contains a character Docker --mount cannot encode.`);
@@ -50,6 +68,88 @@ export function verificationSandboxConfig(
     throw new Error("Verification sandbox image has an invalid reference.");
   }
   return { image, stateRoot };
+}
+
+/**
+ * Cross-platform proof commands run as a dedicated low-privilege OS account.
+ * The trusted recorder keeps its checkpoint and transport archive under the
+ * runner account, outside this account's writable workspace/state roots.
+ */
+export function hostVerificationSandboxConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): HostVerificationSandboxConfig | null {
+  const user = env.FACTORY_PLATFORM_PROOF_USER?.trim() ?? "";
+  const stateRootValue = env.FACTORY_PLATFORM_PROOF_STATE_ROOT?.trim() ?? "";
+  const windowsLauncherValue =
+    env.FACTORY_PLATFORM_PROOF_WINDOWS_LAUNCHER?.trim() ?? "";
+  const windowsPassword = env.FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD?.trim() ?? "";
+  const anyConfigured = Boolean(
+    user || stateRootValue || windowsLauncherValue || windowsPassword,
+  );
+  if (!anyConfigured) return null;
+  if (platform !== "win32" && platform !== "darwin") {
+    throw new Error(
+      "The restricted host-user verification sandbox is supported only on Windows and macOS.",
+    );
+  }
+  if (!user || !stateRootValue) {
+    throw new Error(
+      "Host verification sandbox configuration requires both " +
+        "FACTORY_PLATFORM_PROOF_USER and FACTORY_PLATFORM_PROOF_STATE_ROOT.",
+    );
+  }
+  if (
+    !SAFE_HOST_USER.test(user) ||
+    PRIVILEGED_HOST_USERS.has(user.toLowerCase()) ||
+    [env.USER, env.USERNAME]
+      .filter((value): value is string => Boolean(value))
+      .some((value) => value.toLowerCase() === user.toLowerCase())
+  ) {
+    throw new Error("Host verification sandbox user is invalid or privileged.");
+  }
+  const stateRoot = validateMountPath(
+    stateRootValue,
+    "Host verification sandbox state root",
+  );
+  if (platform === "win32") {
+    if (!windowsLauncherValue || !windowsPassword) {
+      throw new Error(
+        "Windows host verification requires its trusted launcher and ephemeral account password.",
+      );
+    }
+    const windowsLauncher = validateMountPath(
+      windowsLauncherValue,
+      "Windows host verification launcher",
+    );
+    return { user, stateRoot, windowsLauncher, windowsPassword };
+  }
+  if (windowsLauncherValue || windowsPassword) {
+    throw new Error("Windows-only host verification settings cannot be used on macOS.");
+  }
+  return { user, stateRoot };
+}
+
+export function assertHostVerificationSandboxIsolation(
+  config: HostVerificationSandboxConfig,
+  workspaceRoot: string,
+): void {
+  const root = validateMountPath(workspaceRoot, "Workspace root");
+  if (pathWithin(root, config.stateRoot) || pathWithin(config.stateRoot, root)) {
+    throw new Error(
+      "Host verification sandbox state and generated workspaces must not overlap.",
+    );
+  }
+  if (config.windowsLauncher) {
+    if (
+      pathWithin(root, config.windowsLauncher) ||
+      pathWithin(config.stateRoot, config.windowsLauncher)
+    ) {
+      throw new Error(
+        "The trusted Windows proof launcher must be outside generated workspaces and writable sandbox state.",
+      );
+    }
+  }
 }
 
 export function verificationNetwork(

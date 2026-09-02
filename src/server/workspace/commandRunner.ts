@@ -7,7 +7,9 @@ import {
   normalizeSafeRelativePath,
 } from "./testPaths.js";
 import {
+  assertHostVerificationSandboxIsolation,
   buildVerificationSandboxPlan,
+  hostVerificationSandboxConfig,
   verificationSandboxConfig,
 } from "./verificationSandbox.js";
 
@@ -51,7 +53,9 @@ import {
  * NOTE: `isInsideWorkspace` remains only a cwd boundary. When
  * FACTORY_VERIFICATION_SANDBOX_IMAGE is configured on Linux, every generated
  * command is additionally executed in a locked-down container with only the
- * workspace and an empty per-run state directory mounted writable.
+ * workspace and an empty per-run state directory mounted writable. Windows and
+ * macOS cloud proofs require a dedicated low-privilege account whose only
+ * writable roots are the candidate and an empty per-run cache directory.
  */
 
 /** (binary, firstArg) pairs that are permitted. */
@@ -376,6 +380,50 @@ export function sanitizeChildEnv(
   return clean;
 }
 
+function hostSandboxChildEnv(
+  base: NodeJS.ProcessEnv,
+  stateRoot: string,
+  user: string,
+): NodeJS.ProcessEnv {
+  const home = join(stateRoot, "home");
+  const temp = join(stateRoot, "tmp");
+  const windowsDrive =
+    process.platform === "win32" && /^[A-Za-z]:/.test(home)
+      ? home.slice(0, 2)
+      : undefined;
+  return {
+    ...base,
+    HOME: home,
+    USERPROFILE: home,
+    USER: user,
+    LOGNAME: user,
+    USERNAME: user,
+    TMPDIR: temp,
+    TMP: temp,
+    TEMP: temp,
+    APPDATA: join(stateRoot, "appdata"),
+    LOCALAPPDATA: join(stateRoot, "localappdata"),
+    ...(windowsDrive
+      ? { HOMEDRIVE: windowsDrive, HOMEPATH: home.slice(windowsDrive.length) }
+      : {}),
+    XDG_CACHE_HOME: join(stateRoot, "cache"),
+    XDG_CONFIG_HOME: join(stateRoot, "config"),
+    XDG_DATA_HOME: join(stateRoot, "data"),
+    COREPACK_HOME: join(stateRoot, "corepack"),
+    PNPM_HOME: join(stateRoot, "pnpm"),
+    npm_config_cache: join(stateRoot, "npm"),
+    YARN_CACHE_FOLDER: join(stateRoot, "yarn"),
+    PIP_CACHE_DIR: join(stateRoot, "pip"),
+    PLAYWRIGHT_BROWSERS_PATH: join(stateRoot, "playwright"),
+    PIP_DISABLE_PIP_VERSION_CHECK: "1",
+    PIP_NO_INPUT: "1",
+    PIP_USER: "1",
+    PIP_BREAK_SYSTEM_PACKAGES: "1",
+    CI: "true",
+    NO_COLOR: "1",
+  };
+}
+
 /**
  * Matches any caller-supplied form of the hardening flags (incl. `=false` and
  * any casing, e.g. `--Ignore-Scripts=false`). Case-insensitive so a mixed-case
@@ -442,6 +490,8 @@ export interface RunCommandOptions {
    * when the whole Factory Deck process is externally sandboxed.
    */
   allowScriptExecution?: boolean;
+  /** Require a dedicated low-privilege OS account (Windows/macOS cloud proof). */
+  requireHostSandbox?: boolean;
   /**
    * Cooperative cancellation. When provided and it returns true, the command is
    * refused before spawning; if it flips true mid-run, the child is force-killed
@@ -469,8 +519,9 @@ function spawnPm(
   runArgs: string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
+  directWindows = false,
 ) {
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && !directWindows) {
     const comspec = process.env.COMSPEC || "cmd.exe";
     // cmd /S /C strips the FIRST and LAST quote character from the line, so a
     // bin path quoted for its spaces ("C:\Program Files\nodejs\npm.cmd" ci)
@@ -561,11 +612,120 @@ export async function runCommand(
   const env = sanitizeChildEnv(process.env, opts.workspaceRoot);
   let absBin: string;
   let spawnArgs = runArgs;
+  let spawnEnv = env;
+  let directWindowsSpawn = false;
   let sandboxContainerName: string | null = null;
   let sandboxDockerBin: string | null = null;
+  let hostSandboxKill: { bin: string; args: string[] } | null = null;
   try {
     const sandbox = verificationSandboxConfig(process.env);
-    if (sandbox) {
+    const hostSandbox = opts.requireHostSandbox
+      ? hostVerificationSandboxConfig(process.env, process.platform)
+      : null;
+    if (opts.requireHostSandbox && !hostSandbox) {
+      return refuse(
+        "Refused: cross-platform proof requires a dedicated restricted OS account.",
+      );
+    }
+    if (sandbox && hostSandbox) {
+      return refuse(
+        "Refused: container and host-user verification sandboxes cannot be combined.",
+      );
+    }
+    if (hostSandbox) {
+      assertHostVerificationSandboxIsolation(hostSandbox, opts.workspaceRoot);
+      if (!existsSync(hostSandbox.stateRoot)) {
+        return refuse("Refused: restricted-account sandbox state root does not exist.");
+      }
+      const trustedBin = resolvePmBinary(req.bin, opts.workspaceRoot);
+      if (!trustedBin) {
+        return refuse(
+          `Refused: '${req.bin}' not found on a trusted PATH outside the workspace.`,
+        );
+      }
+      const proofEnv = hostSandboxChildEnv(
+        env,
+        hostSandbox.stateRoot,
+        hostSandbox.user,
+      );
+      if (process.platform === "win32") {
+        const launcher = hostSandbox.windowsLauncher!;
+        if (!existsSync(launcher)) {
+          return refuse("Refused: trusted Windows proof launcher was not found.");
+        }
+        const pwsh = resolvePmBinary("pwsh", opts.workspaceRoot);
+        const taskkill = resolvePmBinary("taskkill", opts.workspaceRoot);
+        if (!pwsh || !taskkill) {
+          return refuse(
+            "Refused: PowerShell/taskkill were not found on a trusted PATH for restricted Windows verification.",
+          );
+        }
+        const request = Buffer.from(
+          JSON.stringify({
+            user: hostSandbox.user,
+            workingDirectory: resolve(req.cwd),
+            executable: trustedBin,
+            arguments: runArgs,
+            environment: proofEnv,
+          }),
+          "utf8",
+        ).toString("base64");
+        absBin = pwsh;
+        spawnArgs = [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          launcher,
+          "-Request",
+          request,
+        ];
+        spawnEnv = {
+          ...env,
+          FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD: hostSandbox.windowsPassword!,
+        };
+        directWindowsSpawn = true;
+        hostSandboxKill = {
+          bin: taskkill,
+          args: [
+            "/F",
+            "/FI",
+            `USERNAME eq ${process.env.COMPUTERNAME ?? "."}\\${hostSandbox.user}`,
+            "/IM",
+            "*",
+          ],
+        };
+      } else {
+        const sudo = resolvePmBinary("sudo", opts.workspaceRoot);
+        const envBin = resolvePmBinary("env", opts.workspaceRoot);
+        const pkill = resolvePmBinary("pkill", opts.workspaceRoot);
+        if (!sudo || !envBin || !pkill) {
+          return refuse(
+            "Refused: sudo/env/pkill were not found on a trusted PATH for restricted macOS verification.",
+          );
+        }
+        absBin = sudo;
+        spawnArgs = [
+          "-n",
+          "-u",
+          hostSandbox.user,
+          "--",
+          envBin,
+          "-i",
+          ...Object.entries(proofEnv)
+            .filter((entry): entry is [string, string] => entry[1] !== undefined)
+            .map(([key, value]) => `${key}=${value}`),
+          trustedBin,
+          ...runArgs,
+        ];
+        hostSandboxKill = {
+          bin: sudo,
+          args: ["-n", pkill, "-KILL", "-u", hostSandbox.user],
+        };
+      }
+    } else if (sandbox) {
       if (process.platform !== "linux") {
         return refuse(
           "Refused: the integrated verification sandbox is supported only on Linux.",
@@ -623,7 +783,7 @@ export async function runCommand(
   }
 
   return new Promise<CommandResult>((resolveP) => {
-    const child = spawnPm(absBin, spawnArgs, req.cwd, env);
+    const child = spawnPm(absBin, spawnArgs, req.cwd, spawnEnv, directWindowsSpawn);
     const stdoutCapture: OutputCapture = {
       chunks: [],
       bytes: 0,
@@ -642,7 +802,20 @@ export async function runCommand(
     // for as long as the grandchild lives (run d687f5fd: a 120s timeout kill
     // produced a 19.5-minute zombie `npm test`). taskkill /T reaps the tree —
     // the same fix the EVA launcher uses for the identical problem.
+    const killHostSandboxProcesses = () => {
+      if (hostSandboxKill) {
+        try {
+          spawnSync(hostSandboxKill.bin, hostSandboxKill.args, {
+            stdio: "ignore",
+            env: spawnEnv,
+          });
+        } catch {
+          // The launcher process group is still killed below.
+        }
+      }
+    };
     const killTree = () => {
+      killHostSandboxProcesses();
       if (sandboxContainerName && sandboxDockerBin) {
         try {
           spawnSync(sandboxDockerBin, ["kill", sandboxContainerName], {
@@ -703,6 +876,7 @@ export async function runCommand(
     });
     child.on("error", (err) => {
       cleanup();
+      killHostSandboxProcesses();
       resolveP({
         command,
         allowed: true,
@@ -716,6 +890,11 @@ export async function runCommand(
     });
     child.on("close", (code) => {
       cleanup();
+      // A package script can deliberately detach a child before its immediate
+      // process exits. The proof account is unique to this hosted runner, so
+      // reaping every process owned by it prevents a straggler from racing the
+      // recorder or later workflow steps.
+      killHostSandboxProcesses();
       const stdout = capturedOutput(stdoutCapture);
       const stderr = capturedOutput(stderrCapture);
       const truncation = {

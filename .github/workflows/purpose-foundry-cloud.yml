@@ -163,11 +163,57 @@ jobs:
         shell: pwsh
         run: tar --extract --file purpose-foundry-workspaces.tar
 
+      - name: Isolate untrusted Windows proof
+        id: proof_sandbox
+        shell: pwsh
+        run: |
+          $proofUser = "factoryproof"
+          $password = [Guid]::NewGuid().ToString("N") + "aA1!"
+          Write-Output "::add-mask::$password"
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name $proofUser -Password $secure -AccountNeverExpires -PasswordNeverExpires | Out-Null
+          $proofRoot = Join-Path $env:SystemDrive "factory-proof-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $sandboxRoot = Join-Path $proofRoot "workspaces"
+          $stateRoot = Join-Path $proofRoot "state"
+          @($sandboxRoot, $stateRoot) | ForEach-Object {
+            New-Item -ItemType Directory -Force -Path $_ | Out-Null
+          }
+          @("home", "tmp", "appdata", "localappdata", "cache", "config", "data", "corepack", "pnpm", "npm", "yarn", "pip", "playwright") | ForEach-Object {
+            New-Item -ItemType Directory -Force -Path (Join-Path $stateRoot $_) | Out-Null
+          }
+          & icacls.exe $proofRoot /grant:r "${proofUser}:(RX)" /Q
+          if ($LASTEXITCODE -ne 0) { throw "Could not grant proof-root traversal." }
+          foreach ($writableRoot in @($sandboxRoot, $stateRoot)) {
+            & icacls.exe $writableRoot /grant:r "${proofUser}:(OI)(CI)M" /T /Q
+            if ($LASTEXITCODE -ne 0) { throw "Could not grant the proof account its isolated writable root." }
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:PNPM_HOME)) {
+            & icacls.exe $env:PNPM_HOME /grant:r "${proofUser}:(OI)(CI)RX" /T /Q
+            if ($LASTEXITCODE -ne 0) { throw "Could not grant read-only access to the trusted pnpm runtime." }
+          }
+          $writeDeny = "${proofUser}:(OI)(CI)(WD,AD,WEA,WA,DE,DC,WDAC,WO)"
+          foreach ($trustedRoot in @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)) {
+            & icacls.exe $trustedRoot /deny $writeDeny /T /Q
+            if ($LASTEXITCODE -ne 0) { throw "Could not protect trusted runner state from the proof account." }
+          }
+          & icacls.exe ".factory" /deny "${proofUser}:(OI)(CI)F" /T /Q
+          if ($LASTEXITCODE -ne 0) { throw "Could not isolate Factory proof state." }
+          & icacls.exe "purpose-foundry-workspaces.tar" /deny "${proofUser}:F" /Q
+          if ($LASTEXITCODE -ne 0) { throw "Could not isolate the immutable transport archive." }
+          "proof_user=$proofUser" >> $env:GITHUB_OUTPUT
+          "sandbox_root=$sandboxRoot" >> $env:GITHUB_OUTPUT
+          "state_root=$stateRoot" >> $env:GITHUB_OUTPUT
+          "password=$password" >> $env:GITHUB_OUTPUT
+
       - name: Execute Windows proof without production secrets
         shell: pwsh
         env:
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
-          FACTORY_PLATFORM_SANDBOX_ROOT: "${{ runner.temp }}/factory-platform-${{ github.run_id }}-${{ github.run_attempt }}"
+          FACTORY_PLATFORM_SANDBOX_ROOT: "${{ steps.proof_sandbox.outputs.sandbox_root }}"
+          FACTORY_PLATFORM_PROOF_USER: "${{ steps.proof_sandbox.outputs.proof_user }}"
+          FACTORY_PLATFORM_PROOF_STATE_ROOT: "${{ steps.proof_sandbox.outputs.state_root }}"
+          FACTORY_PLATFORM_PROOF_WINDOWS_LAUNCHER: "${{ github.workspace }}/scripts/ci/windows-proof-launcher.ps1"
+          FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD: "${{ steps.proof_sandbox.outputs.password }}"
           ALLOW_UNTRUSTED_SCRIPTS: "true"
           CI: "true"
         run: pnpm exec tsx src/cli/factory-platform-proof.ts record
@@ -233,11 +279,47 @@ jobs:
         shell: pwsh
         run: tar --extract --file purpose-foundry-workspaces.tar
 
+      - name: Isolate untrusted macOS proof
+        id: proof_sandbox
+        shell: bash
+        run: |
+          proof_user="factoryproof"
+          proof_root="/Users/Shared/factory-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sandbox_root="${proof_root}/workspaces"
+          state_root="${proof_root}/state"
+          runner_gid="$(id -g)"
+          proof_uid="$(dscl . -list /Users UniqueID | awk 'BEGIN { max = 600 } $2 > max && $2 < 65000 { max = $2 } END { print max + 1 }')"
+          sudo dscl . -create "/Users/${proof_user}"
+          sudo dscl . -create "/Users/${proof_user}" RealName "Factory Proof"
+          sudo dscl . -create "/Users/${proof_user}" UniqueID "${proof_uid}"
+          sudo dscl . -create "/Users/${proof_user}" PrimaryGroupID "${runner_gid}"
+          sudo dscl . -create "/Users/${proof_user}" NFSHomeDirectory "${state_root}/home"
+          sudo dscl . -create "/Users/${proof_user}" UserShell /usr/bin/false
+          sudo dscl . -passwd "/Users/${proof_user}" "$(uuidgen | tr -d '-')aA1!"
+          sudo mkdir -p "${sandbox_root}" "${state_root}"/{home,tmp,appdata,localappdata,cache,config,data,corepack,pnpm,npm,yarn,pip,playwright}
+          sudo chown -R "$(id -un):${runner_gid}" "${proof_root}"
+          sudo chmod 0750 "${proof_root}"
+          sudo chmod -R 0770 "${sandbox_root}" "${state_root}"
+          sudo chmod -R go-w "${HOME}" "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}"
+          if [[ -n "${PNPM_HOME:-}" ]]; then
+            chmod go+x "${HOME}"
+            chmod -R go+rX "${PNPM_HOME}"
+          fi
+          chmod -R go-rwx .factory
+          chmod go-rwx purpose-foundry-workspaces.tar
+          {
+            echo "proof_user=${proof_user}"
+            echo "sandbox_root=${sandbox_root}"
+            echo "state_root=${state_root}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Execute macOS proof without production secrets
         shell: pwsh
         env:
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
-          FACTORY_PLATFORM_SANDBOX_ROOT: "${{ runner.temp }}/factory-platform-${{ github.run_id }}-${{ github.run_attempt }}"
+          FACTORY_PLATFORM_SANDBOX_ROOT: "${{ steps.proof_sandbox.outputs.sandbox_root }}"
+          FACTORY_PLATFORM_PROOF_USER: "${{ steps.proof_sandbox.outputs.proof_user }}"
+          FACTORY_PLATFORM_PROOF_STATE_ROOT: "${{ steps.proof_sandbox.outputs.state_root }}"
           ALLOW_UNTRUSTED_SCRIPTS: "true"
           CI: "true"
         run: pnpm exec tsx src/cli/factory-platform-proof.ts record

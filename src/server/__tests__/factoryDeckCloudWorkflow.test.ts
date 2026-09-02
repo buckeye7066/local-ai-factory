@@ -22,6 +22,18 @@ const foundrySmoke = readFileSync(
   resolve("scripts/ci/run-purpose-foundry-smoke.mjs"),
   "utf8",
 );
+const commandRunner = readFileSync(
+  resolve("src/server/workspace/commandRunner.ts"),
+  "utf8",
+);
+const platformEvidenceRunner = readFileSync(
+  resolve("src/server/workspace/platformEvidenceRunner.ts"),
+  "utf8",
+);
+const windowsProofLauncher = readFileSync(
+  resolve("scripts/ci/windows-proof-launcher.ps1"),
+  "utf8",
+);
 
 describe("paid cloud workflow contract", () => {
   it("pins the current strongest Anthropic model for paid production", () => {
@@ -246,6 +258,68 @@ describe("paid cloud workflow contract", () => {
     expect(macosProof).not.toContain("API_KEY");
     expect(windowsProof).toContain("FACTORY_PLATFORM_SANDBOX_ROOT:");
     expect(macosProof).toContain("FACTORY_PLATFORM_SANDBOX_ROOT:");
+  });
+
+  it.each([
+    ["Factory Deck", factory, "factory-deck-workspaces.tar"],
+    ["Purpose Foundry", foundry, "purpose-foundry-workspaces.tar"],
+  ])(
+    "%s gives native proof commands only isolated low-privilege writable roots",
+    (_name, workflow, archive) => {
+      const windowsIsolation = workflow.slice(
+        workflow.indexOf("Isolate untrusted Windows proof"),
+        workflow.indexOf("Preserve Windows evidence"),
+      );
+      const macIsolation = workflow.slice(
+        workflow.indexOf("Isolate untrusted macOS proof"),
+        workflow.indexOf("Preserve macOS evidence"),
+      );
+      expect(windowsIsolation).toContain("New-LocalUser -Name $proofUser");
+      expect(windowsIsolation).toContain("$env:GITHUB_WORKSPACE");
+      expect(windowsIsolation).toContain("$env:RUNNER_TEMP");
+      expect(windowsIsolation).toContain("/deny $writeDeny /T /Q");
+      expect(windowsIsolation).toContain(
+        '$env:PNPM_HOME /grant:r "${proofUser}:(OI)(CI)RX"',
+      );
+      expect(windowsIsolation).toContain(
+        '& icacls.exe ".factory" /deny "${proofUser}:(OI)(CI)F"',
+      );
+      expect(windowsIsolation).toContain(
+        `& icacls.exe "${archive}" /deny "\${proofUser}:F"`,
+      );
+      expect(windowsIsolation).toContain("FACTORY_PLATFORM_PROOF_USER:");
+      expect(windowsIsolation).toContain("FACTORY_PLATFORM_PROOF_STATE_ROOT:");
+      expect(windowsIsolation).toContain("FACTORY_PLATFORM_PROOF_WINDOWS_LAUNCHER:");
+      expect(windowsIsolation).toContain("FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD:");
+
+      expect(macIsolation).toContain('proof_user="factoryproof"');
+      expect(macIsolation).toContain("PrimaryGroupID");
+      expect(macIsolation).toContain(
+        'sudo chmod -R go-w "${HOME}" "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}"',
+      );
+      expect(macIsolation).toContain('chmod -R go+rX "${PNPM_HOME}"');
+      expect(macIsolation).toContain("chmod -R go-rwx .factory");
+      expect(macIsolation).toContain(`chmod go-rwx ${archive}`);
+      expect(macIsolation).toContain("FACTORY_PLATFORM_PROOF_USER:");
+      expect(macIsolation).toContain("FACTORY_PLATFORM_PROOF_STATE_ROOT:");
+    },
+  );
+
+  it("requires and reaps the restricted native proof account", () => {
+    expect(platformEvidenceRunner).toContain("requireHostSandbox: true");
+    expect(platformEvidenceRunner).toContain(
+      'groupWritable: hostPlatform === "darwin"',
+    );
+    expect(commandRunner).toContain("hostVerificationSandboxConfig");
+    expect(commandRunner).toContain("killHostSandboxProcesses");
+    expect(commandRunner).toContain('resolvePmBinary("taskkill"');
+    expect(commandRunner).toContain('resolvePmBinary("pkill"');
+    expect(windowsProofLauncher).toContain("$psi.Environment.Clear()");
+    expect(windowsProofLauncher).toContain("$psi.UserName =");
+    expect(windowsProofLauncher).toContain("$psi.Password =");
+    expect(windowsProofLauncher).toContain(
+      "Remove-Item Env:FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD",
+    );
   });
 
   it("resumes the same Purpose Foundry candidate after secret-free Windows and macOS proof", () => {

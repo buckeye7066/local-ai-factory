@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -66,6 +66,39 @@ describe("platformEvidenceRunner", () => {
     );
   });
 
+  it("seals empty directories while matching tar's zero-prefix Python excludes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "factory-platform-directories-"));
+    roots.push(root);
+    await mkdir(join(root, "empty-deliverable"));
+    await mkdir(join(root, ".hypothesis"));
+    await writeFile(join(root, ".pyc"), "cache");
+    await writeFile(join(root, ".pyo"), "cache");
+    await writeFile(join(root, ".coverage."), "cache");
+    const before = await capturePlatformArtifactSnapshot(root);
+
+    expect(before["empty-deliverable"]).toBe("directory");
+    expect(before[".hypothesis"]).toBeUndefined();
+    expect(before[".pyc"]).toBeUndefined();
+    expect(before[".pyo"]).toBeUndefined();
+    expect(before[".coverage."]).toBeUndefined();
+
+    await rm(join(root, "empty-deliverable"), { recursive: true });
+    await mkdir(join(root, "command-created-empty"));
+    const after = await capturePlatformArtifactSnapshot(root);
+    expect(changedPlatformArtifactPaths(before, after)).toEqual([
+      "command-created-empty",
+      "empty-deliverable",
+    ]);
+
+    await removeAddedPlatformArtifacts(root, before, after);
+    expect(
+      changedPlatformArtifactPaths(
+        before,
+        await capturePlatformArtifactSnapshot(root),
+      ),
+    ).toEqual(["empty-deliverable"]);
+  });
+
   it("binds every generic report-named path into the exact artifact", async () => {
     const root = await mkdtemp(join(tmpdir(), "factory-platform-coverage-"));
     roots.push(root);
@@ -114,6 +147,7 @@ describe("platformEvidenceRunner", () => {
 
     expect(addedPlatformArtifactPaths(before, afterCommands)).toEqual([
       "coverage/coverage-final.json",
+      "coverage",
     ]);
     await removeAddedPlatformArtifacts(root, before, afterCommands);
     const cleaned = await capturePlatformArtifactSnapshot(root);
@@ -151,6 +185,30 @@ describe("platformEvidenceRunner", () => {
       "created during verification\n",
     );
     await removeDisposableVerificationWorkspace(disposable);
+  });
+
+  it("grants the macOS proof group access without changing executable intent", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "factory-platform-group-source-"));
+    roots.push(root);
+    await writeFile(join(root, "regular"), "regular\n", { mode: 0o600 });
+    await writeFile(join(root, "executable"), "#!/bin/sh\n", { mode: 0o700 });
+
+    const disposable = await createDisposableVerificationWorkspace(root, tmpdir(), {
+      groupWritable: true,
+    });
+    roots.push(disposable.root);
+
+    expect((await stat(disposable.root)).mode & 0o070).toBe(0o070);
+    expect((await stat(join(disposable.workspacePath, "regular"))).mode & 0o070).toBe(
+      0o060,
+    );
+    expect(
+      (await stat(join(disposable.workspacePath, "executable"))).mode & 0o070,
+    ).toBe(0o070);
+    expect(await capturePlatformArtifactSnapshot(disposable.workspacePath)).toEqual(
+      await capturePlatformArtifactSnapshot(root),
+    );
   });
 
   it("keeps POSIX mode intent in the seal while comparing portable Windows bytes", () => {

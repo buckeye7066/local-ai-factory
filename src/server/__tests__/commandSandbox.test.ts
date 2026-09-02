@@ -47,6 +47,7 @@ describe("#1 sanitizeChildEnv drops credential URLs / DSNs (allowlist)", () => {
       REDIS_URL: "redis://:sekret@cache:6379",
       SUPABASE_ANON: "public-but-not-allowlisted",
       ANTHROPIC_API_KEY: "sk-ant-leak",
+      FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD: "ephemeral-proof-password",
     });
     expect(clean.PATH).toBe("/usr/bin");
     expect(clean.HOME).toBe("/home/x");
@@ -56,6 +57,7 @@ describe("#1 sanitizeChildEnv drops credential URLs / DSNs (allowlist)", () => {
     expect(clean.REDIS_URL).toBeUndefined();
     expect(clean.SUPABASE_ANON).toBeUndefined();
     expect(clean.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(clean.FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD).toBeUndefined();
     const blob = JSON.stringify(clean);
     expect(blob).not.toContain("pass");
     expect(blob).not.toContain("hunter2");
@@ -100,6 +102,21 @@ describe("#2/#3 model-authored scripts require explicit approval", () => {
     expect(res.executed).toBe(false);
     expect(res.allowed).toBe(false);
     expect(res.reason).toMatch(/explicit approval|ALLOW_UNTRUSTED_SCRIPTS/i);
+  });
+
+  it("refuses a cross-platform proof without a restricted host account", async () => {
+    const ws = tmp();
+    const res = await runCommand(
+      { bin: "pnpm", args: ["test"], cwd: ws },
+      {
+        workspaceRoot: ws,
+        allowScriptExecution: true,
+        requireHostSandbox: true,
+      },
+    );
+    expect(res.executed).toBe(false);
+    expect(res.allowed).toBe(false);
+    expect(res.reason).toMatch(/restricted OS account/i);
   });
 });
 

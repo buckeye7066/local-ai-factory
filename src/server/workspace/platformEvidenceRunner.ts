@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { cp, lstat, mkdir, mkdtemp, readdir, readlink, rm } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readlink,
+  rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
@@ -60,7 +69,7 @@ const ARTIFACT_EXCLUDED_DIRS = new Set([
   ".nox",
   ".nyc_output",
 ]);
-const ARTIFACT_EXCLUDED_FILES = [/^\.coverage(?:\..+)?$/, /^.+\.(?:pyc|pyo)$/];
+const ARTIFACT_EXCLUDED_FILES = [/^\.coverage(?:\..*)?$/, /^.*\.(?:pyc|pyo)$/];
 
 function isExcludedArtifactEntry(path: string, name: string): boolean {
   return (
@@ -88,6 +97,7 @@ function pathWithin(root: string, candidate: string): boolean {
 export async function createDisposableVerificationWorkspace(
   sourceWorkspacePath: string,
   parentRoot = tmpdir(),
+  options: { groupWritable?: boolean } = {},
 ): Promise<DisposableVerificationWorkspace> {
   const source = resolve(sourceWorkspacePath);
   const parent = resolve(parentRoot);
@@ -111,6 +121,25 @@ export async function createDisposableVerificationWorkspace(
         );
       },
     });
+    if (options.groupWritable) {
+      // The trusted recorder owns this copy, while macOS proof commands run as
+      // a second account in the recorder's primary group. Grant that group
+      // access without following candidate-controlled symlinks or changing a
+      // file's executable intent.
+      const pending = [root];
+      while (pending.length > 0) {
+        const path = pending.pop()!;
+        const metadata = await lstat(path);
+        if (metadata.isSymbolicLink()) continue;
+        const groupMode = metadata.isDirectory()
+          ? 0o070
+          : 0o060 | (metadata.mode & 0o111 ? 0o010 : 0);
+        await chmod(path, metadata.mode | groupMode);
+        if (metadata.isDirectory()) {
+          for (const name of await readdir(path)) pending.push(join(path, name));
+        }
+      }
+    }
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;
@@ -161,6 +190,7 @@ export async function capturePlatformArtifactSnapshot(
       }
       if (isExcludedArtifactEntry(path, entry.name)) continue;
       if (entry.isDirectory()) {
+        snapshot[path] = "directory";
         pending.push(absolute);
       } else if (entry.isSymbolicLink()) {
         snapshot[path] = createHash("sha256")
@@ -187,9 +217,25 @@ export function changedPlatformArtifactPaths(
     compareExecutableIntent
       ? fingerprint
       : fingerprint?.replace(/^file:(?:executable|regular):/, "file:portable:");
-  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+  const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])]
     .filter((path) => comparable(before[path]) !== comparable(after[path]))
     .sort();
+  const changedAncestors = new Set<string>();
+  for (const path of changed) {
+    let slash = path.lastIndexOf("/");
+    while (slash > 0) {
+      changedAncestors.add(path.slice(0, slash));
+      slash = path.lastIndexOf("/", slash - 1);
+    }
+  }
+  // A non-empty added/removed directory is already represented by its changed
+  // descendants. Keep directory-only changes so empty directory identity is
+  // exact without making every ordinary file addition report its parents too.
+  return changed.filter(
+    (path) =>
+      !changedAncestors.has(path) ||
+      (before[path] !== "directory" && after[path] !== "directory"),
+  );
 }
 
 /** Ignore concurrent additions while still detecting mutation or deletion. */
@@ -504,6 +550,7 @@ export async function recordCurrentPlatformEvidence(
   const disposable = await createDisposableVerificationWorkspace(
     held.workspacePath,
     input.sandboxRoot,
+    { groupWritable: hostPlatform === "darwin" },
   );
   try {
     const copiedArtifact = await capturePlatformArtifactSnapshot(
@@ -540,6 +587,7 @@ export async function recordCurrentPlatformEvidence(
         {
           workspaceRoot: disposable.root,
           allowScriptExecution: input.allowScriptExecution,
+          requireHostSandbox: true,
           timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
           ...(command.directTestPath
             ? { maxCapturedOutputBytes: 32 * 1024 * 1024 }
