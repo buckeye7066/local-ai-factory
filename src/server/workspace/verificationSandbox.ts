@@ -77,8 +77,10 @@ export function verificationNetwork(
   if (
     bin === "npx" &&
     args[0] === "--no-install" &&
-    args[1] === "prisma" &&
-    args[2] === "generate"
+    ((args[1] === "prisma" && args[2] === "generate") ||
+      (args[1] === "playwright" &&
+        args[2] === "install" &&
+        args[3] === "chromium"))
   ) {
     return "bridge";
   }
