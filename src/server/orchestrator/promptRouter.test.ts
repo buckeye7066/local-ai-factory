@@ -63,11 +63,13 @@ describe("routePrompt", () => {
 
   it("keeps bullets under their target heading", () => {
     const routes = routePrompt(
-      "FlexFactor:\n- add prompt routing\nFactory Deck:\n- add live steering",
+      "FlexFactor:\n- add prompt routing\n- add routing tests\nFactory Deck:\n- add live steering",
       targets,
     );
     expect(routes[0]!.prompt).toContain("add prompt routing");
+    expect(routes[0]!.prompt).toContain("add routing tests");
     expect(routes[0]!.prompt).not.toContain("live steering");
     expect(routes[1]!.prompt).toContain("live steering");
+    expect(routes[1]!.prompt).not.toContain("routing tests");
   });
 });

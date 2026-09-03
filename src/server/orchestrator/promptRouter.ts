@@ -126,18 +126,18 @@ export function routePrompt(prompt: string, targets: PromptTarget[]): PromptRout
   for (const segment of segments) {
     const named = targets.filter((_, index) => mentions(segment, aliasSets[index]!));
     const shared = SHARED.test(segment);
+    const contextual =
+      CONTINUATION.test(segment) || /^(?:[-*+]|\d+[.)])\s+/.test(segment);
     const chosen = named.length
       ? named
       : shared
         ? targets
-        : CONTINUATION.test(segment) && lastNamed.length
+        : contextual && lastNamed.length
           ? lastNamed
-          : /^(?:[-*+]|\d+[.)])\s+/.test(segment) && lastNamed.length
-            ? lastNamed
-            : targets;
+          : targets;
     if (named.length) lastNamed = named;
     else if (shared) lastNamed = [];
-    else if (!(CONTINUATION.test(segment) && lastNamed.length)) lastNamed = [];
+    else if (!(contextual && lastNamed.length)) lastNamed = [];
     for (const target of chosen) {
       routed.get(target.id)!.push(segment);
       if (named.includes(target)) evidence.set(target.id, "named");
