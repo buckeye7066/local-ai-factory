@@ -156,8 +156,8 @@ const CompetitiveSelectionSchema = z
       .array(
         CandidateComparisonSchema.omit({ origin: true }).extend({
           candidateId: z.string().trim().min(1),
-          strengths: z.array(z.string().trim().min(1)).min(1),
-          gaps: z.array(z.string().trim().min(1)).min(1),
+          strengths: z.array(z.string().trim().min(1)).default([]),
+          gaps: z.array(z.string().trim().min(1)).default([]),
           evidenceUrls: z.array(HttpUrlSchema).min(1),
         }),
       )
@@ -211,9 +211,10 @@ async function planProductDiscovery(
     system:
       `${SYSTEM_PREAMBLE}\nYou are the PRODUCT DISCOVERY planner. Identify real products that compete with ` +
       `the target app. Return only short web-search queries, one distinct product per query. Each query must name ` +
-      `a real competitor and ask for its official website. Prefer direct competitors; use adjacent products only ` +
-      `when the niche does not contain eight credible products. Never query for roundups, reviews, comparison ` +
-      `sites, source repositories, packages, articles, forums, or implementation tutorials. Do not evaluate or ` +
+      `a real competitor and ask for its independent official website. Prefer direct competitors, but every query ` +
+      `must be capable of returning a non-GitHub product site. When a narrow niche lacks eight such products, fill ` +
+      `the remaining slots with mainstream adjacent products that solve the same user need. Never query for ` +
+      `roundups, reviews, comparison sites, source repositories, packages, articles, forums, or implementation tutorials. Do not evaluate or ` +
       `cite products here: downstream search and page inspection provide the evidence.`,
     prompt: [
       `TARGET SPEC:\n${JSON.stringify(spec)}`,
@@ -501,7 +502,7 @@ function mergeCompetitiveResults(
     if (!candidate) return [];
     const allowed = inspectedEvidence(candidate);
     const evidenceUrls = matchingEvidenceUrls(item.evidenceUrls, allowed);
-    return evidenceUrls.length
+    return evidenceUrls.length && item.strengths.length && item.gaps.length
       ? [{ ...item, evidenceUrls, origin: "competitive-selection" as const }]
       : [];
   });

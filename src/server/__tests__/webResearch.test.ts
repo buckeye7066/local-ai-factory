@@ -520,14 +520,16 @@ describe("researchAgent competitive selection failure is a named skip", () => {
       },
     ],
   };
-
-  const PRODUCT_DISCOVERY_PLAN = {
+  const PRODUCT_PLAN = {
     queries: [
-      "Taskwarrior official website",
-      "Todo.txt official website",
-      "Todoist official website",
-      "Things official website",
-      "OmniFocus official website",
+      "Product One official website",
+      "Product Two official website",
+      "Product Three official website",
+      "Product Four official website",
+      "Product Five official website",
+      "Product Six official website",
+      "Product Seven official website",
+      "Product Eight official website",
     ],
   };
 
@@ -544,8 +546,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           action: "conclude",
           findings: { summary: "base summary", recommendations: [] },
         },
-        // Product discovery planning is a distinct orchestrator call.
-        PRODUCT_DISCOVERY_PLAN,
+        PRODUCT_PLAN,
         // ...then the selection payload is missing `element` -> real ZodError.
         {
           summary: "s",
@@ -603,7 +604,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           action: "conclude",
           findings: { summary: "base summary", recommendations: [] },
         },
-        PRODUCT_DISCOVERY_PLAN,
+        PRODUCT_PLAN,
         {
           summary: "comparison complete",
           comparisons: [
