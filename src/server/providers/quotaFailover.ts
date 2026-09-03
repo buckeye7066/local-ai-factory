@@ -58,7 +58,7 @@ export class QuotaFailoverProvider implements LLMProvider {
   }
 
   private async execute<T>(invoke: (provider: LLMProvider) => Promise<T>): Promise<T> {
-    let firstExhaustion: unknown = null;
+    let lastExhaustion: unknown = null;
     for (let index = this.cursor; index < this.providers.length; index += 1) {
       const provider = this.providers[index]!;
       if (!provider.isConfigured()) continue;
@@ -71,9 +71,9 @@ export class QuotaFailoverProvider implements LLMProvider {
         if (error instanceof ProviderAbortError || !isModelExhaustion(error)) {
           throw error;
         }
-        firstExhaustion ??= error;
+        lastExhaustion = error;
         const nextIndex = this.nextConfigured(index);
-        if (nextIndex === null) throw firstExhaustion;
+        if (nextIndex === null) throw lastExhaustion;
         const next = this.providers[nextIndex]!;
         const reason = modelFailureText(error);
         noteFailover(next.name, reason, provider.name);
@@ -82,7 +82,7 @@ export class QuotaFailoverProvider implements LLMProvider {
         index = nextIndex - 1;
       }
     }
-    if (firstExhaustion) throw firstExhaustion;
+    if (lastExhaustion) throw lastExhaustion;
     throw new Error("No configured model remains in the provider ladder.");
   }
 
