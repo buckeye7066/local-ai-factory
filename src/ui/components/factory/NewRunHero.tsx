@@ -7,6 +7,8 @@ import {
   MessageCircleQuestion,
   Sparkles,
   GitBranch,
+  Layers3,
+  Send,
 } from "lucide-react";
 import { Button } from "../ui/Button.js";
 import { Textarea } from "../ui/Textarea.js";
@@ -17,7 +19,7 @@ import { slideUp, staggerContainer, staggerItem } from "../../lib/motion.js";
 import { ProviderRoutingCards } from "./ProviderRoutingCards.js";
 import { SafetySettingsPreview } from "./SafetySettingsPreview.js";
 import { ExtendExistingPanel } from "./ExtendExistingPanel.js";
-import { api } from "../../lib/api.js";
+import { api, type PortfolioSession } from "../../lib/api.js";
 import { repoNameProblem } from "../../../shared/schemas.js";
 import type { Health, RunOptions } from "../../../shared/schemas.js";
 
@@ -46,7 +48,7 @@ export function NewRunHero({
   // fails loudly with the real missing-credential error instead of silently
   // producing a mock app. The option no longer exists at all: the server
   // rejects options.demo outright.
-  const [runMode, setRunMode] = useState<"new" | "extend">("new");
+  const [runMode, setRunMode] = useState<"new" | "extend" | "portfolio">("new");
   // The owner names a brand-new app/repo up front. Factory Deck never invents
   // one and never buries the build in an anonymous workspace folder.
   const [repoName, setRepoName] = useState("");
@@ -111,9 +113,14 @@ export function NewRunHero({
               label: "Extend an Existing Program",
               icon: <MessageCircleQuestion className="h-3.5 w-3.5" />,
             },
+            {
+              id: "portfolio",
+              label: "Work Across Programs",
+              icon: <Layers3 className="h-3.5 w-3.5" />,
+            },
           ]}
           active={runMode}
-          onChange={(id) => setRunMode(id as "new" | "extend")}
+          onChange={(id) => setRunMode(id as "new" | "extend" | "portfolio")}
         />
       </motion.div>
 
@@ -143,7 +150,9 @@ export function NewRunHero({
         </motion.div>
       )}
 
-      {runMode === "extend" ? (
+      {runMode === "portfolio" ? (
+        <PortfolioSessionPanel />
+      ) : runMode === "extend" ? (
         <ExtendExistingPanel
           starting={starting}
           routingMode="auto"
@@ -161,6 +170,234 @@ export function NewRunHero({
           start={start}
         />
       )}
+    </motion.div>
+  );
+}
+
+function inferredProgramName(source: string): string {
+  const clean = source
+    .trim()
+    .replace(/[\\/]+$/, "")
+    .replace(/\.git$/i, "");
+  return clean.split(/[\\/]/).pop() || clean;
+}
+
+/** One prompt, routed before work, with a live steering surface for the queue. */
+function PortfolioSessionPanel() {
+  const [programs, setPrograms] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [session, setSession] = useState<PortfolioSession | null>(null);
+  const [steering, setSteering] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = window.localStorage.getItem("factory.portfolioSessionId");
+    if (!id) return;
+    api
+      .getPortfolioSession(id)
+      .then(setSession)
+      .catch(() => window.localStorage.removeItem("factory.portfolioSessionId"));
+  }, []);
+
+  const parsedTargets = programs
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const split = line.match(/^([^=]+?)\s*=\s*(.+)$/);
+      const source = (split?.[2] ?? line).trim();
+      return {
+        name: (split?.[1] ?? inferredProgramName(source)).trim(),
+        repoSource: {
+          type: /^(?:[a-z][a-z0-9+.-]*:\/\/|git@)|\.git$/i.test(source)
+            ? ("git" as const)
+            : ("path" as const),
+          location: source,
+        },
+      };
+    });
+
+  useEffect(() => {
+    if (!session || (session.status !== "queued" && session.status !== "running")) {
+      return;
+    }
+    let active = true;
+    const timer = setInterval(() => {
+      api
+        .getPortfolioSession(session.id)
+        .then((next) => active && setSession(next))
+        .catch(() => {});
+    }, 2_000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [session?.id, session?.status]);
+
+  const start = async () => {
+    if (!prompt.trim() || !parsedTargets.length || parsedTargets.length > 30) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api.createPortfolioSession(prompt.trim(), parsedTargets);
+      window.localStorage.setItem("factory.portfolioSessionId", created.id);
+      setSession(created);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not start session.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const steer = async () => {
+    if (!session || !steering.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.steerPortfolioSession(session.id, steering.trim());
+      setSteering("");
+      setSession(await api.getPortfolioSession(session.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not steer session.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (session) {
+    const live = session.status === "queued" || session.status === "running";
+    return (
+      <motion.div
+        variants={slideUp}
+        className="glass mx-auto mt-8 max-w-3xl p-5 sm:p-6"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-medium text-white">Portfolio session</h2>
+            <p className="text-xs text-slate-400">
+              Programs run one at a time; each receives its routed portion when it
+              starts.
+            </p>
+          </div>
+          <Badge tone={live ? "cyan" : "neutral"}>{session.status}</Badge>
+        </div>
+        <div className="mt-4 space-y-2">
+          {session.targets.map((target) => (
+            <div
+              key={target.id}
+              className="rounded-lg border border-white/10 bg-black/10 p-3"
+            >
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-medium text-white">{target.name}</span>
+                <span className="text-xs text-slate-400">{target.status}</span>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                {target.prompt}
+              </p>
+              {target.error && (
+                <p className="mt-1 text-xs text-red-300">{target.error}</p>
+              )}
+            </div>
+          ))}
+        </div>
+        {live && (
+          <div className="mt-5">
+            <label
+              htmlFor="portfolio-steering"
+              className="mb-2 block text-xs font-medium text-slate-400"
+            >
+              Add information while the session is running
+            </label>
+            <Textarea
+              id="portfolio-steering"
+              value={steering}
+              onChange={(event) => setSteering(event.target.value)}
+              rows={3}
+              placeholder="Name a program to steer only it, or use ‘both/all programs’ to steer the queue."
+            />
+            <div className="mt-3 flex justify-end">
+              <Button
+                onClick={steer}
+                disabled={!steering.trim() || busy}
+                loading={busy}
+                icon={<Send className="h-4 w-4" />}
+              >
+                Send steering
+              </Button>
+            </div>
+          </div>
+        )}
+        {!live && (
+          <div className="mt-5 flex justify-end">
+            <Button
+              onClick={() => {
+                window.localStorage.removeItem("factory.portfolioSessionId");
+                setSession(null);
+              }}
+            >
+              Start another session
+            </Button>
+          </div>
+        )}
+        {error && <p className="mt-3 text-xs text-red-300">{error}</p>}
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div variants={slideUp} className="glass mx-auto mt-8 max-w-3xl p-5 sm:p-6">
+      <label
+        htmlFor="portfolio-programs"
+        className="mb-2 block text-xs font-medium text-slate-400"
+      >
+        Programs / repositories, one per line (1–30)
+      </label>
+      <Textarea
+        id="portfolio-programs"
+        value={programs}
+        onChange={(event) => setPrograms(event.target.value)}
+        rows={4}
+        placeholder={
+          "FlexFactor = C:\\\\Projects\\\\flexfactor\nFactory Deck = https://github.com/owner/local-ai-factory.git"
+        }
+      />
+      <p className="mt-2 text-[11px] text-slate-500">
+        Use <span className="text-slate-300">Program name = path or Git URL</span> so
+        routing can match names in your prompt.
+      </p>
+      <label
+        htmlFor="portfolio-prompt"
+        className="mb-2 mt-5 block text-xs font-medium text-slate-400"
+      >
+        Prompt for the whole session
+      </label>
+      <Textarea
+        id="portfolio-prompt"
+        value={prompt}
+        onChange={(event) => setPrompt(event.target.value)}
+        rows={5}
+        placeholder="Describe everything once. Name each program where a requirement is specific; shared requirements are sent to every program."
+      />
+      <div className="mt-5 flex items-center justify-between gap-3">
+        <span className="text-xs text-slate-400">
+          {parsedTargets.length} program{parsedTargets.length === 1 ? "" : "s"} selected
+        </span>
+        <Button
+          onClick={start}
+          loading={busy}
+          disabled={
+            !prompt.trim() || !parsedTargets.length || parsedTargets.length > 30
+          }
+          icon={<Layers3 className="h-4 w-4" />}
+        >
+          Route prompt and start
+        </Button>
+      </div>
+      {parsedTargets.length > 30 && (
+        <p className="mt-2 text-xs text-red-300">Choose no more than 30 programs.</p>
+      )}
+      {error && <p className="mt-3 text-xs text-red-300">{error}</p>}
     </motion.div>
   );
 }
