@@ -138,9 +138,7 @@ describe("automatic cloud model-ladder contract", () => {
       ).toHaveLength(2);
       expect(workflow.match(/FACTORY_FREE_ENABLED: "1"/g)).toHaveLength(2);
       expect(workflow).not.toContain('FACTORY_FREE_ENABLED: "0"');
-      expect(workflow).not.toMatch(
-        /No (?:Anthropic|OpenAI) production credential/,
-      );
+      expect(workflow).not.toMatch(/No (?:Anthropic|OpenAI) production credential/);
     },
   );
 
@@ -150,7 +148,7 @@ describe("automatic cloud model-ladder contract", () => {
     expect(freeFallback).toContain("qwen3:8b");
     expect(freeFallback).toContain('cost_class: "local-unlimited"');
     expect(freeFallback).toContain('api: "ollama"');
-    expect(freeFallback).toContain('/api/chat');
+    expect(freeFallback).toContain("/api/chat");
     expect(freeFallback).toContain(
       "No AI Time free candidate could serve a real inference.",
     );
