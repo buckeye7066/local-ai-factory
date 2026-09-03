@@ -1,6 +1,6 @@
 name: factory-deck-cloud
 run-name: "Factory Deck cloud proof @ ${{ github.sha }} (attempt ${{ github.run_attempt }})"
-# A marker-bearing main commit starts the exact paid proof; skipped runs are never evidence.
+# A marker-bearing main commit starts the exact automatic-ladder proof; skipped runs are never evidence.
 
 on:
   push:
@@ -41,6 +41,10 @@ jobs:
       - name: Install Factory Deck
         run: pnpm install --frozen-lockfile
 
+      - name: Provision AI Time terminal free rung
+        shell: bash
+        run: bash scripts/ci/provision-aitime-free-fallback.sh
+
       - name: Build generated-code verification sandbox
         shell: bash
         run: |
@@ -49,16 +53,6 @@ jobs:
             --tag "local-ai-factory-verifier:${GITHUB_SHA}" \
             scripts/ci
           mkdir -p "${RUNNER_TEMP}/factory-verification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-
-      - name: Validate production credentials
-        shell: pwsh
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
-        run: |
-          if (-not $env:ANTHROPIC_API_KEY) { throw "No Anthropic production credential is configured." }
-          if (-not $env:OPENAI_API_KEY) { throw "No OpenAI production credential is configured." }
-          Write-Host "Production provider credentials are available (values not displayed)."
 
       # A CLI candidate is expected to stop at the mandatory cross-platform
       # gate after its Linux build. Only the validator below may convert that
@@ -76,7 +70,7 @@ jobs:
           OPENAI_MODEL: gpt-5.5
           FACTORY_SOL_MODEL: gpt-5.5
           FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
-          FACTORY_FREE_ENABLED: "0"
+          FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
           FACTORY_VERIFICATION_SANDBOX_IMAGE: "local-ai-factory-verifier:${{ github.sha }}"
@@ -247,13 +241,17 @@ jobs:
       - name: Install Factory Deck
         run: pnpm install --frozen-lockfile
 
+      - name: Provision AI Time terminal free rung
+        shell: bash
+        run: bash scripts/ci/provision-aitime-free-fallback.sh
+
       - name: Restore cross-platform candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: factory-deck-macos-${{ github.run_id }}
           path: .
 
-      - name: Finalize paid readiness on exact candidate
+      - name: Finalize automatic-ladder readiness on exact candidate
         shell: pwsh
         env:
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
@@ -262,7 +260,7 @@ jobs:
           OPENAI_MODEL: gpt-5.5
           FACTORY_SOL_MODEL: gpt-5.5
           FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
-          FACTORY_FREE_ENABLED: "0"
+          FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
           WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
