@@ -34,17 +34,34 @@ function aliases(target: PromptTarget): string[] {
   ].sort((a, b) => b.length - a.length);
 }
 
-function mentions(segment: string, target: PromptTarget): boolean {
-  const lower = segment.toLowerCase();
-  return aliases(target).some((alias) => {
-    if (alias.length < 2) return false;
-    return new RegExp(`(^|[^a-z0-9])${escapeRegex(alias)}([^a-z0-9]|$)`, "i").test(
-      lower,
+function mentions(segment: string, targetAliases: string[]): boolean {
+  const addressed = segment.trim().replace(/^(?:[-*+]|\d+[.)])\s*/, "");
+  const colon = addressed.indexOf(":");
+  const header = colon > 0 && colon <= 120 ? addressed.slice(0, colon) : "";
+  const normalized = (header || addressed)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(header ? /^$/ : /^(?:for|in|on|to)\s+(?:the\s+)?/, "");
+  const compact = normalized.replace(/\s+/g, "");
+  return targetAliases.some((alias) => {
+    const words = alias.replace(/[^a-z0-9]+/g, " ").trim();
+    const aliasCompact = words.replace(/\s+/g, "");
+    if (header) {
+      return (
+        new RegExp(`(^|\\s)${escapeRegex(words)}(\\s|$)`, "i").test(normalized) ||
+        compact === aliasCompact
+      );
+    }
+    return (
+      normalized === words ||
+      normalized.startsWith(`${words} `) ||
+      compact === aliasCompact
     );
   });
 }
 
-function promptSegments(prompt: string, targets: PromptTarget[]): string[] {
+function promptSegments(prompt: string, aliasSets: string[][]): string[] {
   const segments: string[] = [];
   for (const rawLine of prompt.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -54,7 +71,7 @@ function promptSegments(prompt: string, targets: PromptTarget[]): string[] {
       if (
         clauses.length === 0 ||
         SHARED.test(part) ||
-        targets.some((target) => mentions(part, target))
+        aliasSets.some((targetAliases) => mentions(part, targetAliases))
       ) {
         clauses.push(part);
       } else {
@@ -89,7 +106,17 @@ export function routePrompt(prompt: string, targets: PromptTarget[]): PromptRout
     return [{ targetId: targets[0]!.id, prompt: clean, evidence: "single" }];
   }
 
-  const segments = promptSegments(clean, targets);
+  const rawAliasSets = targets.map(aliases);
+  const aliasCounts = new Map<string, number>();
+  for (const targetAliases of rawAliasSets) {
+    for (const alias of targetAliases) {
+      aliasCounts.set(alias, (aliasCounts.get(alias) ?? 0) + 1);
+    }
+  }
+  const aliasSets = rawAliasSets.map((targetAliases) =>
+    targetAliases.filter((alias) => aliasCounts.get(alias) === 1),
+  );
+  const segments = promptSegments(clean, aliasSets);
   const routed = new Map(targets.map((target) => [target.id, [] as string[]]));
   const evidence = new Map<string, PromptRoute["evidence"]>(
     targets.map((target) => [target.id, "shared"]),
@@ -97,17 +124,19 @@ export function routePrompt(prompt: string, targets: PromptTarget[]): PromptRout
   let lastNamed: PromptTarget[] = [];
 
   for (const segment of segments) {
-    const named = targets.filter((target) => mentions(segment, target));
+    const named = targets.filter((_, index) => mentions(segment, aliasSets[index]!));
     const shared = SHARED.test(segment);
-    const chosen = shared
-      ? targets
-      : named.length
-        ? named
+    const chosen = named.length
+      ? named
+      : shared
+        ? targets
         : CONTINUATION.test(segment) && lastNamed.length
           ? lastNamed
-          : targets;
-    if (shared) lastNamed = [];
-    else if (named.length) lastNamed = named;
+          : /^(?:[-*+]|\d+[.)])\s+/.test(segment) && lastNamed.length
+            ? lastNamed
+            : targets;
+    if (named.length) lastNamed = named;
+    else if (shared) lastNamed = [];
     else if (!(CONTINUATION.test(segment) && lastNamed.length)) lastNamed = [];
     for (const target of chosen) {
       routed.get(target.id)!.push(segment);

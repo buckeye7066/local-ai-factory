@@ -51,4 +51,23 @@ describe("routePrompt", () => {
     expect(routes[0]!.prompt).toContain("repair billing");
     expect(routes[1]!.prompt).toBe("");
   });
+
+  it("keeps shared words and incidental repo names inside the addressed target", () => {
+    const routes = routePrompt(
+      "FlexFactor: show all programs and call Factory Deck only after login.",
+      targets,
+    );
+    expect(routes[0]!.prompt).toContain("show all programs");
+    expect(routes[1]!.prompt).toBe("");
+  });
+
+  it("keeps bullets under their target heading", () => {
+    const routes = routePrompt(
+      "FlexFactor:\n- add prompt routing\nFactory Deck:\n- add live steering",
+      targets,
+    );
+    expect(routes[0]!.prompt).toContain("add prompt routing");
+    expect(routes[0]!.prompt).not.toContain("live steering");
+    expect(routes[1]!.prompt).toContain("live steering");
+  });
 });

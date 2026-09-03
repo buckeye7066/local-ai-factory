@@ -2958,9 +2958,17 @@ async function executeRun(
     // TRUE PRE-RELEASE GATE. Both semantic reviewers decide over the exact
     // candidate-byte digest before deliverRun can push a branch/fast-forward
     // trunk, releaseRun can merge, or deployRun can publish anything.
-    let preReleaseApproval = checkpoint.preReleaseApproval as
-      | PreReleaseReadinessApproval
-      | undefined;
+    // No steering accepted after this boundary can reach another safe model
+    // checkpoint. Close first; an instruction accepted during the preceding
+    // in-flight call remains pending and forces a fresh readiness review below.
+    run.acceptingSteering = false;
+    await flush();
+    const hasLateSteering = (run.steering ?? []).some(
+      (item) => item.status === "pending",
+    );
+    let preReleaseApproval = (
+      hasLateSteering ? undefined : checkpoint.preReleaseApproval
+    ) as PreReleaseReadinessApproval | undefined;
     if (!run.demo) {
       const candidateFacts = await currentCandidateFacts();
       const candidateDigest = productionReadinessDigest(candidateFacts);
@@ -3106,11 +3114,6 @@ async function executeRun(
         "final_review",
       );
     }
-    // There are no more model checkpoints after the readiness decision.
-    // Close steering before any delivery/release side effect so the API can
-    // never accept guidance that this run has no remaining opportunity to use.
-    run.acceptingSteering = false;
-    await flush();
     const runApprovedSideEffect = async <T>(
       effect: () => Promise<T>,
     ): Promise<{ executed: boolean; value?: T; blockers: string[] }> =>

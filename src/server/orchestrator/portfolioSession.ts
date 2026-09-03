@@ -8,6 +8,7 @@ import { redactDeep, redactSecrets } from "../security/redact.js";
 import { submitRunSteering, writeFileContained } from "../storage/runsStore.js";
 import { runFactoryTracked } from "./runFactory.js";
 import { routePrompt } from "./promptRouter.js";
+import { underWorkTheme } from "./themeBind.js";
 
 const SessionTargetSchema = z.object({
   id: z.string().uuid(),
@@ -29,7 +30,7 @@ const PortfolioSessionSchema = z.object({
   steering: z.array(
     z.object({
       id: z.string().uuid(),
-      prompt: z.string().min(1).max(20_000),
+      prompt: z.string().min(1).max(4_000),
       submittedAt: z.number(),
       targetIds: z.array(z.string().uuid()),
     }),
@@ -129,10 +130,12 @@ export async function createPortfolioSession(
 }
 
 export function startPortfolioSession(
-  session: PortfolioSession,
+  sessionId: string,
   config: AppConfig,
   secrets: AppSecrets,
 ): void {
+  const session = sessions.get(sessionId);
+  if (!session) throw new Error("Portfolio session not found.");
   void (async () => {
     session.status = "running";
     await saveSession(session);
@@ -143,31 +146,35 @@ export function startPortfolioSession(
       const startedPrompt = target.prompt;
       await saveSession(session);
       try {
-        const run = await runFactoryTracked(
-          {
-            idea: startedPrompt,
-            options: {
-              routingMode: "auto",
-              mode: "extend",
-              repoSource: target.repoSource,
-              goals: [startedPrompt],
-              pushToOrigin: true,
-            },
-            config,
-            secrets,
-          },
-          async (created) => {
-            target.runId = created.id;
-            await saveSession(session);
-            // Covers steering submitted in the tiny interval between marking
-            // this target running and the run record being created.
-            if (target.prompt !== startedPrompt) {
-              await submitRunSteering(
-                created.id,
-                target.prompt.slice(startedPrompt.length).trim(),
-              );
-            }
-          },
+        const run = await underWorkTheme(
+          { idea: startedPrompt, stage: "portfolio-target" },
+          () =>
+            runFactoryTracked(
+              {
+                idea: startedPrompt,
+                options: {
+                  routingMode: "auto",
+                  mode: "extend",
+                  repoSource: target.repoSource,
+                  goals: [startedPrompt],
+                  pushToOrigin: true,
+                },
+                config,
+                secrets,
+              },
+              async (created) => {
+                target.runId = created.id;
+                await saveSession(session);
+                // Covers steering submitted in the tiny interval between marking
+                // this target running and the run record being created.
+                if (target.prompt !== startedPrompt) {
+                  await submitRunSteering(
+                    created.id,
+                    target.prompt.slice(startedPrompt.length).trim(),
+                  );
+                }
+              },
+            ),
         );
         target.status = run.status === "completed" ? "completed" : "failed";
         target.error = run.error;
@@ -180,7 +187,9 @@ export function startPortfolioSession(
       await saveSession(session);
     }
     session.currentTarget = session.targets.length;
-    session.status = "completed";
+    session.status = session.targets.some((target) => target.status === "failed")
+      ? "failed"
+      : "completed";
     await saveSession(session);
   })().catch(async (error) => {
     session.status = "failed";
@@ -211,6 +220,12 @@ export async function steerPortfolioSession(
   }
   const clean = prompt.trim();
   if (!clean) return { ok: false, reason: "Steering prompt is required." };
+  if (clean.length > 4_000) {
+    return {
+      ok: false,
+      reason: "Steering prompt must be 4,000 characters or fewer.",
+    };
+  }
   const routes = routePrompt(
     clean,
     session.targets.map((target) => ({
@@ -219,17 +234,28 @@ export async function steerPortfolioSession(
       source: target.repoSource.location,
     })),
   );
+  const applicable = routes
+    .map((route) => ({
+      route,
+      target: session.targets.find((item) => item.id === route.targetId)!,
+    }))
+    .filter(
+      ({ route, target }) =>
+        route.prompt && (target.status === "queued" || target.status === "running"),
+    );
   const targetIds: string[] = [];
-  for (const route of routes) {
-    const target = session.targets.find((item) => item.id === route.targetId)!;
-    if (target.status !== "queued" && target.status !== "running") continue;
-    if (target.status === "queued" || !target.runId) {
-      target.prompt += `\n\nADDITIONAL OPERATOR STEERING:\n${route.prompt}`;
-      targetIds.push(target.id);
-    } else {
-      const receipt = await submitRunSteering(target.runId, route.prompt);
-      if (receipt.ok) targetIds.push(target.id);
-    }
+  const active = applicable.find(
+    ({ target }) => target.status === "running" && target.runId,
+  );
+  if (active?.target.runId) {
+    const receipt = await submitRunSteering(active.target.runId, active.route.prompt);
+    if (!receipt.ok) return receipt;
+    targetIds.push(active.target.id);
+  }
+  for (const { route, target } of applicable) {
+    if (target.id === active?.target.id) continue;
+    target.prompt += `\n\nADDITIONAL OPERATOR STEERING:\n${route.prompt}`;
+    targetIds.push(target.id);
   }
   if (!targetIds.length) {
     return {

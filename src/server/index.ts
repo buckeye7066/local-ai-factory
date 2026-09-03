@@ -498,6 +498,24 @@ const PortfolioSessionRequestSchema = z
   })
   .strict();
 
+function portfolioRepositoryIdentity(target: {
+  repoSource: z.infer<typeof RepoSourceSchema>;
+}): string {
+  const location = target.repoSource.location.trim();
+  if (target.repoSource.type === "path") return `path:${resolve(location)}`;
+  const withoutSuffix = location.replace(/[\\/]+$/, "").replace(/\.git$/i, "");
+  const scp = /^git@([^:]+):(.+)$/i.exec(withoutSuffix);
+  if (scp) return `git:${scp[1]!.toLowerCase()}/${scp[2]!.toLowerCase()}`;
+  try {
+    const url = new URL(withoutSuffix);
+    return `git:${url.hostname.toLowerCase()}/${url.pathname
+      .replace(/^\/+/, "")
+      .toLowerCase()}`;
+  } catch {
+    return `git:${withoutSuffix}`;
+  }
+}
+
 app.post(
   "/api/sessions",
   wrap(async (req, res) => {
@@ -509,9 +527,7 @@ app.post(
       return;
     }
     const targetNames = parsed.data.targets.map((target) => target.name.toLowerCase());
-    const targetLocations = parsed.data.targets.map((target) =>
-      target.repoSource.location.trim().toLowerCase(),
-    );
+    const targetLocations = parsed.data.targets.map(portfolioRepositoryIdentity);
     if (
       new Set(targetNames).size !== targetNames.length ||
       new Set(targetLocations).size !== targetLocations.length
@@ -535,7 +551,7 @@ app.post(
       parsed.data.prompt,
       parsed.data.targets,
     );
-    startPortfolioSession(session, config, secrets);
+    startPortfolioSession(session.id, config, secrets);
     res.status(202).json(session);
   }),
 );

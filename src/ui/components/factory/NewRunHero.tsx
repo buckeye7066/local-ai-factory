@@ -191,6 +191,15 @@ function PortfolioSessionPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    const id = window.localStorage.getItem("factory.portfolioSessionId");
+    if (!id) return;
+    api
+      .getPortfolioSession(id)
+      .then(setSession)
+      .catch(() => window.localStorage.removeItem("factory.portfolioSessionId"));
+  }, []);
+
   const parsedTargets = programs
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -201,7 +210,7 @@ function PortfolioSessionPanel() {
       return {
         name: (split?.[1] ?? inferredProgramName(source)).trim(),
         repoSource: {
-          type: /^(?:https?:\/\/|git@)|\.git$/i.test(source)
+          type: /^(?:[a-z][a-z0-9+.-]*:\/\/|git@)|\.git$/i.test(source)
             ? ("git" as const)
             : ("path" as const),
           location: source,
@@ -231,7 +240,9 @@ function PortfolioSessionPanel() {
     setBusy(true);
     setError(null);
     try {
-      setSession(await api.createPortfolioSession(prompt.trim(), parsedTargets));
+      const created = await api.createPortfolioSession(prompt.trim(), parsedTargets);
+      window.localStorage.setItem("factory.portfolioSessionId", created.id);
+      setSession(created);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not start session.");
     } finally {
