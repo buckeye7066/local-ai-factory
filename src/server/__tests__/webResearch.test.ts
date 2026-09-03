@@ -857,6 +857,87 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     },
   );
 
+  it("falls back to evidence-scoped paid reviews for individual products", async () => {
+    const ci = await import("../tools/competitiveIntelligence.js");
+    const products = Array.from({ length: 5 }, (_, index) => {
+      const number = index + 1;
+      const url = `https://targeted-${number}.example/`;
+      return {
+        ...DOSSIER.candidates[0],
+        id: `product:targeted-${number}.example`,
+        kind: "product" as const,
+        name: `Targeted Product ${number}`,
+        url,
+        sourceEvidence: [
+          { path: "product-page", url, excerpt: `Verified product ${number}.` },
+        ],
+      };
+    });
+    const productDossier = {
+      ...DOSSIER,
+      coverage: {
+        productTarget: 5,
+        productDiscoveredCount: 5,
+        productInspectedCount: 5,
+        productVerifiedCount: 5,
+        productCoverageMet: true,
+        repositoryDiscoveredCount: 0,
+        repositoryInspectedCount: 0,
+        repositoryVerifiedCount: 0,
+      },
+      candidates: products,
+    };
+    const spy = vi
+      .spyOn(ci, "buildCompetitiveDossier")
+      .mockResolvedValue(productDossier as never);
+    try {
+      const targetedReviews = products.map((product, index) => ({
+        summary: `Reviewed ${product.name}`,
+        matchedFeature: "fast capture",
+        strength: `advantage ${index + 1}`,
+        gap: `target gap ${index + 1}`,
+        decision: "adapt",
+        rationale: "The inspected product page supports this behavior.",
+        element: `clean-room pattern ${index + 1}`,
+        why: "It improves the primary workflow.",
+        howToIntegrate: "Implement independently and add acceptance tests.",
+        reuseMode: "clean-room-pattern",
+        evidenceUrls: [product.url],
+        score: 90 - index,
+      }));
+      const provider = new ScriptedProvider([
+        {
+          thought: "nothing external needed",
+          action: "conclude",
+          findings: { summary: "base summary", recommendations: [] },
+        },
+        PRODUCT_PLAN,
+        { comparisons: [], selected: [], summary: "bulk empty" },
+        ...targetedReviews,
+      ]);
+
+      const findings = await researchAgent({ provider }, spec, arch, {
+        competitive: true,
+      });
+
+      expect(provider.calls).toBe(8);
+      expect(findings.summary).toContain(
+        "Targeted paid product review produced 5 evidence-linked advantage(s).",
+      );
+      expect(findings.comparisons).toHaveLength(5);
+      expect(findings.recommendations).toHaveLength(5);
+      expect(findings.comparisons.map((item) => item.candidateId)).toEqual(
+        products.map((product) => product.id),
+      );
+      for (const [index, prompt] of provider.prompts.slice(-5).entries()) {
+        expect(prompt).toContain(products[index]!.id);
+        expect(prompt).not.toContain(products[(index + 1) % products.length]!.id);
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("a deliberate abort still propagates — a cancelled run is never continued", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");
     const spy = vi
