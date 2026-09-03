@@ -68,7 +68,10 @@ describe("verificationCommandsForWorkspace", () => {
     writeFileSync(join(path, "requirements.txt"), "numpy>=1.26\n");
     writeFileSync(join(path, "test_root.py"), "print('root ok')\n");
     writeFileSync(join(path, "iplay", "test_suite.py"), "print('suite ok')\n");
-    writeFileSync(join(path, "iplay", "test_camera.py"), "raise SystemExit(1)\n");
+    writeFileSync(
+      join(path, "iplay", "test_camera.py"),
+      "raise SystemExit(1)\n",
+    );
     writeFileSync(
       join(path, ".github", "workflows", "test.yml"),
       [
@@ -222,9 +225,9 @@ describe("verificationCommandsForWorkspace", () => {
       args: ["test", "--", "--root=."],
       isTest: true,
     });
-    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
-      true,
-    );
+    expect(
+      plan.commands.every((command) => isAllowed(command.bin, command.args)),
+    ).toBe(true);
   });
 
   it("pins a restored pnpm Vitest host suite to its own workspace", () => {
@@ -282,9 +285,9 @@ describe("verificationCommandsForWorkspace", () => {
           command.args.at(-1) === `--config=${PLATFORM_VITEST_CONFIG}`,
       ),
     ).toBe(true);
-    expect(vitestCommands.every((command) => isAllowed(command.bin, command.args))).toBe(
-      true,
-    );
+    expect(
+      vitestCommands.every((command) => isAllowed(command.bin, command.args)),
+    ).toBe(true);
     expect(
       commandForPlatformProof(
         { bin: "pnpm", args: ["run", "build"], isTest: false },
@@ -405,7 +408,9 @@ describe("verificationCommandsForWorkspace", () => {
         command.bin === "npx" &&
         command.args.join(" ") === "--no-install playwright install chromium",
     );
-    const browserTestIndex = plan.commands.findIndex((command) => command.isBrowser);
+    const browserTestIndex = plan.commands.findIndex(
+      (command) => command.isBrowser,
+    );
     expect(browserSetupIndex).toBeGreaterThan(-1);
     expect(browserSetupIndex).toBeLessThan(browserTestIndex);
     expect(plan.commands[browserTestIndex]).toMatchObject({
@@ -418,9 +423,9 @@ describe("verificationCommandsForWorkspace", () => {
       ],
       directTestPath: "tests/profile.spec.ts",
     });
-    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
-      true,
-    );
+    expect(
+      plan.commands.every((command) => isAllowed(command.bin, command.args)),
+    ).toBe(true);
   });
 });
 
@@ -448,9 +453,9 @@ describe("Python command sandbox", () => {
     expect(isAllowed("python", ["../test_escape.py"])).toBe(false);
     expect(isAllowed("python", ["malicious.py"])).toBe(false);
     expect(isAllowed("python", ["-m", "http.server"])).toBe(false);
-    expect(isAllowed("python", ["-m", "pip", "install", "attacker-package"])).toBe(
-      false,
-    );
+    expect(
+      isAllowed("python", ["-m", "pip", "install", "attacker-package"]),
+    ).toBe(false);
   });
   it("directly selects idiomatic *_test.py files with parseable verbose output", () => {
     const root = workspace();
@@ -464,15 +469,17 @@ describe("Python command sandbox", () => {
       ],
     });
     expect(
-      plan.commands.find((cmd) => cmd.directTestPath === "tests/calculator_test.py"),
+      plan.commands.find(
+        (cmd) => cmd.directTestPath === "tests/calculator_test.py",
+      ),
     ).toMatchObject({
       bin: "python",
       args: ["-m", "pytest", "-vv", "tests/calculator_test.py"],
       runner: "pytest",
     });
-    expect(plan.commands.every((command) => isAllowed(command.bin, command.args))).toBe(
-      true,
-    );
+    expect(
+      plan.commands.every((command) => isAllowed(command.bin, command.args)),
+    ).toBe(true);
   });
 
   it("never lets a workflow smoke replace the full pytest suite", () => {
