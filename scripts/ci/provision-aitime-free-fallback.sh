@@ -37,9 +37,10 @@ if [[ "${ready}" != "1" ]]; then
 fi
 
 # Ordered using AI Time's capability policy: use the strongest code-capable
-# model that fits and can complete a real inference on this runner. Operators
-# may prepend newer candidates without changing the orchestration contract.
-read -r -a candidates <<< "${AITIME_OLLAMA_CANDIDATES:-qwen2.5-coder:14b qwen3:8b}"
+# model that fits and can complete a real inference on this runner. Private
+# Ubuntu runners expose about 7 GB RAM, so 14B models can kill the runner before
+# the probe returns. Operators may prepend larger candidates on larger runners.
+read -r -a candidates <<< "${AITIME_OLLAMA_CANDIDATES:-qwen2.5-coder:7b qwen2.5-coder:3b}"
 selected=""
 for model in "${candidates[@]}"; do
   echo "Trying AI Time free candidate ${model}..."
