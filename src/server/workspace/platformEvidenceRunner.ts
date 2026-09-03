@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
 import { platformEvidenceBlockersFromRunError } from "../orchestrator/platformEvidenceHold.js";
@@ -12,6 +12,7 @@ import { platformStampForExecutedCommand } from "./completionEvidence.js";
 import {
   generatedTestsForVerification,
   verificationPlanForWorkspace,
+  type VerificationCommand,
 } from "./verificationCommands.js";
 import { verifyFileDigests } from "./verificationReceipt.js";
 
@@ -30,6 +31,31 @@ export type PlatformEvidenceHold = {
 type CheckpointExecutedCommand = NonNullable<
   FactoryCheckpoint["verification"]
 >["executed"][number];
+
+export const PLATFORM_VITEST_CONFIG =
+  ".factory-deck-platform-vitest.config.mjs";
+const PLATFORM_VITEST_CONFIG_SOURCE =
+  "// Engine-owned isolation: do not inherit Factory Deck's ancestor config.\nexport default {};\n";
+const LOCAL_VITEST_CONFIG =
+  /^(?:vitest|vite)\.config\.(?:js|cjs|mjs|ts|cts|mts)$/i;
+
+async function hasLocalVitestConfig(workspacePath: string): Promise<boolean> {
+  const entries = await readdir(workspacePath, { withFileTypes: true });
+  return entries.some(
+    (entry) => entry.isFile() && LOCAL_VITEST_CONFIG.test(entry.name),
+  );
+}
+
+export function commandForPlatformProof(
+  command: VerificationCommand,
+  isolatedVitest: boolean,
+): VerificationCommand {
+  if (!isolatedVitest || command.runner !== "vitest") return command;
+  return {
+    ...command,
+    args: [...command.args, `--config=${PLATFORM_VITEST_CONFIG}`],
+  };
+}
 
 export function replaceHostPlatformEvidence<T extends CheckpointExecutedCommand>(
   existing: readonly T[],
@@ -160,45 +186,63 @@ export async function recordCurrentPlatformEvidence(
     );
   }
 
-  const executed: CheckpointExecutedCommand[] = [];
-  for (const command of plan.commands) {
-    const result = await runCommand(
-      { bin: command.bin, args: command.args, cwd: held.workspacePath },
-      {
-        workspaceRoot: resolve(
-          input.workspaceRoot ??
-            process.env.WORKSPACE_ROOT ??
-            join(process.cwd(), "workspaces"),
-        ),
-        allowScriptExecution: true,
-        timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
-      },
-    );
-    const outputTail = `${result.stdout}\n${result.stderr}`.slice(-32_768);
-    if (!result.executed || result.exitCode !== 0) {
-      throw new Error(
-        `${hostPlatform} verification failed for \`${result.command}\`: ${
-          result.reason ?? `exit ${String(result.exitCode)}`
-        }. ${outputTail.slice(-2_000)}`,
-      );
-    }
-    executed.push({
-      command: result.command,
-      exitCode: result.exitCode,
-      isTest: command.isTest,
-      isBrowser: command.isBrowser ?? false,
-      ...platformStampForExecutedCommand(
-        {
-          command: result.command,
-          exitCode: result.exitCode,
-          isTest: command.isTest,
-          isBrowser: command.isBrowser ?? false,
-          outputTail,
-        },
-        hostPlatform,
-      ),
-      outputTail,
+  const isolatedVitest =
+    plan.commands.some((command) => command.runner === "vitest") &&
+    !(await hasLocalVitestConfig(held.workspacePath));
+  const platformVitestConfig = join(held.workspacePath, PLATFORM_VITEST_CONFIG);
+  if (isolatedVitest) {
+    await writeFile(platformVitestConfig, PLATFORM_VITEST_CONFIG_SOURCE, {
+      encoding: "utf8",
+      flag: "wx",
     });
+  }
+
+  const executed: CheckpointExecutedCommand[] = [];
+  try {
+    for (const plannedCommand of plan.commands) {
+      const command = commandForPlatformProof(plannedCommand, isolatedVitest);
+      const result = await runCommand(
+        { bin: command.bin, args: command.args, cwd: held.workspacePath },
+        {
+          workspaceRoot: resolve(
+            input.workspaceRoot ??
+              process.env.WORKSPACE_ROOT ??
+              join(process.cwd(), "workspaces"),
+          ),
+          allowScriptExecution: true,
+          timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
+        },
+      );
+      const outputTail = `${result.stdout}\n${result.stderr}`.slice(-32_768);
+      if (!result.executed || result.exitCode !== 0) {
+        throw new Error(
+          `${hostPlatform} verification failed for \`${result.command}\`: ${
+            result.reason ?? `exit ${String(result.exitCode)}`
+          }. ${outputTail.slice(-2_000)}`,
+        );
+      }
+      executed.push({
+        command: result.command,
+        exitCode: result.exitCode,
+        isTest: command.isTest,
+        isBrowser: command.isBrowser ?? false,
+        ...platformStampForExecutedCommand(
+          {
+            command: result.command,
+            exitCode: result.exitCode,
+            isTest: command.isTest,
+            isBrowser: command.isBrowser ?? false,
+            outputTail,
+          },
+          hostPlatform,
+        ),
+        outputTail,
+      });
+    }
+  } finally {
+    if (isolatedVitest) {
+      await rm(platformVitestConfig, { force: true });
+    }
   }
   if (!executed.some((entry) => entry.isTest === true)) {
     throw new Error(`${hostPlatform} proof executed no test command.`);
