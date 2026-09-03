@@ -684,6 +684,84 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     }
   });
 
+  it("retries an incomplete broad review with verified products only", async () => {
+    const ci = await import("../tools/competitiveIntelligence.js");
+    const products = Array.from({ length: 5 }, (_, index) => {
+      const number = index + 1;
+      const url = `https://product-${number}.example/`;
+      return {
+        ...DOSSIER.candidates[0],
+        id: `product:product-${number}.example`,
+        kind: "product",
+        name: `Product ${number}`,
+        url,
+        sourceEvidence: [
+          { path: "product-page", url, excerpt: `Verified product ${number}.` },
+        ],
+      };
+    });
+    const productDossier = {
+      ...DOSSIER,
+      coverage: {
+        productTarget: 5,
+        productDiscoveredCount: 5,
+        productInspectedCount: 5,
+        productVerifiedCount: 5,
+        productCoverageMet: true,
+        repositoryDiscoveredCount: 0,
+        repositoryInspectedCount: 0,
+        repositoryVerifiedCount: 0,
+      },
+      candidates: products,
+    };
+    const spy = vi
+      .spyOn(ci, "buildCompetitiveDossier")
+      .mockResolvedValue(productDossier as never);
+    try {
+      const comparisons = products.map((product, index) => ({
+        candidateId: product.id,
+        name: product.name,
+        score: 90 - index,
+        matchedFeatures: ["fast capture"],
+        strengths: ["fast capture"],
+        gaps: ["no local JSON"],
+        evidenceUrls: [product.url],
+        decision: "adapt",
+        rationale: "Useful behavior",
+      }));
+      const selected = products.map((product, index) => ({
+        candidateId: product.id,
+        element: `capture pattern ${index + 1}`,
+        why: "reduces friction",
+        howToIntegrate: "Implement independently and test it.",
+        reuseMode: "clean-room-pattern",
+        evidenceUrls: [product.url],
+        score: 90 - index,
+      }));
+      const provider = new ScriptedProvider([
+        {
+          thought: "nothing external needed",
+          action: "conclude",
+          findings: { summary: "base summary", recommendations: [] },
+        },
+        PRODUCT_PLAN,
+        { summary: "broad review incomplete", comparisons: [], selected: [] },
+        { summary: "focused review complete", comparisons, selected },
+      ]);
+
+      const findings = await researchAgent({ provider }, spec, arch, {
+        competitive: true,
+      });
+
+      expect(provider.calls).toBe(4);
+      expect(findings.summary).toContain("focused review complete");
+      expect(findings.comparisons).toHaveLength(5);
+      expect(findings.recommendations).toHaveLength(5);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("a deliberate abort still propagates — a cancelled run is never continued", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");
     const spy = vi
