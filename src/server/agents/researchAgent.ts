@@ -149,6 +149,14 @@ const ResearchActionSchema = z.object({
 });
 type ResearchAction = z.infer<typeof ResearchActionSchema>;
 
+const ProviderSummarySchema = z.preprocess((value) => {
+  if (value === undefined || value === null) return "";
+  // Models occasionally return a useful structured recap even when the
+  // contract asks for prose. Preserve it without relaxing any evidence,
+  // comparison, or selection field.
+  return typeof value === "string" ? value : JSON.stringify(value);
+}, z.string());
+
 const CompetitiveComparisonInputSchema = CandidateComparisonSchema.omit({
   origin: true,
 }).extend({
@@ -177,7 +185,7 @@ const CompetitiveSelectionShape = z.object({
   // summary and manufacture empty arrays through defaults.
   comparisons: z.array(CompetitiveComparisonInputSchema),
   selected: z.array(CompetitiveSelectedInputSchema),
-  summary: z.string().default(""),
+  summary: ProviderSummarySchema.default(""),
 });
 type CompetitiveSelection = z.infer<typeof CompetitiveSelectionShape>;
 

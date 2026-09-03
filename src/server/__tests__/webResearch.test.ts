@@ -593,6 +593,88 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     }
   });
 
+  it("preserves a structured reviewer summary without relaxing product evidence", async () => {
+    const ci = await import("../tools/competitiveIntelligence.js");
+    const productUrl = "https://structured-rival.example/product";
+    const productDossier = {
+      ...DOSSIER,
+      coverage: {
+        productTarget: 5,
+        productDiscoveredCount: 1,
+        productInspectedCount: 1,
+        productVerifiedCount: 1,
+        productCoverageMet: false,
+        repositoryDiscoveredCount: 0,
+        repositoryInspectedCount: 0,
+        repositoryVerifiedCount: 0,
+      },
+      candidates: [
+        {
+          ...DOSSIER.candidates[0],
+          id: "product:structured-rival.example",
+          kind: "product" as const,
+          url: productUrl,
+          sourceEvidence: [
+            { path: "product-page", url: productUrl, excerpt: "Verified behavior." },
+          ],
+        },
+      ],
+    };
+    const spy = vi
+      .spyOn(ci, "buildCompetitiveDossier")
+      .mockResolvedValue(productDossier as never);
+    try {
+      const provider = new ScriptedProvider([
+        {
+          thought: "nothing external needed",
+          action: "conclude",
+          findings: { summary: "base summary", recommendations: [] },
+        },
+        PRODUCT_PLAN,
+        {
+          comparisons: [
+            {
+              candidateId: "product:structured-rival.example",
+              name: "Structured Rival",
+              score: 85,
+              matchedFeatures: ["fast add"],
+              strengths: ["fast capture"],
+              gaps: ["no local JSON export"],
+              evidenceUrls: [productUrl],
+              decision: "adapt",
+              rationale: "Useful behavior",
+            },
+          ],
+          selected: [
+            {
+              candidateId: "product:structured-rival.example",
+              element: "single-command task capture",
+              why: "reduces input friction",
+              reuseMode: "clean-room-pattern",
+              evidenceUrls: [productUrl],
+              score: 85,
+            },
+          ],
+          summary: {
+            verdict: "review complete",
+            coverage: { compared: 1 },
+          },
+        },
+      ]);
+
+      const findings = await researchAgent({ provider }, spec, arch, {
+        competitive: true,
+      });
+
+      expect(findings.summary).not.toContain("FAILED and was SKIPPED");
+      expect(findings.summary).toContain('"verdict":"review complete"');
+      expect(findings.comparisons).toHaveLength(1);
+      expect(findings.recommendations).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("keeps valid comparisons when one selected item omits integration prose", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");
     const productUrl = "https://rival.example/product";
