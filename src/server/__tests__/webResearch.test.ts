@@ -461,6 +461,12 @@ describe("researchAgent", () => {
               sourceUrl: "https://example.com/weatherapi",
               licensePolicy: "compatible",
             },
+            {
+              name: "Unknown-license client",
+              sourceUrl: "https://example.com/weatherapi",
+              licensePolicy: "proprietary",
+              reuseMode: "direct-code",
+            },
           ],
         },
       },
@@ -468,8 +474,12 @@ describe("researchAgent", () => {
 
     const findings = await researchAgent({ provider }, spec, arch);
 
-    expect(findings.recommendations).toHaveLength(1);
+    expect(findings.recommendations).toHaveLength(2);
     expect(findings.recommendations[0]?.licensePolicy).toBe("conditional-review");
+    expect(findings.recommendations[1]).toMatchObject({
+      licensePolicy: "reference-only",
+      reuseMode: "direct-code",
+    });
   });
 
   it("drops a model recommendation whose URL was never observed by a tool", async () => {
