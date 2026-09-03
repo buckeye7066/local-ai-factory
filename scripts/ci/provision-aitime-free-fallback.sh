@@ -58,7 +58,7 @@ for model in "${candidates[@]}"; do
     }));
   ' "${model}")"
 
-  if response="$(curl --fail --silent --show-error \
+  if response="$(curl --fail --silent --show-error --max-time 600 \
       --header "content-type: application/json" \
       --data "${request}" \
       "${ollama_url}/api/chat")" &&
@@ -121,7 +121,12 @@ const catalog = {
       quota_status: "unlimited",
       resets_at: null,
       note: "Real zero-cost terminal rung provisioned and verified for this run.",
-      capabilities: ["code", "reasoning"],
+      capabilities: [
+        "code_author",
+        "structured_json",
+        "code_review",
+        "honest",
+      ],
       capabilities_source: "declared",
     },
   ],
