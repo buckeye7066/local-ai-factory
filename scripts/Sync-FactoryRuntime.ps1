@@ -106,18 +106,17 @@ if (-not (Test-Path $launcher)) {
 # extensionless pnpm shim. Git for Windows can likewise return cmd\git.exe and
 # bin\git.exe. start-factory.ps1 historically assumed one ApplicationInfo and
 # then read `.Source`; PowerShell joins an array of Source values into one bogus
-# command path. Intercept only Application lookups and deterministically return
-# the first real command. All other Get-Command behavior delegates unchanged to
-# the built-in cmdlet. Because the launcher is dot-sourced below, this one guard
+# command path. Intercept Application lookups and deterministically return the
+# first real command. Because the launcher is dot-sourced below, this one guard
 # covers node, pnpm, corepack, git, fcc-server, and future executable lookups.
 function Get-Command {
+    [CmdletBinding()]
     param(
         [Parameter(Position=0, Mandatory=$true)][string[]]$Name,
-        [System.Management.Automation.CommandTypes]$CommandType,
-        [System.Management.Automation.ActionPreference]$ErrorAction = [System.Management.Automation.ActionPreference]::Continue
+        [System.Management.Automation.CommandTypes]$CommandType
     )
 
-    $params = @{ Name = $Name; ErrorAction = $ErrorAction }
+    $params = @{ Name = $Name; ErrorAction = "SilentlyContinue" }
     if ($PSBoundParameters.ContainsKey("CommandType")) {
         $params["CommandType"] = $CommandType
     }
