@@ -194,7 +194,9 @@ export const api = {
 
 /** True when a run has reached a terminal state (no more polling needed). */
 export function isTerminal(status: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return (
+    status === "completed" || status === "failed" || status === "cancelled"
+  );
 }
 
 /** Poll a run record until it reaches a terminal state. */
@@ -285,4 +287,3 @@ export function useHealth(): { health: Health | null; loading: boolean } {
   }, []);
   return { health, loading };
 }
-

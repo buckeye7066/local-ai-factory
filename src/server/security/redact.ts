@@ -90,7 +90,8 @@ export function redactSecrets(input: string): string {
   // Whole-value redaction of secret-bearing header LINES first, so Basic/opaque/
   // odd-char values are fully covered before the narrower token rules run.
   out = out.replace(HEADER_SECRET, (_m, name) => `${name}: [REDACTED]`);
-  for (const { re, label } of PATTERNS) out = out.replace(re, `[REDACTED_${label}]`);
+  for (const { re, label } of PATTERNS)
+    out = out.replace(re, `[REDACTED_${label}]`);
   // Strip inline URL credentials (keep scheme + host).
   out = out.replace(CRED_URL, (_m, scheme) => `${scheme}[REDACTED]@`);
   // Redact secret-named assignments (value only).
@@ -261,7 +262,9 @@ export function sanitizeRunRecordForServe(r: RunRecord): RunRecord {
     idea: redactSecrets(r.idea),
     appName: r.appName == null ? r.appName : redactSecrets(r.appName),
     workspacePath:
-      r.workspacePath == null ? r.workspacePath : redactSecrets(r.workspacePath),
+      r.workspacePath == null
+        ? r.workspacePath
+        : redactSecrets(r.workspacePath),
     error: r.error == null ? r.error : redactSecrets(r.error),
     steering: (r.steering ?? []).map((item) => ({
       ...item,
@@ -273,7 +276,8 @@ export function sanitizeRunRecordForServe(r: RunRecord): RunRecord {
       path: redactSecrets(f.path),
       purpose: redactSecrets(f.purpose),
     })),
-    finalReport: r.finalReport == null ? r.finalReport : redactDeep(r.finalReport),
+    finalReport:
+      r.finalReport == null ? r.finalReport : redactDeep(r.finalReport),
   };
 }
 
@@ -284,4 +288,3 @@ export function sanitizeRunRecordForServe(r: RunRecord): RunRecord {
 export function sanitizeFileRecords(files: FileContent[]): FileContent[] {
   return files.map((f) => redactDeep(f));
 }
-

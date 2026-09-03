@@ -13,7 +13,11 @@ import { constants as FS } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { resolve, join, relative, isAbsolute, sep, dirname } from "node:path";
 import { z } from "zod";
-import type { RunRecord, RunSummary, FileContent } from "../../shared/schemas.js";
+import type {
+  RunRecord,
+  RunSummary,
+  FileContent,
+} from "../../shared/schemas.js";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
 import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
 import {
@@ -35,7 +39,10 @@ import {
  * *contents* are stored separately and never auto-shipped to the browser.
  */
 
-const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".factory");
+const DATA_ROOT = resolve(
+  process.cwd(),
+  process.env.FACTORY_DATA_DIR || ".factory",
+);
 const STORE_DIR = join(DATA_ROOT, "runs");
 const FILES_DIR = join(DATA_ROOT, "files");
 const CHECKPOINTS_DIR = join(DATA_ROOT, "checkpoints");
@@ -75,7 +82,12 @@ function isInside(parent: string, child: string): boolean {
 async function guardStoreDirs(): Promise<void> {
   const rootReal = await realpath(DATA_ROOT).catch(() => null);
   if (!rootReal) return; // nothing created yet — nothing can have escaped
-  for (const dir of [STORE_DIR, FILES_DIR, CHECKPOINTS_DIR, PROJECT_MEMORY_DIR]) {
+  for (const dir of [
+    STORE_DIR,
+    FILES_DIR,
+    CHECKPOINTS_DIR,
+    PROJECT_MEMORY_DIR,
+  ]) {
     const st = await lstat(dir).catch(() => null);
     if (!st) continue; // not created yet
     if (st.isSymbolicLink()) {
@@ -98,7 +110,9 @@ async function guardStoreDirs(): Promise<void> {
  */
 function storeFilePath(dir: string, id: string): string {
   if (!isValidRunId(id)) {
-    throw new Error(`Refused: invalid run id (not a UUID): ${JSON.stringify(id)}`);
+    throw new Error(
+      `Refused: invalid run id (not a UUID): ${JSON.stringify(id)}`,
+    );
   }
   const target = join(dir, `${id}.json`);
   const rel = relative(resolve(dir), resolve(target));
@@ -158,9 +172,15 @@ const HAS_NOFOLLOW = typeof FS.O_NOFOLLOW === "number" && FS.O_NOFOLLOW !== 0;
  * Parent-directory mutation by a hostile same-user process remains an OS-level
  * boundary; normal store callers run guardStoreDirs immediately beforehand.
  */
-export async function writeFileContained(path: string, data: string): Promise<void> {
+export async function writeFileContained(
+  path: string,
+  data: string,
+): Promise<void> {
   const parent = dirname(path);
-  const tempPath = join(parent, `.factory-store-${process.pid}-${randomUUID()}.tmp`);
+  const tempPath = join(
+    parent,
+    `.factory-store-${process.pid}-${randomUUID()}.tmp`,
+  );
   const flags =
     FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | (HAS_NOFOLLOW ? FS.O_NOFOLLOW : 0);
   let published = false;
@@ -208,7 +228,9 @@ export async function writeFileContained(path: string, data: string): Promise<vo
 export async function saveRun(run: RunRecord): Promise<void> {
   // Containment first: never write (or cache) a record with an unsafe id.
   if (!isValidRunId(run.id)) {
-    throw new Error(`Refused: invalid run id (not a UUID): ${JSON.stringify(run.id)}`);
+    throw new Error(
+      `Refused: invalid run id (not a UUID): ${JSON.stringify(run.id)}`,
+    );
   }
   memory.set(run.id, run);
   await ensureDirs();
@@ -257,7 +279,9 @@ async function normalizeLoaded(run: RunRecord): Promise<RunRecord> {
  * never returns a sanitized copy and therefore must not be used at an API serve
  * boundary.
  */
-export async function getRunForExecution(id: string): Promise<RunRecord | null> {
+export async function getRunForExecution(
+  id: string,
+): Promise<RunRecord | null> {
   if (!isValidRunId(id)) return null;
   if (memory.has(id)) return memory.get(id)!;
   try {
@@ -307,7 +331,8 @@ export async function submitRunSteering(
   if (run.acceptingSteering === false) {
     return {
       ok: false,
-      reason: "This run has passed its final model checkpoint and is releasing work.",
+      reason:
+        "This run has passed its final model checkpoint and is releasing work.",
     };
   }
   const steeringId = randomUUID();
@@ -365,7 +390,9 @@ export async function listRuns(): Promise<RunSummary[]> {
       reviewProvider: r.reviewProvider,
       appName: r.appName == null ? r.appName : redactSecrets(r.appName),
       workspacePath:
-        r.workspacePath == null ? r.workspacePath : redactSecrets(r.workspacePath),
+        r.workspacePath == null
+          ? r.workspacePath
+          : redactSecrets(r.workspacePath),
       // SERVE BOUNDARY: `detail` carries git/gh output, which can quote a
       // remote URL containing credentials — redact it like every other
       // model/tool-controlled string in the summary.
@@ -374,7 +401,9 @@ export async function listRuns(): Promise<RunSummary[]> {
             ...r.destination,
             target: redactSecrets(r.destination.target),
             detail:
-              r.destination.detail == null ? null : redactSecrets(r.destination.detail),
+              r.destination.detail == null
+                ? null
+                : redactSecrets(r.destination.detail),
           }
         : r.destination,
       repairLoops: r.repairLoops,
@@ -418,8 +447,12 @@ export async function pruneOldRuns(keep = 200): Promise<number> {
     let removed = 0;
     for (const { id } of doomed) {
       // Route deletes through the containment/symlink guard too.
-      await rm(await safeStorePath(STORE_DIR, id), { force: true }).catch(() => {});
-      await rm(await safeStorePath(FILES_DIR, id), { force: true }).catch(() => {});
+      await rm(await safeStorePath(STORE_DIR, id), { force: true }).catch(
+        () => {},
+      );
+      await rm(await safeStorePath(FILES_DIR, id), { force: true }).catch(
+        () => {},
+      );
       await rm(await safeStorePath(CHECKPOINTS_DIR, id), { force: true }).catch(
         () => {},
       );
@@ -461,7 +494,9 @@ export async function deleteRun(id: string): Promise<boolean> {
 }
 
 /** Persist private continuation state; never served by an API route. */
-export async function saveRunCheckpoint(checkpoint: FactoryCheckpoint): Promise<void> {
+export async function saveRunCheckpoint(
+  checkpoint: FactoryCheckpoint,
+): Promise<void> {
   if (!isValidRunId(checkpoint.runId)) {
     throw new Error("Refused: invalid checkpoint run id.");
   }
@@ -470,10 +505,15 @@ export async function saveRunCheckpoint(checkpoint: FactoryCheckpoint): Promise<
   await writeFileContained(target, JSON.stringify(checkpoint));
 }
 
-export async function getRunCheckpoint(id: string): Promise<FactoryCheckpoint | null> {
+export async function getRunCheckpoint(
+  id: string,
+): Promise<FactoryCheckpoint | null> {
   if (!isValidRunId(id)) return null;
   try {
-    const raw = await readFile(await safeStorePath(CHECKPOINTS_DIR, id), "utf8");
+    const raw = await readFile(
+      await safeStorePath(CHECKPOINTS_DIR, id),
+      "utf8",
+    );
     const parsed = FactoryCheckpointSchema.parse(JSON.parse(raw));
     return parsed.runId === id ? parsed : null;
   } catch {
@@ -488,7 +528,10 @@ export async function deleteRunCheckpoint(id: string): Promise<void> {
 }
 
 /** Persist one bounded cross-run project memory record behind a hashed id. */
-export async function saveProjectMemoryJson(id: string, json: string): Promise<void> {
+export async function saveProjectMemoryJson(
+  id: string,
+  json: string,
+): Promise<void> {
   if (Buffer.byteLength(json, "utf8") > 2 * 1024 * 1024) {
     throw new Error("Refused: project memory exceeds 2 MB.");
   }
@@ -497,7 +540,9 @@ export async function saveProjectMemoryJson(id: string, json: string): Promise<v
 }
 
 /** Load private project continuity; this store is never exposed by an API. */
-export async function loadProjectMemoryJson(id: string): Promise<string | null> {
+export async function loadProjectMemoryJson(
+  id: string,
+): Promise<string | null> {
   try {
     await ensureDirs();
     return await readFile(await safeProjectMemoryPath(id), "utf8");
@@ -523,7 +568,10 @@ export function saveRunFiles(id: string, files: FileContent[]): void {
   // in-memory copy still serves the live run.
   void ensureDirs()
     .then(async () =>
-      writeFileContained(await safeStorePath(FILES_DIR, id), JSON.stringify(redacted)),
+      writeFileContained(
+        await safeStorePath(FILES_DIR, id),
+        JSON.stringify(redacted),
+      ),
     )
     .catch(() => {});
 }
@@ -536,11 +584,12 @@ export async function getRunFiles(id: string): Promise<FileContent[]> {
   if (cached && cached.length) return sanitizeFileRecords(cached);
   try {
     const raw = await readFile(await safeStorePath(FILES_DIR, id), "utf8");
-    const files = sanitizeFileRecords(FileContentListSchema.parse(JSON.parse(raw)));
+    const files = sanitizeFileRecords(
+      FileContentListSchema.parse(JSON.parse(raw)),
+    );
     fileContents.set(id, files);
     return files;
   } catch {
     return [];
   }
 }
-
