@@ -103,6 +103,14 @@ export class CountingProvider implements LLMProvider {
     return this.inner.isConfigured();
   }
 
+  currentProvider(): ProviderName {
+    return this.inner.currentProvider?.() ?? this.inner.name;
+  }
+
+  currentModel(): string {
+    return this.inner.currentModel?.() ?? this.currentProvider();
+  }
+
   private tick() {
     // A cancel request stops the run before the next model call.
     throwIfCancelled(this.run.id);
