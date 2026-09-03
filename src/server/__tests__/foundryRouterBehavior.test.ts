@@ -23,11 +23,7 @@ function jsonHeaders() {
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
-async function waitFor<T>(
-  fn: () => Promise<T>,
-  pred: (v: T) => boolean,
-  ms = 8000,
-) {
+async function waitFor<T>(fn: () => Promise<T>, pred: (v: T) => boolean, ms = 8000) {
   const start = Date.now();
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -99,9 +95,7 @@ class TestFoundryAdapters extends FoundryAdapters {
           files: ["a.txt", "b.txt"],
           bytes: 42,
         };
-        const hex = createHash("sha256")
-          .update(JSON.stringify(tree))
-          .digest("hex");
+        const hex = createHash("sha256").update(JSON.stringify(tree)).digest("hex");
         evidence.evidenceDigest = `sha256:${hex}`;
         evidence.revision = `rev-${hex.slice(0, 12)}`;
       }
@@ -173,8 +167,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     app.use("/api/foundry", createFoundryRouter(store, adapters));
     server = app.listen(0);
     const address = server.address();
-    if (!address || typeof address === "string")
-      throw new Error("no server address");
+    if (!address || typeof address === "string") throw new Error("no server address");
     baseUrl = `http://127.0.0.1:${address.port}/api/foundry`;
   }
 
@@ -201,8 +194,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     else process.env.ANTHROPIC_API_KEY = prevAnthropic;
     if (prevSolModel === undefined) delete process.env.FACTORY_SOL_MODEL;
     else process.env.FACTORY_SOL_MODEL = prevSolModel;
-    if (prevFableModel === undefined)
-      delete process.env.FACTORY_FABLE_OR_OPUS_MODEL;
+    if (prevFableModel === undefined) delete process.env.FACTORY_FABLE_OR_OPUS_MODEL;
     else process.env.FACTORY_FABLE_OR_OPUS_MODEL = prevFableModel;
   });
 
@@ -218,9 +210,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       }),
     });
     expect(response.status).toBe(201);
-    const project = (await response.json()) as Awaited<
-      ReturnType<typeof store.create>
-    >;
+    const project = (await response.json()) as Awaited<ReturnType<typeof store.create>>;
     const queued = project.stations
       .filter((station) => station.status === "queued")
       .map((station) => station.stationId);
@@ -236,8 +226,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       project.stations.find((station) => station.stationId === "scout")?.status,
     ).toBe("queued");
     expect(
-      project.stations.find((station) => station.stationId === "flexfactor")
-        ?.status,
+      project.stations.find((station) => station.stationId === "flexfactor")?.status,
     ).toBe("not_selected");
   });
 
@@ -257,8 +246,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     });
     expect(started.status).toBe(202);
     await waitFor(
-      async () =>
-        adapters.getCalls().filter((call) => call.projectId === project.id),
+      async () => adapters.getCalls().filter((call) => call.projectId === project.id),
       (calls) => calls.some((call) => call.stationId === "repo-rewards"),
     );
 
@@ -270,9 +258,8 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
         .map((call) => call.stationId),
     ).toEqual(["scout", "repo-rewards"]);
     expect(
-      whileDiscoveryRuns.stations.find(
-        (station) => station.stationId === "scout",
-      )?.status,
+      whileDiscoveryRuns.stations.find((station) => station.stationId === "scout")
+        ?.status,
     ).toBe("completed");
     expect(
       whileDiscoveryRuns.stations.find(
@@ -291,9 +278,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       .getCalls()
       .filter((call) => call.projectId === project.id)
       .map((call) => call.stationId);
-    expect(
-      completedCalls.filter((stationId) => stationId === "scout"),
-    ).toHaveLength(1);
+    expect(completedCalls.filter((stationId) => stationId === "scout")).toHaveLength(1);
     expect(
       completedCalls.filter((stationId) => stationId === "repo-rewards"),
     ).toHaveLength(1);
@@ -351,9 +336,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
         "C:/Vault/LegacyRetry.md",
       ),
     );
-    const scout = project.stations.find(
-      (station) => station.stationId === "scout",
-    )!;
+    const scout = project.stations.find((station) => station.stationId === "scout")!;
     scout.status = "completed";
     scout.handoff = {
       insights: ["Legacy project already contains verified Scout evidence."],
@@ -381,27 +364,23 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     expect(response.status).toBe(202);
     const migrated = (await store.get(project.id))!;
     expect(
-      migrated.stations.find((station) => station.stationId === "repo-rewards")
-        ?.status,
+      migrated.stations.find((station) => station.stationId === "repo-rewards")?.status,
     ).toBe("active");
     expect(
-      migrated.stations.find((station) => station.stationId === "factory-deck")
-        ?.status,
+      migrated.stations.find((station) => station.stationId === "factory-deck")?.status,
     ).toBe("queued");
     await waitFor(
       async () => adapters.getCalls(),
       (calls) =>
         calls.some(
-          (call) =>
-            call.projectId === project.id && call.stationId === "repo-rewards",
+          (call) => call.projectId === project.id && call.stationId === "repo-rewards",
         ),
     );
     expect(
       adapters
         .getCalls()
         .some(
-          (call) =>
-            call.projectId === project.id && call.stationId === "factory-deck",
+          (call) => call.projectId === project.id && call.stationId === "factory-deck",
         ),
     ).toBe(false);
     adapters.release("repo-rewards");
@@ -414,9 +393,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
         "C:/Vault/LegacyRestart.md",
       ),
     );
-    const scout = project.stations.find(
-      (station) => station.stationId === "scout",
-    )!;
+    const scout = project.stations.find((station) => station.stationId === "scout")!;
     scout.status = "completed";
     scout.handoff = {
       insights: ["Legacy project already contains verified Scout evidence."],
@@ -449,26 +426,22 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       async () => adapters.getCalls(),
       (calls) =>
         calls.some(
-          (call) =>
-            call.projectId === project.id && call.stationId === "repo-rewards",
+          (call) => call.projectId === project.id && call.stationId === "repo-rewards",
         ),
       4_000,
     );
     const migrated = (await store.get(project.id))!;
     expect(
-      migrated.stations.find((station) => station.stationId === "repo-rewards")
-        ?.status,
+      migrated.stations.find((station) => station.stationId === "repo-rewards")?.status,
     ).toBe("active");
     expect(
-      migrated.stations.find((station) => station.stationId === "factory-deck")
-        ?.status,
+      migrated.stations.find((station) => station.stationId === "factory-deck")?.status,
     ).toBe("queued");
     expect(
       adapters
         .getCalls()
         .some(
-          (call) =>
-            call.projectId === project.id && call.stationId === "factory-deck",
+          (call) => call.projectId === project.id && call.stationId === "factory-deck",
         ),
     ).toBe(false);
 
@@ -495,8 +468,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       async () => adapters.getCalls(),
       (calls) =>
         calls.some(
-          (call) =>
-            call.projectId === project.id && call.stationId === "factory-deck",
+          (call) => call.projectId === project.id && call.stationId === "factory-deck",
         ),
       4_000,
     );
@@ -504,10 +476,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
 
   it("redispatches an in-flight station after restart without replay or concurrency", async () => {
     const intake = {
-      ...intakeFromMarkdown(
-        "# GrantFlow\nFind funding.",
-        "C:/Vault/GrantFlow.md",
-      ),
+      ...intakeFromMarkdown("# GrantFlow\nFind funding.", "C:/Vault/GrantFlow.md"),
       selectedStations: STATIONS.map((station) => station.id),
     };
     const createdRes = await fetch(`${baseUrl}/projects`, {
@@ -533,34 +502,27 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       async () => adapters.getCalls(),
       (calls) =>
         calls.some(
-          (call) =>
-            call.projectId === projectId && call.stationId === "factory-deck",
+          (call) => call.projectId === projectId && call.stationId === "factory-deck",
         ),
       4_000,
     );
 
     for (let i = 0; i < 20; i++) {
       const snapshot = (await store.get(projectId))!;
-      const active = snapshot.stations.filter(
-        (station) => station.status === "active",
-      );
-      expect(active.map((station) => station.stationId)).toEqual([
-        "factory-deck",
-      ]);
+      const active = snapshot.stations.filter((station) => station.status === "active");
+      expect(active.map((station) => station.stationId)).toEqual(["factory-deck"]);
       await sleep(10);
     }
     const beforeRestart = (await store.get(projectId))!;
     for (const stationId of ["scout", "repo-rewards", "promo-pilot"] as const) {
       expect(
-        beforeRestart.stations.find(
-          (station) => station.stationId === stationId,
-        )?.status,
+        beforeRestart.stations.find((station) => station.stationId === stationId)
+          ?.status,
       ).toBe("completed");
     }
     expect(
-      beforeRestart.stations.find(
-        (station) => station.stationId === "repo-rewards",
-      )?.handoff.candidates[0],
+      beforeRestart.stations.find((station) => station.stationId === "repo-rewards")
+        ?.handoff.candidates[0],
     ).toMatchObject({
       name: "useful/repo",
       url: "https://github.com/useful/repo",
@@ -578,8 +540,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       async () => adapters.getCalls(),
       (calls) =>
         calls.some(
-          (call) =>
-            call.projectId === projectId && call.stationId === "factory-deck",
+          (call) => call.projectId === projectId && call.stationId === "factory-deck",
         ),
       4_000,
     );
@@ -596,11 +557,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       .getCalls()
       .filter((call) => call.projectId === projectId)
       .map((call) => call.stationId);
-    expect(callsAfterRestart).toEqual([
-      "factory-deck",
-      "flexfactor",
-      "crucible",
-    ]);
+    expect(callsAfterRestart).toEqual(["factory-deck", "flexfactor", "crucible"]);
     for (const stationId of [
       "scout",
       "repo-rewards",
@@ -621,9 +578,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       (station) => station.stationId === "factory-deck",
     )!;
     const expectedHex = createHash("sha256")
-      .update(
-        JSON.stringify({ projectId, files: ["a.txt", "b.txt"], bytes: 42 }),
-      )
+      .update(JSON.stringify({ projectId, files: ["a.txt", "b.txt"], bytes: 42 }))
       .digest("hex");
     expect(factory.evidenceDigest).toBe(`sha256:${expectedHex}`);
     expect(factory.revision).toBe(`rev-${expectedHex.slice(0, 12)}`);

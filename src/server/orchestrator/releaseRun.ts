@@ -246,8 +246,9 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
       process.cwd(),
       60_000,
     );
-    const [existingUrl, existingState, existingHead, existingMergeSha] =
-      succeeded(view) ? view.stdout.trim().split("\t") : [];
+    const [existingUrl, existingState, existingHead, existingMergeSha] = succeeded(view)
+      ? view.stdout.trim().split("\t")
+      : [];
     prUrl = existingUrl || null;
     if (existingState === "MERGED") {
       if (existingHead !== input.verifiedCommitSha) {
@@ -376,11 +377,7 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
             .join(", "),
       };
     }
-    if (
-      states.length > 0 &&
-      !pending.length &&
-      successful.length === states.length
-    ) {
+    if (states.length > 0 && !pending.length && successful.length === states.length) {
       break;
     }
     if (Date.now() > deadline) {
@@ -432,17 +429,7 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
   // Bind the merge to the exact commit whose bytes passed Factory Deck's
   // receipt. A branch update after verification must never inherit its green.
   const head = await run(
-    [
-      "pr",
-      "view",
-      prUrl,
-      "-R",
-      slug,
-      "--json",
-      "headRefOid",
-      "--jq",
-      ".headRefOid",
-    ],
+    ["pr", "view", prUrl, "-R", slug, "--json", "headRefOid", "--jq", ".headRefOid"],
     process.cwd(),
     60_000,
   );

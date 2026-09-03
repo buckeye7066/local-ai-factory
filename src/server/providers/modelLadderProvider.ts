@@ -27,11 +27,7 @@ export class ModelLadderProvider implements LLMProvider {
 
   constructor(
     rungs: ModelLadderRung[],
-    private onFailover: (
-      from: string,
-      to: string,
-      reason: string,
-    ) => void = () => {},
+    private onFailover: (from: string, to: string, reason: string) => void = () => {},
   ) {
     const seen = new Set<string>();
     this.rungs = rungs.filter((rung) => {
@@ -70,9 +66,7 @@ export class ModelLadderProvider implements LLMProvider {
     return null;
   }
 
-  private async execute<T>(
-    invoke: (provider: LLMProvider) => Promise<T>,
-  ): Promise<T> {
+  private async execute<T>(invoke: (provider: LLMProvider) => Promise<T>): Promise<T> {
     let lastExhaustion: unknown = null;
     for (let index = this.cursor; index < this.rungs.length; index += 1) {
       const rung = this.rungs[index]!;

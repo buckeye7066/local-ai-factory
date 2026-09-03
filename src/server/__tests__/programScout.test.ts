@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  programScoutConfiguration,
-  runProgramScout,
-} from "../tools/programScout.js";
+import { programScoutConfiguration, runProgramScout } from "../tools/programScout.js";
 
 const job = {
   id: "11111111-1111-4111-8111-111111111111",

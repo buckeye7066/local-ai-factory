@@ -142,9 +142,7 @@ function asJob(value: unknown): ProgramScoutJob | null {
   if (
     typeof job.id !== "string" ||
     typeof job.targetUrl !== "string" ||
-    !["queued", "running", "ready", "failed", "cancelled"].includes(
-      String(job.status),
-    )
+    !["queued", "running", "ready", "failed", "cancelled"].includes(String(job.status))
   ) {
     return null;
   }
@@ -213,14 +211,12 @@ export async function runProgramScout(
 
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleepImpl =
-    options.sleepImpl ??
-    ((ms: number) => new Promise((done) => setTimeout(done, ms)));
+    options.sleepImpl ?? ((ms: number) => new Promise((done) => setTimeout(done, ms)));
   const timeoutMs =
     options.timeoutMs ??
     positiveInt(env.PURPOSE_FOUNDRY_PROGRAM_SCOUT_TIMEOUT_MS, 7_200_000);
   const pollMs =
-    options.pollMs ??
-    positiveInt(env.PURPOSE_FOUNDRY_PROGRAM_SCOUT_POLL_MS, 5_000);
+    options.pollMs ?? positiveInt(env.PURPOSE_FOUNDRY_PROGRAM_SCOUT_POLL_MS, 5_000);
   const failures: string[] = [];
 
   for (const endpoint of config.endpoints) {
@@ -257,8 +253,7 @@ export async function runProgramScout(
           `HTTP ${created.status}: ${String(created.body.error ?? "job creation failed")}`,
         );
       }
-      if (!job)
-        throw new Error("job response did not contain a valid Scout job");
+      if (!job) throw new Error("job response did not contain a valid Scout job");
 
       const deadline = Date.now() + timeoutMs;
       for (;;) {
@@ -310,8 +305,7 @@ export async function runProgramScout(
           );
         }
         const next = asJob(polled.body.job);
-        if (!next)
-          throw new Error("poll response did not contain a valid Scout job");
+        if (!next) throw new Error("poll response did not contain a valid Scout job");
         job = next;
       }
     } catch (error) {

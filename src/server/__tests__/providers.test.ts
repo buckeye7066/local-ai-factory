@@ -40,8 +40,7 @@ describe("provider registry selection", () => {
   it("exposes one exact paid-model ladder with AI Time free as the final rung", () => {
     const configured = loadConfig({
       FACTORY_FREE_ENABLED: "1",
-      FACTORY_ANTHROPIC_MODEL_LADDER:
-        "claude-fable-5-1,claude-opus-5,claude-sonnet-5",
+      FACTORY_ANTHROPIC_MODEL_LADDER: "claude-fable-5-1,claude-opus-5,claude-sonnet-5",
       FACTORY_OPENAI_MODEL_LADDER: "gpt-5.6-pro,gpt-5.5",
       FACTORY_MODEL_LADDER: "anthropic,openai",
     });
