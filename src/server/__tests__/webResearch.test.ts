@@ -774,9 +774,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
         reuseMode: "clean-room-pattern",
       });
       expect(findings.recommendations[0].name).toContain("fast capture");
-      expect(findings.recommendations[0].evidenceUrls).toEqual([
-        products[0]!.url,
-      ]);
+      expect(findings.recommendations[0].evidenceUrls).toEqual([products[0]!.url]);
     } finally {
       spy.mockRestore();
     }
