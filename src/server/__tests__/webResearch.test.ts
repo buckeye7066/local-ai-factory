@@ -520,6 +520,18 @@ describe("researchAgent competitive selection failure is a named skip", () => {
       },
     ],
   };
+  const PRODUCT_PLAN = {
+    queries: [
+      "Product One official website",
+      "Product Two official website",
+      "Product Three official website",
+      "Product Four official website",
+      "Product Five official website",
+      "Product Six official website",
+      "Product Seven official website",
+      "Product Eight official website",
+    ],
+  };
 
   it("keeps the base findings and audit when selection fails validation", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");
@@ -534,6 +546,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           action: "conclude",
           findings: { summary: "base summary", recommendations: [] },
         },
+        PRODUCT_PLAN,
         // ...then the selection payload is missing `element` -> real ZodError.
         {
           summary: "s",
@@ -591,6 +604,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           action: "conclude",
           findings: { summary: "base summary", recommendations: [] },
         },
+        PRODUCT_PLAN,
         {
           summary: "comparison complete",
           comparisons: [
