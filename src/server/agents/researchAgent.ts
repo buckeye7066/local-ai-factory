@@ -149,45 +149,57 @@ const ResearchActionSchema = z.object({
 });
 type ResearchAction = z.infer<typeof ResearchActionSchema>;
 
-const ProviderSummarySchema = z.preprocess((value) => {
-  if (value === undefined || value === null) return "";
-  // Models occasionally return a useful structured recap even when the
-  // contract asks for prose. Preserve it without relaxing any evidence,
-  // comparison, or selection field.
-  return typeof value === "string" ? value : JSON.stringify(value);
-}, z.string());
+const CompetitiveComparisonInputSchema = CandidateComparisonSchema.omit({
+  origin: true,
+}).extend({
+  candidateId: z.string().trim().min(1),
+  strengths: z.array(z.string().trim().min(1)).min(1),
+  gaps: z.array(z.string().trim().min(1)).min(1),
+  evidenceUrls: z.array(HttpUrlSchema).min(1),
+});
 
-const CompetitiveSelectionSchema = z
-  .object({
-    summary: ProviderSummarySchema.default(""),
-    comparisons: z
-      .array(
-        CandidateComparisonSchema.omit({ origin: true }).extend({
-          candidateId: z.string().trim().min(1),
-          strengths: z.array(z.string().trim().min(1)).default([]),
-          gaps: z.array(z.string().trim().min(1)).default([]),
-          evidenceUrls: z.array(HttpUrlSchema).min(1),
-        }),
-      )
-      .default([]),
-    selected: z
-      .array(
-        z.object({
-          candidateId: z.string().trim().min(1),
-          element: z.string().trim().min(1),
-          why: z.string().trim().min(1),
-          // Preserve otherwise valid evidence when a provider omits this one
-          // prose field; mergeCompetitiveResults derives a concrete, tested
-          // instruction from the selected element and enforced reuse mode.
-          howToIntegrate: z.string().trim().default(""),
-          reuseMode: ActionableReuseModeSchema,
-          evidenceUrls: z.array(HttpUrlSchema).min(1),
-          score: z.number().min(0).max(100).default(0),
-        }),
-      )
-      .default([]),
-  })
-  .superRefine((selection, context) => {
+const CompetitiveSelectedInputSchema = z.object({
+  candidateId: z.string().trim().min(1),
+  element: z.string().trim().min(1),
+  why: z.string().trim().min(1),
+  // Preserve otherwise valid evidence when a provider omits this one prose
+  // field; mergeCompetitiveResults derives a concrete, tested instruction
+  // from the selected element and enforced reuse mode.
+  howToIntegrate: z.string().trim().default(""),
+  reuseMode: ActionableReuseModeSchema,
+  evidenceUrls: z.array(HttpUrlSchema).min(1),
+  score: z.number().min(0).max(100).default(0),
+});
+
+const CompetitiveSelectionShape = z.object({
+  // Keep the gate-bearing arrays first. If a provider response is truncated,
+  // JSON salvage may retain a complete prefix; it must never retain only a
+  // summary and manufacture empty arrays through defaults.
+  comparisons: z.array(CompetitiveComparisonInputSchema),
+  selected: z.array(CompetitiveSelectedInputSchema),
+  summary: z.string().default(""),
+});
+type CompetitiveSelection = z.infer<typeof CompetitiveSelectionShape>;
+
+function competitiveSelectionSchema(
+  candidates: CompetitiveCandidate[],
+  requiredCount: number,
+) {
+  const evidenceByCandidate = new Map(
+    candidates.map((candidate) => [
+      candidate.id,
+      canonicalEvidenceUrlSet([
+        candidate.url,
+        ...candidate.sourceEvidence.map((item) => item.url),
+      ]),
+    ]),
+  );
+  const schema = CompetitiveSelectionShape.extend({
+    comparisons: z.array(CompetitiveComparisonInputSchema).min(requiredCount),
+    selected: z.array(CompetitiveSelectedInputSchema).min(requiredCount),
+  });
+
+  return schema.superRefine((selection, context) => {
     for (const key of ["comparisons", "selected"] as const) {
       const seen = new Set<string>();
       selection[key].forEach((item, index) => {
@@ -201,8 +213,77 @@ const CompetitiveSelectionSchema = z
         seen.add(item.candidateId);
       });
     }
+
+    const validComparisonIds = new Set<string>();
+    selection.comparisons.forEach((comparison, index) => {
+      const allowedEvidence = evidenceByCandidate.get(comparison.candidateId);
+      if (!allowedEvidence) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["comparisons", index, "candidateId"],
+          message: "candidateId is not one of the supplied verified products",
+        });
+        return;
+      }
+      if (comparison.decision === "reject") {
+        return;
+      }
+      if (matchingEvidenceUrls(comparison.evidenceUrls, allowedEvidence).length === 0) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["comparisons", index, "evidenceUrls"],
+          message: "comparison must cite inspected evidence for this product",
+        });
+        return;
+      }
+      validComparisonIds.add(comparison.candidateId);
+    });
+    if (validComparisonIds.size < requiredCount) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["comparisons"],
+        message: `expected ${requiredCount} distinct actionable verified-product comparisons`,
+      });
+    }
+
+    const validSelectedIds = new Set<string>();
+    selection.selected.forEach((selected, index) => {
+      const allowedEvidence = evidenceByCandidate.get(selected.candidateId);
+      if (!allowedEvidence) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["selected", index, "candidateId"],
+          message: "candidateId is not one of the supplied verified products",
+        });
+        return;
+      }
+      if (!validComparisonIds.has(selected.candidateId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["selected", index, "candidateId"],
+          message: "selected advantage must have one valid actionable comparison",
+        });
+        return;
+      }
+      if (matchingEvidenceUrls(selected.evidenceUrls, allowedEvidence).length === 0) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["selected", index, "evidenceUrls"],
+          message: "selected advantage must cite inspected evidence for this product",
+        });
+        return;
+      }
+      validSelectedIds.add(selected.candidateId);
+    });
+    if (validSelectedIds.size < requiredCount) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["selected"],
+        message: `expected ${requiredCount} distinct comparison-qualified product advantages`,
+      });
+    }
   });
-type CompetitiveSelection = z.infer<typeof CompetitiveSelectionSchema>;
+}
 
 const ProductDiscoveryPlanSchema = z.object({
   queries: z.array(z.string().trim().min(3).max(180)).min(5).max(8),
@@ -366,21 +447,25 @@ async function runToolResearch(
   });
 }
 
-function compactCandidate(candidate: CompetitiveCandidate) {
+const COMPETITIVE_REVIEW_HEADROOM = 2;
+const MAX_REVIEW_DESCRIPTION_CHARS = 600;
+const MAX_REVIEW_EVIDENCE_ITEMS = 2;
+const MAX_REVIEW_EVIDENCE_CHARS = 1_000;
+
+function compactProductCandidate(candidate: CompetitiveCandidate) {
   return {
     id: candidate.id,
     kind: candidate.kind,
     name: candidate.name,
     url: candidate.url,
-    description: candidate.description,
-    stars: candidate.stars,
-    archived: candidate.archived,
-    updatedAt: candidate.updatedAt,
-    discoveryEvidence: candidate.discoveryEvidence,
+    description: candidate.description.slice(0, MAX_REVIEW_DESCRIPTION_CHARS),
     license: candidate.license,
-    inspectionError: candidate.inspectionError,
-    fileTree: candidate.fileTree.slice(0, 160),
-    sourceEvidence: candidate.sourceEvidence.slice(0, 12),
+    sourceEvidence: candidate.sourceEvidence
+      .slice(0, MAX_REVIEW_EVIDENCE_ITEMS)
+      .map((evidence) => ({
+        ...evidence,
+        excerpt: evidence.excerpt.slice(0, MAX_REVIEW_EVIDENCE_CHARS),
+      })),
   };
 }
 
@@ -460,10 +545,41 @@ async function evaluateCompetitiveDossier(
   arch: Architecture,
   dossier: CompetitiveDossier,
 ): Promise<CompetitiveSelection> {
+  const productTarget = Math.max(
+    MIN_PRODUCT_COMPETITORS,
+    dossier.coverage?.productTarget ?? MIN_PRODUCT_COMPETITORS,
+  );
+  // Repository source trees are useful to deterministic discovery and the
+  // ordinary implementation recommendations, but they made the production
+  // product-review prompt exceed 43k input tokens. The two paid responses then
+  // hit their output limits, and truncation salvage retained only a summary.
+  // Review only verified market products here, with two spares so the judge
+  // can reject weak candidates while still satisfying the five-product gate.
+  const candidates = dossier.candidates
+    .filter(
+      (candidate) =>
+        candidate.kind === "product" &&
+        !candidate.inspectionError &&
+        candidate.sourceEvidence.length > 0 &&
+        canonicalEvidenceUrlSet([
+          candidate.url,
+          ...candidate.sourceEvidence.map((item) => item.url),
+        ]).size > 0,
+    )
+    .slice(0, productTarget + COMPETITIVE_REVIEW_HEADROOM);
+  const requiredCount = Math.min(productTarget, candidates.length);
+  if (requiredCount === 0) {
+    return {
+      comparisons: [],
+      selected: [],
+      summary: "Competitive review found no verified product evidence to evaluate.",
+    };
+  }
+
   return deps.provider.generateJson<CompetitiveSelection>({
     system:
       `${SYSTEM_PREAMBLE}\nYou are the COMPETITIVE INTELLIGENCE reviewer. Compare only the supplied, ` +
-      `evidence-backed candidates. Score feature fit, implementation quality, maintenance, and integration cost. ` +
+      `evidence-backed product candidates. Score feature fit, implementation quality, maintenance, and integration cost. ` +
       `Never invent a candidate, file, feature, or license. License policy is authoritative: direct code reuse is ` +
       `allowed only when policy=direct-use; otherwise choose clean-room-pattern for an adoptable behavior or design ` +
       `idea. The selected list is implementation work and therefore cannot be reference-only; use decision=reject ` +
@@ -471,19 +587,17 @@ async function evaluateCompetitiveDossier(
     prompt: [
       `TARGET SPEC:\n${JSON.stringify(spec)}`,
       `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
-      `COVERAGE:\n${JSON.stringify(dossier.coverage)}`,
-      `DISCOVERY DOSSIER:\n${JSON.stringify(dossier.candidates.map(compactCandidate))}`,
-      `Return a feature-by-feature comparison for every credible candidate and a selected list of concrete elements ` +
-        `worth integrating. Candidate kind=product means a market competitor; kind=repository means an inspectable ` +
-        `open-source implementation. Cover AT LEAST five distinct kind=product competitors in the comparisons when ` +
-        `coverage contains five verified products. Repositories are valuable implementation evidence but NEVER count ` +
-        `toward that five-product floor. When product coverage is below target, compare every supplied product and say ` +
-        `the shortfall plainly. For each product competitor name the single most valuable idea worth adopting - ` +
+      `REQUIRED PRODUCT COUNT: ${requiredCount}`,
+      `VERIFIED PRODUCT DOSSIER:\n${JSON.stringify(candidates.map(compactProductCandidate))}`,
+      `Return comparisons and selected FIRST, followed by a short summary. Keep every string concise. Return at least ` +
+        `${requiredCount} distinct evidence-linked comparisons and ${requiredCount} matching selected advantages. ` +
+        `When more candidates are supplied, reject weak candidates only if at least ${requiredCount} others remain. ` +
+        `For each compared product name the single most valuable idea worth adopting - ` +
         `the thing it does better than this app - respecting its license policy. Every selected candidateId must ` +
-        `exactly match the dossier. Cite file/page URLs in evidenceUrls. ` +
+        `exactly match the dossier and a non-rejected comparison. Cite only supplied page URLs in evidenceUrls. ` +
         `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
     ].join("\n\n"),
-    schema: CompetitiveSelectionSchema,
+    schema: competitiveSelectionSchema(candidates, requiredCount),
     schemaName: "CompetitiveSelection",
     intent: { role: "judge", needs: ["structured_json"] },
     temperature: 0.1,
