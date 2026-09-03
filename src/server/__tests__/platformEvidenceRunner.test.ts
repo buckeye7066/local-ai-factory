@@ -97,6 +97,17 @@ describe("platformEvidenceRunner", () => {
     ).toEqual(["empty-deliverable"]);
   });
 
+  it("rejects POSIX artifact names with literal backslashes before normalization", async () => {
+    if (process.platform === "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "factory-platform-backslash-"));
+    roots.push(root);
+    await writeFile(join(root, "a\\b"), "flat\n");
+    await mkdir(join(root, "a"));
+    await writeFile(join(root, "a", "b"), "nested\n");
+
+    await expect(capturePlatformArtifactSnapshot(root)).rejects.toThrow(/backslash/i);
+  });
+
   it("binds every generic report-named path into the exact artifact", async () => {
     const root = await mkdtemp(join(tmpdir(), "factory-platform-coverage-"));
     roots.push(root);
