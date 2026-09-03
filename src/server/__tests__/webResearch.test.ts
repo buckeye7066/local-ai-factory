@@ -573,11 +573,11 @@ describe("researchAgent competitive selection failure is a named skip", () => {
         },
         // Product discovery planning is a distinct orchestrator call.
         PRODUCT_PLAN,
-        // ...then the selection payload is missing `element` -> real ZodError.
+        // ...then the selection payload is missing its essential candidate identity.
         {
           summary: "s",
           comparisons: [],
-          selected: [{ candidateId: "c1", why: "missing element" }],
+          selected: [{ why: "missing candidate identity" }],
         },
       ]);
       const findings = await researchAgent({ provider }, spec, arch, {
@@ -731,7 +731,6 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           summary: "comparison complete",
           comparisons: [
             {
-              candidateId: "product:rival.example",
               name: "Rival",
               score: 90,
               matchedFeatures: ["fast add"],
@@ -744,7 +743,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           ],
           selected: [
             {
-              candidateId: "product:rival.example",
+              name: "Rival",
               reuseMode: "pattern-or-direct-use-allowed-but-not-needed",
               score: 90,
             },
