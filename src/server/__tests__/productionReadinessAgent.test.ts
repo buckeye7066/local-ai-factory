@@ -16,11 +16,11 @@ import {
 } from "../orchestrator/completeProductionReadiness.js";
 
 class ReviewProvider implements LLMProvider {
-  readonly name: "openai" | "anthropic";
+  readonly name: "openai" | "anthropic" | "free";
   readonly seen: Array<{ system: string; prompt: string }> = [];
 
   constructor(
-    name: "openai" | "anthropic",
+    name: "openai" | "anthropic" | "free",
     private readonly response: unknown,
     private readonly barrier?: {
       arrivals: number;
@@ -114,7 +114,7 @@ describe("production readiness brain agents", () => {
     });
   });
 
-  it("allows the challenger slot to use whichever paid provider answers", async () => {
+  it("allows the challenger slot to use whichever live provider answers", async () => {
     const provider = new ReviewProvider("openai", readyResponse);
     const review = await productionReadinessAgent({
       provider,
@@ -128,6 +128,22 @@ describe("production readiness brain agents", () => {
       model: "gpt-5.6-pro",
     });
     expect(provider.seen).toHaveLength(1);
+  });
+
+  it("stamps an AI Time free judgment truthfully after paid exhaustion", async () => {
+    const provider = new ReviewProvider("free", readyResponse);
+    const review = await productionReadinessAgent({
+      provider,
+      identity: "lead",
+      providerName: "free",
+      model: "qwen3:8b",
+      evidence: { ...facts, evidenceDigest: "sha256:exact" },
+    });
+    expect(review).toMatchObject({
+      provider: "free",
+      model: "qwen3:8b",
+      decision: "ready",
+    });
   });
 
   it("normalizes contradictory READY prose into not_ready", async () => {
