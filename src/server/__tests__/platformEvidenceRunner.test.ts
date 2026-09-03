@@ -295,6 +295,28 @@ describe("platformEvidenceRunner", () => {
       hostPlatform: "win32",
     });
 
+    const mappedTitle = "mapped title after reporter sample cap";
+    const manyAssertions = Array.from({ length: 300 }, (_, index) => ({
+      status: "passed",
+      title: `unmapped ${index}`,
+    }));
+    manyAssertions.push({ status: "passed", title: mappedTitle });
+    expect(
+      successfulPlatformCommandEvidence(
+        command,
+        {
+          ...result,
+          stdout: JSON.stringify({
+            numPassedTests: manyAssertions.length,
+            numPendingTests: 0,
+            testResults: [{ assertionResults: manyAssertions }],
+          }),
+        },
+        "win32",
+        [mappedTitle],
+      ).passedTestNames,
+    ).toContain(mappedTitle);
+
     expect(() =>
       successfulPlatformCommandEvidence(
         command,

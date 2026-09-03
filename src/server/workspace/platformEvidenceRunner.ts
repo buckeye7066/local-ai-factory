@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
+import { mappedTestNamesForPath } from "../orchestrator/acceptanceGate.js";
 import { parseDirectTestEvidence } from "../orchestrator/directTestEvidence.js";
 import { platformEvidenceBlockersFromRunError } from "../orchestrator/platformEvidenceHold.js";
 import {
@@ -276,6 +277,7 @@ export function successfulPlatformCommandEvidence(
   command: VerificationCommand,
   result: CommandResult,
   hostPlatform: PlatformProofHost,
+  requiredTestNames: Iterable<string> = [],
 ): CheckpointExecutedCommand {
   if (!result.executed || result.exitCode !== 0) {
     throw new Error(
@@ -291,7 +293,12 @@ export function successfulPlatformCommandEvidence(
               `${hostPlatform} direct ${command.runner} evidence exceeded the structured-output capture limit.`,
             );
           }
-          return parseDirectTestEvidence(command.runner, result.stdout, result.stderr);
+          return parseDirectTestEvidence(
+            command.runner,
+            result.stdout,
+            result.stderr,
+            requiredTestNames,
+          );
         })()
       : undefined;
   const directEvidenceValid = parsedDirect?.valid;
@@ -602,7 +609,14 @@ export async function recordCurrentPlatformEvidence(
           }. ${outputTail.slice(-2_000)}`,
         );
       }
-      executed.push(successfulPlatformCommandEvidence(command, result, hostPlatform));
+      executed.push(
+        successfulPlatformCommandEvidence(
+          command,
+          result,
+          hostPlatform,
+          mappedTestNamesForPath(held.checkpoint.testPlan, command.directTestPath),
+        ),
+      );
     }
     if (!executed.some((entry) => entry.directEvidenceValid === true)) {
       throw new Error(

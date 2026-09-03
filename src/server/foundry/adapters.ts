@@ -100,6 +100,23 @@ export type AdapterDescriptor = {
   destination: string;
 };
 
+export function isActionablePlatformEvidenceHold(
+  checkpoint: {
+    testWriterComplete?: boolean;
+    verification?: {
+      fileDigests?: Record<string, string>;
+      platformArtifactSnapshot?: Record<string, string>;
+    };
+  } | null,
+): boolean {
+  return Boolean(
+    checkpoint?.testWriterComplete &&
+      checkpoint.verification &&
+      Object.keys(checkpoint.verification.fileDigests ?? {}).length > 0 &&
+      Object.keys(checkpoint.verification.platformArtifactSnapshot ?? {}).length > 0,
+  );
+}
+
 type ProcessResult = { stdout: string; stderr: string; exitCode: number };
 type ProcessRunner = (
   executable: string,
@@ -794,11 +811,7 @@ export class FoundryAdapters {
     const errorLedger = Array.isArray(run.errorLedger) ? run.errorLedger : [];
     const platformBlockers = platformEvidenceBlockersFromRunError(run.error);
     const platformCheckpoint = platformBlockers ? await getRunCheckpoint(run.id) : null;
-    const actionablePlatformHold = Boolean(
-      platformCheckpoint?.testWriterComplete &&
-        platformCheckpoint.verification &&
-        Object.keys(platformCheckpoint.verification.fileDigests ?? {}).length > 0,
-    );
+    const actionablePlatformHold = isActionablePlatformEvidenceHold(platformCheckpoint);
     // External platform holds remain visible to Foundry without advertising
     // the ordinary same-host resume action that cannot satisfy them. A missing
     // or corrupt checkpoint is irrecoverable and must remain an honest failure.

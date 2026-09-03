@@ -451,6 +451,33 @@ describe("verificationCommandsForWorkspace", () => {
     );
   });
 
+  it.each([
+    "vitest run --dir ..",
+    "vitest run --dir=../outside",
+    "vitest run --config /tmp/external.config.ts",
+    "vitest run --config=C:/external.config.ts",
+    "vitest run --workspace ../outside/vitest.workspace.ts",
+  ])("rejects Vitest options that can escape the candidate: %s", (testScript) => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: testScript },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    expect(verificationPlanForWorkspace(path).incomplete).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: "host tests",
+          reason: expect.stringMatching(/cannot be contained/i),
+        }),
+      ]),
+    );
+  });
+
   it("selects each generated test's own runner when Vitest and Jest coexist", () => {
     const path = workspace();
     writeFileSync(
@@ -549,6 +576,73 @@ describe("verificationCommandsForWorkspace", () => {
       runner: "jest",
     });
   });
+
+  it.each([
+    ["import type { Mock } from 'vitest';", "declaration"],
+    ["import { type Mock } from 'vitest';", "specifier"],
+  ])("ignores a type-only runner import (%s)", (typeImport, _kind) => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "node ./scripts/run-tests.mjs" },
+        devDependencies: { vitest: "3", jest: "30", "@jest/globals": "30" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "tests/jest-types.test.ts",
+          contents: [
+            typeImport,
+            "import { test, jest } from '@jest/globals';",
+            "test('j', () => { jest.useFakeTimers(); });",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(plan.incomplete).toEqual([]);
+    expect(plan.commands.find((command) => command.directTestPath)).toMatchObject({
+      directTestPath: "tests/jest-types.test.ts",
+      runner: "jest",
+    });
+  });
+
+  it.each([
+    ["jest", "useFakeTimers", "jest"],
+    ["vi", "stubGlobal", "vitest"],
+  ] as const)(
+    "uses an unshadowed %s.%s call as %s runner evidence",
+    (api, method, runner) => {
+      const path = workspace();
+      writeFileSync(
+        join(path, "package.json"),
+        JSON.stringify({
+          scripts: { test: "node ./scripts/run-tests.mjs" },
+          devDependencies: { vitest: "3", jest: "30" },
+        }),
+      );
+      writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+      const plan = verificationPlanForWorkspace(path, {
+        generatedTests: [
+          {
+            path: `tests/${runner}-global.test.ts`,
+            contents: `test('runner', () => { ${api}.${method}(); });`,
+          },
+        ],
+      });
+
+      expect(plan.incomplete).toEqual([]);
+      expect(plan.commands.find((command) => command.directTestPath)).toMatchObject({
+        directTestPath: `tests/${runner}-global.test.ts`,
+        runner,
+      });
+    },
+  );
 
   it("ignores runner-looking comments, fixture strings, templates, and regexes", () => {
     const path = workspace();

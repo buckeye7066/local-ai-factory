@@ -8,6 +8,7 @@ import {
   FoundryAdapters,
   createFoundryTierProvider,
   defaultProcessRunner,
+  isActionablePlatformEvidenceHold,
   repoRewardsQuery,
   repoSourceFromTarget,
 } from "../foundry/adapters.js";
@@ -68,6 +69,32 @@ afterEach(() => {
 });
 
 describe("Purpose Foundry", () => {
+  it("advertises only recoverable sealed platform-evidence holds", () => {
+    const checkpoint = {
+      testWriterComplete: true,
+      verification: {
+        fileDigests: { "src/app.ts": "digest" },
+        platformArtifactSnapshot: { "src/app.ts": "file:regular:digest" },
+      },
+    };
+
+    expect(isActionablePlatformEvidenceHold(checkpoint)).toBe(true);
+    expect(
+      isActionablePlatformEvidenceHold({
+        ...checkpoint,
+        verification: { ...checkpoint.verification, platformArtifactSnapshot: {} },
+      }),
+    ).toBe(false);
+    expect(
+      isActionablePlatformEvidenceHold({
+        ...checkpoint,
+        verification: {
+          fileDigests: checkpoint.verification.fileDigests,
+        },
+      }),
+    ).toBe(false);
+  });
+
   it.each(["free", "paid"] as const)(
     "normalizes legacy %s intake to the same automatic production line",
     async (legacyMode) => {

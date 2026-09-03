@@ -134,7 +134,11 @@ import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
 import { shouldSkipRepairForIncompleteVerification } from "./repairEligibility.js";
 import { isForbiddenRepairPath } from "./repairScope.js";
 import { reportRouteQuality } from "../rotation/rotatingProvider.js";
-import { assessExecutedCoverage, assessGeneratedTests } from "./acceptanceGate.js";
+import {
+  assessExecutedCoverage,
+  assessGeneratedTests,
+  mappedTestNamesForPath,
+} from "./acceptanceGate.js";
 import { nextTestDraftToGenerate } from "./testDraftProgress.js";
 import { parseDirectTestEvidence } from "./directTestEvidence.js";
 import { groundFinalReport } from "./reportGrounding.js";
@@ -2129,7 +2133,15 @@ async function executeRun(
                             passedTestNames: [],
                             reason: `direct ${cmd.runner} evidence exceeded the structured-output capture limit`,
                           }
-                        : parseDirectTestEvidence(cmd.runner, res.stdout, res.stderr)
+                        : parseDirectTestEvidence(
+                            cmd.runner,
+                            res.stdout,
+                            res.stderr,
+                            mappedTestNamesForPath(
+                              checkpoint.testPlan,
+                              cmd.directTestPath,
+                            ),
+                          )
                       : undefined;
                   const directEvidenceValid =
                     parsedDirect === undefined

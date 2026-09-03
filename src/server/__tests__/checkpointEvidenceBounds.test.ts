@@ -22,10 +22,14 @@ describe("checkpoint evidence bounds", () => {
     vi.resetModules();
     const { saveRunCheckpoint } = await import("../storage/runsStore.js");
     const runId = crypto.randomUUID();
-    const names = Array.from(
-      { length: MAX_PERSISTED_PASSED_TEST_NAMES + 50 },
-      (_, index) => `${index}:${"x".repeat(MAX_PERSISTED_TEST_NAME_CHARS + 100)}`,
-    );
+    const oversized = "z".repeat(MAX_PERSISTED_TEST_NAME_CHARS + 1);
+    const names = [
+      oversized,
+      ...Array.from(
+        { length: MAX_PERSISTED_PASSED_TEST_NAMES + 50 },
+        (_, index) => `${index}:${"x".repeat(MAX_PERSISTED_TEST_NAME_CHARS - 20)}`,
+      ),
+    ];
     const checkpoint = {
       schemaVersion: 3,
       runId,
@@ -66,5 +70,6 @@ describe("checkpoint evidence bounds", () => {
     expect(
       persisted.every((name) => name.length <= MAX_PERSISTED_TEST_NAME_CHARS),
     ).toBe(true);
+    expect(persisted).not.toContain(oversized.slice(0, MAX_PERSISTED_TEST_NAME_CHARS));
   });
 });

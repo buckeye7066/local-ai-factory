@@ -1167,6 +1167,22 @@ export function assessGeneratedTests(
   };
 }
 
+export function mappedTestNamesForPath(
+  testPlan: TestPlan | undefined,
+  testPath: string | undefined,
+): string[] {
+  const path = normalizeTestPath(testPath ?? "");
+  if (!path) return [];
+  return [
+    ...new Set(
+      (testPlan?.coverage ?? [])
+        .filter((item) => normalizeTestPath(item.testPath) === path)
+        .map((item) => item.testName.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 export function assessExecutedCoverage(
   testPlan: TestPlan,
   executed: Array<{

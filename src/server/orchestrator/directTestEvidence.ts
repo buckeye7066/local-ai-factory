@@ -1,3 +1,8 @@
+import {
+  MAX_TEST_NAME_CHARS,
+  MAX_TEST_PLAN_COVERAGE_ENTRIES,
+} from "../../shared/schemas.js";
+
 export type DirectTestRunner = "vitest" | "jest" | "playwright" | "pytest";
 
 export interface DirectTestEvidence {
@@ -8,20 +13,61 @@ export interface DirectTestEvidence {
   reason?: string;
 }
 
-export const MAX_PERSISTED_PASSED_TEST_NAMES = 256;
-export const MAX_PERSISTED_TEST_NAME_CHARS = 512;
+export const MAX_PERSISTED_PASSED_TEST_NAMES = MAX_TEST_PLAN_COVERAGE_ENTRIES;
+export const MAX_PERSISTED_TEST_NAME_CHARS = MAX_TEST_NAME_CHARS;
 
 export function boundPassedTestNames(names: Iterable<string>): string[] {
   const bounded: string[] = [];
   const seen = new Set<string>();
   for (const rawName of names) {
-    const name = rawName.trim().slice(0, MAX_PERSISTED_TEST_NAME_CHARS);
-    if (!name || seen.has(name)) continue;
+    const name = rawName.trim();
+    // Never truncate evidence: a long reporter title could otherwise become
+    // indistinguishable from a different mapped title with the same prefix.
+    if (!name || name.length > MAX_PERSISTED_TEST_NAME_CHARS || seen.has(name)) {
+      continue;
+    }
     seen.add(name);
     bounded.push(name);
     if (bounded.length === MAX_PERSISTED_PASSED_TEST_NAMES) break;
   }
   return bounded;
+}
+
+class PassedTestNameCollector {
+  private readonly required: Set<string>;
+  private readonly matched: string[] = [];
+  private readonly matchedSet = new Set<string>();
+  private readonly samples: string[] = [];
+  private readonly sampleSet = new Set<string>();
+  hasReportedName = false;
+
+  constructor(requiredTestNames: Iterable<string>) {
+    this.required = new Set(boundPassedTestNames(requiredTestNames));
+  }
+
+  add(rawName: string): void {
+    const name = rawName.trim();
+    if (!name) return;
+    this.hasReportedName = true;
+    // Required acceptance titles are retained even when they appear after
+    // hundreds of thousands of unrelated parameterized reporter entries.
+    if (this.required.has(name) && !this.matchedSet.has(name)) {
+      this.matchedSet.add(name);
+      this.matched.push(name);
+    }
+    if (
+      name.length <= MAX_PERSISTED_TEST_NAME_CHARS &&
+      this.samples.length < MAX_PERSISTED_PASSED_TEST_NAMES &&
+      !this.sampleSet.has(name)
+    ) {
+      this.sampleSet.add(name);
+      this.samples.push(name);
+    }
+  }
+
+  persistedNames(): string[] {
+    return boundPassedTestNames([...this.matched, ...this.samples]);
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -62,10 +108,10 @@ function jsonFrom(stdout: string, stderr: string): unknown | null {
 function finish(
   passedCount: number,
   skippedCount: number,
-  names: Iterable<string>,
+  names: PassedTestNameCollector,
   parseReason?: string,
 ): DirectTestEvidence {
-  const passedTestNames = boundPassedTestNames(names);
+  const passedTestNames = names.persistedNames();
   if (parseReason) {
     return {
       valid: false,
@@ -93,7 +139,7 @@ function finish(
       reason: `runner reported ${skippedCount} skipped/pending test(s)`,
     };
   }
-  if (!passedTestNames.length) {
+  if (!names.hasReportedName) {
     return {
       valid: false,
       passedCount,
@@ -105,11 +151,14 @@ function finish(
   return { valid: true, passedCount, skippedCount, passedTestNames };
 }
 
-function parseJestLike(root: Record<string, unknown>): DirectTestEvidence {
+function parseJestLike(
+  root: Record<string, unknown>,
+  requiredTestNames: Iterable<string>,
+): DirectTestEvidence {
   const passedCount = numberField(root, "numPassedTests", "numPassedTestSuites");
   const skippedCount =
     numberField(root, "numPendingTests") + numberField(root, "numTodoTests");
-  const names = new Set<string>();
+  const names = new PassedTestNameCollector(requiredTestNames);
 
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) {
@@ -122,7 +171,7 @@ function parseJestLike(root: Record<string, unknown>): DirectTestEvidence {
     if (status === "passed" || status === "pass") {
       for (const key of ["title", "fullName", "name"]) {
         const name = object[key];
-        if (typeof name === "string" && name.trim()) names.add(name.trim());
+        if (typeof name === "string") names.add(name);
       }
     }
     for (const child of Object.values(object)) visit(child);
@@ -131,10 +180,13 @@ function parseJestLike(root: Record<string, unknown>): DirectTestEvidence {
   return finish(passedCount, skippedCount, names);
 }
 
-function parsePlaywright(root: Record<string, unknown>): DirectTestEvidence {
+function parsePlaywright(
+  root: Record<string, unknown>,
+  requiredTestNames: Iterable<string>,
+): DirectTestEvidence {
   let passedCount = 0;
   let skippedCount = 0;
-  const names = new Set<string>();
+  const names = new PassedTestNameCollector(requiredTestNames);
 
   const visitSuite = (value: unknown): void => {
     const suite = asRecord(value);
@@ -182,10 +234,14 @@ function parsePlaywright(root: Record<string, unknown>): DirectTestEvidence {
   return finish(passedCount, skippedCount, names);
 }
 
-function parsePytest(stdout: string, stderr: string): DirectTestEvidence {
+function parsePytest(
+  stdout: string,
+  stderr: string,
+  requiredTestNames: Iterable<string>,
+): DirectTestEvidence {
   let passedCount = 0;
   let skippedCount = 0;
-  const names = new Set<string>();
+  const names = new PassedTestNameCollector(requiredTestNames);
   for (const line of `${stdout}\n${stderr}`.split(/\r?\n/)) {
     const match =
       /^\s*(?:[^\s:]+\/)*[^\s:]+\.py(?:::([^\s]+))?\s+(PASSED|SKIPPED|XFAIL|XPASS)\b/i.exec(
@@ -213,12 +269,20 @@ export function parseDirectTestEvidence(
   runner: DirectTestRunner,
   stdout: string,
   stderr: string,
+  requiredTestNames: Iterable<string> = [],
 ): DirectTestEvidence {
-  if (runner === "pytest") return parsePytest(stdout, stderr);
+  if (runner === "pytest") return parsePytest(stdout, stderr, requiredTestNames);
   const parsed = jsonFrom(stdout, stderr);
   const root = asRecord(parsed);
   if (!root) {
-    return finish(0, 0, [], `${runner} reporter output was not valid JSON`);
+    return finish(
+      0,
+      0,
+      new PassedTestNameCollector(requiredTestNames),
+      `${runner} reporter output was not valid JSON`,
+    );
   }
-  return runner === "playwright" ? parsePlaywright(root) : parseJestLike(root);
+  return runner === "playwright"
+    ? parsePlaywright(root, requiredTestNames)
+    : parseJestLike(root, requiredTestNames);
 }

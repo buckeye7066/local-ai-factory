@@ -176,6 +176,9 @@ interface VitestScript {
   ownsRoot: boolean;
 }
 
+const SAFE_VITEST_FLAGS = new Set(["--coverage=false", "--passWithNoTests", "--run"]);
+const SAFE_VITEST_PATH_OPTIONS = new Set(["--config", "--dir", "--root"]);
+
 /** Canonicalize equivalent, contained Vitest root spellings. */
 function normalizeSafeVitestRoot(raw: string): string | null {
   const slashed = raw.replace(/\\/g, "/");
@@ -202,19 +205,29 @@ function inspectVitestScript(script: unknown): VitestScript | null {
   const words = runnerScriptWords(script, "vitest");
   if (!words) return null;
   let root: string | undefined;
+  const seenPathOptions = new Set<string>();
   for (let index = 1; index < words.length; index += 1) {
     const word = words[index]!;
+    if (index === 1 && word === "run") continue;
+    if (SAFE_VITEST_FLAGS.has(word)) continue;
+
+    const equals = word.indexOf("=");
+    const option = equals < 0 ? word : word.slice(0, equals);
+    if (!SAFE_VITEST_PATH_OPTIONS.has(option) || seenPathOptions.has(option)) {
+      return null;
+    }
+    seenPathOptions.add(option);
     let candidate: string | undefined;
-    if (word === "--root") {
+    if (equals < 0) {
       candidate = words[index + 1];
       index += 1;
-    } else if (word.startsWith("--root=")) {
-      candidate = word.slice("--root=".length);
+    } else {
+      candidate = word.slice(equals + 1);
     }
-    if (candidate === undefined) continue;
+    if (!candidate || candidate.startsWith("-")) return null;
     const normalized = normalizeSafeVitestRoot(candidate);
-    if (!normalized || root !== undefined) return null;
-    root = normalized;
+    if (!normalized) return null;
+    if (option === "--root") root = normalized;
   }
   return { root: root ?? ".", ownsRoot: root !== undefined };
 }
@@ -436,9 +449,18 @@ function runnerDeclaredByTest(contents: string): JavascriptRunner | "ambiguous" 
   let jestApi = false;
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
-      modules.add(node.moduleSpecifier.text);
+      const clause = node.importClause;
+      const runtimeImport =
+        !clause ||
+        (!clause.isTypeOnly &&
+          (Boolean(clause.name) ||
+            !clause.namedBindings ||
+            ts.isNamespaceImport(clause.namedBindings) ||
+            clause.namedBindings.elements.some((element) => !element.isTypeOnly)));
+      if (runtimeImport) modules.add(node.moduleSpecifier.text);
     } else if (
       ts.isImportEqualsDeclaration(node) &&
+      !node.isTypeOnly &&
       ts.isExternalModuleReference(node.moduleReference) &&
       node.moduleReference.expression &&
       ts.isStringLiteralLike(node.moduleReference.expression)
@@ -456,7 +478,7 @@ function runnerDeclaredByTest(contents: string): JavascriptRunner | "ambiguous" 
     if (
       ts.isPropertyAccessExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      ["fn", "mock", "spyOn"].includes(node.name.text) &&
+      (node.expression.text === "vi" || node.expression.text === "jest") &&
       // Imports already establish their runner through `modules`. API syntax
       // is evidence only for an unshadowed runner global; a local parameter,
       // variable, or import named `vi`/`jest` is ordinary candidate code.
@@ -530,7 +552,7 @@ export function verificationPlanForWorkspace(
     incomplete.push({
       command: "host tests",
       reason:
-        "Vitest test script has a compound, absolute, traversing, or ambiguous root that cannot be contained to the candidate",
+        "Vitest test script has compound, unsupported, absolute, traversing, or ambiguous options that cannot be contained to the candidate",
     });
   }
   const quality = ["lint", "typecheck", "build"]
