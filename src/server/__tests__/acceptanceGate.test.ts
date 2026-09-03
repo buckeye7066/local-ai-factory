@@ -161,6 +161,54 @@ describe("assessGeneratedTests", () => {
       /brittle negated substring "sync"/i,
     );
 
+    const typedLoopBoundSubstring = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion(`for (const featureWord of (["collaboration", "sync"] as const)) {
+  expect(output).not.toContain(featureWord);
+}`),
+    );
+    expect(typedLoopBoundSubstring.ok).toBe(false);
+    expect(typedLoopBoundSubstring.errors.join("\n")).toMatch(
+      /brittle negated substring "sync"/i,
+    );
+
+    const helperLoopBoundSubstring = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion(`const rejectWord = (word: string) => expect(output).not.toContain(word);
+for (const featureWord of ["collaboration", "sync"] as const) {
+  rejectWord(featureWord);
+}`),
+    );
+    expect(helperLoopBoundSubstring.ok).toBe(false);
+    expect(helperLoopBoundSubstring.errors.join("\n")).toMatch(
+      /brittle negated substring "sync"/i,
+    );
+
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion(`for (const featureWord of ["sync"] as const) {
+  {
+    const featureWord = " sync ";
+    expect(output).not.toContain(featureWord);
+  }
+}`),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion(`for (let featureWord of ["collaboration"]) {
+  featureWord = "sync";
+  expect(output).not.toContain(featureWord);
+}`),
+      ).ok,
+    ).toBe(true);
+
     const regex = assessGeneratedTests(
       cliSpec,
       cliBuild,
