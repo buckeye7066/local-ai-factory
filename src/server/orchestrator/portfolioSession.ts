@@ -102,7 +102,7 @@ export async function createPortfolioSession(
   const now = Date.now();
   const session: PortfolioSession = {
     id: randomUUID(),
-    prompt: redactSecrets(clean),
+    prompt: clean,
     status: "queued",
     currentTarget: 0,
     targets: targets.flatMap((target) => {
@@ -113,7 +113,7 @@ export async function createPortfolioSession(
           id: target.id,
           name: target.name,
           repoSource: target.repoSource,
-          prompt: redactSecrets(route.prompt),
+          prompt: route.prompt,
           routeEvidence: route.evidence,
           status: "queued" as const,
           runId: null,
@@ -247,6 +247,17 @@ export async function steerPortfolioSession(
   const active = applicable.find(
     ({ target }) => target.status === "running" && target.runId,
   );
+  const queuedOverflow = applicable.find(
+    ({ route, target }) =>
+      target.id !== active?.target.id &&
+      target.prompt.length + route.prompt.length + 34 > 24_000,
+  );
+  if (queuedOverflow) {
+    return {
+      ok: false,
+      reason: `Queued steering for ${queuedOverflow.target.name} exceeds the session prompt limit.`,
+    };
+  }
   if (active?.target.runId) {
     const receipt = await submitRunSteering(active.target.runId, active.route.prompt);
     if (!receipt.ok) return receipt;

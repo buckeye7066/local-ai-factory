@@ -328,6 +328,18 @@ function PortfolioSessionPanel() {
             </div>
           </div>
         )}
+        {!live && (
+          <div className="mt-5 flex justify-end">
+            <Button
+              onClick={() => {
+                window.localStorage.removeItem("factory.portfolioSessionId");
+                setSession(null);
+              }}
+            >
+              Start another session
+            </Button>
+          </div>
+        )}
         {error && <p className="mt-3 text-xs text-red-300">{error}</p>}
       </motion.div>
     );
