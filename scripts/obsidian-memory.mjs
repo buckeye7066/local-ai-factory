@@ -1,5 +1,5 @@
 /**
- * GrantFlow operational memory bridge.
+ * Local AI Factory operational memory bridge.
  *
  * Shared memory is the Obsidian AI Bus, never a second per-app database.
  * This CLI is safe to run at process start; programmatic callers may import
@@ -7,7 +7,8 @@
  */
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import path from "node:path";\nimport { pathToFileURL } from "node:url";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const APP = process.env.OBSIDIAN_MEMORY_APP?.trim() || process.env.npm_package_name?.trim() || path.basename(process.cwd());
 const VAULT = process.env.AIBUS_VAULT?.trim() || String.raw`G:\\Obsidian Vault`;
