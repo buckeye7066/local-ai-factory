@@ -22,7 +22,7 @@ import {
   filterRoutableCatalog,
 } from "../rotation/rotatingProvider.js";
 import { ThemedProvider } from "../orchestrator/workTheme.js";
-import { ModelLadderProvider } from "./modelLadderProvider.js";
+import { ModelLadderProvider, type ModelLadderRung } from "./modelLadderProvider.js";
 
 export { AnthropicProvider, OpenAIProvider, StubProvider, MockProvider, FreeProvider };
 export { FailoverProvider };
@@ -77,6 +77,11 @@ export interface ProviderRegistry {
   availableLive(): ProviderName[];
   /** Configured paid ladder rungs only. */
   availablePaid(): ProviderName[];
+  /**
+   * Exact strongest-to-weakest model rungs for a run. Paid models are
+   * individual sticky rungs; AI Time's best available free rotation is last.
+   */
+  automaticRungs?(order?: ProviderName[]): ModelLadderRung[];
   missingCredentialNames(): string[];
 }
 
@@ -108,43 +113,53 @@ export function createProviderRegistry(
   // usage then replaces the in-flight estimate in the local ledger; provider
   // billing can include charges this estimate does not model.
   const anthropicModels = config.anthropicModels ?? [config.anthropicModel];
-  const anthropic = new ModelLadderProvider(
-    anthropicModels.map((model) => ({
+  const anthropicRungs: ModelLadderRung[] = anthropicModels.map((model) => ({
+    model,
+    provider: new AnthropicProvider(
+      secrets.anthropicApiKey,
       model,
-      provider: new AnthropicProvider(
-        secrets.anthropicApiKey,
-        model,
-        (u) => {
-          const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
-          log(
-            "warn",
-            `[route] paid Anthropic ${model} call billed: ${u.inTokens} in / ` +
-              `${u.outTokens} out tokens (est. $${usd.toFixed(4)}).`,
-          );
-        },
-        signal,
-        true,
-      ),
-    })),
-    (from, to, reason) =>
-      log(
-        "warn",
-        `[route] Anthropic model ${from} exhausted — continuing on ${to}. (${reason.slice(0, 120)})`,
-      ),
+      (u) => {
+        const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
+        log(
+          "warn",
+          `[route] paid Anthropic ${model} call billed: ${u.inTokens} in / ` +
+            `${u.outTokens} out tokens (est. $${usd.toFixed(4)}).`,
+        );
+      },
+      signal,
+      true,
+    ),
+  }));
+  const anthropic = new ModelLadderProvider(anthropicRungs, (from, to, reason) =>
+    log(
+      "warn",
+      `[route] Anthropic model ${from} exhausted — continuing on ${to}. (${reason.slice(0, 120)})`,
+    ),
   );
-  const openai = new OpenAIProvider(
-    secrets.openaiApiKey,
-    config.openaiModel,
-    (u) => {
-      const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
-      log(
-        "warn",
-        `[route] paid OpenAI call billed: ${u.inTokens} in / ${u.outTokens} out ` +
-          `tokens (est. $${usd.toFixed(4)}).`,
-      );
-    },
-    signal,
-    true,
+
+  const openaiModels = config.openaiModels ?? [config.openaiModel];
+  const openaiRungs: ModelLadderRung[] = openaiModels.map((model) => ({
+    model,
+    provider: new OpenAIProvider(
+      secrets.openaiApiKey,
+      model,
+      (u) => {
+        const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
+        log(
+          "warn",
+          `[route] paid OpenAI ${model} call billed: ${u.inTokens} in / ${u.outTokens} out ` +
+            `tokens (est. $${usd.toFixed(4)}).`,
+        );
+      },
+      signal,
+      true,
+    ),
+  }));
+  const openai = new ModelLadderProvider(openaiRungs, (from, to, reason) =>
+    log(
+      "warn",
+      `[route] OpenAI model ${from} exhausted — continuing on ${to}. (${reason.slice(0, 120)})`,
+    ),
   );
 
   const free = new FreeProvider({
@@ -195,6 +210,24 @@ export function createProviderRegistry(
         signal,
       })
     : free;
+
+  function automaticRungs(
+    order: ProviderName[] = config.modelLadder ?? ["anthropic", "openai", "free"],
+  ): ModelLadderRung[] {
+    const groups: Partial<Record<ProviderName, ModelLadderRung[]>> = {
+      anthropic: anthropicRungs,
+      openai: openaiRungs,
+      free: [
+        {
+          model: rotator ? "aitime:best-free" : `fcc:${config.free.model}`,
+          provider: freePrimary,
+        },
+      ],
+    };
+    return [...new Set(order)]
+      .flatMap((name) => groups[name] ?? [])
+      .filter((rung) => rung.provider.isConfigured());
+  }
 
   /** Legacy free-route diagnostic chain; current live work uses the ladder. */
   const chain = new FailoverProvider(
@@ -300,6 +333,7 @@ export function createProviderRegistry(
     available,
     availableLive,
     availablePaid,
+    automaticRungs,
     missingCredentialNames,
   };
 }

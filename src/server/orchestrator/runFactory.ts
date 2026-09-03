@@ -26,6 +26,7 @@ import {
   MissingProviderCredentialError,
   OFFLINE_PROVIDERS,
   ProviderAbortError,
+  ModelLadderProvider,
 } from "../providers/index.js";
 import type { ProviderRegistry } from "../providers/index.js";
 import { createReadinessBrainProviders } from "../providers/readinessBrains.js";
@@ -414,8 +415,9 @@ export function selectRunRouting(
  * Build the single run-scoped provider ladder.
  *
  * Every concrete paid rung is budget-gated before it is attempted. The
- * QuotaFailoverProvider owns a sticky cursor, so quota/capacity exhaustion
- * demotes the entire run instead of making each stage hammer the spent model.
+ * ModelLadderProvider owns the production model-by-model sticky cursor, so
+ * quota/capacity exhaustion demotes the entire run exactly once. The family
+ * failover wrapper remains only for compatibility with embedded registries.
  */
 export function createTierProvider(
   routing: ResolvedRunRouting,
@@ -427,12 +429,11 @@ export function createTierProvider(
   } = {},
 ): LLMProvider {
   const decorate = options.decorate ?? ((provider: LLMProvider) => provider);
-  const buildConcrete = (name: ProviderName): LLMProvider => {
-    const concrete = registry.get(name);
+  const buildProvider = (concrete: LLMProvider): LLMProvider => {
     const themed = new ThemedProvider(concrete);
     const budgeted =
-      isPaidProvider(name) && concrete.paidBudgetManaged !== true
-        ? new BudgetGatedProvider(themed, name)
+      isPaidProvider(concrete.name) && concrete.paidBudgetManaged !== true
+        ? new BudgetGatedProvider(themed, concrete.name)
         : themed;
     // Run call-count rejection stays outside the paid gate, so a call refused
     // before provider I/O never creates a phantom paid reservation.
@@ -444,6 +445,27 @@ export function createTierProvider(
     ...registry.availablePaid().filter(isPaidProvider),
     "free",
   ];
+
+  // The production registry exposes each MODEL as its own rung. This is the
+  // critical distinction from provider-family failover: one strongest model
+  // stays selected until its credits/quota/capacity are exhausted, then the
+  // cursor advances exactly once to the next configured model. AI Time's
+  // frontier free rotation is the one terminal rung.
+  const exactRungs = registry.automaticRungs?.(candidates) ?? [];
+  if (exactRungs.length > 0) {
+    return new ModelLadderProvider(
+      exactRungs.map((rung) => ({
+        model: rung.model,
+        provider: buildProvider(rung.provider),
+      })),
+      options.onFailover,
+    );
+  }
+
+  // Compatibility for embedded/test registries that expose provider families
+  // only. Production never takes this branch.
+  const buildConcrete = (name: ProviderName): LLMProvider =>
+    buildProvider(registry.get(name));
   const ladder = [...new Set(candidates)].filter(
     (name) => !OFFLINE_PROVIDERS.has(name) && registry.get(name).isConfigured(),
   );
@@ -3232,6 +3254,16 @@ async function executeRun(
           runId: run.id,
           detail: release.prUrl ?? delivered.target,
         });
+        if (pending) {
+          run.status = "failed";
+          run.resumable = true;
+          run.error = redactSecrets(
+            `Release pending: ${release.reason}. The verified branch and auto-merge remain active, but the run is not complete until the exact commit is confirmed on the trunk. Resume this run to re-check it.`,
+          );
+          await checkpointNow();
+          await flush();
+          return;
+        }
         if (outcome === "fail-run") {
           run.status = "failed";
           run.resumable = false;

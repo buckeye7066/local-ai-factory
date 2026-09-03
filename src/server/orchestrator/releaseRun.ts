@@ -232,11 +232,44 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
     prUrl = create.stdout.trim().split(/\s+/).pop() ?? null;
   } else if (/already exists/i.test(create.stderr + create.stdout)) {
     const view = await run(
-      ["pr", "view", input.branch, "-R", slug, "--json", "url", "--jq", ".url"],
+      [
+        "pr",
+        "view",
+        input.branch,
+        "-R",
+        slug,
+        "--json",
+        "url,state,headRefOid,mergeCommit",
+        "--jq",
+        '[.url, .state, .headRefOid, (.mergeCommit.oid // "")] | @tsv',
+      ],
       process.cwd(),
       60_000,
     );
-    prUrl = succeeded(view) ? view.stdout.trim() : null;
+    const [existingUrl, existingState, existingHead, existingMergeSha] = succeeded(view)
+      ? view.stdout.trim().split("\t")
+      : [];
+    prUrl = existingUrl || null;
+    if (existingState === "MERGED") {
+      if (existingHead !== input.verifiedCommitSha) {
+        return {
+          released: false,
+          state: "held",
+          prUrl,
+          mergedSha: null,
+          reason:
+            "the existing merged PR head does not match the exact verified delivered commit",
+        };
+      }
+      return {
+        released: true,
+        state: "merged",
+        prUrl,
+        mergedSha: existingMergeSha || null,
+        reason:
+          "confirmed the existing PR already merged the exact verified commit to the trunk",
+      };
+    }
   }
   if (!prUrl) {
     return {
@@ -264,6 +297,7 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
   const graceUntil = Date.now() + (input.noChecksGraceMs ?? NO_CHECKS_GRACE_MS);
   const neededAbsent = input.noChecksConfirmations ?? NO_CHECKS_CONFIRMATIONS;
   let absentObservations = 0;
+  let noHostCiConfirmed = false;
   for (;;) {
     const checks = await run(
       ["pr", "checks", prUrl, "--json", "state,name"],
@@ -276,14 +310,12 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
       // Believe "this repo has no CI" only after the grace window has elapsed
       // AND the absence has held across several polls.
       if (absentObservations >= neededAbsent && Date.now() >= graceUntil) {
-        return {
-          released: false,
-          state: "held",
-          prUrl,
-          mergedSha: null,
-          reason:
-            "host repo has no reported CI checks — release is held because absence is not passing evidence",
-        };
+        // Factory Deck already ran grounded QA and the repository's executable
+        // test command on the exact commit. A repository with no host CI has
+        // no additional gate to satisfy, so continue to the same SHA-bound PR
+        // merge after carefully ruling out GitHub's registration race.
+        noHostCiConfirmed = true;
+        break;
       }
       if (Date.now() > deadline) {
         return {
@@ -472,7 +504,8 @@ export async function releaseRun(input: ReleaseInput): Promise<ReleaseResult> {
     // observed real checks and every one of them SUCCESS — so "green host-repo
     // checks" is a claim this line has actually earned. No other exit from this
     // function may make it.
-    reason:
-      "merged to the trunk after grounded QA, passing tests, green host-repo checks, and exact PR-head verification",
+    reason: noHostCiConfirmed
+      ? "merged to the trunk after grounded QA, passing repository tests, confirmed absence of host CI, and exact PR-head verification"
+      : "merged to the trunk after grounded QA, passing tests, green host-repo checks, and exact PR-head verification",
   };
 }

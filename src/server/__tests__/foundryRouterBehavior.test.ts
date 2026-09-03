@@ -90,7 +90,11 @@ class TestFoundryAdapters extends FoundryAdapters {
       const evidence: Record<string, unknown> = {};
       if (stationId === "factory-deck") {
         // Build a deterministic artifact tree digest bound to project id.
-        const tree = { projectId: project.id, files: ["a.txt", "b.txt"], bytes: 42 };
+        const tree = {
+          projectId: project.id,
+          files: ["a.txt", "b.txt"],
+          bytes: 42,
+        };
         const hex = createHash("sha256").update(JSON.stringify(tree)).digest("hex");
         evidence.evidenceDigest = `sha256:${hex}`;
         evidence.revision = `rev-${hex.slice(0, 12)}`;
@@ -99,20 +103,29 @@ class TestFoundryAdapters extends FoundryAdapters {
         status: "completed",
         summary: `completed:${stationId}`,
         artifacts: [],
-        ...(stationId === "repo-rewards"
+        ...(stationId === "repo-rewards" || stationId === "scout"
           ? {
               handoff: {
-                insights: ["Use the useful/repo validation pattern."],
-                sources: ["https://github.com/useful/repo"],
-                candidates: [
-                  {
-                    name: "useful/repo",
-                    url: "https://github.com/useful/repo",
-                    summary: "A maintained validation implementation.",
-                    license: "MIT",
-                    score: 91,
-                  },
-                ],
+                insights:
+                  stationId === "scout"
+                    ? ["Program Scout verified the target capability map."]
+                    : ["Use the useful/repo validation pattern."],
+                sources:
+                  stationId === "scout"
+                    ? ["https://example.com/program-scout-evidence"]
+                    : ["https://github.com/useful/repo"],
+                candidates:
+                  stationId === "repo-rewards"
+                    ? [
+                        {
+                          name: "useful/repo",
+                          url: "https://github.com/useful/repo",
+                          summary: "A maintained validation implementation.",
+                          license: "MIT",
+                          score: 91,
+                        },
+                      ]
+                    : [],
               },
             }
           : {}),
@@ -202,6 +215,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
       .filter((station) => station.status === "queued")
       .map((station) => station.stationId);
     expect(queued).toEqual([
+      "scout",
       "repo-rewards",
       "promo-pilot",
       "factory-deck",
@@ -210,7 +224,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     ]);
     expect(
       project.stations.find((station) => station.stationId === "scout")?.status,
-    ).toBe("not_selected");
+    ).toBe("queued");
     expect(
       project.stations.find((station) => station.stationId === "flexfactor")?.status,
     ).toBe("not_selected");
@@ -322,6 +336,14 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
         "C:/Vault/LegacyRetry.md",
       ),
     );
+    const scout = project.stations.find((station) => station.stationId === "scout")!;
+    scout.status = "completed";
+    scout.handoff = {
+      insights: ["Legacy project already contains verified Scout evidence."],
+      sources: ["https://example.com/program-scout-evidence"],
+      candidates: [],
+    };
+    scout.endedAt = Date.now();
     const discovery = project.stations.find(
       (station) => station.stationId === "repo-rewards",
     )!;
@@ -371,6 +393,14 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
         "C:/Vault/LegacyRestart.md",
       ),
     );
+    const scout = project.stations.find((station) => station.stationId === "scout")!;
+    scout.status = "completed";
+    scout.handoff = {
+      insights: ["Legacy project already contains verified Scout evidence."],
+      sources: ["https://example.com/program-scout-evidence"],
+      candidates: [],
+    };
+    scout.endedAt = Date.now();
     const discovery = project.stations.find(
       (station) => station.stationId === "repo-rewards",
     )!;
@@ -430,7 +460,7 @@ describe("Foundry router invariants (deterministic adapters): single-active, sta
     );
     expect(bypass.status).toBe(409);
     expect(await bypass.json()).toMatchObject({
-      error: expect.stringMatching(/RepoRewards discovery must complete/i),
+      error: expect.stringMatching(/Program Scout and RepoRewards discovery/i),
     });
 
     adapters.release("repo-rewards");

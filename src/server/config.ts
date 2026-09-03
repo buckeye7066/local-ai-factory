@@ -49,6 +49,8 @@ export const DEFAULT_ANTHROPIC_MODEL_LADDER = [
   "claude-haiku-4-5",
 ] as const;
 
+export const DEFAULT_OPENAI_MODEL_LADDER = ["gpt-5.5"] as const;
+
 function modelIds(value: string | undefined): string[] {
   return (value ?? "")
     .split(/[;,]/)
@@ -110,6 +112,11 @@ export interface AppConfig {
    */
   anthropicModels?: string[];
   openaiModel: string;
+  /**
+   * Strongest-to-weakest OpenAI model order inside the single paid ladder.
+   * Optional for compatibility with embedders that construct AppConfig directly.
+   */
+  openaiModels?: string[];
   /** OpenAI model used when the unified readiness ladder reaches OpenAI. */
   solModel: string;
   /** Legacy Anthropic readiness preference retained for configuration compatibility. */
@@ -171,6 +178,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ? [...new Set(requestedAnthropicModels)]
     : [...new Set([anthropicModel, ...DEFAULT_ANTHROPIC_MODEL_LADDER])];
   const openaiModel = env.OPENAI_MODEL || "gpt-5.5";
+  const requestedOpenAiModels = modelIds(env.FACTORY_OPENAI_MODEL_LADDER);
+  const openaiModels = requestedOpenAiModels.length
+    ? [...new Set(requestedOpenAiModels)]
+    : [...new Set([openaiModel, ...DEFAULT_OPENAI_MODEL_LADDER])];
   return {
     free: {
       enabled: bool(env.FACTORY_FREE_ENABLED, true),
@@ -190,6 +201,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     anthropicModel,
     anthropicModels,
     openaiModel,
+    openaiModels,
     // Readiness models are separate from ordinary build routing. Helper models
     // may build, but they can never impersonate the required production brains.
     solModel: env.FACTORY_SOL_MODEL || openaiModel,
@@ -319,7 +331,8 @@ export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown
     // never a legacy ANTHROPIC_MODEL excluded by the explicit ladder.
     anthropicModel: config.anthropicModels?.[0] ?? config.anthropicModel,
     anthropicModels: config.anthropicModels ?? [config.anthropicModel],
-    openaiModel: config.openaiModel,
+    openaiModel: config.openaiModels?.[0] ?? config.openaiModel,
+    openaiModels: config.openaiModels ?? [config.openaiModel],
     mandatoryProductionReadiness: true as const,
     readinessBrainFloorConfigured: brainFloor.configured,
     readinessPaidProviders: brainFloor.paidProviders,

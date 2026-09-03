@@ -1,6 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +9,7 @@ import {
   defaultProcessRunner,
   repoRewardsQuery,
   repoSourceFromTarget,
+  programScoutTargetUrl,
 } from "../foundry/adapters.js";
 import {
   EXTEND_PERSISTENCE_CONTRACT,
@@ -84,6 +84,7 @@ describe("Purpose Foundry", () => {
       expect(project.routingMode).toBe("auto");
       expect((await store.get(project.id))?.routingMode).toBe("auto");
       for (const stationId of [
+        "scout",
         "repo-rewards",
         "factory-deck",
         "crucible",
@@ -93,12 +94,7 @@ describe("Purpose Foundry", () => {
           project.stations.find((station) => station.stationId === stationId)?.status,
         ).toBe("queued");
       }
-      for (const stationId of [
-        "scout",
-        "promo-pilot",
-        "flexfactor",
-        "app-store-publisher",
-      ]) {
+      for (const stationId of ["promo-pilot", "flexfactor", "app-store-publisher"]) {
         expect(
           project.stations.find((station) => station.stationId === stationId)?.status,
         ).toBe("not_selected");
@@ -355,111 +351,183 @@ describe("Purpose Foundry", () => {
     }
   });
 
-  it("uses the directed FlexFactor run script by default in descriptors and process mode", async () => {
-    const previousScript = process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
-    const previousProvider = process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER;
-    const previousOpenAiKey = process.env.OPENAI_API_KEY;
-    const previousAuthToken = process.env.FACTORY_AUTH_TOKEN;
-    const previousPromoToken = process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN;
-    delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
-    // A stale operator override must not pin FlexFactor: its own orchestrator
-    // chooses the strongest available rung.
-    process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER = "anthropic";
-    process.env.OPENAI_API_KEY = "paid-secret-must-not-reach-free-child";
-    process.env.FACTORY_AUTH_TOKEN = "factory-secret-must-not-reach-child";
-    process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN = "promo-secret-must-not-reach-child";
-    try {
-      const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
-      const store = new FoundryStore(root);
-      const project = await store.create(
-        intakeFromMarkdown(
-          "---\nproject: GrantFlow\npurpose: Match people to real funding\ntargets: buckeye7066/GrantFlow\n---\n# GrantFlow",
-          "C:/Vault/GrantFlow.md",
-        ),
-      );
-      let receivedArgs: string[] = [];
-      let receivedEnv: NodeJS.ProcessEnv | undefined;
-      let processExit = 0;
-      const adapters = new FoundryAdapters(store, {
-        config: () =>
-          loadConfig({
-            FACTORY_FREE_ENABLED: "true",
-            DEFAULT_CODE_PROVIDER: "free",
-            DEFAULT_REVIEW_PROVIDER: "free",
-          }),
-        providerRegistry: () => providerRegistry([callable("free")]),
-        processRunner: async (_python, args, options) => {
-          receivedArgs = args;
-          receivedEnv = options.env;
-          return {
-            stdout:
-              processExit === 0
-                ? "ok"
-                : `FACTORY_AUTH_TOKEN=${process.env.FACTORY_AUTH_TOKEN}`,
-            stderr:
-              processExit === 0
-                ? "failed detail"
-                : `PURPOSE_FOUNDRY_PROMOPILOT_TOKEN=${process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN}`,
-            exitCode: processExit,
-          };
-        },
-      });
+  it("runs Program Scout through its authenticated jobs API and persists verified evidence", async () => {
+    vi.stubEnv("PURPOSE_FOUNDRY_PROGRAM_SCOUT_URL", "https://scout.example");
+    vi.stubEnv("PURPOSE_FOUNDRY_PROGRAM_SCOUT_TOKEN", "scout-secret");
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown(
+        "---\nproject: GrantFlow\npurpose: Match people to real funding\ntargets: buckeye7066/GrantFlow\n---\n# GrantFlow",
+        "C:/Vault/GrantFlow.md",
+      ),
+    );
+    const requests: Array<{
+      url: string;
+      method: string;
+      authorization: string;
+    }> = [];
+    const baseJob = {
+      id: "11111111-1111-4111-8111-111111111111",
+      targetUrl: "https://github.com/buckeye7066/GrantFlow",
+      normalizedUrl: "https://github.com/buckeye7066/GrantFlow",
+      targetHost: "github.com",
+      programSlug: "grantflow",
+      status: "running",
+      stage: "researching",
+      progress: 20,
+      branchName: null,
+      headSha: null,
+      research: null,
+      specification: null,
+      verification: null,
+      failureCode: null,
+      failureMessage: null,
+    };
+    const readyJob = {
+      ...baseJob,
+      status: "ready",
+      stage: "complete",
+      progress: 100,
+      branchName: "scout/grantflow-11111111",
+      headSha: "abc123",
+      research: {
+        programName: "GrantFlow",
+        description: "Funding workflow",
+        sources: [
+          {
+            url: "https://grantflow.example/docs",
+            title: "Docs",
+            kind: "documentation",
+            excerpt: "Verified workflow",
+            retrievedAt: "2026-09-03T00:00:00Z",
+          },
+        ],
+        openSourceReferences: [
+          {
+            fullName: "useful/repo",
+            url: "https://github.com/useful/repo",
+            description: "Reusable pattern",
+            commitSha: "def456",
+            evidencePaths: ["README.md"],
+          },
+        ],
+      },
+      specification: {
+        purpose: "Match applicants to funding",
+        intendedUsers: ["applicants"],
+        roles: ["applicant"],
+        capabilities: [
+          {
+            id: "matching",
+            name: "Verified matching",
+            description: "Match against live opportunities",
+            priority: "core",
+            roles: ["applicant"],
+            acceptanceCriteria: ["returns evidence"],
+            evidenceUrls: ["https://grantflow.example/docs"],
+          },
+        ],
+        workflows: [],
+        integrations: [],
+        unknowns: [],
+        cleanRoomNotice: "No proprietary source was copied.",
+      },
+      verification: {
+        state: "passed",
+        commitSha: "abc123",
+        requiredChecks: ["test", "build"],
+        passedChecks: ["test", "build"],
+        failedChecks: [],
+        checkedAt: "2026-09-03T00:10:00Z",
+      },
+    };
+    let poll = 0;
+    const adapters = new FoundryAdapters(store, {
+      sleep: async () => {},
+      fetch: async (input, init) => {
+        const url = String(input);
+        requests.push({
+          url,
+          method: init?.method ?? "GET",
+          authorization: String(
+            (init?.headers as Record<string, string> | undefined)?.authorization ?? "",
+          ),
+        });
+        if (init?.method === "POST") {
+          return new Response(JSON.stringify({ job: baseJob }), {
+            status: 202,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        poll += 1;
+        return new Response(JSON.stringify({ job: readyJob }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
 
-      const descriptors = adapters.descriptors();
-      const scout = descriptors.find((descriptor) => descriptor.stationId === "scout");
-      const flexfactor = descriptors.find(
-        (descriptor) => descriptor.stationId === "flexfactor",
-      );
-      const directedScript = "C:\\Users\\firer\\flexfactor\\flexfactor_run.py";
-      expect(scout?.destination).toBe(directedScript);
-      expect(flexfactor?.destination).toBe(directedScript);
-      expect(scout?.configured).toBe(existsSync(directedScript));
-      expect(flexfactor?.configured).toBe(existsSync(directedScript));
+    expect(programScoutTargetUrl("buckeye7066/GrantFlow")).toBe(
+      "https://github.com/buckeye7066/GrantFlow",
+    );
+    expect(
+      adapters.descriptors().find((item) => item.stationId === "scout"),
+    ).toMatchObject({
+      mode: "http",
+      configured: true,
+      destination: "https://scout.example",
+    });
+    const outcome = await adapters.execute(project, "scout");
+    expect(outcome).toMatchObject({
+      status: "completed",
+      evidence: {
+        jobId: baseJob.id,
+        branchName: readyJob.branchName,
+        headSha: "abc123",
+        verification: { state: "passed" },
+        capabilityCount: 1,
+      },
+    });
+    expect(poll).toBe(1);
+    expect(requests.map((item) => item.method)).toEqual(["POST", "GET"]);
+    expect(requests.every((item) => item.authorization === "Bearer scout-secret")).toBe(
+      true,
+    );
+    expect(JSON.parse(await readFile(outcome.artifacts[0], "utf8"))).toMatchObject({
+      completed: true,
+      job: { status: "ready", headSha: "abc123" },
+    });
+  });
 
-      const success = await adapters.execute(project, "scout");
-      expect(success.status).toBe("completed");
-      expect(receivedArgs[0]).toBe(directedScript);
-      expect(receivedArgs).not.toContain("--provider");
-      expect(receivedArgs).not.toContain("ollama");
-      expect(receivedArgs).not.toContain("anthropic");
-      expect(receivedEnv?.OPENAI_API_KEY).toBeUndefined();
-      expect(receivedEnv?.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER).toBeUndefined();
-      expect(receivedEnv?.FACTORY_AUTH_TOKEN).toBeUndefined();
-      expect(receivedEnv?.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN).toBeUndefined();
-
-      processExit = 7;
-      const failure = await adapters.execute(project, "scout");
-      expect(failure).toMatchObject({
-        status: "failed",
-        evidence: {
-          exitCode: 7,
-          provider: "flexfactor-orchestrated",
-        },
-      });
-      const failureOutput = await readFile(failure.artifacts[0], "utf8");
-      expect(failureOutput).not.toContain("factory-secret-must-not-reach-child");
-      expect(failureOutput).not.toContain("promo-secret-must-not-reach-child");
-      expect(JSON.stringify(failure.evidence)).not.toContain(
-        "factory-secret-must-not-reach-child",
-      );
-      expect(JSON.stringify(failure.evidence)).not.toContain(
-        "promo-secret-must-not-reach-child",
-      );
-    } finally {
-      if (previousScript === undefined)
-        delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT;
-      else process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT = previousScript;
-      if (previousProvider === undefined)
-        delete process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER;
-      else process.env.PURPOSE_FOUNDRY_FLEXFACTOR_PROVIDER = previousProvider;
-      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = previousOpenAiKey;
-      if (previousAuthToken === undefined) delete process.env.FACTORY_AUTH_TOKEN;
-      else process.env.FACTORY_AUTH_TOKEN = previousAuthToken;
-      if (previousPromoToken === undefined)
-        delete process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN;
-      else process.env.PURPOSE_FOUNDRY_PROMOPILOT_TOKEN = previousPromoToken;
-    }
+  it("uses the directed FlexFactor run script only for the FlexFactor station", async () => {
+    const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
+    const store = new FoundryStore(root);
+    const project = await store.create(
+      intakeFromMarkdown(
+        "---\nproject: GrantFlow\npurpose: Review the app\ntargets: buckeye7066/GrantFlow\n---\n# GrantFlow",
+        "C:/Vault/GrantFlow.md",
+      ),
+    );
+    let receivedArgs: string[] = [];
+    const adapters = new FoundryAdapters(store, {
+      processRunner: async (_python, args) => {
+        receivedArgs = args;
+        return { stdout: "completed", stderr: "", exitCode: 0 };
+      },
+    });
+    const flexfactor = adapters
+      .descriptors()
+      .find((descriptor) => descriptor.stationId === "flexfactor");
+    expect(flexfactor?.destination).toBe(
+      "C:\\Users\\firer\\flexfactor\\flexfactor_run.py",
+    );
+    await expect(adapters.execute(project, "flexfactor")).resolves.toMatchObject({
+      status: "completed",
+      evidence: { provider: "flexfactor-orchestrated" },
+    });
+    expect(receivedArgs).toContain("prodready");
+    expect(receivedArgs).not.toContain("scout");
   });
 
   it("returns ordinary nonzero exits from the real process runner", async () => {
@@ -538,6 +606,7 @@ describe("Purpose Foundry", () => {
       project.stations.findIndex((station) => station.stationId === "promo-pilot"),
     );
     for (const stationId of [
+      "scout",
       "repo-rewards",
       "factory-deck",
       "crucible",
@@ -547,12 +616,7 @@ describe("Purpose Foundry", () => {
         project.stations.find((station) => station.stationId === stationId)?.status,
       ).toBe("queued");
     }
-    for (const stationId of [
-      "scout",
-      "promo-pilot",
-      "flexfactor",
-      "app-store-publisher",
-    ]) {
+    for (const stationId of ["promo-pilot", "flexfactor", "app-store-publisher"]) {
       expect(
         project.stations.find((station) => station.stationId === stationId)?.status,
       ).toBe("not_selected");

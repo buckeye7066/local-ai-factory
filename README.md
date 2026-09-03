@@ -62,8 +62,9 @@ Factory Deck:
 
 1. derives multiple discovery queries from the durable product mission,
    target users, active goal, and feature set—not an invented app name;
-2. queries RepoRewards for ranked implementation candidates and searches
-   Firecrawl v2 with an honest DuckDuckGo fallback, recording source health;
+2. queries the real RepoRewards `POST /api/search` service for ranked
+   implementation candidates and searches Firecrawl v2 with an honest
+   DuckDuckGo fallback, recording source health;
 3. reserves separate capacity for real product competitors and requires five
    verified, evidence-linked products on every live production run;
 4. inspects open-source repository metadata, maintenance signals, file trees,
@@ -74,8 +75,12 @@ Factory Deck:
    into an acceptance criterion, and passes concrete integration instructions,
    reuse mode, and source URL into planning and file generation.
 
-RepoRewards and the five-product comparison are production gates. If discovery
-is disabled, RepoRewards is unreachable, or five verified/compared/selected
+RepoRewards and the five-product comparison are production gates. Purpose
+Foundry's required Scout discovery station separately creates and polls authenticated
+Program Scout jobs through `POST /api/scout/jobs` and `GET /api/scout/jobs/:id`;
+it completes only after the service returns a verified branch whose verification
+commit equals its head SHA. If discovery is disabled, RepoRewards is unreachable,
+or five verified/compared/selected
 product advantages cannot be established, the run stops before the planner or
 builder instead of pretending research occurred.
 
@@ -114,6 +119,7 @@ ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 ANTHROPIC_MODEL=claude-fable-5-1
 OPENAI_MODEL=gpt-5.5
+FACTORY_OPENAI_MODEL_LADDER=gpt-5.5
 FIRECRAWL_API_KEY=optional_firecrawl_key
 DEFAULT_CODE_PROVIDER=free
 DEFAULT_REVIEW_PROVIDER=free

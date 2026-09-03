@@ -4,6 +4,7 @@ import type { StationId } from "./model.js";
 
 /** Discovery inputs that must finish before Factory Deck may start. */
 export const REQUIRED_DISCOVERY_STATIONS = Object.freeze([
+  "scout",
   "repo-rewards",
 ] as const satisfies readonly StationId[]);
 
@@ -17,7 +18,8 @@ export type RequiredDiscoveryStation = (typeof REQUIRED_DISCOVERY_STATIONS)[numb
 export type RequiredProductionStation = (typeof REQUIRED_PRODUCTION_STATIONS)[number];
 
 /**
- * Every project first gathers structured RepoRewards discovery, then follows
+ * Every project first gathers verified Program Scout and structured RepoRewards
+ * discovery, then follows
  * one internal evidence line: Factory Deck, Crucible, and Watchtower. Legacy
  * free/paid values normalize to this same route. FlexFactor remains optional
  * because its child orchestrator owns its own model ladder and call ledger.

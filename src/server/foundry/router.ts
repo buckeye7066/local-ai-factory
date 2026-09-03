@@ -113,7 +113,9 @@ export function createFoundryRouter(
       (station) =>
         station &&
         (station.status !== "completed" ||
-          (station.stationId === "repo-rewards" &&
+          (REQUIRED_DISCOVERY_STATIONS.includes(
+            station.stationId as (typeof REQUIRED_DISCOVERY_STATIONS)[number],
+          ) &&
             (station.handoff.insights.length === 0 ||
               station.handoff.sources.length === 0))),
     );
@@ -223,13 +225,15 @@ export function createFoundryRouter(
       );
     }
     if (
-      stationId === "repo-rewards" &&
+      REQUIRED_DISCOVERY_STATIONS.includes(
+        stationId as (typeof REQUIRED_DISCOVERY_STATIONS)[number],
+      ) &&
       event.status === "completed" &&
       (event.handoff.insights.length === 0 || event.handoff.sources.length === 0)
     ) {
       throw new FoundryRouteError(
         409,
-        "RepoRewards completion requires a purpose-bound insight and queried source.",
+        `${stationId} completion requires a purpose-bound insight and queried source.`,
       );
     }
     if (
@@ -239,7 +243,7 @@ export function createFoundryRouter(
     ) {
       throw new FoundryRouteError(
         409,
-        "Mandatory RepoRewards discovery must complete with a typed handoff before a downstream station can complete.",
+        "Mandatory Program Scout and RepoRewards discovery must complete with typed handoffs before a downstream station can complete.",
       );
     }
     if (

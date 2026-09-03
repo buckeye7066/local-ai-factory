@@ -38,6 +38,11 @@ import {
 } from "../../shared/schemas.js";
 import type { LLMProvider } from "../../shared/types.js";
 import {
+  programScoutConfiguration,
+  runProgramScout,
+  type ProgramScoutJob,
+} from "../tools/programScout.js";
+import {
   STATIONS,
   type FoundryProject,
   type FoundryStore,
@@ -426,6 +431,21 @@ function firstTarget(project: FoundryProject): string | null {
   return project.constitution.targets.map((item) => item.trim()).find(Boolean) ?? null;
 }
 
+export function programScoutTargetUrl(target: string): string | null {
+  const value = target.trim();
+  if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value)) {
+    return `https://github.com/${value.replace(/\.git$/i, "")}`;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Convert explicit local paths and GitHub references into Factory Deck input. */
 export function repoSourceFromTarget(
   target: string,
@@ -512,6 +532,7 @@ export class FoundryAdapters {
   descriptors(): AdapterDescriptor[] {
     const flexScript = flexfactorDirectedScript();
     const flexConfigured = existsSync(flexScript);
+    const scoutConfig = programScoutConfiguration();
     const liveProviderConfigured =
       this.dependencies.providerRegistry().availableLive().length > 0;
     const map: Record<StationId, Omit<AdapterDescriptor, "stationId">> = {
@@ -521,9 +542,11 @@ export class FoundryAdapters {
         destination: "Factory Deck run API",
       },
       scout: {
-        mode: "process",
-        configured: flexConfigured,
-        destination: flexScript,
+        mode: "http",
+        configured: scoutConfig.configured,
+        destination:
+          scoutConfig.endpoints[0] ??
+          "Set PURPOSE_FOUNDRY_PROGRAM_SCOUT_URL and PURPOSE_FOUNDRY_PROGRAM_SCOUT_TOKEN",
       },
       "repo-rewards": {
         mode: "http",
@@ -579,7 +602,7 @@ export class FoundryAdapters {
       case "factory-deck":
         return this.factoryDeck(project);
       case "scout":
-        return this.flexfactorProcess(project, "scout");
+        return this.programScout(project);
       case "repo-rewards":
         return this.repoRewards(project);
       case "promo-pilot":
@@ -759,7 +782,7 @@ export class FoundryAdapters {
       runStart.idempotent === true &&
       run?.status === "failed" &&
       run.resumable === true &&
-      heldBlockers
+      (heldBlockers || run.release?.state === "pending")
     ) {
       await this.fetchJson(
         `http://127.0.0.1:${config.port}/api/runs/${encodeURIComponent(run.id)}/resume`,
@@ -807,6 +830,19 @@ export class FoundryAdapters {
         },
       };
     }
+    if (run.release?.state === "pending") {
+      return {
+        status: "needs_attention",
+        summary: `Factory Deck run ${run.id} has pushed its verified branch and armed auto-merge, but the exact commit is not confirmed on the trunk yet. Retry to re-check the release.`,
+        artifacts: [artifact],
+        evidence: {
+          runId: run.id,
+          status: run.status,
+          release: run.release,
+          errorLedger,
+        },
+      };
+    }
     if (run.status !== "completed") {
       return {
         status: "failed",
@@ -833,6 +869,27 @@ export class FoundryAdapters {
         },
       };
     }
+    if (
+      run.destination?.kind === "existing-repo" &&
+      (!run.release ||
+        run.release.released !== true ||
+        run.release.state !== "merged" ||
+        !run.release.mergedSha)
+    ) {
+      return {
+        status: "needs_attention",
+        summary: `Factory Deck verified run ${run.id}, but Purpose Foundry will not complete this station until its exact commit is merged to the target repository's default branch.`,
+        artifacts: [artifact],
+        evidence: {
+          runId: run.id,
+          status: run.status,
+          destination: run.destination,
+          release: run.release ?? null,
+          readinessReceipt: readiness.receipt,
+          errorLedger,
+        },
+      };
+    }
     await recordReadinessEvaluation({
       subjectType: "foundry-project",
       subjectId: project.id,
@@ -841,9 +898,9 @@ export class FoundryAdapters {
       receipt: readiness.receipt,
     });
     const revision =
-      run.release?.mergedSha ??
-      run.destination?.commitSha ??
-      readiness.receipt.evidenceDigest;
+      run.destination?.kind === "existing-repo"
+        ? run.release!.mergedSha!
+        : (run.destination?.commitSha ?? readiness.receipt.evidenceDigest);
     return {
       status: "completed",
       summary: run.finalReport?.summary || `Factory Deck completed run ${run.id}.`,
@@ -860,6 +917,110 @@ export class FoundryAdapters {
         revision,
         readinessReceipt: readiness.receipt,
         errorLedger,
+      },
+    };
+  }
+
+  private async programScout(project: FoundryProject): Promise<AdapterOutcome> {
+    const target = firstTarget(project);
+    if (!target) {
+      return {
+        status: "needs_attention",
+        summary:
+          "Program Scout needs a public target URL or owner/repository in the project constitution.",
+        artifacts: [],
+        evidence: { missing: "constitution.targets" },
+      };
+    }
+    const targetUrl = programScoutTargetUrl(target);
+    if (!targetUrl) {
+      return {
+        status: "needs_attention",
+        summary:
+          "Program Scout requires a public HTTP(S) URL or owner/repository target; a local path cannot be researched by the Scout service.",
+        artifacts: [],
+        evidence: { target, invalidForProgramScout: true },
+      };
+    }
+
+    const result = await runProgramScout(targetUrl, {
+      fetchImpl: this.dependencies.fetch,
+      sleepImpl: this.dependencies.sleep,
+    });
+    const artifacts: string[] = [];
+    if (result.job) {
+      artifacts.push(
+        await this.store.writeArtifact(
+          project.id,
+          "scout",
+          "program-scout-job.json",
+          result,
+        ),
+      );
+    }
+    const job: ProgramScoutJob | null = result.job;
+    if (!result.completed || !job) {
+      const terminalFailure = job?.status === "failed" || job?.status === "cancelled";
+      return {
+        status: terminalFailure ? "failed" : "needs_attention",
+        summary: result.reason,
+        artifacts,
+        evidence: {
+          configured: result.configured,
+          endpoint: result.endpoint,
+          jobId: job?.id ?? null,
+          jobStatus: job?.status ?? null,
+          stage: job?.stage ?? null,
+          progress: job?.progress ?? null,
+          failureCode: job?.failureCode ?? null,
+        },
+      };
+    }
+
+    const capabilities = job.specification?.capabilities ?? [];
+    const references = job.research?.openSourceReferences ?? [];
+    const sources = [
+      ...(job.research?.sources ?? []).map((source) => source.url),
+      ...references.map((reference) => reference.url),
+    ];
+    const handoff: StationHandoff = {
+      insights: [
+        `Program Scout verified ${job.research?.programName || job.programSlug}: ${job.specification?.purpose || job.research?.description || "purpose captured"}.`,
+        ...capabilities
+          .slice(0, 20)
+          .map((capability) =>
+            `${capability.priority}: ${capability.name} — ${capability.description}`.slice(
+              0,
+              4_000,
+            ),
+          ),
+      ],
+      sources: [...new Set([targetUrl, ...sources])].slice(0, 50),
+      candidates: references.slice(0, 20).map((reference) => ({
+        name: reference.fullName,
+        url: reference.url,
+        summary: reference.description ?? "",
+        license: null,
+        score: null,
+      })),
+    };
+    return {
+      status: "completed",
+      summary: `Program Scout completed real research, specification, generation, and verification for ${job.research?.programName || targetUrl}; verified branch ${job.branchName} at ${job.headSha?.slice(0, 12)}.`,
+      artifacts,
+      handoff,
+      evidence: {
+        endpoint: result.endpoint,
+        jobId: job.id,
+        status: job.status,
+        stage: job.stage,
+        branchName: job.branchName,
+        headSha: job.headSha,
+        verification: job.verification,
+        capabilityCount: capabilities.length,
+        sourceCount: job.research?.sources.length ?? 0,
+        openSourceReferenceCount: references.length,
+        cleanRoomNotice: job.specification?.cleanRoomNotice ?? null,
       },
     };
   }
