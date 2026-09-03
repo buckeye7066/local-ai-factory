@@ -383,4 +383,30 @@ describe("comparative evidence gate", () => {
       status: "ok",
     });
   });
+
+  it("replaces stale engine-authored criteria after competitive research retries", () => {
+    const oldResearch = findings();
+    const restoredSpec = withCompetitiveAcceptanceCriteria(spec, oldResearch);
+    const refreshedResearch = findings();
+    refreshedResearch.recommendations = refreshedResearch.recommendations.map(
+      (recommendation, index) => ({
+        ...recommendation,
+        name: `Refreshed Product ${index + 1}: current advantage`,
+        howToIntegrate: `Implement refreshed advantage ${index + 1}`,
+      }),
+    );
+
+    const refreshedSpec = withCompetitiveAcceptanceCriteria(
+      restoredSpec,
+      refreshedResearch,
+    );
+    const criteria = refreshedSpec.acceptanceCriteria.filter((item) =>
+      item.startsWith("[COMP-"),
+    );
+
+    expect(criteria).toHaveLength(5);
+    expect(criteria.every((item) => item.includes("Refreshed Product"))).toBe(true);
+    expect(criteria.some((item) => item.includes("Add verified workflow"))).toBe(false);
+    expect(refreshedSpec.acceptanceCriteria).toContain("build succeeds");
+  });
 });
