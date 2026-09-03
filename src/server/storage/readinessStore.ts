@@ -15,7 +15,7 @@ const READINESS_DIR = join(DATA_ROOT, "readiness");
 
 const BrainReviewSchema = z.object({
   identity: z.enum(["lead", "challenger", "sol", "fable", "opus"]),
-  provider: z.enum(["openai", "anthropic"]),
+  provider: z.enum(["openai", "anthropic", "free"]),
   model: z.string().min(1),
   evidenceDigest: z.string().min(1),
   decision: z.enum(["ready", "not_ready"]),
