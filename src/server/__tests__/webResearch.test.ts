@@ -432,6 +432,46 @@ describe("researchAgent", () => {
     );
   });
 
+  it("fails closed on provider license-policy prose without aborting research", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 200,
+            text: async () => SAMPLE_DDG_HTML,
+          }) as unknown as Response,
+      ),
+    );
+    const provider = new ScriptedProvider([
+      {
+        thought: "check for a weather API",
+        action: "web_search",
+        query: "weather api",
+      },
+      {
+        thought: "found one",
+        action: "conclude",
+        findings: {
+          summary: "A keyless weather API fits this build.",
+          recommendations: [
+            {
+              name: "Example Weather API",
+              sourceUrl: "https://example.com/weatherapi",
+              licensePolicy: "compatible",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const findings = await researchAgent({ provider }, spec, arch);
+
+    expect(findings.recommendations).toHaveLength(1);
+    expect(findings.recommendations[0]?.licensePolicy).toBe("conditional-review");
+  });
+
   it("drops a model recommendation whose URL was never observed by a tool", async () => {
     const provider = new ScriptedProvider([
       {
