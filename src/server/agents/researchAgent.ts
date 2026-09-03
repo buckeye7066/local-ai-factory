@@ -218,6 +218,104 @@ const CompetitiveSelectionSchema = z
   });
 type CompetitiveSelection = z.infer<typeof CompetitiveSelectionSchema>;
 
+function normalizedCandidateIdentity(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^product:/, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function candidateIdentityTokens(candidate: CompetitiveCandidate): Set<string> {
+  const tokens = new Set(
+    [candidate.id, candidate.name, candidate.url]
+      .map(normalizedCandidateIdentity)
+      .filter(Boolean),
+  );
+  try {
+    tokens.add(normalizedCandidateIdentity(new URL(candidate.url).hostname));
+  } catch {
+    // The dossier already validates usable evidence URLs; an invalid display URL
+    // simply cannot participate in identity recovery.
+  }
+  return tokens;
+}
+
+function hydrateCompetitiveCandidateIds(
+  raw: unknown,
+  reviewCandidates: CompetitiveCandidate[],
+): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const selection = raw as Record<string, unknown>;
+  const candidateIds = new Set(reviewCandidates.map((candidate) => candidate.id));
+  const identityTokens = new Map(
+    reviewCandidates.map((candidate) => [candidate.id, candidateIdentityTokens(candidate)]),
+  );
+
+  const resolveCandidateId = (value: unknown): string | undefined => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const item = value as Record<string, unknown>;
+    const explicitId = typeof item.candidateId === "string" ? item.candidateId.trim() : "";
+    if (candidateIds.has(explicitId)) return explicitId;
+
+    const hints = [item.candidateId, item.name, item.url, item.sourceUrl]
+      .map(normalizedCandidateIdentity)
+      .filter(Boolean);
+    const textMatches = reviewCandidates.filter((candidate) =>
+      hints.some((hint) => identityTokens.get(candidate.id)?.has(hint)),
+    );
+    if (textMatches.length === 1) return textMatches[0]!.id;
+
+    const evidenceUrls = Array.isArray(item.evidenceUrls)
+      ? item.evidenceUrls.filter((url): url is string => typeof url === "string")
+      : [];
+    const suppliedEvidence = canonicalEvidenceUrlSet(evidenceUrls);
+    if (suppliedEvidence.size === 0) return undefined;
+    const evidenceMatches = reviewCandidates.filter((candidate) => {
+      const allowed = canonicalEvidenceUrlSet([
+        candidate.url,
+        ...candidate.sourceEvidence.map((evidence) => evidence.url),
+      ]);
+      return [...suppliedEvidence].some((url) => allowed.has(url));
+    });
+    return evidenceMatches.length === 1 ? evidenceMatches[0]!.id : undefined;
+  };
+
+  const comparisons = Array.isArray(selection.comparisons)
+    ? selection.comparisons.map((value) => {
+        const candidateId = resolveCandidateId(value);
+        return candidateId && value && typeof value === "object" && !Array.isArray(value)
+          ? { ...(value as Record<string, unknown>), candidateId }
+          : value;
+      })
+    : selection.comparisons;
+  const selectedValues = Array.isArray(selection.selected) ? selection.selected : null;
+  const selected = selectedValues
+    ? selectedValues.map((value, index) => {
+        let candidateId = resolveCandidateId(value);
+        if (
+          !candidateId &&
+          Array.isArray(comparisons) &&
+          comparisons.length === selectedValues.length
+        ) {
+          const comparison = comparisons[index];
+          if (comparison && typeof comparison === "object" && !Array.isArray(comparison)) {
+            const comparisonId = (comparison as Record<string, unknown>).candidateId;
+            if (typeof comparisonId === "string" && candidateIds.has(comparisonId)) {
+              candidateId = comparisonId;
+            }
+          }
+        }
+        return candidateId && value && typeof value === "object" && !Array.isArray(value)
+          ? { ...(value as Record<string, unknown>), candidateId }
+          : value;
+      })
+    : selection.selected;
+
+  return { ...selection, comparisons, selected };
+}
+
 const ProductDiscoveryPlanSchema = z.object({
   queries: z.array(z.string().trim().min(3).max(180)).min(5).max(8),
 });
@@ -506,7 +604,10 @@ async function evaluateCompetitiveDossier(
           `exactly match the dossier. Cite file/page URLs in evidenceUrls. ` +
           `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
     ].join("\n\n"),
-    schema: CompetitiveSelectionSchema,
+    schema: z.preprocess(
+      (raw) => hydrateCompetitiveCandidateIds(raw, reviewCandidates),
+      CompetitiveSelectionSchema,
+    ),
     schemaName: "CompetitiveSelection",
     intent: { role: "judge", needs: ["structured_json"] },
     temperature: 0.1,
