@@ -17,6 +17,7 @@ function fake(
   name: LLMProvider["name"],
   behavior: "ok" | "quota" | "badRequest",
   configured = true,
+  quotaMessage = "429 You have no credits remaining. Add funds",
 ): LLMProvider & { calls: number } {
   const p = {
     name,
@@ -25,14 +26,14 @@ function fake(
     async generateText() {
       p.calls += 1;
       if (behavior === "quota")
-        throw new Error("429 You have no credits remaining. Add funds");
+        throw new Error(quotaMessage);
       if (behavior === "badRequest") throw new Error("400 invalid model parameter");
       return { text: `served by ${name}`, provider: name };
     },
     async generateJson<T>() {
       p.calls += 1;
       if (behavior === "quota")
-        throw new Error("insufficient_quota: exceeded your current quota");
+        throw new Error(quotaMessage);
       if (behavior === "badRequest") throw new Error("400 unknown field");
       return { served: name } as unknown as T;
     },
@@ -130,11 +131,13 @@ describe("QuotaFailoverProvider", () => {
     expect(sameName.calls).toBe(0);
   });
 
-  it("surfaces the original refusal when every alternate is also dry", async () => {
-    const primary = fake("openai", "quota");
-    const alt = fake("anthropic", "quota");
+  it("surfaces the terminal refusal when every alternate is also dry", async () => {
+    const primary = fake("anthropic", "quota", true, "Anthropic credits exhausted");
+    const alt = fake("openai", "quota", true, "OpenAI quota exceeded");
     const p = new QuotaFailoverProvider(primary, [alt]);
-    await expect(p.generateJson({} as never)).rejects.toThrow(/no credits|quota/i);
+    await expect(p.generateJson({} as never)).rejects.toThrow(
+      /OpenAI quota exceeded/,
+    );
     expect(alt.calls).toBe(1);
   });
 
