@@ -7,7 +7,7 @@
  */
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import path from "node:path";
+import path from "node:path";\nimport { pathToFileURL } from "node:url";
 
 const APP = process.env.OBSIDIAN_MEMORY_APP?.trim() || process.env.npm_package_name?.trim() || path.basename(process.cwd());
 const VAULT = process.env.AIBUS_VAULT?.trim() || String.raw`G:\\Obsidian Vault`;
@@ -62,7 +62,7 @@ export async function health({ runner } = {}) {
   return result.ok ? { ok: true, reachable: true, vault: VAULT, script: SCRIPT } : { ok: false, reachable: false, vault: VAULT, script: SCRIPT, code: result.code, detail: result.detail };
 }
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command = "startup", ...arguments_] = process.argv.slice(2);
   const result = command === "note"
     ? await remember({ title: arguments_[0], content: arguments_.slice(1).join(" ") })
