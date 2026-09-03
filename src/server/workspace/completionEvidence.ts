@@ -499,23 +499,50 @@ function packageSignals(workspacePath: string): {
       // An unreadable manifest cannot create positive compatibility evidence.
     }
   }
-  const manifestText = JSON.stringify(manifests).toLowerCase();
+  const packageNames = new Set<string>();
+  for (const manifest of manifests) {
+    for (const field of [
+      "dependencies",
+      "devDependencies",
+      "peerDependencies",
+      "optionalDependencies",
+    ]) {
+      const dependencies = manifest[field];
+      if (dependencies !== null && typeof dependencies === "object") {
+        for (const name of Object.keys(dependencies)) {
+          packageNames.add(name.toLowerCase());
+        }
+      }
+    }
+  }
+  const hasPackage = (...names: string[]) =>
+    names.some((name) => packageNames.has(name));
   const web =
-    /\b(?:react|vue|vite|next|svelte|angular|astro)\b/.test(manifestText) ||
-    files.some((path) =>
-      /(^|\/)index\.html$|(^|\/)src\/(?:app|main)\.[cm]?[jt]sx?$/i.test(path),
-    );
+    hasPackage(
+      "react-dom",
+      "next",
+      "vue",
+      "nuxt",
+      "svelte",
+      "@sveltejs/kit",
+      "@angular/core",
+      "astro",
+      "preact",
+      "solid-js",
+      "lit",
+    ) ||
+    files.some((path) => /(^|\/)(?:public\/)?index\.html$/i.test(path));
   const nativeMobile =
     files.some((path) => /^(?:android|ios)\//i.test(path)) ||
     files.some((path) => /(^|\/)capacitor\.config\.[cm]?[jt]s$/i.test(path)) ||
-    /\b(?:react-native|expo|@capacitor\/core|cordova)\b/.test(manifestText);
+    hasPackage("react-native", "expo", "@capacitor/core", "cordova");
   const packageCli = manifests.some((manifest) => {
     const bin = manifest.bin;
     return typeof bin === "string" || (bin !== null && typeof bin === "object");
   });
   const desktopOrCli =
     packageCli ||
-    /\b(?:electron|@tauri-apps\/api)\b/.test(manifestText) ||
+    hasPackage("electron", "@tauri-apps/api") ||
     files.some((path) => /^src-tauri\//i.test(path)) ||
     files.some(
       (path) =>
