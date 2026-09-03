@@ -665,13 +665,7 @@ export async function researchAgent(
     const broadMsg = err instanceof Error ? err.message : String(err);
     if (coverage.productCoverageMet) {
       try {
-        selection = await evaluateCompetitiveDossier(
-          deps,
-          spec,
-          arch,
-          dossier,
-          true,
-        );
+        selection = await evaluateCompetitiveDossier(deps, spec, arch, dossier, true);
         usedFocusedReview = true;
       } catch (focusedErr) {
         if (focusedErr instanceof ProviderAbortError) throw focusedErr;
