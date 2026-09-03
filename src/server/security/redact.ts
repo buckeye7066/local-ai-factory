@@ -263,6 +263,10 @@ export function sanitizeRunRecordForServe(r: RunRecord): RunRecord {
     workspacePath:
       r.workspacePath == null ? r.workspacePath : redactSecrets(r.workspacePath),
     error: r.error == null ? r.error : redactSecrets(r.error),
+    steering: (r.steering ?? []).map((item) => ({
+      ...item,
+      instruction: redactSecrets(item.instruction),
+    })),
     logs: r.logs.map((l) => ({ ...l, message: redactSecrets(l.message) })),
     files: r.files.map((f) => ({
       ...f,
@@ -280,3 +284,4 @@ export function sanitizeRunRecordForServe(r: RunRecord): RunRecord {
 export function sanitizeFileRecords(files: FileContent[]): FileContent[] {
   return files.map((f) => redactDeep(f));
 }
+

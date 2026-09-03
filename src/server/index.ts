@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getConfig, getSecrets, toHealth, isFactoryHealthPayload } from "./config.js";
 import {
   RunOptionsSchema,
+  RepoSourceSchema,
   isValidRunId,
   repoNameProblem,
   ProviderNameSchema,
@@ -40,6 +41,7 @@ import {
   getRunFiles,
   pruneOldRuns,
   deleteRun,
+  submitRunSteering,
 } from "./storage/runsStore.js";
 import { rollbackWorkspace } from "./workspace/cleanup.js";
 import { githubLogin, githubRepoExists } from "./workspace/gitOps.js";
@@ -70,6 +72,12 @@ import { findRemovedRunOption } from "./removedOptions.js";
 import { FATAL_EXIT_CODE } from "./exitCodes.js";
 import { underWorkTheme } from "./orchestrator/themeBind.js";
 import { resumeWorkTheme } from "./orchestrator/workTheme.js";
+import {
+  createPortfolioSession,
+  getPortfolioSession,
+  startPortfolioSession,
+  steerPortfolioSession,
+} from "./orchestrator/portfolioSession.js";
 
 /**
  * server/index.ts — the LOCAL backend API.
@@ -473,6 +481,96 @@ app.post(
   }),
 );
 
+const PortfolioSessionRequestSchema = z
+  .object({
+    prompt: z.string().trim().min(1).max(20_000),
+    targets: z
+      .array(
+        z
+          .object({
+            name: z.string().trim().min(1).max(120),
+            repoSource: RepoSourceSchema,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(30),
+  })
+  .strict();
+
+app.post(
+  "/api/sessions",
+  wrap(async (req, res) => {
+    const parsed = PortfolioSessionRequestSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({
+        error: parsed.error.issues[0]?.message ?? "Invalid portfolio session.",
+      });
+      return;
+    }
+    const targetNames = parsed.data.targets.map((target) =>
+      target.name.toLowerCase(),
+    );
+    const targetLocations = parsed.data.targets.map((target) =>
+      target.repoSource.location.trim().toLowerCase(),
+    );
+    if (
+      new Set(targetNames).size !== targetNames.length ||
+      new Set(targetLocations).size !== targetLocations.length
+    ) {
+      res.status(400).json({
+        error: "Every portfolio target must have a unique program name and repository.",
+      });
+      return;
+    }
+    try {
+      selectRunRouting(
+        { routingMode: "auto" },
+        createProviderRegistry(config, secrets),
+        config,
+      );
+    } catch (error) {
+      if (respondProviderUnavailable(res, error)) return;
+      throw error;
+    }
+    const session = await createPortfolioSession(
+      parsed.data.prompt,
+      parsed.data.targets,
+    );
+    startPortfolioSession(session, config, secrets);
+    res.status(202).json(session);
+  }),
+);
+
+app.get(
+  "/api/sessions/:sessionId",
+  wrap(async (req, res) => {
+    const id = String(req.params.sessionId ?? "");
+    const session = await getPortfolioSession(id);
+    if (!session) {
+      res.status(404).json({ error: "Portfolio session not found." });
+      return;
+    }
+    res.json(session);
+  }),
+);
+
+app.post(
+  "/api/sessions/:sessionId/steer",
+  wrap(async (req, res) => {
+    const id = String(req.params.sessionId ?? "");
+    const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
+    const receipt = await steerPortfolioSession(id, prompt);
+    if (!receipt.ok) {
+      res.status(receipt.reason.includes("not found") ? 404 : 409).json({
+        error: receipt.reason,
+      });
+      return;
+    }
+    res.status(202).json(receipt);
+  }),
+);
+
 app.get(
   "/api/runs",
   wrap(async (_req, res) => {
@@ -667,6 +765,23 @@ app.post(
     }
     requestCancel(run.id);
     res.status(202).json({ ok: true });
+  }),
+);
+
+app.post(
+  "/api/runs/:runId/steer",
+  wrap(async (req, res) => {
+    const runId = validRunIdParam(req, res);
+    if (runId === null) return;
+    const instruction =
+      typeof req.body?.instruction === "string" ? req.body.instruction : "";
+    const receipt = await submitRunSteering(runId, instruction);
+    if (!receipt.ok) {
+      const status = receipt.reason === "Run not found." ? 404 : 409;
+      res.status(status).json({ error: receipt.reason });
+      return;
+    }
+    res.status(202).json(receipt);
   }),
 );
 
@@ -1062,3 +1177,4 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 
 process.on("SIGINT", () => server.close(() => process.exit(0)));
 process.on("SIGTERM", () => server.close(() => process.exit(0)));
+

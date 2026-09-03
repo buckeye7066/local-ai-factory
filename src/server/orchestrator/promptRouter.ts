@@ -1,0 +1,101 @@
+export interface PromptTarget {
+  id: string;
+  name: string;
+  source: string;
+}
+
+export interface PromptRoute {
+  targetId: string;
+  prompt: string;
+  evidence: "named" | "shared" | "single";
+}
+
+const SHARED =
+  /\b(all|both|each|every)\s+(programs?|apps?|repos(?:itories)?)\b/i;
+const CONTINUATION = /^(also|and|then|it|that|this|additionally|afterward)\b/i;
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function aliases(target: PromptTarget): string[] {
+  const source = target.source.replace(/[\\/]+$/, "");
+  const base =
+    source
+      .split(/[\\/]/)
+      .pop()
+      ?.replace(/\.git$/i, "") ?? "";
+  const ownerRepo = /github\.com[/:]([^/]+)\/([^/#]+?)(?:\.git)?$/i.exec(
+    source,
+  );
+  return [
+    ...new Set(
+      [target.name, base, ownerRepo?.[2], ownerRepo?.slice(1).join("/")]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .map((value) => value.trim().toLowerCase()),
+    ),
+  ].sort((a, b) => b.length - a.length);
+}
+
+function mentions(segment: string, target: PromptTarget): boolean {
+  const lower = segment.toLowerCase();
+  return aliases(target).some((alias) => {
+    if (alias.length < 2) return false;
+    return new RegExp(
+      `(^|[^a-z0-9])${escapeRegex(alias)}([^a-z0-9]|$)`,
+      "i",
+    ).test(lower);
+  });
+}
+
+/**
+ * Deterministically split one owner prompt among selected programs.
+ * Explicit program/repo names win; shared and genuinely unscoped requirements
+ * go to every target so no instruction silently disappears.
+ */
+export function routePrompt(
+  prompt: string,
+  targets: PromptTarget[],
+): PromptRoute[] {
+  const clean = prompt.trim();
+  if (!clean) throw new Error("Session prompt is required.");
+  if (clean.length > 20_000) throw new Error("Session prompt is too long.");
+  if (targets.length < 1 || targets.length > 30) {
+    throw new Error("Choose from 1 through 30 programs.");
+  }
+  if (targets.length === 1) {
+    return [{ targetId: targets[0]!.id, prompt: clean, evidence: "single" }];
+  }
+
+  const segments = clean
+    .split(/(?<=[.!?])\s+(?=(?:[-*]\s*)?[\[A-Za-z0-9])/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const routed = new Map(targets.map((target) => [target.id, [] as string[]]));
+  const evidence = new Map<string, PromptRoute["evidence"]>(
+    targets.map((target) => [target.id, "shared"]),
+  );
+  let lastNamed: PromptTarget[] = [];
+
+  for (const segment of segments.length ? segments : [clean]) {
+    const named = targets.filter((target) => mentions(segment, target));
+    const chosen = SHARED.test(segment)
+      ? targets
+      : named.length
+        ? named
+        : CONTINUATION.test(segment) && lastNamed.length
+          ? lastNamed
+          : targets;
+    if (named.length) lastNamed = named;
+    for (const target of chosen) {
+      routed.get(target.id)!.push(segment);
+      if (named.includes(target)) evidence.set(target.id, "named");
+    }
+  }
+
+  return targets.map((target) => ({
+    targetId: target.id,
+    prompt: routed.get(target.id)!.join(" ").trim(),
+    evidence: evidence.get(target.id)!,
+  }));
+}
