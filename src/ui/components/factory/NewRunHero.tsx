@@ -8,7 +8,6 @@ import {
   Sparkles,
   GitBranch,
 } from "lucide-react";
-import { cn } from "../../lib/cn.js";
 import { Button } from "../ui/Button.js";
 import { Textarea } from "../ui/Textarea.js";
 import { Input } from "../ui/Input.js";
@@ -361,29 +360,3 @@ function NewAppPanel({
   );
 }
 
-function Helper({
-  tone,
-  icon,
-  children,
-}: {
-  tone: "amber" | "violet" | "cyan";
-  icon: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex items-start gap-2 rounded-xl border px-3 py-2 text-xs leading-relaxed",
-        tone === "amber" && "border-amber-400/25 bg-amber-400/[0.06] text-amber-200",
-        tone === "violet" &&
-          "border-aurora-violet/25 bg-aurora-violet/[0.06] text-violet-200",
-        tone === "cyan" && "border-aurora-cyan/25 bg-aurora-cyan/[0.06] text-cyan-100",
-      )}
-    >
-      <span className="mt-0.5 shrink-0">{icon}</span>
-      <span className="[&_code]:rounded [&_code]:bg-black/30 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[11px]">
-        {children}
-      </span>
-    </div>
-  );
-}
