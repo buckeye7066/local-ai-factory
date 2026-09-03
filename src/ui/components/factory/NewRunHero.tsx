@@ -3,7 +3,6 @@ import { motion } from "framer-motion";
 import {
   Rocket,
   Wand2,
-  TriangleAlert,
   ArrowRight,
   MessageCircleQuestion,
   Sparkles,
@@ -43,7 +42,6 @@ export function NewRunHero({
   starting: boolean;
   onStart: (idea: string, options: RunOptions) => void;
 }) {
-  const admissionReady = health?.readinessBrainFloorConfigured ?? false;
   const [idea, setIdea] = useState("");
   // Demo/simulate mode is not an owner surface — a run without a provider
   // fails loudly with the real missing-credential error instead of silently
@@ -159,7 +157,6 @@ export function NewRunHero({
           repoName={repoName}
           setRepoName={setRepoName}
           nameCheck={nameCheck}
-          admissionReady={admissionReady}
           health={health}
           starting={starting}
           start={start}
@@ -246,7 +243,6 @@ function NewAppPanel({
   repoName,
   setRepoName,
   nameCheck,
-  admissionReady,
   health,
   starting,
   start,
@@ -256,7 +252,6 @@ function NewAppPanel({
   repoName: string;
   setRepoName: (v: string) => void;
   nameCheck: NameCheck;
-  admissionReady: boolean;
   health: Health | null;
   starting: boolean;
   start: () => void;
@@ -336,18 +331,6 @@ function NewAppPanel({
               {ex}
             </button>
           ))}
-        </div>
-
-        {/* Warnings / helpers (provider routing renders above, shared with
-            extend mode) */}
-        <div className="mt-5 space-y-2">
-          {!admissionReady && (
-            <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
-              Production admission requires at least one configured paid rung. The
-              independent reviewers use the same paid-first ladder; free/local can
-              finish ordinary work after paid exhaustion but cannot issue the receipt.
-            </Helper>
-          )}
         </div>
 
         {/* Action row */}
