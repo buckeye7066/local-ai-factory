@@ -109,10 +109,11 @@ export function assessRequiredCompetitiveEvidence(
         },
       ]),
   );
-  const productComparisons = (research?.comparisons ?? []).filter(
-    (comparison) =>
-      comparison.origin === "competitive-selection" &&
-      verifiedProducts.has(comparison.candidateId),
+  const competitiveComparisons = (research?.comparisons ?? []).filter(
+    (comparison) => comparison.origin === "competitive-selection",
+  );
+  const productComparisons = competitiveComparisons.filter((comparison) =>
+    verifiedProducts.has(comparison.candidateId),
   );
   const comparedProductIds = uniquelyActionableComparisonIds(
     productComparisons,
@@ -122,13 +123,15 @@ export function assessRequiredCompetitiveEvidence(
         verifiedProducts.get(comparison.candidateId)!.evidence,
       ),
   );
+  const competitiveRecommendations = (research?.recommendations ?? []).filter(
+    (recommendation) => recommendation.origin === "competitive-selection",
+  );
   const selectedProductIds = new Set(
-    (research?.recommendations ?? [])
+    competitiveRecommendations
       .filter((recommendation) => {
         const candidate = verifiedProducts.get(recommendation.candidateId);
         const sourceUrl = canonicalHttpEvidenceUrl(recommendation.sourceUrl);
         return (
-          recommendation.origin === "competitive-selection" &&
           Boolean(candidate) &&
           recommendation.reuseMode !== "reference-only" &&
           sourceUrl !== null &&
@@ -170,12 +173,22 @@ export function assessRequiredCompetitiveEvidence(
   if (productVerifiedCount < target) {
     reasons.push(`verified product coverage is ${productVerifiedCount}/${target}`);
   }
-  if (comparedProductIds.size < target) {
+  if (competitiveComparisons.length !== target) {
+    reasons.push(
+      `competitive comparison entries are ${competitiveComparisons.length}/${target}; exactly ${target} required`,
+    );
+  }
+  if (comparedProductIds.size !== target) {
     reasons.push(
       `evidence-linked product comparisons are ${comparedProductIds.size}/${target}`,
     );
   }
-  if (qualifiedSelectedProductIds.size < target) {
+  if (competitiveRecommendations.length !== target) {
+    reasons.push(
+      `competitive selected-advantage entries are ${competitiveRecommendations.length}/${target}; exactly ${target} required`,
+    );
+  }
+  if (qualifiedSelectedProductIds.size !== target) {
     reasons.push(
       `comparison-qualified selected product advantages are ${qualifiedSelectedProductIds.size}/${target}`,
     );
