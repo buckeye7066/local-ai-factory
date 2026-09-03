@@ -142,7 +142,12 @@ function packageTestCommand(
       : simpleVitest && manager === "pnpm"
         ? ["test", "--root=."]
         : ["test"];
-  return { bin: manager, args, isTest: true };
+  return {
+    bin: manager,
+    args,
+    isTest: true,
+    ...(simpleVitest ? { runner: "vitest" as const } : {}),
+  };
 }
 
 function javascriptCommands(
