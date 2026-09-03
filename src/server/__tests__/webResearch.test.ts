@@ -567,6 +567,41 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     }
   });
 
+  it("preserves a structured reviewer summary without discarding the review", async () => {
+    const ci = await import("../tools/competitiveIntelligence.js");
+    const spy = vi
+      .spyOn(ci, "buildCompetitiveDossier")
+      .mockResolvedValue(DOSSIER as never);
+    try {
+      const provider = new ScriptedProvider([
+        {
+          thought: "nothing external needed",
+          action: "conclude",
+          findings: { summary: "base summary", recommendations: [] },
+        },
+        PRODUCT_PLAN,
+        {
+          summary: {
+            verdict: "review complete",
+            coverage: { compared: 1 },
+          },
+          comparisons: [],
+          selected: [],
+        },
+      ]);
+
+      const findings = await researchAgent({ provider }, spec, arch, {
+        competitive: true,
+      });
+
+      expect(findings.summary).not.toContain("FAILED and was SKIPPED");
+      expect(findings.summary).toContain('"verdict":"review complete"');
+      expect(findings.competitiveAudit?.candidates).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("keeps valid comparisons when one selected item omits integration prose", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");
     const productUrl = "https://rival.example/product";
