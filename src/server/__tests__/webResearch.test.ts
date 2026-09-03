@@ -678,9 +678,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
       expect(findings.recommendations[0].howToIntegrate).toContain(
         "direct acceptance tests",
       );
-      expect(findings.recommendations[0].why).toContain(
-        "single-command task capture",
-      );
+      expect(findings.recommendations[0].why).toContain("single-command task capture");
     } finally {
       spy.mockRestore();
     }
