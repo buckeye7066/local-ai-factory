@@ -1,10 +1,11 @@
 @echo off
-REM Purpose Foundry launcher - opens the Foundry floor while preserving Factory Deck.
+REM Purpose Foundry launcher - opens the Foundry floor through the same
+REM synchronized/hardened runtime path used by Factory Deck.
 title Purpose Foundry
 setlocal
 powershell -NoLogo -NoProfile -File "%~dp0Install-Purpose-Foundry-Icon.ps1" -Quiet >nul 2>&1
 set "FACTORY_START_PATH=?mode=foundry"
-powershell -NoLogo -NoProfile -File "%~dp0start-factory.ps1"
+powershell -NoLogo -NoProfile -File "%~dp0Sync-FactoryRuntime.ps1"
 set "FOUNDRY_EXIT=%ERRORLEVEL%"
 if not "%FOUNDRY_EXIT%"=="0" (
   echo.
