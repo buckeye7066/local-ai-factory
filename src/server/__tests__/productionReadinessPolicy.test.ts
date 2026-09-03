@@ -96,7 +96,7 @@ describe("mandatory production-readiness policy", () => {
     ).toBe("new-repo");
   });
 
-  it("issues a receipt only for purpose-aligned, executed, delivered work approved by both paid-ladder reviewers", () => {
+  it("issues a receipt only for purpose-aligned, executed, delivered work approved by both automatic-ladder reviewers", () => {
     const receipt = evaluateProductionReadiness(evidence());
     expect(receipt.ready).toBe(true);
     expect(receipt.mandatory).toBe(true);
@@ -105,6 +105,7 @@ describe("mandatory production-readiness policy", () => {
       lead: true,
       challenger: true,
       independentReviews: true,
+      liveModels: true,
       paidModels: true,
       sameEvidence: true,
       sol: false,
@@ -113,7 +114,7 @@ describe("mandatory production-readiness policy", () => {
     });
   });
 
-  it("requires both reviewer slots but permits both to land on one paid family", () => {
+  it("requires both reviewer slots but permits both to land on one live family", () => {
     const onlyLead = evaluateProductionReadiness(evidence({ reviews: [lead()] }));
     expect(onlyLead.ready).toBe(false);
     expect(onlyLead.blockers.join(" ")).toMatch(/challenger|exactly two/i);
@@ -127,12 +128,26 @@ describe("mandatory production-readiness policy", () => {
     expect(sameFamily.brainFloor.independentFamilies).toBe(false);
   });
 
+  it("accepts independent judgments served by the terminal AI Time free rung", () => {
+    const receipt = evaluateProductionReadiness(
+      evidence({
+        reviews: [
+          lead({ provider: "free", model: "qwen2.5-coder:14b" }),
+          challenger({ provider: "free", model: "qwen2.5-coder:14b" }),
+        ],
+      }),
+    );
+    expect(receipt.ready).toBe(true);
+    expect(receipt.brainFloor.liveModels).toBe(true);
+    expect(receipt.brainFloor.paidModels).toBe(false);
+  });
+
   it("refuses a reviewer record without the actual model identity", () => {
     const receipt = evaluateProductionReadiness(
       evidence({ reviews: [lead(), challenger({ model: "" })] }),
     );
     expect(receipt.ready).toBe(false);
-    expect(receipt.brainFloor.paidModels).toBe(false);
+    expect(receipt.brainFloor.liveModels).toBe(false);
   });
 
   it("requires a nonempty canonical SHA-256 evidence digest", () => {
