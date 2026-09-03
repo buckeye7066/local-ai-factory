@@ -25,12 +25,26 @@ const ReuseModeSchema = z.enum([
   "api-integration",
   "reference-only",
 ]);
-const ActionableReuseModeSchema = z.enum([
+const ACTIONABLE_REUSE_MODES = [
   "dependency",
   "direct-code",
   "clean-room-pattern",
   "api-integration",
-]);
+] as const;
+const ActionableReuseModeSchema = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    const exact = ACTIONABLE_REUSE_MODES.find((mode) => mode === normalized);
+    if (exact) return exact;
+    if (normalized.includes("api")) return "api-integration";
+    if (normalized.includes("dependency")) return "dependency";
+    if (normalized.includes("direct") && normalized.includes("code")) {
+      return "direct-code";
+    }
+  }
+  // Unknown or omitted provider wording must fall toward the safest mode.
+  return "clean-room-pattern";
+}, z.enum(ACTIONABLE_REUSE_MODES));
 const HttpUrlSchema = z
   .string()
   .trim()
@@ -174,14 +188,14 @@ const CompetitiveSelectionSchema = z
       .array(
         z.object({
           candidateId: z.string().trim().min(1),
-          element: z.string().trim().min(1),
+          element: z.string().trim().default(""),
           why: z.string().trim().default(""),
           // Preserve otherwise valid evidence when a provider omits this one
           // prose field; mergeCompetitiveResults derives a concrete, tested
           // instruction from the selected element and enforced reuse mode.
           howToIntegrate: z.string().trim().default(""),
           reuseMode: ActionableReuseModeSchema,
-          evidenceUrls: z.array(HttpUrlSchema).min(1),
+          evidenceUrls: z.array(HttpUrlSchema).default([]),
           score: z.number().min(0).max(100).default(0),
         }),
       )
@@ -540,12 +554,22 @@ function mergeCompetitiveResults(
     const candidate = candidates.get(selected.candidateId);
     if (!candidate) continue;
     if (!actionableComparisonIds.has(candidate.id)) continue;
+    const comparison = comparisonGroups.get(candidate.id)?.[0];
+    if (!comparison) continue;
     const allowedEvidence = inspectedEvidence(candidate);
     const selectedEvidence = matchingEvidenceUrls(
       selected.evidenceUrls,
       allowedEvidence,
     );
-    if (selectedEvidence.length === 0) continue;
+    const evidenceUrls =
+      selectedEvidence.length > 0 ? selectedEvidence : comparison.evidenceUrls;
+    if (evidenceUrls.length === 0) continue;
+    const element =
+      selected.element ||
+      comparison.strengths[0] ||
+      comparison.matchedFeatures[0] ||
+      "";
+    if (!element) continue;
     const reuseMode = enforceReuseMode(selected.reuseMode, candidate);
     if (candidate.kind === "product" && reuseMode === "reference-only") continue;
     const legalPrefix =
@@ -554,19 +578,19 @@ function mergeCompetitiveResults(
         : "";
     const integrationInstruction =
       selected.howToIntegrate ||
-      `Integrate ${selected.element} using the enforced ${reuseMode} reuse mode in the target architecture, and add direct acceptance tests tied to the cited evidence.`;
+      `Integrate ${element} using the enforced ${reuseMode} reuse mode in the target architecture, and add direct acceptance tests tied to the cited evidence.`;
     competitiveRecommendations.push({
-      name: `${candidate.name}: ${selected.element}`,
+      name: `${candidate.name}: ${element}`,
       why:
         selected.why ||
-        `Adopt ${selected.element} as an evidence-backed advantage over the reviewed product.`,
+        `Adopt ${element} as an evidence-backed advantage over the reviewed product.`,
       sourceUrl: candidate.url,
       howToIntegrate: `${legalPrefix}${integrationInstruction}`.trim(),
       candidateId: candidate.id,
       licenseSpdx: candidate.license.spdxId,
       licensePolicy: candidate.license.policy,
       reuseMode,
-      evidenceUrls: [...new Set([...selectedEvidence].filter(Boolean))],
+      evidenceUrls: [...new Set([...evidenceUrls].filter(Boolean))],
       score: selected.score,
       origin: "competitive-selection",
     });
