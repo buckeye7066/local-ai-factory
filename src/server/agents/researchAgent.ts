@@ -175,7 +175,7 @@ const CompetitiveSelectionSchema = z
         z.object({
           candidateId: z.string().trim().min(1),
           element: z.string().trim().min(1),
-          why: z.string().trim().min(1),
+          why: z.string().trim().default(""),
           // Preserve otherwise valid evidence when a provider omits this one
           // prose field; mergeCompetitiveResults derives a concrete, tested
           // instruction from the selected element and enforced reuse mode.
@@ -557,7 +557,9 @@ function mergeCompetitiveResults(
       `Integrate ${selected.element} using the enforced ${reuseMode} reuse mode in the target architecture, and add direct acceptance tests tied to the cited evidence.`;
     competitiveRecommendations.push({
       name: `${candidate.name}: ${selected.element}`,
-      why: selected.why,
+      why:
+        selected.why ||
+        `Adopt ${selected.element} as an evidence-backed advantage over the reviewed product.`,
       sourceUrl: candidate.url,
       howToIntegrate: `${legalPrefix}${integrationInstruction}`.trim(),
       candidateId: candidate.id,
@@ -645,6 +647,8 @@ export async function researchAgent(
     });
   }
 
+  const coverage = dossier.coverage ?? auditFrom(dossier).coverage;
+
   // RESEARCH IS ADVISORY — IT MUST NEVER KILL THE RUN (2026-08-16, live
   // GrantFlow slice: the competitive-selection call failed schema validation
   // after ~$10 of billed retries and the whole slice died before the builder
@@ -653,23 +657,44 @@ export async function researchAgent(
   // summary says out loud what was skipped and why. A deliberate cancel
   // (abort) still propagates — swallowing that would be worse.
   let selection: CompetitiveSelection;
+  let usedFocusedReview = false;
   try {
     selection = await evaluateCompetitiveDossier(deps, spec, arch, dossier);
   } catch (err) {
     if (err instanceof ProviderAbortError) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
-    return ResearchFindingsSchema.parse({
-      ...base,
-      summary:
-        `${base.summary}\n\nCompetitive selection FAILED and was SKIPPED — ` +
-        `continuing without competitor recommendations (${msg.slice(0, 300)}). ` +
-        `${dossier.candidates.length} discovered candidate(s) are recorded in the audit.`,
-      competitiveAudit: auditFrom(dossier),
-    });
+    const broadMsg = err instanceof Error ? err.message : String(err);
+    if (coverage.productCoverageMet) {
+      try {
+        selection = await evaluateCompetitiveDossier(deps, spec, arch, dossier, true);
+        usedFocusedReview = true;
+      } catch (focusedErr) {
+        if (focusedErr instanceof ProviderAbortError) throw focusedErr;
+        const focusedMsg =
+          focusedErr instanceof Error ? focusedErr.message : String(focusedErr);
+        return ResearchFindingsSchema.parse({
+          ...base,
+          summary:
+            `${base.summary}\n\nCompetitive selection FAILED and was SKIPPED — ` +
+            `the broad review failed (${broadMsg.slice(0, 180)}) and its focused ` +
+            `product correction also failed (${focusedMsg.slice(0, 180)}). ` +
+            `${dossier.candidates.length} discovered candidate(s) are recorded in the audit.`,
+          competitiveAudit: auditFrom(dossier),
+        });
+      }
+    } else {
+      return ResearchFindingsSchema.parse({
+        ...base,
+        summary:
+          `${base.summary}\n\nCompetitive selection FAILED and was SKIPPED — ` +
+          `continuing without competitor recommendations (${broadMsg.slice(0, 300)}). ` +
+          `${dossier.candidates.length} discovered candidate(s) are recorded in the audit.`,
+        competitiveAudit: auditFrom(dossier),
+      });
+    }
   }
   let merged = mergeCompetitiveResults(base, dossier, selection);
-  const coverage = dossier.coverage ?? auditFrom(dossier).coverage;
   if (
+    !usedFocusedReview &&
     coverage.productCoverageMet &&
     qualifyingProductAdvantageCount(merged, dossier) < MIN_PRODUCT_COMPETITORS
   ) {
