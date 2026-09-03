@@ -603,27 +603,131 @@ function brittleRegex(pattern: string): string | null {
     : null;
 }
 
+function unwrapTransparentExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
 function forOfLiteralValues(call: ts.CallExpression, identifier: string): string[] {
   let current: ts.Node | undefined = call.parent;
   while (current && !ts.isSourceFile(current)) {
+    if (ts.isBlock(current) || ts.isCaseBlock(current)) {
+      const statements = ts.isBlock(current)
+        ? current.statements
+        : current.clauses.flatMap((clause) => [...clause.statements]);
+      if (
+        statements.some(
+          (statement) =>
+            ts.isVariableStatement(statement) &&
+            declarationListBinds(statement.declarationList, identifier),
+        )
+      ) {
+        return [];
+      }
+    }
     if (
       ts.isForOfStatement(current) &&
       ts.isVariableDeclarationList(current.initializer) &&
-      ts.isArrayLiteralExpression(current.expression)
+      (current.initializer.flags & ts.NodeFlags.Const) !== 0
     ) {
       const bindsIdentifier = current.initializer.declarations.some(
         (declaration) =>
           ts.isIdentifier(declaration.name) && declaration.name.text === identifier,
       );
       if (bindsIdentifier) {
-        return current.expression.elements
+        const expression = unwrapTransparentExpression(current.expression);
+        if (!ts.isArrayLiteralExpression(expression)) return [];
+        return expression.elements
           .filter(ts.isStringLiteralLike)
           .map((element) => element.text);
       }
     }
+    if (
+      (ts.isForStatement(current) ||
+        ts.isForInStatement(current) ||
+        ts.isForOfStatement(current)) &&
+      current.initializer &&
+      ts.isVariableDeclarationList(current.initializer) &&
+      declarationListBinds(current.initializer, identifier)
+    ) {
+      return [];
+    }
+    if (
+      ts.isCatchClause(current) &&
+      current.variableDeclaration &&
+      bindingNameContains(current.variableDeclaration.name, identifier)
+    ) {
+      return [];
+    }
+    if (
+      ts.isFunctionLike(current) &&
+      current.parameters.some((parameter) =>
+        bindingNameContains(parameter.name, identifier),
+      )
+    ) {
+      return [];
+    }
     current = current.parent;
   }
   return [];
+}
+
+function usesUnshadowedParameter(
+  call: ts.CallExpression,
+  identifier: string,
+  helper: JavascriptHelper,
+): boolean {
+  let current: ts.Node | undefined = call.parent;
+  while (current && current !== helper) {
+    if (ts.isBlock(current) || ts.isCaseBlock(current)) {
+      const statements = ts.isBlock(current)
+        ? current.statements
+        : current.clauses.flatMap((clause) => [...clause.statements]);
+      if (
+        statements.some(
+          (statement) =>
+            ts.isVariableStatement(statement) &&
+            declarationListBinds(statement.declarationList, identifier),
+        )
+      ) {
+        return false;
+      }
+    }
+    if (
+      (ts.isForStatement(current) ||
+        ts.isForInStatement(current) ||
+        ts.isForOfStatement(current)) &&
+      current.initializer &&
+      ts.isVariableDeclarationList(current.initializer) &&
+      declarationListBinds(current.initializer, identifier)
+    ) {
+      return false;
+    }
+    if (
+      ts.isCatchClause(current) &&
+      current.variableDeclaration &&
+      bindingNameContains(current.variableDeclaration.name, identifier)
+    ) {
+      return false;
+    }
+    if (ts.isFunctionLike(current)) return false;
+    current = current.parent;
+  }
+  return Boolean(
+    current === helper &&
+      helper.parameters.some((parameter) =>
+        bindingNameContains(parameter.name, identifier),
+      ),
+  );
 }
 
 /**
@@ -636,6 +740,7 @@ function forOfLiteralValues(call: ts.CallExpression, identifier: string): string
 function brittleNegatedMatcher(
   call: ts.CallExpression,
   executionRoot: JavascriptHelper,
+  parameterLiterals: ReadonlyMap<string, readonly string[]>,
 ): string | null {
   if (!ts.isPropertyAccessExpression(call.expression)) return null;
   const matcher = call.expression.name.text;
@@ -652,7 +757,11 @@ function brittleNegatedMatcher(
       return brittleSubstring(expected.text);
     }
     if (matcher === "toContain" && expected && ts.isIdentifier(expected)) {
-      for (const value of forOfLiteralValues(call, expected.text)) {
+      const propagated = usesUnshadowedParameter(call, expected.text, executionRoot)
+        ? parameterLiterals.get(expected.text)
+        : undefined;
+      const values = propagated ?? forOfLiteralValues(call, expected.text);
+      for (const value of values) {
         const issue = brittleSubstring(value);
         if (issue) return issue;
       }
@@ -692,8 +801,9 @@ function analyzeCallback(
   const inspectCall = (
     call: ts.CallExpression,
     executionRoot: JavascriptHelper,
+    parameterLiterals: ReadonlyMap<string, readonly string[]>,
   ): void => {
-    const brittle = brittleNegatedMatcher(call, executionRoot);
+    const brittle = brittleNegatedMatcher(call, executionRoot, parameterLiterals);
     if (brittle && !brittleAssertions.includes(brittle)) {
       brittleAssertions.push(brittle);
     }
@@ -786,6 +896,7 @@ function analyzeCallback(
     node: ts.Node,
     root = false,
     executionRoot: JavascriptHelper = callback,
+    parameterLiterals: ReadonlyMap<string, readonly string[]> = new Map(),
   ): void => {
     if (
       !root &&
@@ -799,22 +910,24 @@ function analyzeCallback(
     }
     if (ts.isBlock(node)) {
       for (const statement of node.statements) {
-        visit(statement, false, executionRoot);
+        visit(statement, false, executionRoot, parameterLiterals);
         if (statementDefinitelyTerminates(statement)) break;
       }
       return;
     }
     if (ts.isIfStatement(node)) {
       if (node.expression.kind === ts.SyntaxKind.FalseKeyword) {
-        if (node.elseStatement) visit(node.elseStatement, false, executionRoot);
+        if (node.elseStatement)
+          visit(node.elseStatement, false, executionRoot, parameterLiterals);
         return;
       }
       if (node.expression.kind === ts.SyntaxKind.TrueKeyword) {
-        visit(node.thenStatement, false, executionRoot);
+        visit(node.thenStatement, false, executionRoot, parameterLiterals);
         return;
       }
-      visit(node.thenStatement, false, executionRoot);
-      if (node.elseStatement) visit(node.elseStatement, false, executionRoot);
+      visit(node.thenStatement, false, executionRoot, parameterLiterals);
+      if (node.elseStatement)
+        visit(node.elseStatement, false, executionRoot, parameterLiterals);
       return;
     }
     if (
@@ -824,7 +937,7 @@ function analyzeCallback(
       return;
     }
     if (ts.isCallExpression(node)) {
-      inspectCall(node, executionRoot);
+      inspectCall(node, executionRoot, parameterLiterals);
       if (ts.isIdentifier(node.expression)) {
         const binding = resolveVisibleBinding(
           node,
@@ -839,13 +952,37 @@ function analyzeCallback(
           !isGeneratorHelper(helper) &&
           (!isAsyncFunction(helper) || expressionResultIsObserved(node, executionRoot))
         ) {
+          const helperLiterals = new Map<string, readonly string[]>();
+          helper.parameters.forEach((parameter, index) => {
+            if (!ts.isIdentifier(parameter.name)) return;
+            const argument = node.arguments[index];
+            if (!argument) return;
+            const value = unwrapTransparentExpression(argument);
+            if (ts.isStringLiteralLike(value)) {
+              helperLiterals.set(parameter.name.text, [value.text]);
+              return;
+            }
+            if (ts.isIdentifier(value)) {
+              const propagated = usesUnshadowedParameter(
+                node,
+                value.text,
+                executionRoot,
+              )
+                ? parameterLiterals.get(value.text)
+                : undefined;
+              const values = propagated ?? forOfLiteralValues(node, value.text);
+              if (values.length > 0) helperLiterals.set(parameter.name.text, values);
+            }
+          });
           activeHelpers.add(helper);
-          visit(helper.body, true, executionRoot);
+          visit(helper.body, true, helper, helperLiterals);
           activeHelpers.delete(helper);
         }
       }
     }
-    ts.forEachChild(node, (child) => visit(child, false, executionRoot));
+    ts.forEachChild(node, (child) =>
+      visit(child, false, executionRoot, parameterLiterals),
+    );
   };
   visit(callback.body, true);
   return {
