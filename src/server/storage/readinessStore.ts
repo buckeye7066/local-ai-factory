@@ -47,10 +47,12 @@ const ReceiptSchema = z.object({
   evidenceDigest: z.string(),
   brainFloor: z.object({
     // Defaults preserve readability of receipts written before the unified
-    // paid-ladder reviewer slots were introduced.
+    // automatic-ladder reviewer slots were introduced.
     lead: z.boolean().default(false),
     challenger: z.boolean().default(false),
     independentReviews: z.boolean().default(false),
+    liveModels: z.boolean().default(false),
+    // Legacy diagnostic; no longer controls readiness.
     paidModels: z.boolean().default(false),
     sol: z.boolean(),
     fableOrOpus: z.boolean(),
