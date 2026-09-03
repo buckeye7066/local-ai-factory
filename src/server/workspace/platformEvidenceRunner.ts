@@ -188,18 +188,20 @@ export async function recordCurrentPlatformEvidence(
     plan.commands.some((command) => command.runner === "vitest") &&
     !(await hasLocalVitestConfig(held.workspacePath));
   const platformVitestConfig = join(held.workspacePath, PLATFORM_VITEST_CONFIG);
-  if (isolatedVitest) {
-    await writeFile(platformVitestConfig, PLATFORM_VITEST_CONFIG_SOURCE, {
-      encoding: "utf8",
-      flag: "wx",
-    });
-  }
 
   const executed: CheckpointExecutedCommand[] = [];
-  try {
-    for (const plannedCommand of plan.commands) {
-      const command = commandForPlatformProof(plannedCommand, isolatedVitest);
-      const result = await runCommand(
+  for (const plannedCommand of plan.commands) {
+    const command = commandForPlatformProof(plannedCommand, isolatedVitest);
+    const needsIsolatedConfig = isolatedVitest && plannedCommand.runner === "vitest";
+    if (needsIsolatedConfig) {
+      await writeFile(platformVitestConfig, PLATFORM_VITEST_CONFIG_SOURCE, {
+        encoding: "utf8",
+        flag: "wx",
+      });
+    }
+    let result;
+    try {
+      result = await runCommand(
         { bin: command.bin, args: command.args, cwd: held.workspacePath },
         {
           workspaceRoot: resolve(
@@ -211,36 +213,36 @@ export async function recordCurrentPlatformEvidence(
           timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
         },
       );
-      const outputTail = `${result.stdout}\n${result.stderr}`.slice(-32_768);
-      if (!result.executed || result.exitCode !== 0) {
-        throw new Error(
-          `${hostPlatform} verification failed for \`${result.command}\`: ${
-            result.reason ?? `exit ${String(result.exitCode)}`
-          }. ${outputTail.slice(-2_000)}`,
-        );
+    } finally {
+      if (needsIsolatedConfig) {
+        await rm(platformVitestConfig, { force: true });
       }
-      executed.push({
-        command: result.command,
-        exitCode: result.exitCode,
-        isTest: command.isTest,
-        isBrowser: command.isBrowser ?? false,
-        ...platformStampForExecutedCommand(
-          {
-            command: result.command,
-            exitCode: result.exitCode,
-            isTest: command.isTest,
-            isBrowser: command.isBrowser ?? false,
-            outputTail,
-          },
-          hostPlatform,
-        ),
-        outputTail,
-      });
     }
-  } finally {
-    if (isolatedVitest) {
-      await rm(platformVitestConfig, { force: true });
+    const outputTail = `${result.stdout}\n${result.stderr}`.slice(-32_768);
+    if (!result.executed || result.exitCode !== 0) {
+      throw new Error(
+        `${hostPlatform} verification failed for \`${result.command}\`: ${
+          result.reason ?? `exit ${String(result.exitCode)}`
+        }. ${outputTail.slice(-2_000)}`,
+      );
     }
+    executed.push({
+      command: result.command,
+      exitCode: result.exitCode,
+      isTest: command.isTest,
+      isBrowser: command.isBrowser ?? false,
+      ...platformStampForExecutedCommand(
+        {
+          command: result.command,
+          exitCode: result.exitCode,
+          isTest: command.isTest,
+          isBrowser: command.isBrowser ?? false,
+          outputTail,
+        },
+        hostPlatform,
+      ),
+      outputTail,
+    });
   }
   if (!executed.some((entry) => entry.isTest === true)) {
     throw new Error(`${hostPlatform} proof executed no test command.`);
