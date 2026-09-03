@@ -20,6 +20,31 @@ const BLOCKED = [
   /\b(?:\d[ -]*?){13,19}\b/,
 ];
 
+const BRIDGE_URL = process.env.OBSIDIAN_MEMORY_BRIDGE_URL?.trim().replace(/\/+$/, "") || "";
+const BRIDGE_TOKEN = process.env.OBSIDIAN_MEMORY_BRIDGE_TOKEN?.trim() || "";
+
+async function bridgeRequest(route, payload) {
+  if (!BRIDGE_URL || !BRIDGE_TOKEN) return { ok: false, code: "bridge_credentials_missing", detail: "Hosted memory bridge credentials are not configured." };
+  if (typeof fetch !== "function") return { ok: false, code: "bridge_fetch_unavailable", detail: "This runtime cannot reach the hosted memory bridge." };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch(BRIDGE_URL + route, {
+      method: "POST",
+      headers: { Authorization: "Bearer " + BRIDGE_TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body?.ok) return { ok: false, code: "bridge_unavailable", detail: "Hosted memory bridge is unavailable." };
+    return { ok: true, output: String(body.results ?? body.detail ?? "") };
+  } catch {
+    return { ok: false, code: "bridge_unavailable", detail: "Hosted memory bridge is unavailable." };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function runAibus(args, { timeoutMs = 30_000, runner } = {}) {
   if (runner) return runner(args);
   return new Promise((resolve) => {
@@ -43,7 +68,10 @@ export function runAibus(args, { timeoutMs = 30_000, runner } = {}) {
 export async function recall(query, { limit = 8, runner } = {}) {
   const clean = String(query ?? "").trim();
   if (!clean) return { ok: false, code: "empty_query", detail: "A recall query is required." };
-  const result = await runAibus(["recall", "--limit", String(Math.max(1, Math.min(25, Number(limit) || 8))), APP, ...clean.split(/\s+/)], { runner });
+  const safeLimit = Math.max(1, Math.min(10, Number(limit) || 8));
+  const result = BRIDGE_URL && !runner
+    ? await bridgeRequest("/v1/recall", { project: APP, query: clean, limit: safeLimit })
+    : await runAibus(["recall", "--limit", String(safeLimit), APP, ...clean.split(/\s+/)], { runner });
   return result.ok ? { ok: true, query: clean, results: result.output || "(nothing in the vault matches)" } : result;
 }
 
@@ -53,13 +81,17 @@ export async function remember({ title, content, tag = "project", runner } = {})
   if (heading.length + body.length > 4_000 || BLOCKED.some((pattern) => pattern.test(heading + "\n" + body))) {
     return { ok: false, code: "unsafe_memory", detail: "Shared memory rejects sensitive, secret-bearing, or oversized content." };
   }
-  const result = await runAibus(["note", "--from", process.env.OBSIDIAN_MEMORY_AGENT?.trim() || APP, "--title", `[${APP}] ${heading}`, "--tag", String(tag || "project"), body], { runner });
+  const result = BRIDGE_URL && !runner
+    ? await bridgeRequest("/v1/note", { project: APP, agent: process.env.OBSIDIAN_MEMORY_AGENT?.trim() || APP, title: heading, content: body, tag: String(tag || "project") })
+    : await runAibus(["note", "--from", process.env.OBSIDIAN_MEMORY_AGENT?.trim() || APP, "--title", "[" + APP + "] " + heading, "--tag", String(tag || "project"), body], { runner });
   return result.ok ? { ok: true, title: heading, detail: result.output } : result;
 }
 
 export async function health({ runner } = {}) {
   const result = await recall("continuity decisions blockers", { limit: 1, runner });
-  return result.ok ? { ok: true, reachable: true, vault: VAULT, script: SCRIPT } : { ok: false, reachable: false, vault: VAULT, script: SCRIPT, code: result.code, detail: result.detail };
+  return result.ok
+    ? { ok: true, reachable: true, mode: BRIDGE_URL ? "hosted-bridge" : "local-vault", vault: VAULT, script: SCRIPT }
+    : { ok: false, reachable: false, mode: BRIDGE_URL ? "hosted-bridge" : "local-vault", vault: VAULT, script: SCRIPT, code: result.code, detail: result.detail };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
