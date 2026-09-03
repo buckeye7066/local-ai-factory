@@ -530,8 +530,7 @@ function packageSignals(workspacePath: string): {
       "preact",
       "solid-js",
       "lit",
-    ) ||
-    files.some((path) => /(^|\/)(?:public\/)?index\.html$/i.test(path));
+    ) || files.some((path) => /(^|\/)(?:public\/)?index\.html$/i.test(path));
   const nativeMobile =
     files.some((path) => /^(?:android|ios)\//i.test(path)) ||
     files.some((path) => /(^|\/)capacitor\.config\.[cm]?[jt]s$/i.test(path)) ||
