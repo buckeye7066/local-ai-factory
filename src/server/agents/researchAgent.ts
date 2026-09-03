@@ -25,12 +25,28 @@ const ReuseModeSchema = z.enum([
   "api-integration",
   "reference-only",
 ]);
-const ActionableReuseModeSchema = z.enum([
+const ACTIONABLE_REUSE_MODES = [
   "dependency",
   "direct-code",
   "clean-room-pattern",
   "api-integration",
-]);
+] as const;
+const ActionableReuseModeSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const normalized = value.trim().toLowerCase();
+  const exact = ACTIONABLE_REUSE_MODES.find((mode) => mode === normalized);
+  if (exact) return exact;
+  // Paid reviewers sometimes describe the intended policy instead of
+  // returning its enum token. Normalize only recognizable intent, preferring
+  // the non-code-reuse option whenever the wording mentions a pattern.
+  if (/\b(?:clean[- ]?room|pattern|behaviou?r|design|idea)\b/.test(normalized)) {
+    return "clean-room-pattern";
+  }
+  if (/\bapi\b/.test(normalized)) return "api-integration";
+  if (/\b(?:dependency|package)\b/.test(normalized)) return "dependency";
+  if (/\bdirect(?:ly)?[- ]+code\b/.test(normalized)) return "direct-code";
+  return value;
+}, z.enum(ACTIONABLE_REUSE_MODES));
 const HttpUrlSchema = z
   .string()
   .trim()
@@ -168,14 +184,14 @@ const CompetitiveComparisonInputSchema = CandidateComparisonSchema.omit({
 
 const CompetitiveSelectedInputSchema = z.object({
   candidateId: z.string().trim().min(1),
-  element: z.string().trim().min(1),
+  element: z.string().trim().default(""),
   why: z.string().trim().default(""),
   // Preserve otherwise valid evidence when a provider omits this one prose
   // field; mergeCompetitiveResults derives a concrete, tested instruction
   // from the selected element and enforced reuse mode.
   howToIntegrate: z.string().trim().default(""),
   reuseMode: ActionableReuseModeSchema,
-  evidenceUrls: z.array(HttpUrlSchema).min(1),
+  evidenceUrls: z.array(HttpUrlSchema).default([]),
   score: z.number().min(0).max(100).default(0),
 });
 
@@ -223,6 +239,7 @@ function competitiveSelectionSchema(
     }
 
     const validComparisonIds = new Set<string>();
+    const validComparisonEvidence = new Map<string, string[]>();
     selection.comparisons.forEach((comparison, index) => {
       const allowedEvidence = evidenceByCandidate.get(comparison.candidateId);
       if (!allowedEvidence) {
@@ -236,7 +253,11 @@ function competitiveSelectionSchema(
       if (comparison.decision === "reject") {
         return;
       }
-      if (matchingEvidenceUrls(comparison.evidenceUrls, allowedEvidence).length === 0) {
+      const evidenceUrls = matchingEvidenceUrls(
+        comparison.evidenceUrls,
+        allowedEvidence,
+      );
+      if (evidenceUrls.length === 0) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["comparisons", index, "evidenceUrls"],
@@ -245,6 +266,7 @@ function competitiveSelectionSchema(
         return;
       }
       validComparisonIds.add(comparison.candidateId);
+      validComparisonEvidence.set(comparison.candidateId, evidenceUrls);
     });
     if (validComparisonIds.size !== requiredCount) {
       context.addIssue({
@@ -273,11 +295,20 @@ function competitiveSelectionSchema(
         });
         return;
       }
-      if (matchingEvidenceUrls(selected.evidenceUrls, allowedEvidence).length === 0) {
+      const selectedEvidence = matchingEvidenceUrls(
+        selected.evidenceUrls,
+        allowedEvidence,
+      );
+      if (
+        selectedEvidence.length === 0 &&
+        (selected.evidenceUrls.length > 0 ||
+          !validComparisonEvidence.has(selected.candidateId))
+      ) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["selected", index, "evidenceUrls"],
-          message: "selected advantage must cite inspected evidence for this product",
+          message:
+            "selected advantage must cite inspected evidence or rely on its validated comparison",
         });
         return;
       }
@@ -603,6 +634,8 @@ async function evaluateCompetitiveDossier(
         `For each compared product name the single most valuable idea worth adopting - ` +
         `the thing it does better than this app - respecting its license policy. Every selected candidateId must ` +
         `exactly match the dossier and a non-rejected comparison. Cite only supplied page URLs in evidenceUrls. ` +
+        `A selected item may omit element or evidenceUrls only when they are redundant with that item\'s ` +
+        `validated comparison; the engine will derive the first stated strength and its inspected evidence. ` +
         `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
     ].join("\n\n"),
     schema: competitiveSelectionSchema(candidates, requiredCount),
@@ -653,12 +686,26 @@ function mergeCompetitiveResults(
     const candidate = candidates.get(selected.candidateId);
     if (!candidate) continue;
     if (!actionableComparisonIds.has(candidate.id)) continue;
+    const comparison = comparisonGroups.get(candidate.id)?.[0];
+    if (!comparison) continue;
     const allowedEvidence = inspectedEvidence(candidate);
     const selectedEvidence = matchingEvidenceUrls(
       selected.evidenceUrls,
       allowedEvidence,
     );
-    if (selectedEvidence.length === 0) continue;
+    const evidenceUrls =
+      selectedEvidence.length > 0
+        ? selectedEvidence
+        : selected.evidenceUrls.length === 0
+          ? comparison.evidenceUrls
+          : [];
+    if (evidenceUrls.length === 0) continue;
+    const element =
+      selected.element ||
+      comparison.strengths[0] ||
+      comparison.matchedFeatures[0] ||
+      "";
+    if (!element) continue;
     const reuseMode = enforceReuseMode(selected.reuseMode, candidate);
     if (candidate.kind === "product" && reuseMode === "reference-only") continue;
     const legalPrefix =
@@ -667,19 +714,19 @@ function mergeCompetitiveResults(
         : "";
     const integrationInstruction =
       selected.howToIntegrate ||
-      `Integrate ${selected.element} using the enforced ${reuseMode} reuse mode in the target architecture, and add direct acceptance tests tied to the cited evidence.`;
+      `Integrate ${element} using the enforced ${reuseMode} reuse mode in the target architecture, and add direct acceptance tests tied to the cited evidence.`;
     competitiveRecommendations.push({
-      name: `${candidate.name}: ${selected.element}`,
+      name: `${candidate.name}: ${element}`,
       why:
         selected.why ||
-        `Adopt ${selected.element} as an evidence-backed advantage over the reviewed product.`,
+        `Adopt ${element} as an evidence-backed advantage over the reviewed product.`,
       sourceUrl: candidate.url,
       howToIntegrate: `${legalPrefix}${integrationInstruction}`.trim(),
       candidateId: candidate.id,
       licenseSpdx: candidate.license.spdxId,
       licensePolicy: candidate.license.policy,
       reuseMode,
-      evidenceUrls: [...new Set([...selectedEvidence].filter(Boolean))],
+      evidenceUrls: [...new Set([...evidenceUrls].filter(Boolean))],
       score: selected.score,
       origin: "competitive-selection",
     });

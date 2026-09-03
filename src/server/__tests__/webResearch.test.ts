@@ -675,7 +675,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     }
   });
 
-  it("keeps valid comparisons when one selected item omits integration prose", async () => {
+  it("derives omitted selection detail from its evidence-validated comparison", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");
     const productUrl = "https://rival.example/product";
     const productDossier = {
@@ -745,9 +745,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           selected: [
             {
               candidateId: "product:rival.example",
-              element: "single-command task capture",
-              reuseMode: "clean-room-pattern",
-              evidenceUrls: [productUrl],
+              reuseMode: "pattern-or-direct-use-allowed-but-not-needed",
               score: 90,
             },
           ],
@@ -759,13 +757,14 @@ describe("researchAgent competitive selection failure is a named skip", () => {
       expect(findings.summary).not.toContain("FAILED and was SKIPPED");
       expect(findings.comparisons).toHaveLength(1);
       expect(findings.recommendations).toHaveLength(1);
-      expect(findings.recommendations[0].howToIntegrate).toContain(
-        "single-command task capture",
-      );
+      expect(findings.recommendations[0].name).toContain("fast capture");
+      expect(findings.recommendations[0].reuseMode).toBe("clean-room-pattern");
+      expect(findings.recommendations[0].evidenceUrls).toEqual([productUrl]);
+      expect(findings.recommendations[0].howToIntegrate).toContain("fast capture");
       expect(findings.recommendations[0].howToIntegrate).toContain(
         "direct acceptance tests",
       );
-      expect(findings.recommendations[0].why).toContain("single-command task capture");
+      expect(findings.recommendations[0].why).toContain("fast capture");
       expect(provider.prompts[2]).toContain("product:rival.example");
       expect(provider.prompts[2]).not.toContain(
         "REPOSITORY_SENTINEL_MUST_NOT_ENTER_PRODUCT_REVIEW",
