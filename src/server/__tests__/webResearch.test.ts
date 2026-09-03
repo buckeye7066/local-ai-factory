@@ -775,90 +775,89 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     }
   });
 
-  it("rejects an underfilled product review instead of silently saving a partial gate", async () => {
-    const ci = await import("../tools/competitiveIntelligence.js");
-    const products = Array.from({ length: 5 }, (_, index) => {
-      const host = `rival-${index + 1}.example`;
-      const url = `https://${host}/product`;
-      return {
-        ...DOSSIER.candidates[0],
-        id: `product:${host}`,
-        kind: "product" as const,
-        name: `Rival ${index + 1}`,
-        url,
-        description: `Verified rival ${index + 1}`,
-        sourceEvidence: [
-          { path: "product-page", url, excerpt: "Verified product behavior." },
-        ],
-      };
-    });
-    const productDossier = {
-      ...DOSSIER,
-      coverage: {
-        productTarget: 5,
-        productDiscoveredCount: 5,
-        productInspectedCount: 5,
-        productVerifiedCount: 5,
-        productCoverageMet: true,
-        repositoryDiscoveredCount: 0,
-        repositoryInspectedCount: 0,
-        repositoryVerifiedCount: 0,
-      },
-      candidates: products,
-    };
-    const spy = vi
-      .spyOn(ci, "buildCompetitiveDossier")
-      .mockResolvedValue(productDossier as never);
-    try {
-      const first = products[0];
-      const provider = new ScriptedProvider([
-        {
-          thought: "nothing external needed",
-          action: "conclude",
-          findings: { summary: "base summary", recommendations: [] },
+  it.each([1, 6])(
+    "rejects a %i-entry product review when the exact gate count is five",
+    async (returnedCount) => {
+      const ci = await import("../tools/competitiveIntelligence.js");
+      const products = Array.from({ length: 6 }, (_, index) => {
+        const host = `rival-${index + 1}.example`;
+        const url = `https://${host}/product`;
+        return {
+          ...DOSSIER.candidates[0],
+          id: `product:${host}`,
+          kind: "product" as const,
+          name: `Rival ${index + 1}`,
+          url,
+          description: `Verified rival ${index + 1}`,
+          sourceEvidence: [
+            { path: "product-page", url, excerpt: "Verified product behavior." },
+          ],
+        };
+      });
+      const productDossier = {
+        ...DOSSIER,
+        coverage: {
+          productTarget: 5,
+          productDiscoveredCount: 6,
+          productInspectedCount: 6,
+          productVerifiedCount: 6,
+          productCoverageMet: true,
+          repositoryDiscoveredCount: 0,
+          repositoryInspectedCount: 0,
+          repositoryVerifiedCount: 0,
         },
-        PRODUCT_PLAN,
-        {
-          comparisons: [
-            {
-              candidateId: first.id,
-              name: first.name,
+        candidates: products,
+      };
+      const spy = vi
+        .spyOn(ci, "buildCompetitiveDossier")
+        .mockResolvedValue(productDossier as never);
+      try {
+        const returnedProducts = products.slice(0, returnedCount);
+        const provider = new ScriptedProvider([
+          {
+            thought: "nothing external needed",
+            action: "conclude",
+            findings: { summary: "base summary", recommendations: [] },
+          },
+          PRODUCT_PLAN,
+          {
+            comparisons: returnedProducts.map((product) => ({
+              candidateId: product.id,
+              name: product.name,
               score: 80,
               matchedFeatures: ["fast add"],
               strengths: ["fast capture"],
               gaps: ["no local JSON export"],
-              evidenceUrls: [first.url],
+              evidenceUrls: [product.url],
               decision: "adapt",
               rationale: "Useful behavior",
-            },
-          ],
-          selected: [
-            {
-              candidateId: first.id,
+            })),
+            selected: returnedProducts.map((product) => ({
+              candidateId: product.id,
               element: "single-command task capture",
               why: "reduces input friction",
               reuseMode: "clean-room-pattern",
-              evidenceUrls: [first.url],
+              evidenceUrls: [product.url],
               score: 80,
-            },
-          ],
-          summary: "Only one of five products was returned before truncation.",
-        },
-      ]);
+            })),
+            summary: `${returnedCount} products returned for an exact five-product gate.`,
+          },
+        ]);
 
-      const findings = await researchAgent({ provider }, spec, arch, {
-        competitive: true,
-      });
+        const findings = await researchAgent({ provider }, spec, arch, {
+          competitive: true,
+        });
 
-      expect(findings.summary).toContain("FAILED and was SKIPPED");
-      expect(findings.comparisons).toEqual([]);
-      expect(findings.recommendations).toEqual([]);
-      expect(provider.prompts[2]).toContain("REQUIRED PRODUCT COUNT: 5");
-      expect(provider.prompts[2].length).toBeLessThan(20_000);
-    } finally {
-      spy.mockRestore();
-    }
-  });
+        expect(findings.summary).toContain("FAILED and was SKIPPED");
+        expect(findings.comparisons).toEqual([]);
+        expect(findings.recommendations).toEqual([]);
+        expect(provider.prompts[2]).toContain("REQUIRED PRODUCT COUNT: 5");
+        expect(provider.prompts[2].length).toBeLessThan(20_000);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 
   it("a deliberate abort still propagates — a cancelled run is never continued", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");

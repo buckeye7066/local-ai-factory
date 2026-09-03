@@ -203,8 +203,8 @@ function competitiveSelectionSchema(
     ]),
   );
   const schema = CompetitiveSelectionShape.extend({
-    comparisons: z.array(CompetitiveComparisonInputSchema).min(requiredCount),
-    selected: z.array(CompetitiveSelectedInputSchema).min(requiredCount),
+    comparisons: z.array(CompetitiveComparisonInputSchema).length(requiredCount),
+    selected: z.array(CompetitiveSelectedInputSchema).length(requiredCount),
   });
 
   return schema.superRefine((selection, context) => {
@@ -246,11 +246,11 @@ function competitiveSelectionSchema(
       }
       validComparisonIds.add(comparison.candidateId);
     });
-    if (validComparisonIds.size < requiredCount) {
+    if (validComparisonIds.size !== requiredCount) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["comparisons"],
-        message: `expected ${requiredCount} distinct actionable verified-product comparisons`,
+        message: `expected exactly ${requiredCount} distinct actionable verified-product comparisons`,
       });
     }
 
@@ -283,11 +283,11 @@ function competitiveSelectionSchema(
       }
       validSelectedIds.add(selected.candidateId);
     });
-    if (validSelectedIds.size < requiredCount) {
+    if (validSelectedIds.size !== requiredCount) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["selected"],
-        message: `expected ${requiredCount} distinct comparison-qualified product advantages`,
+        message: `expected exactly ${requiredCount} distinct comparison-qualified product advantages`,
       });
     }
   });
@@ -597,9 +597,9 @@ async function evaluateCompetitiveDossier(
       `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
       `REQUIRED PRODUCT COUNT: ${requiredCount}`,
       `VERIFIED PRODUCT DOSSIER:\n${JSON.stringify(candidates.map(compactProductCandidate))}`,
-      `Return comparisons and selected FIRST, followed by a short summary. Keep every string concise. Return at least ` +
-        `${requiredCount} distinct evidence-linked comparisons and ${requiredCount} matching selected advantages. ` +
-        `When more candidates are supplied, reject weak candidates only if at least ${requiredCount} others remain. ` +
+      `Return comparisons and selected FIRST, followed by a short summary. Keep every string concise. Return exactly ` +
+        `${requiredCount} distinct evidence-linked comparisons and exactly ${requiredCount} matching selected advantages. ` +
+        `When more candidates are supplied, omit the weaker candidates rather than returning surplus entries. ` +
         `For each compared product name the single most valuable idea worth adopting - ` +
         `the thing it does better than this app - respecting its license policy. Every selected candidateId must ` +
         `exactly match the dossier and a non-rejected comparison. Cite only supplied page URLs in evidenceUrls. ` +
