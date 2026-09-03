@@ -7,7 +7,9 @@ import { ProductSpecSchema } from "../../shared/schemas.js";
 
 const cfg = loadConfig({});
 /** A deck with the free route switched off — the only truly provider-less case. */
-const noFreeCfg = loadConfig({ FACTORY_FREE_ENABLED: "0" } as NodeJS.ProcessEnv);
+const noFreeCfg = loadConfig({
+  FACTORY_FREE_ENABLED: "0",
+} as NodeJS.ProcessEnv);
 
 describe("provider registry selection", () => {
   it("offers the FREE route even with no paid keys at all", () => {
@@ -47,9 +49,9 @@ describe("provider registry selection", () => {
       configured,
       loadSecrets({ ANTHROPIC_API_KEY: "sk-a", OPENAI_API_KEY: "sk-o" }),
     );
-    const rungs = reg
-      .automaticRungs!()
-      .map((rung) => `${rung.provider.name}:${rung.model}`);
+    const rungs = reg.automaticRungs!().map(
+      (rung) => `${rung.provider.name}:${rung.model}`,
+    );
     expect(rungs.slice(0, -1)).toEqual([
       "anthropic:claude-fable-5-1",
       "anthropic:claude-opus-5",

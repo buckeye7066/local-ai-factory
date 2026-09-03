@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -16,7 +23,11 @@ import {
   withExtendPersistenceGoals,
 } from "../orchestrator/composeExtendIdea.js";
 import { encodeStructuredGoalDirectives } from "../orchestrator/goalDirectives.js";
-import { FoundryStore, STATIONS, intakeFromMarkdown } from "../foundry/model.js";
+import {
+  FoundryStore,
+  STATIONS,
+  intakeFromMarkdown,
+} from "../foundry/model.js";
 import { loadConfig } from "../config.js";
 import type { ProviderRegistry } from "../providers/index.js";
 import type { LLMProvider } from "../../shared/types.js";
@@ -24,13 +35,16 @@ import type { ProviderName } from "../../shared/schemas.js";
 import { resetPaidBudget } from "../providers/paidBudget.js";
 
 function providerRegistry(providers: LLMProvider[]): ProviderRegistry {
-  const byName = new Map(providers.map((provider) => [provider.name, provider]));
+  const byName = new Map(
+    providers.map((provider) => [provider.name, provider]),
+  );
   const missing = (name: ProviderName) =>
     ({ name, isConfigured: () => false }) as LLMProvider;
   const get = (name: ProviderName) => byName.get(name) ?? missing(name);
   const configured = providers.map((provider) => provider.name);
   const paid = configured.filter(
-    (name): name is "anthropic" | "openai" => name === "anthropic" || name === "openai",
+    (name): name is "anthropic" | "openai" =>
+      name === "anthropic" || name === "openai",
   );
   return {
     get,
@@ -44,7 +58,10 @@ function providerRegistry(providers: LLMProvider[]): ProviderRegistry {
   };
 }
 
-function callable(name: ProviderName, fail = false): LLMProvider & { calls: number } {
+function callable(
+  name: ProviderName,
+  fail = false,
+): LLMProvider & { calls: number } {
   const provider = {
     name,
     calls: 0,
@@ -91,7 +108,8 @@ describe("Purpose Foundry", () => {
         "watchtower",
       ]) {
         expect(
-          project.stations.find((station) => station.stationId === stationId)?.status,
+          project.stations.find((station) => station.stationId === stationId)
+            ?.status,
         ).toBe("queued");
       }
       for (const stationId of [
@@ -100,7 +118,8 @@ describe("Purpose Foundry", () => {
         "app-store-publisher",
       ]) {
         expect(
-          project.stations.find((station) => station.stationId === stationId)?.status,
+          project.stations.find((station) => station.stationId === stationId)
+            ?.status,
         ).toBe("not_selected");
       }
     },
@@ -124,7 +143,8 @@ describe("Purpose Foundry", () => {
       project.stations.find((station) => station.stationId === "scout")?.status,
     ).toBe("queued");
     expect(
-      project.stations.find((station) => station.stationId === "flexfactor")?.status,
+      project.stations.find((station) => station.stationId === "flexfactor")
+        ?.status,
     ).toBe("queued");
   });
 
@@ -136,7 +156,12 @@ describe("Purpose Foundry", () => {
       FACTORY_FREE_ENABLED: "true",
       FACTORY_MODEL_LADDER: "openai",
     });
-    const selected = createFoundryTierProvider("free", registry, config, "review");
+    const selected = createFoundryTierProvider(
+      "free",
+      registry,
+      config,
+      "review",
+    );
 
     await expect(
       selected.provider.generateText({ system: "", prompt: "" }),
@@ -165,7 +190,12 @@ describe("Purpose Foundry", () => {
         FACTORY_FREE_ENABLED: "true",
         FACTORY_MODEL_LADDER: "openai",
       });
-      const selected = createFoundryTierProvider("paid", registry, config, "review");
+      const selected = createFoundryTierProvider(
+        "paid",
+        registry,
+        config,
+        "review",
+      );
 
       await expect(
         selected.provider.generateText({ system: "", prompt: "" }),
@@ -175,7 +205,8 @@ describe("Purpose Foundry", () => {
     } finally {
       if (previousDir === undefined) delete process.env.FACTORY_DATA_DIR;
       else process.env.FACTORY_DATA_DIR = previousDir;
-      if (previousDay === undefined) delete process.env.FACTORY_PAID_RESCUES_PER_DAY;
+      if (previousDay === undefined)
+        delete process.env.FACTORY_PAID_RESCUES_PER_DAY;
       else process.env.FACTORY_PAID_RESCUES_PER_DAY = previousDay;
       resetPaidBudget();
     }
@@ -245,7 +276,10 @@ describe("Purpose Foundry", () => {
   it("forwards the resolved automatic ladder to Factory Deck's run API", async () => {
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
-    const targetUsers = Array.from({ length: 50 }, (_, index) => `User ${index + 1}`);
+    const targetUsers = Array.from(
+      { length: 50 },
+      (_, index) => `User ${index + 1}`,
+    );
     const successCriteria = Array.from(
       { length: 50 },
       (_, index) => `Criterion ${index + 1}`,
@@ -254,7 +288,10 @@ describe("Purpose Foundry", () => {
       { length: 50 },
       (_, index) => `Constraint ${index + 1}`,
     );
-    const nonGoals = Array.from({ length: 50 }, (_, index) => `Non-goal ${index + 1}`);
+    const nonGoals = Array.from(
+      { length: 50 },
+      (_, index) => `Non-goal ${index + 1}`,
+    );
     const project = await store.create({
       ...intakeFromMarkdown(
         "# Metered-Build\nBuild through Factory Deck.",
@@ -307,7 +344,9 @@ describe("Purpose Foundry", () => {
     expect(posted[0]?.options?.goals).toContain(
       encodeStructuredGoalDirectives({
         targetUsers,
-        activeGoals: successCriteria.map((item) => `Success criterion: ${item}`),
+        activeGoals: successCriteria.map(
+          (item) => `Success criterion: ${item}`,
+        ),
         constraints,
         nonGoals,
       }),
@@ -329,7 +368,8 @@ describe("Purpose Foundry", () => {
         "PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL",
       );
 
-      process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL = "http://127.0.0.1:4000";
+      process.env.PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL =
+        "http://127.0.0.1:4000";
       publisher = new FoundryAdapters(store)
         .descriptors()
         .find((descriptor) => descriptor.stationId === "app-store-publisher");
@@ -366,7 +406,11 @@ describe("Purpose Foundry", () => {
         "C:/Vault/GrantFlow.md",
       ),
     );
-    const requests: Array<{ url: string; method: string; authorization: string }> = [];
+    const requests: Array<{
+      url: string;
+      method: string;
+      authorization: string;
+    }> = [];
     const baseJob = {
       id: "11111111-1111-4111-8111-111111111111",
       targetUrl: "https://github.com/buckeye7066/GrantFlow",
@@ -451,7 +495,8 @@ describe("Purpose Foundry", () => {
           url,
           method: init?.method ?? "GET",
           authorization: String(
-            (init?.headers as Record<string, string> | undefined)?.authorization ?? "",
+            (init?.headers as Record<string, string> | undefined)
+              ?.authorization ?? "",
           ),
         });
         if (init?.method === "POST") {
@@ -491,10 +536,12 @@ describe("Purpose Foundry", () => {
     });
     expect(poll).toBe(1);
     expect(requests.map((item) => item.method)).toEqual(["POST", "GET"]);
-    expect(requests.every((item) => item.authorization === "Bearer scout-secret")).toBe(
-      true,
-    );
-    expect(JSON.parse(await readFile(outcome.artifacts[0], "utf8"))).toMatchObject({
+    expect(
+      requests.every((item) => item.authorization === "Bearer scout-secret"),
+    ).toBe(true);
+    expect(
+      JSON.parse(await readFile(outcome.artifacts[0], "utf8")),
+    ).toMatchObject({
       completed: true,
       job: { status: "ready", headSha: "abc123" },
     });
@@ -522,7 +569,9 @@ describe("Purpose Foundry", () => {
     expect(flexfactor?.destination).toBe(
       "C:\\Users\\firer\\flexfactor\\flexfactor_run.py",
     );
-    await expect(adapters.execute(project, "flexfactor")).resolves.toMatchObject({
+    await expect(
+      adapters.execute(project, "flexfactor"),
+    ).resolves.toMatchObject({
       status: "completed",
       evidence: { provider: "flexfactor-orchestrated" },
     });
@@ -562,8 +611,9 @@ describe("Purpose Foundry", () => {
       ),
       routingMode: "paid",
     });
-    project.stations.find((station) => station.stationId === "flexfactor")!.status =
-      "queued";
+    project.stations.find(
+      (station) => station.stationId === "flexfactor",
+    )!.status = "queued";
     let processCalls = 0;
     const adapters = new FoundryAdapters(store, {
       config: () =>
@@ -572,14 +622,17 @@ describe("Purpose Foundry", () => {
           DEFAULT_CODE_PROVIDER: "free",
           DEFAULT_REVIEW_PROVIDER: "free",
         }),
-      providerRegistry: () => providerRegistry([callable("free"), callable("openai")]),
+      providerRegistry: () =>
+        providerRegistry([callable("free"), callable("openai")]),
       processRunner: async () => {
         processCalls += 1;
         return { stdout: "completed", stderr: "", exitCode: 0 };
       },
     });
 
-    await expect(adapters.execute(project, "flexfactor")).resolves.toMatchObject({
+    await expect(
+      adapters.execute(project, "flexfactor"),
+    ).resolves.toMatchObject({
       status: "completed",
       evidence: { provider: "flexfactor-orchestrated" },
     });
@@ -601,9 +654,13 @@ describe("Purpose Foundry", () => {
     expect(project.stations).toHaveLength(STATIONS.length);
     expect(project.stations[0].stationId).toBe("scout");
     expect(
-      project.stations.findIndex((station) => station.stationId === "factory-deck"),
+      project.stations.findIndex(
+        (station) => station.stationId === "factory-deck",
+      ),
     ).toBeGreaterThan(
-      project.stations.findIndex((station) => station.stationId === "promo-pilot"),
+      project.stations.findIndex(
+        (station) => station.stationId === "promo-pilot",
+      ),
     );
     for (const stationId of [
       "scout",
@@ -613,7 +670,8 @@ describe("Purpose Foundry", () => {
       "watchtower",
     ]) {
       expect(
-        project.stations.find((station) => station.stationId === stationId)?.status,
+        project.stations.find((station) => station.stationId === stationId)
+          ?.status,
       ).toBe("queued");
     }
     for (const stationId of [
@@ -622,7 +680,8 @@ describe("Purpose Foundry", () => {
       "app-store-publisher",
     ]) {
       expect(
-        project.stations.find((station) => station.stationId === stationId)?.status,
+        project.stations.find((station) => station.stationId === stationId)
+          ?.status,
       ).toBe("not_selected");
     }
   });
@@ -644,7 +703,10 @@ describe("Purpose Foundry", () => {
     const lines = (await readFile(join(root, "evidence.jsonl"), "utf8"))
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { hash: string; previousHash: string | null });
+      .map(
+        (line) =>
+          JSON.parse(line) as { hash: string; previousHash: string | null },
+      );
     expect(lines).toHaveLength(2);
     expect(lines[1].previousHash).toBe(lines[0].hash);
   });
@@ -679,7 +741,9 @@ describe("Purpose Foundry", () => {
     expect(lines).toHaveLength(13);
     lines.forEach((event, index) => {
       expect(event.sequence).toBe(index + 1);
-      expect(event.previousHash).toBe(index === 0 ? null : lines[index - 1].hash);
+      expect(event.previousHash).toBe(
+        index === 0 ? null : lines[index - 1].hash,
+      );
     });
   });
 
@@ -713,7 +777,9 @@ describe("Purpose Foundry", () => {
     const first = await store.importObsidianInbox(inbox);
     const second = await store.importObsidianInbox(inbox);
     expect(first.imported).toBe(1);
-    expect(first.errors.some((error) => error.startsWith("outside.md:"))).toBe(true);
+    expect(first.errors.some((error) => error.startsWith("outside.md:"))).toBe(
+      true,
+    );
     expect(second.imported).toBe(0);
     expect(second.unchanged).toBe(1);
     expect(await store.list()).toHaveLength(1);
@@ -802,7 +868,9 @@ describe("Purpose Foundry", () => {
       store.writeArtifact(project.id, "repo-rewards", "../escape.json", {}),
     ).rejects.toThrow("Invalid artifact filename");
 
-    const outside = await mkdtemp(join(tmpdir(), "purpose-foundry-artifact-outside-"));
+    const outside = await mkdtemp(
+      join(tmpdir(), "purpose-foundry-artifact-outside-"),
+    );
     const stationParent = join(root, "artifacts", project.id);
     await mkdir(stationParent, { recursive: true });
     await symlink(outside, join(stationParent, "watchtower"), "dir");
@@ -838,19 +906,24 @@ describe("Purpose Foundry", () => {
           headers: { "content-type": "application/json" },
         }),
     });
-    await expect(empty.execute(project, "repo-rewards")).resolves.toMatchObject({
-      status: "completed",
-      handoff: {
-        insights: [expect.stringContaining("returned 0 result")],
-        sources: [expect.stringContaining("/api/search")],
-        candidates: [],
+    await expect(empty.execute(project, "repo-rewards")).resolves.toMatchObject(
+      {
+        status: "completed",
+        handoff: {
+          insights: [expect.stringContaining("returned 0 result")],
+          sources: [expect.stringContaining("/api/search")],
+          candidates: [],
+        },
+        evidence: { resultCount: 0 },
       },
-      evidence: { resultCount: 0 },
-    });
+    );
   });
 
   it("does not mistake an artifact filename for an App Store submission", async () => {
-    vi.stubEnv("PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL", "https://publisher.example");
+    vi.stubEnv(
+      "PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL",
+      "https://publisher.example",
+    );
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const store = new FoundryStore(root);
     const project = await store.create(
@@ -897,7 +970,10 @@ describe("Purpose Foundry", () => {
   });
 
   it("streams, checksum-verifies, dry-runs, and submits a real build through Publisher", async () => {
-    vi.stubEnv("PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL", "https://publisher.example");
+    vi.stubEnv(
+      "PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL",
+      "https://publisher.example",
+    );
     const root = await mkdtemp(join(tmpdir(), "purpose-foundry-"));
     const target = await mkdtemp(join(tmpdir(), "purpose-foundry-release-"));
     const release = join(target, "grantflow-release.aab");
@@ -923,7 +999,9 @@ describe("Purpose Foundry", () => {
           let body: Record<string, unknown>;
           if (path === "/api/stores") {
             body = {
-              stores: [{ id: "google_play", label: "Google Play", configured: true }],
+              stores: [
+                { id: "google_play", label: "Google Play", configured: true },
+              ],
             };
           } else if (path === "/api/presets") {
             body = {
@@ -993,7 +1071,9 @@ describe("Purpose Foundry", () => {
         submittedStores: 1,
       });
       expect(calls).toContain("POST /api/upload");
-      expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(2);
+      expect(calls.filter((call) => call === "POST /api/submit")).toHaveLength(
+        2,
+      );
     }
   });
 });

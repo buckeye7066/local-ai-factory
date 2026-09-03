@@ -27,7 +27,13 @@ import {
   type ModelLadderRung,
 } from "./modelLadderProvider.js";
 
-export { AnthropicProvider, OpenAIProvider, StubProvider, MockProvider, FreeProvider };
+export {
+  AnthropicProvider,
+  OpenAIProvider,
+  StubProvider,
+  MockProvider,
+  FreeProvider,
+};
 export { FailoverProvider };
 export { ModelLadderProvider };
 export { ProviderAbortError } from "./types.js";
@@ -69,12 +75,18 @@ export interface ProviderRegistry {
    * Soft resolve — may land on mock/stub. Use only for explicit demo / health
    * diagnostics. Live runs must use {@link resolveLive}.
    */
-  resolve(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
+  resolve(
+    requested: ProviderName | undefined,
+    fallback: ProviderName,
+  ): LLMProvider;
   /**
    * Legacy free-route diagnostic resolver — never returns mock/stub. Current
    * Factory Deck and Purpose Foundry work uses the automatic ladder builder.
    */
-  resolveLive(requested: ProviderName | undefined, fallback: ProviderName): LLMProvider;
+  resolveLive(
+    requested: ProviderName | undefined,
+    fallback: ProviderName,
+  ): LLMProvider;
   available(): ProviderName[];
   /** Every configured live ladder rung. */
   availableLive(): ProviderName[];
@@ -90,7 +102,9 @@ export interface ProviderRegistry {
 
 /** Stamp the run's WorkTheme onto every live call when ALS is bound. */
 function withTheme(provider: LLMProvider): LLMProvider {
-  return provider instanceof ThemedProvider ? provider : new ThemedProvider(provider);
+  return provider instanceof ThemedProvider
+    ? provider
+    : new ThemedProvider(provider);
 }
 
 export function createProviderRegistry(
@@ -160,13 +174,11 @@ export function createProviderRegistry(
       true,
     ),
   }));
-  const openai = new ModelLadderProvider(
-    openaiRungs,
-    (from, to, reason) =>
-      log(
-        "warn",
-        `[route] OpenAI model ${from} exhausted — continuing on ${to}. (${reason.slice(0, 120)})`,
-      ),
+  const openai = new ModelLadderProvider(openaiRungs, (from, to, reason) =>
+    log(
+      "warn",
+      `[route] OpenAI model ${from} exhausted — continuing on ${to}. (${reason.slice(0, 120)})`,
+    ),
   );
 
   const free = new FreeProvider({
@@ -191,7 +203,9 @@ export function createProviderRegistry(
   // Routes whose credential env var is absent in THIS process are filtered
   // out locally (never marked in the shared state — other consumers may hold
   // the key), so rotation only walks pools this process can actually call.
-  const rotator = built ? filterRoutableCatalog(built, config.free.baseUrl, log) : null;
+  const rotator = built
+    ? filterRoutableCatalog(built, config.free.baseUrl, log)
+    : null;
   if (!built && rotationEnabled()) {
     log(
       "warn",
@@ -219,7 +233,11 @@ export function createProviderRegistry(
     : free;
 
   function automaticRungs(
-    order: ProviderName[] = config.modelLadder ?? ["anthropic", "openai", "free"],
+    order: ProviderName[] = config.modelLadder ?? [
+      "anthropic",
+      "openai",
+      "free",
+    ],
   ): ModelLadderRung[] {
     const groups: Partial<Record<ProviderName, ModelLadderRung[]>> = {
       anthropic: anthropicRungs,

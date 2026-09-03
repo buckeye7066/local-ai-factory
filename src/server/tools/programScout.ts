@@ -60,7 +60,11 @@ export interface ProgramScoutJob {
     intendedUsers: string[];
     roles: string[];
     capabilities: ProgramScoutCapability[];
-    workflows: Array<{ name: string; steps: string[]; capabilityIds: string[] }>;
+    workflows: Array<{
+      name: string;
+      steps: string[];
+      capabilityIds: string[];
+    }>;
     integrations: Array<{ name: string; purpose: string; required: boolean }>;
     unknowns: string[];
     cleanRoomNotice: string;
@@ -125,7 +129,11 @@ export function programScoutConfiguration(
     env.SCOUT_API_TOKEN?.trim() ||
     env.ADMIN_TOKEN?.trim() ||
     "";
-  return { endpoints: [...new Set(endpoints)], token, configured: token.length > 0 };
+  return {
+    endpoints: [...new Set(endpoints)],
+    token,
+    configured: token.length > 0,
+  };
 }
 
 function asJob(value: unknown): ProgramScoutJob | null {
@@ -205,12 +213,14 @@ export async function runProgramScout(
 
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleepImpl =
-    options.sleepImpl ?? ((ms: number) => new Promise((done) => setTimeout(done, ms)));
+    options.sleepImpl ??
+    ((ms: number) => new Promise((done) => setTimeout(done, ms)));
   const timeoutMs =
     options.timeoutMs ??
     positiveInt(env.PURPOSE_FOUNDRY_PROGRAM_SCOUT_TIMEOUT_MS, 7_200_000);
   const pollMs =
-    options.pollMs ?? positiveInt(env.PURPOSE_FOUNDRY_PROGRAM_SCOUT_POLL_MS, 5_000);
+    options.pollMs ??
+    positiveInt(env.PURPOSE_FOUNDRY_PROGRAM_SCOUT_POLL_MS, 5_000);
   const failures: string[] = [];
 
   for (const endpoint of config.endpoints) {
@@ -230,7 +240,9 @@ export async function runProgramScout(
           config.token,
         );
         const jobs = Array.isArray(listed.body.jobs)
-          ? listed.body.jobs.map(asJob).filter((item): item is ProgramScoutJob => Boolean(item))
+          ? listed.body.jobs
+              .map(asJob)
+              .filter((item): item is ProgramScoutJob => Boolean(item))
           : [];
         job =
           jobs.find(
@@ -245,7 +257,8 @@ export async function runProgramScout(
           `HTTP ${created.status}: ${String(created.body.error ?? "job creation failed")}`,
         );
       }
-      if (!job) throw new Error("job response did not contain a valid Scout job");
+      if (!job)
+        throw new Error("job response did not contain a valid Scout job");
 
       const deadline = Date.now() + timeoutMs;
       for (;;) {
@@ -282,8 +295,7 @@ export async function runProgramScout(
             endpoint,
             job,
             completed: false,
-            reason:
-              `Program Scout is still ${job.status} at stage ${job.stage} after the configured timeout.`,
+            reason: `Program Scout is still ${job.status} at stage ${job.stage} after the configured timeout.`,
           };
         }
         await sleepImpl(pollMs);
@@ -298,7 +310,8 @@ export async function runProgramScout(
           );
         }
         const next = asJob(polled.body.job);
-        if (!next) throw new Error("poll response did not contain a valid Scout job");
+        if (!next)
+          throw new Error("poll response did not contain a valid Scout job");
         job = next;
       }
     } catch (error) {
