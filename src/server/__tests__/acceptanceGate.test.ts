@@ -157,9 +157,7 @@ describe("assessGeneratedTests", () => {
 }`),
     );
     expect(loopBoundSubstring.ok).toBe(false);
-    expect(loopBoundSubstring.errors.join("\n")).toMatch(
-      /brittle negated substring "sync"/i,
-    );
+    expect(loopBoundSubstring.errors.join("\n")).toMatch(/dynamic negated substring/i);
 
     const typedLoopBoundSubstring = assessGeneratedTests(
       cliSpec,
@@ -170,7 +168,7 @@ describe("assessGeneratedTests", () => {
     );
     expect(typedLoopBoundSubstring.ok).toBe(false);
     expect(typedLoopBoundSubstring.errors.join("\n")).toMatch(
-      /brittle negated substring "sync"/i,
+      /dynamic negated substring/i,
     );
 
     const helperLoopBoundSubstring = assessGeneratedTests(
@@ -183,7 +181,7 @@ for (const featureWord of ["collaboration", "sync"] as const) {
     );
     expect(helperLoopBoundSubstring.ok).toBe(false);
     expect(helperLoopBoundSubstring.errors.join("\n")).toMatch(
-      /brittle negated substring "sync"/i,
+      /dynamic negated substring/i,
     );
 
     expect(
@@ -196,8 +194,8 @@ for (const featureWord of ["collaboration", "sync"] as const) {
     expect(output).not.toContain(featureWord);
   }
 }`),
-      ).ok,
-    ).toBe(true);
+      ).errors.join("\n"),
+    ).toMatch(/dynamic negated substring/i);
     expect(
       assessGeneratedTests(
         cliSpec,
@@ -206,8 +204,29 @@ for (const featureWord of ["collaboration", "sync"] as const) {
   featureWord = "sync";
   expect(output).not.toContain(featureWord);
 }`),
-      ).ok,
-    ).toBe(true);
+      ).errors.join("\n"),
+    ).toMatch(/dynamic negated substring/i);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion(`for (const featureWord of ["sync"] as const) {
+  expect(output).not.toContain(featureWord as string);
+}`),
+      ).errors.join("\n"),
+    ).toMatch(/dynamic negated substring/i);
+
+    const shadowedExpect = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion(`{
+  const expect = (_value: string) => ({ not: { toContain: (_word: string) => true } });
+  for (const featureWord of ["sync"] as const) {
+    expect(output).not.toContain(featureWord);
+  }
+}`),
+    );
+    expect(shadowedExpect.ok).toBe(true);
 
     const regex = assessGeneratedTests(
       cliSpec,
