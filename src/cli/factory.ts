@@ -1,4 +1,4 @@
-import { getConfig, getSecrets, readinessBrainFloor } from "../server/config.js";
+import { getConfig, getSecrets } from "../server/config.js";
 import {
   startRun,
   MissingProviderCredentialError,
@@ -32,8 +32,8 @@ function parseArgs(argv: string[]): { idea: string } {
     );
     console.error(
       `${COLORS.dim}  Factory Deck has no demo, mock, simulate, or dry-run mode.\n` +
-        `  Every run does real work. Configure at least one paid model in the\n` +
-        `  single ladder used by both mandatory production reviewers.${COLORS.reset}`,
+        `  Every run does real work through the single automatic model ladder.\n` +
+        `  Configure at least one live paid or free/local model.${COLORS.reset}`,
     );
     process.exit(2);
   }
@@ -66,27 +66,14 @@ async function main() {
   const { idea } = parseArgs(process.argv);
   const config = getConfig();
   const secrets = getSecrets();
-  const brainFloor = readinessBrainFloor(config, secrets);
 
   console.log(
     `${COLORS.cyan}▌ Factory Deck — Local AI Software Factory${COLORS.reset}`,
   );
   console.log(`${COLORS.dim}  idea: ${idea}${COLORS.reset}`);
   console.log(
-    `${COLORS.dim}  readiness paid ladder: ${brainFloor.paidProviders.join(" → ")}${COLORS.reset}\n`,
+    `${COLORS.dim}  automatic model ladder: ${config.modelLadder.join(" → ")}${COLORS.reset}\n`,
   );
-
-  if (!brainFloor.configured) {
-    console.error(
-      `${COLORS.red}✘ Mandatory production paid ladder is not configured.${COLORS.reset}`,
-    );
-    console.error(
-      `${COLORS.dim}  Configure at least one paid provider named by FACTORY_MODEL_LADDER.\n` +
-        `  Both independent judgments use that same paid-first route; free/helper\n` +
-        `  models cannot issue readiness receipts.${COLORS.reset}`,
-    );
-    process.exit(1);
-  }
 
   const projectId = process.env.FACTORY_PROJECT_ID?.trim();
   const options: RunOptions = projectId ? { projectId } : {};
