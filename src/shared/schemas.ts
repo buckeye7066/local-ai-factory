@@ -191,10 +191,7 @@ export const GoalContractSchema = z.object({
   nonGoals: z.array(z.string().trim().min(1)).max(200).default([]),
   continuity: z.object({
     previousRunIds: z.array(z.string().uuid()).max(12).default([]),
-    carriedForwardDecisions: z
-      .array(z.string().trim().min(1))
-      .max(30)
-      .default([]),
+    carriedForwardDecisions: z.array(z.string().trim().min(1)).max(30).default([]),
     priorResearch: z.array(z.string().trim().min(1)).max(30).default([]),
   }),
   createdFromRunId: z.string().uuid(),
@@ -285,9 +282,7 @@ function coerceStringList(val: unknown): string[] {
           o.description,
           o.summary,
           o.detail,
-        ].filter(
-          (x): x is string => typeof x === "string" && x.trim().length > 0,
-        );
+        ].filter((x): x is string => typeof x === "string" && x.trim().length > 0);
         if (parts.length) return [...new Set(parts)].join(" — ");
         try {
           return JSON.stringify(item);
@@ -321,16 +316,14 @@ function coerceDataModel(val: unknown): { entity: string; fields: string[] }[] {
       .filter((x): x is { entity: string; fields: string[] } => x !== null);
   }
   if (val && typeof val === "object") {
-    return Object.entries(val as Record<string, unknown>).map(
-      ([entity, fields]) => ({
-        entity,
-        fields: Array.isArray(fields)
-          ? coerceStringList(fields)
-          : fields && typeof fields === "object"
-            ? Object.keys(fields as object)
-            : [String(fields)],
-      }),
-    );
+    return Object.entries(val as Record<string, unknown>).map(([entity, fields]) => ({
+      entity,
+      fields: Array.isArray(fields)
+        ? coerceStringList(fields)
+        : fields && typeof fields === "object"
+          ? Object.keys(fields as object)
+          : [String(fields)],
+    }));
   }
   return [];
 }
@@ -409,13 +402,11 @@ const TaskCategorySchema = z.preprocess(
     const s = String(val ?? "")
       .toLowerCase()
       .trim();
-    if (["frontend", "backend", "database", "tests", "docs"].includes(s))
-      return s;
+    if (["frontend", "backend", "database", "tests", "docs"].includes(s)) return s;
     if (s.includes("front") || s.includes("ui")) return "frontend";
     if (s.includes("back") || s.includes("api") || s.includes("server"))
       return "backend";
-    if (s.includes("data") || s.includes("db") || s.includes("sql"))
-      return "database";
+    if (s.includes("data") || s.includes("db") || s.includes("sql")) return "database";
     if (s.includes("test")) return "tests";
     return "docs";
   },
@@ -736,9 +727,7 @@ export const RunDestinationSchema = z.object({
   target: z.string(),
   /** Branch the work is committed onto (null for a brand-new repo's default). */
   branch: z.string().nullable().default(null),
-  status: z
-    .enum(["planned", "delivered", "failed", "skipped"])
-    .default("planned"),
+  status: z.enum(["planned", "delivered", "failed", "skipped"]).default("planned"),
   /** Human-readable outcome or the exact git/gh failure. */
   detail: z.string().nullable().default(null),
   /** Browsable URL once known (repo page, or a compare/PR link). */
@@ -1113,10 +1102,7 @@ export type Health = z.infer<typeof HealthSchema>;
 /* Stage catalog — names + descriptions shared by orchestrator & UI    */
 /* ------------------------------------------------------------------ */
 
-export const STAGE_CATALOG: Record<
-  StageId,
-  { name: string; description: string }
-> = {
+export const STAGE_CATALOG: Record<StageId, { name: string; description: string }> = {
   intake: {
     name: "Intake",
     description: "Capture and normalize the raw app idea.",

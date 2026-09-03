@@ -58,10 +58,7 @@ describe("submitRunSteering", () => {
     const run = queuedRun();
     await saveRun(run);
 
-    const receipt = await submitRunSteering(
-      run.id,
-      "Keep the existing API stable.",
-    );
+    const receipt = await submitRunSteering(run.id, "Keep the existing API stable.");
     expect(receipt.ok).toBe(true);
     const stored = await getRunForExecution(run.id);
     expect(stored?.steering).toMatchObject([

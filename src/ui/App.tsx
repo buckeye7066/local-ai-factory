@@ -155,9 +155,7 @@ export function App() {
       } catch (e) {
         toast.error("Could not start run", {
           description:
-            e instanceof Error
-              ? e.message
-              : "Is the backend running? (pnpm dev)",
+            e instanceof Error ? e.message : "Is the backend running? (pnpm dev)",
         });
       } finally {
         setStarting(false);
@@ -275,12 +273,9 @@ export function App() {
           description: `No finished runs.${skipped}`,
         });
       } else {
-        toast.success(
-          `Deleted ${res.deleted} of ${res.candidates} finished run(s)`,
-          {
-            description: `${res.workspacesRemoved} workspace folder(s) removed.${skipped}`,
-          },
-        );
+        toast.success(`Deleted ${res.deleted} of ${res.candidates} finished run(s)`, {
+          description: `${res.workspacesRemoved} workspace folder(s) removed.${skipped}`,
+        });
       }
       setActiveRunId(null);
     } catch (e) {
@@ -317,16 +312,10 @@ export function App() {
             {view === "foundry" && <FoundryFloor />}
 
             {view === "new" && (
-              <NewRunHero
-                health={health}
-                starting={starting}
-                onStart={startRun}
-              />
+              <NewRunHero health={health} starting={starting} onStart={startRun} />
             )}
 
-            {view === "history" && (
-              <EvolutionsPanel epics={epics} onOpen={openRun} />
-            )}
+            {view === "history" && <EvolutionsPanel epics={epics} onOpen={openRun} />}
 
             {view === "history" && (
               <RunHistory
@@ -340,11 +329,7 @@ export function App() {
             )}
 
             {view === "workspaces" && (
-              <WorkspacesView
-                runs={runs}
-                loading={runsLoading}
-                onOpen={openRun}
-              />
+              <WorkspacesView runs={runs} loading={runsLoading} onOpen={openRun} />
             )}
 
             {view === "settings" && <SettingsPage health={health} />}
@@ -403,8 +388,7 @@ function RunDetail({
   const [resuming, setResuming] = useState(false);
   const [steering, setSteering] = useState("");
   const [steeringBusy, setSteeringBusy] = useState(false);
-  const repairActive =
-    run.stages.find((s) => s.id === "repair")?.status === "active";
+  const repairActive = run.stages.find((s) => s.id === "repair")?.status === "active";
   const running = run.status === "running" || run.status === "queued";
 
   useEffect(() => {
@@ -492,15 +476,9 @@ function RunDetail({
           />
           <div className="mt-3 flex items-center justify-between gap-3">
             <span className="text-xs text-slate-500">
-              {
-                (run.steering ?? []).filter((item) => item.status === "pending")
-                  .length
-              }{" "}
+              {(run.steering ?? []).filter((item) => item.status === "pending").length}{" "}
               pending ·{" "}
-              {
-                (run.steering ?? []).filter((item) => item.status === "applied")
-                  .length
-              }{" "}
+              {(run.steering ?? []).filter((item) => item.status === "applied").length}{" "}
               applied
             </span>
             <Button

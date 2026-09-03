@@ -29,8 +29,8 @@ describe("routePrompt", () => {
 
   it("routes explicit shared language to every program", () => {
     const routes = routePrompt("Both programs must persist steering.", targets);
-    expect(
-      routes.every((route) => route.prompt.includes("persist steering")),
-    ).toBe(true);
+    expect(routes.every((route) => route.prompt.includes("persist steering"))).toBe(
+      true,
+    );
   });
 });

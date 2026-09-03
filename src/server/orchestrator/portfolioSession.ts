@@ -49,8 +49,7 @@ const SESSION_DIR = resolve(
 const sessions = new Map<string, PortfolioSession>();
 
 function sessionPath(id: string): string {
-  if (!z.string().uuid().safeParse(id).success)
-    throw new Error("Invalid session id.");
+  if (!z.string().uuid().safeParse(id).success) throw new Error("Invalid session id.");
   return join(SESSION_DIR, `${id}.json`);
 }
 
@@ -194,8 +193,7 @@ export async function steerPortfolioSession(
   id: string,
   prompt: string,
 ): Promise<
-  | { ok: true; steeringId: string; targetIds: string[] }
-  | { ok: false; reason: string }
+  { ok: true; steeringId: string; targetIds: string[] } | { ok: false; reason: string }
 > {
   const session = sessions.get(id);
   if (!session) return { ok: false, reason: "Portfolio session not found." };
@@ -230,8 +228,7 @@ export async function steerPortfolioSession(
   if (!targetIds.length) {
     return {
       ok: false,
-      reason:
-        "No remaining program has an open model checkpoint for this steering.",
+      reason: "No remaining program has an open model checkpoint for this steering.",
     };
   }
   const steeringId = randomUUID();

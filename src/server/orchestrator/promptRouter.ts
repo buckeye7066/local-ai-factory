@@ -10,8 +10,7 @@ export interface PromptRoute {
   evidence: "named" | "shared" | "single";
 }
 
-const SHARED =
-  /\b(all|both|each|every)\s+(programs?|apps?|repos(?:itories)?)\b/i;
+const SHARED = /\b(all|both|each|every)\s+(programs?|apps?|repos(?:itories)?)\b/i;
 const CONTINUATION = /^(also|and|then|it|that|this|additionally|afterward)\b/i;
 
 function escapeRegex(value: string): string {
@@ -25,9 +24,7 @@ function aliases(target: PromptTarget): string[] {
       .split(/[\\/]/)
       .pop()
       ?.replace(/\.git$/i, "") ?? "";
-  const ownerRepo = /github\.com[/:]([^/]+)\/([^/#]+?)(?:\.git)?$/i.exec(
-    source,
-  );
+  const ownerRepo = /github\.com[/:]([^/]+)\/([^/#]+?)(?:\.git)?$/i.exec(source);
   return [
     ...new Set(
       [target.name, base, ownerRepo?.[2], ownerRepo?.slice(1).join("/")]
@@ -41,10 +38,9 @@ function mentions(segment: string, target: PromptTarget): boolean {
   const lower = segment.toLowerCase();
   return aliases(target).some((alias) => {
     if (alias.length < 2) return false;
-    return new RegExp(
-      `(^|[^a-z0-9])${escapeRegex(alias)}([^a-z0-9]|$)`,
-      "i",
-    ).test(lower);
+    return new RegExp(`(^|[^a-z0-9])${escapeRegex(alias)}([^a-z0-9]|$)`, "i").test(
+      lower,
+    );
   });
 }
 
@@ -53,10 +49,7 @@ function mentions(segment: string, target: PromptTarget): boolean {
  * Explicit program/repo names win; shared and genuinely unscoped requirements
  * go to every target so no instruction silently disappears.
  */
-export function routePrompt(
-  prompt: string,
-  targets: PromptTarget[],
-): PromptRoute[] {
+export function routePrompt(prompt: string, targets: PromptTarget[]): PromptRoute[] {
   const clean = prompt.trim();
   if (!clean) throw new Error("Session prompt is required.");
   if (clean.length > 20_000) throw new Error("Session prompt is too long.");

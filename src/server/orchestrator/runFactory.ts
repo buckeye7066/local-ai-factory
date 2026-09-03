@@ -131,20 +131,13 @@ import { groundQaReport, type VerificationEvidence } from "./qaGrounding.js";
 import { shouldSkipRepairForIncompleteVerification } from "./repairEligibility.js";
 import { isForbiddenRepairPath } from "./repairScope.js";
 import { reportRouteQuality } from "../rotation/rotatingProvider.js";
-import {
-  assessExecutedCoverage,
-  assessGeneratedTests,
-} from "./acceptanceGate.js";
+import { assessExecutedCoverage, assessGeneratedTests } from "./acceptanceGate.js";
 import { nextTestDraftToGenerate } from "./testDraftProgress.js";
 import { parseDirectTestEvidence } from "./directTestEvidence.js";
 import { groundFinalReport } from "./reportGrounding.js";
 import { ErrorLedger, renderErrorLines } from "./errorLedger.js";
 import { ThemedProvider } from "./workTheme.js";
-import {
-  foldTestExit,
-  freshTestVerdict,
-  relevantTestStatus,
-} from "./testVerdict.js";
+import { foldTestExit, freshTestVerdict, relevantTestStatus } from "./testVerdict.js";
 import { classifyEnvironmentFailure } from "./envFailure.js";
 import { productSpecAgent } from "../agents/productSpecAgent.js";
 import {
@@ -159,16 +152,10 @@ import { qaCriticAgent } from "../agents/qaCriticAgent.js";
 import { repairAgent } from "../agents/repairAgent.js";
 import { renderBuildCodeContext } from "../agents/codeContext.js";
 import { finalReviewerAgent } from "../agents/finalReviewerAgent.js";
-import {
-  repoResolverAgent,
-  ResolveError,
-} from "../agents/repoResolverAgent.js";
+import { repoResolverAgent, ResolveError } from "../agents/repoResolverAgent.js";
 import { ingestExistingRepo, IngestError } from "../workspace/ingestRepo.js";
 import { analyzeExistingCodebase } from "../workspace/analyzeExistingCodebase.js";
-import {
-  composeExtendIdea,
-  buildExistingContext,
-} from "./composeExtendIdea.js";
+import { composeExtendIdea, buildExistingContext } from "./composeExtendIdea.js";
 import { ingestAdditionalSource } from "./ingestAdditionalSource.js";
 import { researchAgent } from "../agents/researchAgent.js";
 import {
@@ -184,12 +171,7 @@ import { releaseRun, isPaperOnlyDelivery } from "./releaseRun.js";
 import { planRelease, planReleaseOutcome } from "./releasePlan.js";
 import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
-import {
-  githubLogin,
-  originUrl,
-  currentBranch,
-  git,
-} from "../workspace/gitOps.js";
+import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
 import { safeErrorMessage } from "../errors.js";
 import {
   assertGoalContractIntegrity,
@@ -256,10 +238,7 @@ export function generatedFilesNeedingWrite<
   T extends { path: string; contents: string },
 >(incoming: T[], written: Iterable<{ path: string; contents: string }>): T[] {
   const current = new Map(
-    [...written].map((file) => [
-      normalizeGeneratedPath(file.path),
-      file.contents,
-    ]),
+    [...written].map((file) => [normalizeGeneratedPath(file.path), file.contents]),
   );
   return incoming.filter(
     (file) => current.get(normalizeGeneratedPath(file.path)) !== file.contents,
@@ -310,10 +289,7 @@ export function clearResolvedBlockingWriteRefusals(
  * repair passes. Prefix/suffix preservation makes local edits cheap while a
  * sequential whole-file rewrite remains impossible.
  */
-export function withinHostChangeBudget(
-  baseline: string,
-  candidate: string,
-): boolean {
+export function withinHostChangeBudget(baseline: string, candidate: string): boolean {
   if (baseline.length === 0) return candidate.length > 0;
   let prefix = 0;
   while (
@@ -327,8 +303,7 @@ export function withinHostChangeBudget(
   while (
     suffix < baseline.length - prefix &&
     suffix < candidate.length - prefix &&
-    baseline[baseline.length - 1 - suffix] ===
-      candidate[candidate.length - 1 - suffix]
+    baseline[baseline.length - 1 - suffix] === candidate[candidate.length - 1 - suffix]
   ) {
     suffix += 1;
   }
@@ -590,8 +565,7 @@ function describeDestination(dest: {
   target: string;
   branch: string | null;
 }): string {
-  if (dest.kind === "workspace-only")
-    return `its workspace folder (${dest.target})`;
+  if (dest.kind === "workspace-only") return `its workspace folder (${dest.target})`;
   if (dest.kind === "new-repo") return `a new repo ${dest.target}`;
   return `${dest.target}${dest.branch ? ` on branch ${dest.branch}` : ""}`;
 }
@@ -632,10 +606,7 @@ function controller(run: RunRecord) {
     run.logs.push(makeLog(kind, message, stage));
     // "Run failed:" lines are recorded explicitly by the failure handler,
     // together with the thrown error's stack (the deck file:line).
-    if (
-      !/^Run failed:/.test(message) &&
-      ErrorLedger.isErrorLogLine(kind, message)
-    ) {
+    if (!/^Run failed:/.test(message) && ErrorLedger.isErrorLogLine(kind, message)) {
       ledger.record({ stage, message });
     }
     touch();
@@ -722,12 +693,8 @@ async function executeRun(
   // bounded only by the SDK's own default timeout, never by
   // FACTORY_RUN_TIMEOUT_MS or a cancel request. See ProviderAbortError for
   // how an abort here is kept distinct from a retryable transport error.
-  const deadlineSignal =
-    timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
-  const callSignal = combineAbortSignals([
-    deadlineSignal,
-    getCancelSignal(run.id),
-  ]);
+  const deadlineSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+  const callSignal = combineAbortSignals([deadlineSignal, getCancelSignal(run.id)]);
   // Route decisions land in the run log, so "why did this cost money?" is
   // answerable from the run itself and not only from the server console.
   const registry = createProviderRegistry(
@@ -1023,9 +990,7 @@ async function executeRun(
       allowedExistingPaths === undefined
         ? null
         : new Set(
-            [...allowedExistingPaths].map((path) =>
-              normalizeGeneratedPath(path),
-            ),
+            [...allowedExistingPaths].map((path) => normalizeGeneratedPath(path)),
           );
     const refusals: Array<{ path: string; reason: string }> = [];
     let written = 0;
@@ -1042,17 +1007,10 @@ async function executeRun(
       try {
         generatedPath = normalizeGeneratedPath(proposedPath);
         const absolute = safeResolve(workspacePath, generatedPath);
-        generatedPath = relative(resolve(workspacePath), absolute).replace(
-          /\\/g,
-          "/",
-        );
+        generatedPath = relative(resolve(workspacePath), absolute).replace(/\\/g, "/");
         const existing = await lstat(absolute).catch(() => null);
         existedBefore = Boolean(existing);
-        if (
-          existing &&
-          allowedExisting &&
-          !allowedExisting.has(generatedPath)
-        ) {
+        if (existing && allowedExisting && !allowedExisting.has(generatedPath)) {
           const reason =
             "existing file was not supplied in full to this stage — refusing an unseen anchored edit";
           log("warning", `WRITE REFUSED: ${generatedPath} — ${reason}`, stage);
@@ -1144,11 +1102,7 @@ async function executeRun(
       // FIX, DON'T BLOCK (owner rule 2026-08-16). A specifier with a known
       // right answer is corrected in place; only an import with no declared
       // counterpart is still refused, because the build must declare it.
-      const phantom = assessPhantomImports(
-        workspacePath,
-        generatedPath,
-        finalContents,
-      );
+      const phantom = assessPhantomImports(workspacePath, generatedPath, finalContents);
       if (phantom.corrections?.length) {
         log(
           "info",
@@ -1167,11 +1121,7 @@ async function executeRun(
         refusals.push({ path: generatedPath, reason });
         continue;
       }
-      const res = await writeWorkspaceFile(
-        workspacePath,
-        generatedPath,
-        finalContents,
-      );
+      const res = await writeWorkspaceFile(workspacePath, generatedPath, finalContents);
       // And again after the awaited write, before we record/log/persist it.
       throwIfCancelled(run.id);
       const status: FileContent["status"] =
@@ -1309,23 +1259,19 @@ async function executeRun(
     // args.options on a fresh run) so a resumed extend run keeps its resolved
     // target/goals instead of replaying the resolver.
     const extendMode = checkpoint.options.mode === "extend";
-    let repoAnalysis: Awaited<
-      ReturnType<typeof analyzeExistingCodebase>
-    > | null = null;
+    let repoAnalysis: Awaited<ReturnType<typeof analyzeExistingCodebase>> | null = null;
     let ingestedWorkspacePath: string | null = null;
     let resolvedExistingRepoOrigin: string | null = null;
     let goalsForSpec: string[] = [];
-    let additionalSourceContexts: Awaited<
-      ReturnType<typeof ingestAdditionalSource>
-    >[] = [];
+    let additionalSourceContexts: Awaited<ReturnType<typeof ingestAdditionalSource>>[] =
+      [];
     if (!stageDone("intake")) {
       throwIfTimedOut(deadline, timeoutMs);
       startStage(run, "intake");
       if (extendMode) {
         log("info", `Intake (extend mode): "${run.idea}"`);
         let repoSource = checkpoint.options.repoSource ?? null;
-        let additionalRepoSources =
-          checkpoint.options.additionalRepoSources ?? [];
+        let additionalRepoSources = checkpoint.options.additionalRepoSources ?? [];
         if (!repoSource) {
           // Direct-prompt mode: nothing pre-resolved — figure out WHICH program(s)
           // and WHAT to do from the free text itself (URL / project name /
@@ -1337,18 +1283,14 @@ async function executeRun(
           );
           let resolved;
           try {
-            resolved = await repoResolverAgent(
-              { provider: code },
-              checkpoint.idea,
-            );
+            resolved = await repoResolverAgent({ provider: code }, checkpoint.idea);
           } catch (err) {
             if (err instanceof ResolveError) {
               throw new IngestError(safeErrorMessage(err));
             }
             throw err;
           }
-          for (const line of resolved.transcript)
-            log("info", `resolver: ${line}`);
+          for (const line of resolved.transcript) log("info", `resolver: ${line}`);
           repoSource = resolved.repoSource;
           additionalRepoSources = resolved.additionalSources;
           goalsForSpec = resolved.goals;
@@ -1402,10 +1344,7 @@ async function executeRun(
           originUrl: ingested.originUrl,
           branch: ingested.branch,
         });
-        log(
-          "info",
-          `Work will be saved to: ${describeDestination(run.destination)}`,
-        );
+        log("info", `Work will be saved to: ${describeDestination(run.destination)}`);
         repoAnalysis = await analyzeExistingCodebase(ingested.path);
         const baselineBrowserHarness = hasPlaywrightHarness(ingested.path);
         log("info", `Detected stack: ${repoAnalysis.stackSummary}`);
@@ -1459,10 +1398,7 @@ async function executeRun(
       }
       // Additional read-only sources only matter while spec/build are still
       // being produced; re-ingest them (local copy/clone, no model calls).
-      if (
-        !checkpoint.build &&
-        checkpoint.options.additionalRepoSources?.length
-      ) {
+      if (!checkpoint.build && checkpoint.options.additionalRepoSources?.length) {
         additionalSourceContexts = await Promise.all(
           checkpoint.options.additionalRepoSources.map((src, i) =>
             ingestAdditionalSource(config, src, run.id, i),
@@ -1497,19 +1433,15 @@ async function executeRun(
           originUrl: existing ?? attached,
           branch: await currentBranch(ingestedWorkspacePath),
         });
-        log(
-          "info",
-          `Work will be saved to: ${describeDestination(run.destination)}`,
-        );
+        log("info", `Work will be saved to: ${describeDestination(run.destination)}`);
       }
     }
 
-    const productionIntelligenceRequired =
-      requiresProductionCompetitiveEvidence(run.demo);
+    const productionIntelligenceRequired = requiresProductionCompetitiveEvidence(
+      run.demo,
+    );
     const newRepoOptions =
-      checkpoint.options.mode !== "extend"
-        ? checkpoint.options.newRepo
-        : undefined;
+      checkpoint.options.mode !== "extend" ? checkpoint.options.newRepo : undefined;
     const resolvedNewRepoOwner =
       newRepoOptions?.owner ??
       (newRepoOptions &&
@@ -1547,9 +1479,7 @@ async function executeRun(
       ? await loadProjectMemory(projectKey)
       : null;
     const continuity = continuityFromMemory(projectMemory, run.id);
-    const requestedGoals = goalsForSpec.length
-      ? goalsForSpec
-      : [checkpoint.idea];
+    const requestedGoals = goalsForSpec.length ? goalsForSpec : [checkpoint.idea];
     let goalContract: GoalContract | undefined = checkpoint.goalContract;
     if (goalContract) {
       assertGoalContractIntegrity(goalContract);
@@ -1570,9 +1500,7 @@ async function executeRun(
 
     let purposeProfile: PurposeProfile | undefined = checkpoint.purposeProfile;
     let purposeProfileAttempted = Boolean(purposeProfile);
-    const ensurePurposeProfile = async (): Promise<
-      PurposeProfile | undefined
-    > => {
+    const ensurePurposeProfile = async (): Promise<PurposeProfile | undefined> => {
       if (!extendMode || !repoAnalysis || purposeProfileAttempted) {
         return purposeProfile;
       }
@@ -1644,11 +1572,7 @@ async function executeRun(
       log("model_call", `Product Spec agent (${critical.name})…`);
       const ideaForSpec =
         extendMode && repoAnalysis
-          ? composeExtendIdea(
-              repoAnalysis,
-              requestedGoals,
-              additionalSourceContexts,
-            )
+          ? composeExtendIdea(repoAnalysis, requestedGoals, additionalSourceContexts)
           : checkpoint.idea;
       spec = await productSpecAgent(
         { provider: critical },
@@ -1751,10 +1675,7 @@ async function executeRun(
           );
         }
       } else if (research) {
-        log(
-          "info",
-          "Competitive research restored from its durable checkpoint.",
-        );
+        log("info", "Competitive research restored from its durable checkpoint.");
       } else {
         log(
           productionIntelligenceRequired ? "warning" : "info",
@@ -1882,10 +1803,7 @@ async function executeRun(
           options: checkpoint.options,
           githubOwner: newRepo ? resolvedNewRepoOwner : null,
         });
-        log(
-          "info",
-          `Work will be saved to: ${describeDestination(run.destination)}`,
-        );
+        log("info", `Work will be saved to: ${describeDestination(run.destination)}`);
       }
       await appendAuditEvent({
         type: "workspace.created",
@@ -1906,9 +1824,7 @@ async function executeRun(
       // plan names, so an existing file is edited from its actual text instead
       // of reconstructed from its filename.
       const baseContext =
-        extendMode && repoAnalysis
-          ? buildExistingContext(repoAnalysis)
-          : undefined;
+        extendMode && repoAnalysis ? buildExistingContext(repoAnalysis) : undefined;
       const targetInspection =
         baseContext && workspacePath
           ? inspectTargetFiles(
@@ -1927,9 +1843,7 @@ async function executeRun(
         );
       }
       builderExistingPaths =
-        targetInspection?.files.map((file) =>
-          normalizeGeneratedPath(file.path),
-        ) ?? [];
+        targetInspection?.files.map((file) => normalizeGeneratedPath(file.path)) ?? [];
       const existingContext =
         baseContext && targetInspection
           ? { ...baseContext, targetFiles: targetInspection.files }
@@ -1959,9 +1873,7 @@ async function executeRun(
           plan,
           existingContext,
           research,
-          additionalSourceContexts.length
-            ? additionalSourceContexts
-            : undefined,
+          additionalSourceContexts.length ? additionalSourceContexts : undefined,
         );
         // SECOND GROUNDED PASS (FutureU run 53b9d1fb, 2026-08-23). The
         // planner named files that do not exist (src/server/routes/*.ts in a
@@ -1996,9 +1908,7 @@ async function executeRun(
                 "info",
                 `Builder named ${extra.files.length} existing file(s) it had not been shown (${extra.files
                   .map((file) => file.path)
-                  .join(
-                    ", ",
-                  )}) — reading them and running one more grounded pass.`,
+                  .join(", ")}) — reading them and running one more grounded pass.`,
               );
               builderExistingPaths = [
                 ...builderExistingPaths,
@@ -2010,10 +1920,7 @@ async function executeRun(
               );
               builderContext = {
                 ...existingContext,
-                targetFiles: [
-                  ...(existingContext.targetFiles ?? []),
-                  ...extra.files,
-                ],
+                targetFiles: [...(existingContext.targetFiles ?? []), ...extra.files],
               };
               build = await fileBuilderAgent(
                 { provider: code },
@@ -2022,9 +1929,7 @@ async function executeRun(
                 plan,
                 builderContext,
                 research,
-                additionalSourceContexts.length
-                  ? additionalSourceContexts
-                  : undefined,
+                additionalSourceContexts.length ? additionalSourceContexts : undefined,
               );
             }
           }
@@ -2087,9 +1992,7 @@ async function executeRun(
         builderContext
       ) {
         const refusedPaths = new Set(
-          builderTally.refusals.map((item) =>
-            normalizeGeneratedPath(item.path),
-          ),
+          builderTally.refusals.map((item) => normalizeGeneratedPath(item.path)),
         );
         const landed = build.files
           .map((file) => normalizeGeneratedPath(file.path))
@@ -2105,9 +2008,7 @@ async function executeRun(
           plan,
           builderContext,
           research,
-          additionalSourceContexts.length
-            ? additionalSourceContexts
-            : undefined,
+          additionalSourceContexts.length ? additionalSourceContexts : undefined,
           { refusals: builderTally.refusals },
         );
         const correctionTally = await writeBuild(
@@ -2118,9 +2019,7 @@ async function executeRun(
         );
         reportWrites(correctionTally, "builder", "builder correction");
         const stillRefused = new Set(
-          correctionTally.refusals.map((item) =>
-            normalizeGeneratedPath(item.path),
-          ),
+          correctionTally.refusals.map((item) => normalizeGeneratedPath(item.path)),
         );
         build = {
           ...build,
@@ -2200,12 +2099,9 @@ async function executeRun(
         uiAcceptanceRequired: acceptance.uiAcceptanceRequired,
         // Extend runs may use only the harness observed before generated writes.
         // Greenfield code cannot prove itself with a model-authored harness.
-        trustedBrowserHarness:
-          extendMode && checkpoint.baselineBrowserHarness === true,
+        trustedBrowserHarness: extendMode && checkpoint.baselineBrowserHarness === true,
       });
-      const windowsPortabilityIssues = assessWindowsProcessPortability(
-        files.values(),
-      );
+      const windowsPortabilityIssues = assessWindowsProcessPortability(files.values());
       verification.incomplete = [
         ...acceptance.errors.map((reason) => ({
           command: "generated acceptance tests",
@@ -2220,8 +2116,7 @@ async function executeRun(
       if (!verificationPlan.commands.length) {
         verification.incomplete!.push({
           command: "workspace verification",
-          reason:
-            "no supported project manifest or verification command was found",
+          reason: "no supported project manifest or verification command was found",
         });
         log(
           "warning",
@@ -2320,8 +2215,7 @@ async function executeRun(
             } else {
               verification.incomplete!.push({
                 command: res.command,
-                reason:
-                  res.reason ?? "required verification command did not execute",
+                reason: res.reason ?? "required verification command did not execute",
               });
             }
           }
@@ -2447,8 +2341,7 @@ async function executeRun(
       );
       for (
         let draft = firstDraftToGenerate;
-        (!testPlan || (!run.demo && !testAssessment?.ok)) &&
-        draft <= maxTestDrafts;
+        (!testPlan || (!run.demo && !testAssessment?.ok)) && draft <= maxTestDrafts;
         draft += 1
       ) {
         if (testPlan && testAssessment && !testAssessment.ok) {
@@ -2462,22 +2355,14 @@ async function executeRun(
           "model_call",
           `Test Writer agent (${review.name})${draft > 1 ? ` — corrective draft ${draft}/${maxTestDrafts}` : ""}…`,
         );
-        testPlan = await testWriterAgent(
-          { provider: review },
-          spec,
-          testWriterBuild,
-          {
-            manifestExcerpt:
-              repoAnalysis?.manifestExcerpts
-                .map(
-                  (manifest) =>
-                    `----- ${manifest.path} -----\n${manifest.excerpt}`,
-                )
-                .join("\n\n") ?? "",
-            validationFeedback: testAssessment?.errors,
-            previousPlan: testPlan,
-          },
-        );
+        testPlan = await testWriterAgent({ provider: review }, spec, testWriterBuild, {
+          manifestExcerpt:
+            repoAnalysis?.manifestExcerpts
+              .map((manifest) => `----- ${manifest.path} -----\n${manifest.excerpt}`)
+              .join("\n\n") ?? "",
+          validationFeedback: testAssessment?.errors,
+          previousPlan: testPlan,
+        });
         // Persist every paid result before evaluating it so a crash never
         // replays the call. An invalid checkpointed draft becomes feedback for
         // the next bounded corrective draft on resume.
@@ -2569,10 +2454,7 @@ async function executeRun(
       try {
         const wired = enforceWiredIntegration(
           report,
-          findUnwiredNewFiles(
-            workspacePath,
-            generatedPathsForWiring(files.values()),
-          ),
+          findUnwiredNewFiles(workspacePath, generatedPathsForWiring(files.values())),
           isExtendRun,
         );
         return enforceCompletionQa(wired, scanCompletionGaps(workspacePath));
@@ -2606,12 +2488,7 @@ async function executeRun(
       log("model_call", `QA Critic agent (${review.name})…`);
       qa = withWiringGate(
         groundCurrentQa(
-          await qaCriticAgent(
-            { provider: review },
-            fullBuild(),
-            commandOutput,
-            spec,
-          ),
+          await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
         ),
       );
       await checkpointNow({ qa });
@@ -2639,21 +2516,12 @@ async function executeRun(
         );
         reportWrites(repairTally, "repair", "repair");
         log("info", repairOutcomeMessage(repairTally), "repair");
-        log(
-          "info",
-          "Re-running executable verification after repair.",
-          "repair",
-        );
+        log("info", "Re-running executable verification after repair.", "repair");
         await verifyWorkspace();
         log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
         qa = withWiringGate(
           groundCurrentQa(
-            await qaCriticAgent(
-              { provider: review },
-              fullBuild(),
-              commandOutput,
-              spec,
-            ),
+            await qaCriticAgent({ provider: review }, fullBuild(), commandOutput, spec),
           ),
         );
         await checkpointNow({ qa, pendingRepair: undefined });
@@ -2668,9 +2536,7 @@ async function executeRun(
       // a final review blaming the Node version for a skipped-install-scripts
       // binding). Classification is deterministic signature matching over the
       // EXECUTED commands' real output — never model judgment.
-      const envFailure = qa.passed
-        ? null
-        : classifyEnvironmentFailure(verification);
+      const envFailure = qa.passed ? null : classifyEnvironmentFailure(verification);
       const incompleteVerification = verification.incomplete?.length ?? 0;
       const shouldStopForIncompleteVerification = (report: QaReport): boolean =>
         !run.demo &&
@@ -2763,11 +2629,7 @@ async function executeRun(
           verify: verifyWorkspace,
           reverify: async () => {
             throwIfTimedOut(deadline, timeoutMs);
-            log(
-              "model_call",
-              `Re-running QA Critic (${review.name})…`,
-              "repair",
-            );
+            log("model_call", `Re-running QA Critic (${review.name})…`, "repair");
             const next = withWiringGate(
               groundCurrentQa(
                 await qaCriticAgent(
@@ -2779,11 +2641,7 @@ async function executeRun(
               ),
             );
             await checkpointNow({ qa: next, pendingRepair: undefined });
-            log(
-              next.passed ? "success" : "warning",
-              `QA: ${next.summary}`,
-              "repair",
-            );
+            log(next.passed ? "success" : "warning", `QA: ${next.summary}`, "repair");
             return next;
           },
         });
@@ -2895,9 +2753,7 @@ async function executeRun(
           nextImprovements: [],
           workspacePath,
           providerUsage: run.providerUsage,
-          ...(spec.purposeProfile
-            ? { purposeProfile: spec.purposeProfile }
-            : {}),
+          ...(spec.purposeProfile ? { purposeProfile: spec.purposeProfile } : {}),
           ...(spec.goalContract ? { goalContract: spec.goalContract } : {}),
         };
       }
@@ -3031,10 +2887,7 @@ async function executeRun(
       return;
     }
 
-    const readinessKind = readinessDeliveryKind(
-      run.destination,
-      checkpoint.options,
-    );
+    const readinessKind = readinessDeliveryKind(run.destination, checkpoint.options);
     const privateApp = checkpoint.options.publish === false;
     const readinessPurposeProfile = spec.purposeProfile;
     const wiringComplete = !(report.caveats ?? []).some((caveat) =>
@@ -3043,9 +2896,7 @@ async function executeRun(
     const highOrCriticalIssues = qa.issues.filter((issue) =>
       ["critical", "high"].includes(String(issue.severity).toLowerCase()),
     ).length;
-    const candidateArtifactDigest = artifactTreeDigest(
-      verification.fileDigests ?? {},
-    );
+    const candidateArtifactDigest = artifactTreeDigest(verification.fileDigests ?? {});
     const readinessFactsFor = (
       delivery: ProductionReadinessFacts["delivery"],
       currentReceiptValid: boolean,
@@ -3057,8 +2908,7 @@ async function executeRun(
           ? readinessPurposeProfile.grounding.grounded &&
             readinessPurposeProfile.evidence.length > 0
           : Boolean(args.idea.trim() && spec.acceptanceCriteria.length > 0),
-        goalsCovered:
-          verifiedOutcome && (verification.incomplete?.length ?? 0) === 0,
+        goalsCovered: verifiedOutcome && (verification.incomplete?.length ?? 0) === 0,
         acceptanceCriteria: spec.acceptanceCriteria.length,
         acceptanceCriteriaExecuted: verifiedOutcome
           ? spec.acceptanceCriteria.length
@@ -3073,8 +2923,7 @@ async function executeRun(
         blockingWriteRefusals: blockingWriteRefusals.length,
         wiringComplete,
         highOrCriticalSecurityIssues: highOrCriticalIssues,
-        operationallyRunnable:
-          verifiedOutcome && Boolean(report.howToRun?.trim()),
+        operationallyRunnable: verifiedOutcome && Boolean(report.howToRun?.trim()),
         completionGaps: scanCompletionGaps(workspacePath).length,
         platformCompatibility: assessPlatformCompatibility(
           workspacePath,
@@ -3086,26 +2935,25 @@ async function executeRun(
         "Legal, regulatory, contractual, store-policy, and licensing decisions are owner-managed outside cyberland and were not evaluated.",
       ],
     });
-    const currentCandidateFacts =
-      async (): Promise<ProductionReadinessFacts> => {
-        const currentReceipt = await verifyFileDigests(
-          workspacePath,
-          files.keys(),
-          verification.fileDigests,
-        );
-        return candidateReadinessFacts(
-          readinessFactsFor(
-            {
-              kind: readinessKind,
-              delivered: false,
-              releasedToTrunk: false,
-              liveVerified: false,
-              localArtifactVerified: false,
-            },
-            currentReceipt.ok,
-          ),
-        );
-      };
+    const currentCandidateFacts = async (): Promise<ProductionReadinessFacts> => {
+      const currentReceipt = await verifyFileDigests(
+        workspacePath,
+        files.keys(),
+        verification.fileDigests,
+      );
+      return candidateReadinessFacts(
+        readinessFactsFor(
+          {
+            kind: readinessKind,
+            delivered: false,
+            releasedToTrunk: false,
+            liveVerified: false,
+            localArtifactVerified: false,
+          },
+          currentReceipt.ok,
+        ),
+      );
+    };
 
     // TRUE PRE-RELEASE GATE. Both semantic reviewers decide over the exact
     // candidate-byte digest before deliverRun can push a branch/fast-forward
@@ -3174,11 +3022,7 @@ async function executeRun(
               config,
               secrets,
               (kind, message) =>
-                log(
-                  kind === "warn" ? "warning" : "info",
-                  message,
-                  "final_review",
-                ),
+                log(kind === "warn" ? "warning" : "info", message, "final_review"),
               callSignal,
             );
             const readinessRouting = selectRunRouting(
@@ -3222,9 +3066,7 @@ async function executeRun(
           { requireDelivery: false },
         );
         blockedReceipt.blockers = [
-          ...(preReleaseApproval?.blockers ?? [
-            "Pre-release approval is missing.",
-          ]),
+          ...(preReleaseApproval?.blockers ?? ["Pre-release approval is missing."]),
           ...blockedReceipt.blockers,
         ];
         await recordReadinessEvaluation({
@@ -3289,10 +3131,7 @@ async function executeRun(
     let liveDeploymentVerified = false;
 
     if (run.destination) {
-      log(
-        "info",
-        `Saving the work to ${describeDestination(run.destination)}…`,
-      );
+      log("info", `Saving the work to ${describeDestination(run.destination)}…`);
       const deliveryBoundary = await runApprovedSideEffect(() =>
         deliverRun({
           destination: run.destination!,
@@ -3324,8 +3163,7 @@ async function executeRun(
       const delivered = deliveryBoundary.value;
       run.destination = {
         ...delivered,
-        detail:
-          delivered.detail == null ? null : redactSecrets(delivered.detail),
+        detail: delivered.detail == null ? null : redactSecrets(delivered.detail),
       };
       log(
         delivered.status === "delivered"
@@ -3406,11 +3244,7 @@ async function executeRun(
        *
        * Skipped only when the trunk ALREADY moved via the named fallback, where
        * a PR would contain nothing at all. */
-      if (
-        releaseStep === "open-pr" &&
-        delivered.branch &&
-        delivered.commitSha
-      ) {
+      if (releaseStep === "open-pr" && delivered.branch && delivered.commitSha) {
         log(
           "info",
           "Release: opening the PR against the repo's default branch and waiting on its checks…",
@@ -3542,16 +3376,11 @@ async function executeRun(
           log(
             "warning",
             `Not deploying to a host: ${
-              qa.passed
-                ? "tests did not execute green"
-                : "grounded QA did not pass"
+              qa.passed ? "tests did not execute green" : "grounded QA did not pass"
             } — an unverified build never goes live.`,
           );
         } else {
-          log(
-            "info",
-            "Deploy: putting the new app on a host (Railway/Vercel)…",
-          );
+          log("info", "Deploy: putting the new app on a host (Railway/Vercel)…");
           const deployBoundary = await runApprovedSideEffect(() =>
             deployRun({
               workspacePath,
@@ -3584,10 +3413,7 @@ async function executeRun(
             ),
           };
           await appendAuditEvent({
-            type:
-              dep.deployed && dep.verified
-                ? "run.deploy.live"
-                : "run.deploy.held",
+            type: dep.deployed && dep.verified ? "run.deploy.live" : "run.deploy.held",
             runId: run.id,
             detail: dep.url ?? dep.reason,
           });
@@ -3620,10 +3446,7 @@ async function executeRun(
             dep.url &&
             process.env.FACTORY_STORE_PUBLISH !== "0"
           ) {
-            log(
-              "info",
-              "App Store: posting to the axiombiolabs.org store registry…",
-            );
+            log("info", "App Store: posting to the axiombiolabs.org store registry…");
             const store = await storePublish({
               appName: run.appName,
               runId: run.id,
@@ -3791,8 +3614,7 @@ async function executeRun(
           competitiveResearch: durableCompetitiveResearch,
           finalSummary: report.summary,
           nextImprovements: report.nextImprovements,
-          revision:
-            run.release?.mergedSha ?? run.destination?.commitSha ?? null,
+          revision: run.release?.mergedSha ?? run.destination?.commitSha ?? null,
         });
         projectMemoryFinalized = true;
         log(
@@ -3914,9 +3736,7 @@ async function executeRun(
       run.resumable = true;
       // The raw error may embed a provider/library message containing a
       // secret-shaped value — redact before it is persisted and served by the API.
-      run.error = redactSecrets(
-        err instanceof Error ? err.message : "Unknown error",
-      );
+      run.error = redactSecrets(err instanceof Error ? err.message : "Unknown error");
       if (run.currentStage) finishStage(run, run.currentStage, "failed");
       ledger.record({
         stage: run.currentStage,
@@ -4085,14 +3905,11 @@ async function prepareResume(
       registry.get("mock");
     } else {
       if (registry.availableLive().length === 0) {
-        throw new MissingProviderCredentialError(
-          registry.missingCredentialNames(),
-        );
+        throw new MissingProviderCredentialError(registry.missingCredentialNames());
       }
-      const requested = [
-        providers?.codeProvider,
-        providers?.reviewProvider,
-      ].filter((name): name is ProviderName => Boolean(name));
+      const requested = [providers?.codeProvider, providers?.reviewProvider].filter(
+        (name): name is ProviderName => Boolean(name),
+      );
       const routing = selectResumeRouting(run, providers, registry, config);
       run.routingMode = routing.routingMode;
       run.codeProvider = routing.codeProvider;
@@ -4143,10 +3960,7 @@ async function prepareResume(
   }
 }
 
-async function restoreFailedResume(
-  run: RunRecord,
-  err: unknown,
-): Promise<void> {
+async function restoreFailedResume(run: RunRecord, err: unknown): Promise<void> {
   run.status = "failed";
   run.resumable = Boolean(await getRunCheckpoint(run.id));
   run.error = redactSecrets(
@@ -4194,10 +4008,7 @@ export async function resumeFactory(
   return prepared.run;
 }
 
-async function failBackgroundRun(
-  run: RunRecord,
-  error: unknown,
-): Promise<void> {
+async function failBackgroundRun(run: RunRecord, error: unknown): Promise<void> {
   const detail = redactSecrets(
     error instanceof Error ? error.message : "Unknown background error.",
   );

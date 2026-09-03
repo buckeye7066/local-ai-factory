@@ -91,13 +91,12 @@ export function NewRunHero({
           Local AI Software Factory
         </Badge>
         <h1 className="text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
-          Build apps through an{" "}
-          <span className="text-aurora">AI assembly line</span>
+          Build apps through an <span className="text-aurora">AI assembly line</span>
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-pretty text-sm leading-relaxed text-slate-400 sm:text-base">
-          Planner, architect, builder, tester, critic, and repair agents work
-          together through one orchestrated model ladder, strongest paid first
-          and free/local last.
+          Planner, architect, builder, tester, critic, and repair agents work together
+          through one orchestrated model ladder, strongest paid first and free/local
+          last.
         </p>
       </motion.div>
 
@@ -142,10 +141,9 @@ export function NewRunHero({
             <span>
               <span className="font-medium text-white">Publish this app</span>
               <span className="block text-xs text-slate-400">
-                List the finished app in your Axiom BioLabs app store and let
-                PromoPilot promote it. Uncheck for something that is just for
-                you - it still gets built, saved to GitHub, and hosted, but
-                never listed or promoted.
+                List the finished app in your Axiom BioLabs app store and let PromoPilot
+                promote it. Uncheck for something that is just for you - it still gets
+                built, saved to GitHub, and hosted, but never listed or promoted.
               </span>
             </span>
           </label>
@@ -212,10 +210,7 @@ function PortfolioSessionPanel() {
     });
 
   useEffect(() => {
-    if (
-      !session ||
-      (session.status !== "queued" && session.status !== "running")
-    ) {
+    if (!session || (session.status !== "queued" && session.status !== "running")) {
       return;
     }
     let active = true;
@@ -232,18 +227,13 @@ function PortfolioSessionPanel() {
   }, [session?.id, session?.status]);
 
   const start = async () => {
-    if (!prompt.trim() || !parsedTargets.length || parsedTargets.length > 30)
-      return;
+    if (!prompt.trim() || !parsedTargets.length || parsedTargets.length > 30) return;
     setBusy(true);
     setError(null);
     try {
-      setSession(
-        await api.createPortfolioSession(prompt.trim(), parsedTargets),
-      );
+      setSession(await api.createPortfolioSession(prompt.trim(), parsedTargets));
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Could not start session.",
-      );
+      setError(reason instanceof Error ? reason.message : "Could not start session.");
     } finally {
       setBusy(false);
     }
@@ -258,9 +248,7 @@ function PortfolioSessionPanel() {
       setSteering("");
       setSession(await api.getPortfolioSession(session.id));
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Could not steer session.",
-      );
+      setError(reason instanceof Error ? reason.message : "Could not steer session.");
     } finally {
       setBusy(false);
     }
@@ -277,8 +265,8 @@ function PortfolioSessionPanel() {
           <div>
             <h2 className="font-medium text-white">Portfolio session</h2>
             <p className="text-xs text-slate-400">
-              Programs run one at a time; each receives its routed portion when
-              it starts.
+              Programs run one at a time; each receives its routed portion when it
+              starts.
             </p>
           </div>
           <Badge tone={live ? "cyan" : "neutral"}>{session.status}</Badge>
@@ -335,10 +323,7 @@ function PortfolioSessionPanel() {
   }
 
   return (
-    <motion.div
-      variants={slideUp}
-      className="glass mx-auto mt-8 max-w-3xl p-5 sm:p-6"
-    >
+    <motion.div variants={slideUp} className="glass mx-auto mt-8 max-w-3xl p-5 sm:p-6">
       <label
         htmlFor="portfolio-programs"
         className="mb-2 block text-xs font-medium text-slate-400"
@@ -355,9 +340,8 @@ function PortfolioSessionPanel() {
         }
       />
       <p className="mt-2 text-[11px] text-slate-500">
-        Use{" "}
-        <span className="text-slate-300">Program name = path or Git URL</span>{" "}
-        so routing can match names in your prompt.
+        Use <span className="text-slate-300">Program name = path or Git URL</span> so
+        routing can match names in your prompt.
       </p>
       <label
         htmlFor="portfolio-prompt"
@@ -374,8 +358,7 @@ function PortfolioSessionPanel() {
       />
       <div className="mt-5 flex items-center justify-between gap-3">
         <span className="text-xs text-slate-400">
-          {parsedTargets.length} program{parsedTargets.length === 1 ? "" : "s"}{" "}
-          selected
+          {parsedTargets.length} program{parsedTargets.length === 1 ? "" : "s"} selected
         </span>
         <Button
           onClick={start}
@@ -389,9 +372,7 @@ function PortfolioSessionPanel() {
         </Button>
       </div>
       {parsedTargets.length > 30 && (
-        <p className="mt-2 text-xs text-red-300">
-          Choose no more than 30 programs.
-        </p>
+        <p className="mt-2 text-xs text-red-300">Choose no more than 30 programs.</p>
       )}
       {error && <p className="mt-3 text-xs text-red-300">{error}</p>}
     </motion.div>
@@ -524,8 +505,8 @@ function NewAppPanel({
           ) : nameCheck.availability === "free" ? (
             <span className="inline-flex items-center gap-1.5 text-emerald-300">
               <GitBranch className="h-3 w-3" />
-              Will create {nameCheck.fullName} (private) and push the finished
-              work there.
+              Will create {nameCheck.fullName} (private) and push the finished work
+              there.
             </span>
           ) : nameCheck.availability === "unknown" && nameCheck.reason ? (
             <span className="text-amber-300">{nameCheck.reason}</span>
