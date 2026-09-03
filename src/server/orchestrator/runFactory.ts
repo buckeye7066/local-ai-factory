@@ -3769,7 +3769,6 @@ async function prepareResume(
       if (registry.availableLive().length === 0) {
         throw new MissingProviderCredentialError(registry.missingCredentialNames());
       }
-      assertReadinessBrainFloor(config, secrets);
       const requested = [providers?.codeProvider, providers?.reviewProvider].filter(
         (name): name is ProviderName => Boolean(name),
       );
