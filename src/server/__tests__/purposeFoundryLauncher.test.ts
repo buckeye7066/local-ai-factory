@@ -29,6 +29,15 @@ describe("Purpose Foundry desktop launcher", () => {
     expect(repairCommand).not.toContain("-ExecutionPolicy Bypass");
   });
 
+  it("resolves exactly one Git executable before synchronizing the Factory runtime", async () => {
+    const sync = await script("Sync-FactoryRuntime.ps1");
+    expect(sync).toContain("Get-Command git -CommandType Application -All");
+    expect(sync).toContain("Select-Object -First 1");
+    expect(sync).toContain("$script:GitExe = [string]$git.Source");
+    expect(sync).toContain("& $script:GitExe -C $WorkingDirectory @Arguments");
+    expect(sync).not.toContain("& $git.Source -C");
+  });
+
   it("opens Foundry mode and preserves errors without bypassing policy", async () => {
     const foundry = await script("start-purpose-foundry.cmd");
     expect(foundry).toContain("Install-Purpose-Foundry-Icon.ps1");
