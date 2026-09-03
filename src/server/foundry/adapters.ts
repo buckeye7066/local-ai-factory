@@ -731,7 +731,7 @@ export class FoundryAdapters {
       `Constraints: ${project.constitution.constraints.join("; ") || "none specified"}`,
       `Non-goals: ${project.constitution.nonGoals.join("; ") || "none specified"}`,
       `Targets: ${project.constitution.targets.join("; ") || "none specified"}`,
-      "Mandatory completion: the run is not complete until the purpose-bound factory.production-readiness.v1 receipt is ready and approved by independent lead and challenger judgments through the same paid-first model ladder. Owner-managed legal/external matters remain outside cyberland.",
+      "Mandatory completion: the run is not complete until the purpose-bound factory.production-readiness.v1 receipt is ready and approved by independent lead and challenger judgments through the same paid-first-to-free automatic model ladder. Owner-managed legal/external matters remain outside cyberland.",
       `Upstream specialist handoffs: ${upstreamEvidence.length ? JSON.stringify(upstreamEvidence) : "none"}`,
       ...(target
         ? [
