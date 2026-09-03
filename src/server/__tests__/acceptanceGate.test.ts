@@ -227,6 +227,29 @@ for (const featureWord of ["collaboration", "sync"] as const) {
 }`),
     );
     expect(shadowedExpect.ok).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion(`const actualIds = ["kept"];
+const forbiddenId = "removed";
+expect(actualIds).not.toContain(forbiddenId);`),
+      ).ok,
+    ).toBe(true);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion("expect(output).not.toContain();"),
+      ).errors.join("\n"),
+    ).toMatch(/no expected value/i);
+    expect(
+      assessGeneratedTests(
+        cliSpec,
+        cliBuild,
+        withAssertion('expect(output).not.toContain(<string>" safe ");'),
+      ).ok,
+    ).toBe(true);
 
     const regex = assessGeneratedTests(
       cliSpec,
@@ -797,6 +820,13 @@ for (const featureWord of ["collaboration", "sync"] as const) {
 
     good.files[0]!.contents =
       'def test_add():\n    output = "vitest ready"\n    assert "vite" not in output\n';
+    expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(false);
+    good.files[0]!.contents = [
+      "def test_add():",
+      '    output = "async ready"',
+      '    for word in ["collaboration", "sync"]:',
+      "        assert word not in output",
+    ].join("\n");
     expect(assessGeneratedTests(pythonSpec, pythonBuild, good).ok).toBe(false);
     good.files[0]!.contents =
       'def test_add():\n    output = "vitest ready"\n    assert not re.search(r"(vite|next)", output)\n';
