@@ -150,6 +150,9 @@ describe("automatic cloud model-ladder contract", () => {
     expect(freeFallback).toContain('api: "ollama"');
     expect(freeFallback).toContain("/api/chat");
     expect(freeFallback).toContain(
+      "AI_ROTATE_CALL_TIMEOUT_MS=${AITIME_OLLAMA_CALL_TIMEOUT_MS:-600000}",
+    );
+    expect(freeFallback).toContain(
       "No AI Time free candidate could serve a real inference.",
     );
     expect(freeFallback).not.toMatch(/mock|stub/i);
