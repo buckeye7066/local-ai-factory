@@ -13,16 +13,16 @@ Starting a project now dispatches the active station automatically. Purpose
 Foundry uses the programs' existing public interfaces rather than absorbing
 their implementations:
 
-| Station             | Adapter                      | Work performed                                                                                                                                                                                                                                                       |
-| ------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scout               | authenticated Program Scout jobs API | Creates or resumes a real RepoRewards Program Scout job, polls research/specification/generation/verification, and completes only for a verified branch whose verification SHA equals its head SHA. |                                                                                                                                                                                                     |
-| Repo Rewards        | HTTP search API              | Searches for maintained, relevant open-source components and records the result set.                                                                                                                                                                                 |
-| PromoPilot          | authenticated HTTP API       | Collects control-plane, campaign, attribution, destination, and advertisement data.                                                                                                                                                                                  |
-| Factory Deck        | local run API                | Receives the completed discovery and market handoffs, builds or extends the named target, and waits for its durable run result.                                                                                                                                      |
-| FlexFactor          | local CLI                    | Runs the production-readiness repair workflow against the target.                                                                                                                                                                                                    |
-| The Crucible        | independent review provider  | Assumes the result is wrong and returns evidence-backed findings or a hardened verdict.                                                                                                                                                                              |
-| App Store Publisher | authenticated local HTTP API | Finds real release files inside approved workspace roots, streams and SHA-256 verifies their bytes, selects exact project presets/stores, reviews the Publisher dry-run, and performs idempotent Google Play, Apple App Review, and Galaxy Store Review submissions. |
-| Watchtower          | HTTP probes                  | Measures the explicitly configured deployment endpoints and returns failures to the line.                                                                                                                                                                            |
+| Station | Adapter | Work performed |
+| --- | --- | --- |
+| Scout | Authenticated Program Scout jobs API | Creates or resumes a real RepoRewards Program Scout job, polls research/specification/generation/verification, and completes only for a verified branch whose verification SHA equals its head SHA. |
+| Repo Rewards | HTTP search API | Searches for maintained, relevant open-source components and records the result set. |
+| PromoPilot | Authenticated HTTP API | Collects control-plane, campaign, attribution, destination, and advertisement data. |
+| Factory Deck | Local run API | Receives the completed discovery and market handoffs, builds or extends the named target, and waits for a merged, durable result. |
+| FlexFactor | Local CLI | Runs the production-readiness repair workflow against the target. |
+| The Crucible | Independent review provider | Assumes the result is wrong and returns evidence-backed findings or a hardened verdict. |
+| App Store Publisher | Authenticated local HTTP API | Finds release files, verifies exact bytes, reviews the dry-run, and performs idempotent store submissions. |
+| Watchtower | HTTP probes | Measures the configured deployment endpoints and returns failures to the line. |
 
 An adapter that lacks credentials, a target, a release artifact, or a deployed
 endpoint moves to **needs attention** instead of pretending its work passed.
