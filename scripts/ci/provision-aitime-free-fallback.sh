@@ -139,6 +139,8 @@ NODE
   echo "AI_ROTATE=on"
   echo "AI_ROTATE_CATALOG=${catalog_path}"
   echo "AI_ROTATE_STATE=${state_path}"
+  # CPU-hosted 7B structured responses can exceed AI Time\'s interactive 180s default.
+  echo "AI_ROTATE_CALL_TIMEOUT_MS=${AITIME_OLLAMA_CALL_TIMEOUT_MS:-600000}"
   echo "OLLAMA_BASE_URL=${ollama_url}"
   echo "FACTORY_FREE_ENABLED=1"
 } >> "${GITHUB_ENV}"
