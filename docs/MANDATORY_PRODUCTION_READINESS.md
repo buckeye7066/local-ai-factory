@@ -31,16 +31,20 @@ tooling, unseen paths, symlinks, unreadable files, oversized files, and files
 outside the bounded aggregate context remain forbidden. Residual markers still
 block the receipt after the repair and executable verification rerun.
 
-## Mandatory brain floor
+## Mandatory independent review floor
 
-The production-readiness brain floor is:
+Every non-demo Factory Deck run and Purpose Foundry project requires two
+independent semantic judgments: a lead and a challenger. Both review the same
+immutable evidence digest and independently return purpose alignment,
+implementation completeness, technical readiness, and zero blockers.
 
-- **Sol**: OpenAI-family lead reviewer;
-- **Fable or Opus**: Anthropic-family independent reviewer whose configured model name is Fable- or Opus-class.
-
-Both must be configured for every non-demo Factory Deck run and Purpose Foundry project. Lower-cost/free helpers may assist earlier stages, but they cannot issue or substitute for the production-readiness receipt. The reviewers must use different provider families, review the same immutable evidence digest, and independently return purpose alignment, implementation completeness, technical readiness, and zero blockers.
-
-Failure, unavailability, quota exhaustion, disagreement, stale evidence, or a weaker Anthropic model holds the run. It never silently falls back to one brain or self-review.
+The judgments use the exact same automatic ladder as all build stages. Each
+starts at the strongest configured paid model, descends through weaker paid
+models and provider families on credit, quota, capacity, or configured-budget
+exhaustion, and finishes at AI Time's strongest available live free/local
+model. There is no paid-only reviewer route and no separate free route. Mock or
+stub providers, a missing judgment, disagreement, stale evidence, or a genuine
+non-exhaustion error still holds the run.
 
 Both brains decide before any branch push, direct trunk fast-forward, PR merge,
 or deployment. Their approval is bound to the digest of the exact sorted
