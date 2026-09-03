@@ -786,6 +786,14 @@ export class RotatingProvider implements LLMProvider {
     );
   }
 
+  currentProvider(): LLMProvider["name"] {
+    return this.name;
+  }
+
+  currentModel(): string {
+    return this.model;
+  }
+
   /** FailoverProvider calls this between free attempts after a failure. */
   resetTransport(): void {
     this.opts.fccDelegate?.resetTransport();
