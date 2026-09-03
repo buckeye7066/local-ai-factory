@@ -144,8 +144,8 @@ describe("automatic cloud model-ladder contract", () => {
 
   it("provisions and probes a real local model without mock or stub evidence", () => {
     expect(freeFallback).toContain("ollama/ollama:latest");
-    expect(freeFallback).toContain("qwen2.5-coder:14b");
-    expect(freeFallback).toContain("qwen3:8b");
+    expect(freeFallback).toContain("qwen2.5-coder:7b");
+    expect(freeFallback).toContain("qwen2.5-coder:3b");
     expect(freeFallback).toContain('cost_class: "local-unlimited"');
     expect(freeFallback).toContain('api: "ollama"');
     expect(freeFallback).toContain("/api/chat");
