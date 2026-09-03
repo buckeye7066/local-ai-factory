@@ -18,9 +18,9 @@ import {
 
 const PreReleaseBrainReviewSchema = z.object({
   // Accept both current reviewer slots and legacy identities so old checkpoints
-  // remain resumable after the paid-ladder migration.
+  // remain resumable after the automatic-ladder migration.
   identity: z.enum(["lead", "challenger", "sol", "fable", "opus"]),
-  provider: z.enum(["openai", "anthropic"]),
+  provider: z.enum(["openai", "anthropic", "free"]),
   model: z.string().min(1),
   evidenceDigest: z.string().min(1),
   decision: z.enum(["ready", "not_ready"]),
