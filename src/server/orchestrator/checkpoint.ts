@@ -21,6 +21,32 @@ export const MAX_CHECKPOINT_COMMAND_OUTPUT_CHARS = 64 * 1024;
 const MAX_COMMAND_OUTPUT_PER_COMMAND_CHARS = 4 * 1024;
 const MAX_COMMAND_LABEL_CHARS = 1024;
 
+/**
+ * Zod 3's record parser intentionally omits an own `__proto__` key while
+ * cloning. Artifact paths are untrusted, legal filesystem names, so validate
+ * the input without that clone and rebuild it into a null-prototype map.
+ */
+const PlatformArtifactSnapshotSchema = z
+  .custom<Record<string, unknown>>(
+    (value) => typeof value === "object" && value !== null && !Array.isArray(value),
+    "expected an artifact snapshot object",
+  )
+  .transform((value, context): Record<string, string> => {
+    const snapshot = Object.create(null) as Record<string, string>;
+    for (const [path, fingerprint] of Object.entries(value)) {
+      if (typeof fingerprint !== "string") {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [path],
+          message: "expected an artifact fingerprint string",
+        });
+        continue;
+      }
+      snapshot[path] = fingerprint;
+    }
+    return snapshot;
+  });
+
 export function boundCheckpointCommandOutput(output: string): string {
   return output.slice(-MAX_CHECKPOINT_COMMAND_OUTPUT_CHARS);
 }
@@ -184,7 +210,7 @@ export const FactoryCheckpointSchema = z.object({
        * Values bind directory presence, file bytes plus executable intent, or
        * symlink identity.
        */
-      platformArtifactSnapshot: z.record(z.string()).optional(),
+      platformArtifactSnapshot: PlatformArtifactSnapshotSchema.optional(),
     })
     .optional(),
   testsExecuted: z.boolean().default(false),
