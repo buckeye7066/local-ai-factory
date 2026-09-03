@@ -23,6 +23,9 @@ workspaces/
 Thumbs.db
 *.tmp
 
+# Local backup snapshots — Git history is the canonical backup
+*.bak-*
+
 # Agent worktrees + one-off run dumps (local debugging artifacts, never source)
 .claude/
 /run-*.json
