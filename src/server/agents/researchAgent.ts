@@ -652,8 +652,7 @@ async function evaluateProductsIndividually(
   dossier: CompetitiveDossier,
 ): Promise<CompetitiveSelection> {
   const verifiedProducts = dossier.candidates.filter(
-    (candidate) =>
-      candidate.kind === "product" && candidate.sourceEvidence.length > 0,
+    (candidate) => candidate.kind === "product" && candidate.sourceEvidence.length > 0,
   );
   const comparisons: CompetitiveSelection["comparisons"] = [];
   const selected: CompetitiveSelection["selected"] = [];
@@ -663,8 +662,7 @@ async function evaluateProductsIndividually(
     if (selected.length >= MIN_PRODUCT_COMPETITORS) break;
     try {
       const review = await deps.provider.generateJson<TargetedProductReview>({
-        system:
-          `${SYSTEM_PREAMBLE}\nYou are the TARGETED COMPETITIVE INTELLIGENCE reviewer. Review only the one supplied, evidence-verified product. Identify one concrete behavior it does better than the target app and one target-app gap it exposes. Do not invent facts, products, URLs, source code, or licenses. Product behavior may be adopted only as a clean-room pattern. Reject the product when its supplied evidence supports no relevant advantage.`,
+        system: `${SYSTEM_PREAMBLE}\nYou are the TARGETED COMPETITIVE INTELLIGENCE reviewer. Review only the one supplied, evidence-verified product. Identify one concrete behavior it does better than the target app and one target-app gap it exposes. Do not invent facts, products, URLs, source code, or licenses. Product behavior may be adopted only as a clean-room pattern. Reject the product when its supplied evidence supports no relevant advantage.`,
         prompt: [
           `TARGET SPEC:\n${JSON.stringify(spec)}`,
           `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
