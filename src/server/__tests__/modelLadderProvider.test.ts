@@ -9,6 +9,7 @@ import { ModelLadderProvider } from "../providers/modelLadderProvider.js";
 function fake(
   behavior: "ok" | "exhausted" | "badRequest",
   name: "anthropic" | "openai" = "anthropic",
+  exhaustionMessage = "model does not exist or you do not have access",
 ): LLMProvider & { calls: number } {
   const provider = {
     name,
@@ -18,7 +19,7 @@ function fake(
     async generateText() {
       provider.calls += 1;
       if (behavior === "exhausted") {
-        throw new Error("model does not exist or you do not have access");
+        throw new Error(exhaustionMessage);
       }
       if (behavior === "badRequest") throw new Error("400 invalid prompt shape");
       return { text: "ok", provider: name };
@@ -26,7 +27,7 @@ function fake(
     async generateJson<T>() {
       provider.calls += 1;
       if (behavior === "exhausted") {
-        throw new Error("model does not exist or you do not have access");
+        throw new Error(exhaustionMessage);
       }
       if (behavior === "badRequest") throw new Error("400 invalid prompt shape");
       return {
@@ -61,6 +62,20 @@ describe("ModelLadderProvider", () => {
     expect(fable.calls).toBe(1);
     expect(opus.calls).toBe(2);
     expect(provider.currentModel()).toBe("claude-opus-5");
+  });
+
+  it("reports the final exhausted rung instead of hiding it behind the first error", async () => {
+    const provider = new ModelLadderProvider([
+      { model: "claude-fable-5-1", provider: fake("exhausted") },
+      {
+        model: "gpt-5.5",
+        provider: fake("exhausted", "openai", "quota exceeded on OpenAI credits"),
+      },
+    ]);
+
+    await expect(provider.generateText({} as never)).rejects.toThrow(
+      /quota exceeded on OpenAI credits/,
+    );
   });
 
   it("keeps real bad requests loud instead of hiding them with fallback", async () => {
