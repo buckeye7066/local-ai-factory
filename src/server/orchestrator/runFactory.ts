@@ -2923,11 +2923,7 @@ async function executeRun(
               config,
               secrets,
               (kind, message) =>
-                log(
-                  kind === "warn" ? "warning" : "info",
-                  message,
-                  "final_review",
-                ),
+                log(kind === "warn" ? "warning" : "info", message, "final_review"),
               callSignal,
             );
             const readinessRouting = selectRunRouting(
