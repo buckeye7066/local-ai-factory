@@ -8,6 +8,10 @@ import {
   verificationPlanForWorkspace,
 } from "../workspace/verificationCommands.js";
 import { isAllowed } from "../workspace/commandRunner.js";
+import {
+  commandForPlatformProof,
+  PLATFORM_VITEST_CONFIG,
+} from "../workspace/platformEvidenceRunner.js";
 
 const workspaces: string[] = [];
 
@@ -242,8 +246,50 @@ describe("verificationCommandsForWorkspace", () => {
       bin: "pnpm",
       args: ["test", "--root=."],
       isTest: true,
+      runner: "vitest",
     });
     expect(isAllowed(hostTest!.bin, hostTest!.args)).toBe(true);
+  });
+
+  it("isolates restored Vitest commands from an ancestor Factory config", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        packageManager: "pnpm@10.17.0",
+        scripts: { test: "vitest run" },
+        devDependencies: { vitest: "3" },
+      }),
+    );
+    writeFileSync(join(path, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "tests/workflow.test.ts",
+          contents:
+            "import { test, expect } from 'vitest'; test('x',()=>expect(1).toBe(1));",
+        },
+      ],
+    });
+    const vitestCommands = plan.commands
+      .filter((command) => command.runner === "vitest")
+      .map((command) => commandForPlatformProof(command, true));
+
+    expect(vitestCommands).toHaveLength(2);
+    expect(
+      vitestCommands.every(
+        (command) => command.args.at(-1) === `--config=${PLATFORM_VITEST_CONFIG}`,
+      ),
+    ).toBe(true);
+    expect(
+      vitestCommands.every((command) => isAllowed(command.bin, command.args)),
+    ).toBe(true);
+    expect(
+      commandForPlatformProof(
+        { bin: "pnpm", args: ["run", "build"], isTest: false },
+        true,
+      ),
+    ).toEqual({ bin: "pnpm", args: ["run", "build"], isTest: false });
   });
 
   it("directly proves tests authored by both Builder and Test Writer", () => {
