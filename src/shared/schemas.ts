@@ -884,6 +884,17 @@ export const RunStatusSchema = z.enum([
 ]);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
+/** Operator guidance submitted while a queued/running program is being worked. */
+export const OperatorSteeringSchema = z.object({
+  id: z.string().uuid(),
+  instruction: z.string().min(1).max(4_000),
+  status: z.enum(["pending", "applied"]),
+  submittedAt: z.number(),
+  appliedAt: z.number().nullable().default(null),
+  appliedStage: StageIdSchema.nullable().default(null),
+});
+export type OperatorSteering = z.infer<typeof OperatorSteeringSchema>;
+
 /**
  * Run IDs are always minted with randomUUID(). Constraining the schema to a
  * strict UUID means a hand-crafted/corrupt record whose `id` contains path
@@ -954,6 +965,10 @@ export const RunRecordSchema = z.object({
     .nullable()
     .optional(),
   error: z.string().nullable().default(null),
+  /** Durable live instructions, injected into every subsequent model call. */
+  steering: z.array(OperatorSteeringSchema).optional(),
+  /** False once release side effects begin and there is no safe model checkpoint left. */
+  acceptingSteering: z.boolean().optional(),
   /** Populated as the run progresses; full attribution written at completion. */
   attribution: RunAttributionSchema.nullable().default(null),
   createdAt: z.number(),
@@ -1137,3 +1152,4 @@ export function freshStages(): StageState[] {
     durationMs: null,
   }));
 }
+

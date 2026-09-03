@@ -20,7 +20,12 @@ import type {
 } from "../../shared/schemas.js";
 import { freshStages } from "../../shared/schemas.js";
 import type { FileEdit } from "../../shared/schemas.js";
-import type { LLMProvider } from "../../shared/types.js";
+import type {
+  LLMProvider,
+  GenerateJsonInput,
+  GenerateTextInput,
+  GenerateTextResult,
+} from "../../shared/types.js";
 import {
   createProviderRegistry,
   MissingProviderCredentialError,
@@ -546,6 +551,8 @@ function createRecord(args: StartRunArgs): RunRecord {
     // building — so the UI can show where the work will be saved up front.
     destination: null,
     error: null,
+    steering: [],
+    acceptingSteering: true,
     attribution: null,
     createdAt: nowMs(),
     updatedAt: nowMs(),
@@ -732,11 +739,80 @@ async function executeRun(
         decorate: countProvider,
         onFailover: onModelFailover,
       });
+  /**
+   * Read operator guidance immediately before every model call. The API and
+   * orchestrator share the canonical in-memory RunRecord, so a steer submitted
+   * during a long stage is picked up by the next specialist without restarting
+   * or losing already-verified work. Applied guidance remains in every later
+   * prompt so downstream agents cannot forget the owner's correction.
+   */
+  class LiveSteeringProvider implements LLMProvider {
+    readonly name;
+    readonly paidBudgetManaged;
+
+    constructor(private readonly inner: LLMProvider) {
+      this.name = inner.name;
+      this.paidBudgetManaged = inner.paidBudgetManaged;
+    }
+
+    isConfigured(): boolean {
+      return this.inner.isConfigured();
+    }
+
+    currentProvider() {
+      return this.inner.currentProvider?.() ?? this.inner.name;
+    }
+
+    currentModel() {
+      return this.inner.currentModel?.() ?? this.currentProvider();
+    }
+
+    private async guidedPrompt(prompt: string): Promise<string> {
+      const steering = run.steering ?? [];
+      const newlyApplied = steering.filter((item) => item.status === "pending");
+      if (newlyApplied.length) {
+        const appliedAt = Date.now();
+        for (const item of newlyApplied) {
+          item.status = "applied";
+          item.appliedAt = appliedAt;
+          item.appliedStage = run.currentStage;
+        }
+        run.logs.push(
+          makeLog(
+            "info",
+            `Applied ${newlyApplied.length} operator steering instruction(s) at the next model checkpoint.`,
+            run.currentStage,
+          ),
+        );
+        run.updatedAt = appliedAt;
+        await saveRun(run);
+      }
+      if (!steering.length) return prompt;
+      return `${prompt}\n\nOPERATOR STEERING (authoritative; address all applicable items in this program):\n${steering
+        .map((item, index) => `${index + 1}. ${item.instruction}`)
+        .join("\n")}`;
+    }
+
+    async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
+      return this.inner.generateText({
+        ...input,
+        prompt: await this.guidedPrompt(input.prompt),
+      });
+    }
+
+    async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
+      return this.inner.generateJson({
+        ...input,
+        prompt: await this.guidedPrompt(input.prompt),
+      });
+    }
+  }
+  const steeredProvider: LLMProvider = new LiveSteeringProvider(modelProvider);
   // All roles share the same QuotaFailoverProvider instance. Its cursor is the
   // orchestrator's source of truth for the remainder of the run.
-  const code = modelProvider;
-  const review = modelProvider;
-  const critical = modelProvider;
+  const code = steeredProvider;
+  const review = steeredProvider;
+  const critical = steeredProvider;
   if (liveRouting) {
     log(
       "info",
@@ -1157,6 +1233,7 @@ async function executeRun(
     const isResume = Boolean(restored);
     run.status = "running";
     run.resumable = false;
+    run.acceptingSteering = true;
     run.error = null;
     await checkpointNow();
     await appendAuditEvent({
@@ -2962,7 +3039,8 @@ async function executeRun(
               readinessRouting.codeProvider,
               readinessRegistry,
               {
-                decorate: countProvider,
+                decorate: (provider) =>
+                  new LiveSteeringProvider(countProvider(provider)),
                 onFailover: onModelFailover,
               },
             );
@@ -3028,6 +3106,11 @@ async function executeRun(
         "final_review",
       );
     }
+    // There are no more model checkpoints after the readiness decision.
+    // Close steering before any delivery/release side effect so the API can
+    // never accept guidance that this run has no remaining opportunity to use.
+    run.acceptingSteering = false;
+    await flush();
     const runApprovedSideEffect = async <T>(
       effect: () => Promise<T>,
     ): Promise<{ executed: boolean; value?: T; blockers: string[] }> =>

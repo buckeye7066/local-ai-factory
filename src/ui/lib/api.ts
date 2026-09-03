@@ -5,6 +5,7 @@ import type {
   RunOptions,
   Health,
   FileContent,
+  RepoSource,
 } from "../../shared/schemas.js";
 
 /**
@@ -53,6 +54,31 @@ export type EpicSummary = {
   updatedAt: number;
 };
 
+export type PortfolioSession = {
+  id: string;
+  prompt: string;
+  status: "queued" | "running" | "completed" | "failed";
+  currentTarget: number;
+  targets: Array<{
+    id: string;
+    name: string;
+    repoSource: RepoSource;
+    prompt: string;
+    routeEvidence: "named" | "shared" | "single";
+    status: "queued" | "running" | "completed" | "failed";
+    runId: string | null;
+    error: string | null;
+  }>;
+  steering: Array<{
+    id: string;
+    prompt: string;
+    submittedAt: number;
+    targetIds: string[];
+  }>;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export const api = {
   health: () => jsonFetch<Health>("/api/health"),
   listRuns: () => jsonFetch<{ runs: RunSummary[] }>("/api/runs"),
@@ -75,6 +101,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ idea, options }),
     }),
+  createPortfolioSession: (
+    prompt: string,
+    targets: Array<{ name: string; repoSource: RepoSource }>,
+  ) =>
+    jsonFetch<PortfolioSession>("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({ prompt, targets }),
+    }),
+  getPortfolioSession: (id: string) =>
+    jsonFetch<PortfolioSession>(`/api/sessions/${id}`),
+  steerPortfolioSession: (id: string, prompt: string) =>
+    jsonFetch<{ ok: true; steeringId: string; targetIds: string[] }>(
+      `/api/sessions/${id}/steer`,
+      { method: "POST", body: JSON.stringify({ prompt }) },
+    ),
+  steerRun: (id: string, instruction: string) =>
+    jsonFetch<{ ok: true; steeringId: string; status: "pending" }>(
+      `/api/runs/${id}/steer`,
+      { method: "POST", body: JSON.stringify({ instruction }) },
+    ),
   /**
    * Start a large evolution. The server responds 202 with ONLY `epicId` and
    * plans in the background (planning alone can take minutes on the free
@@ -239,3 +285,4 @@ export function useHealth(): { health: Health | null; loading: boolean } {
   }, []);
   return { health, loading };
 }
+

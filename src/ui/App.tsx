@@ -9,6 +9,7 @@ import {
   FolderOpen,
   Copy,
   Boxes,
+  Send,
 } from "lucide-react";
 import { AppShell } from "./components/layout/AppShell.js";
 import type { NavKey } from "./components/layout/Sidebar.js";
@@ -26,6 +27,8 @@ import { Card, CardHeader } from "./components/ui/Card.js";
 import { Tabs } from "./components/ui/Tabs.js";
 import { Badge } from "./components/ui/Badge.js";
 import { EmptyState } from "./components/ui/EmptyState.js";
+import { Button } from "./components/ui/Button.js";
+import { Textarea } from "./components/ui/Textarea.js";
 import { routeTransition } from "./lib/motion.js";
 import { useClipboard } from "./lib/useClipboard.js";
 import { api, useHealth, useRunPolling } from "./lib/api.js";
@@ -383,6 +386,8 @@ function RunDetail({
   const [tab, setTab] = useState("logs");
   const [cancelling, setCancelling] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [steering, setSteering] = useState("");
+  const [steeringBusy, setSteeringBusy] = useState(false);
   const repairActive = run.stages.find((s) => s.id === "repair")?.status === "active";
   const running = run.status === "running" || run.status === "queued";
 
@@ -424,6 +429,26 @@ function RunDetail({
     }
   }, [run.id, refreshRun]);
 
+  const steer = useCallback(async () => {
+    const instruction = steering.trim();
+    if (!instruction) return;
+    setSteeringBusy(true);
+    try {
+      await api.steerRun(run.id, instruction);
+      setSteering("");
+      refreshRun();
+      toast.success("Steering queued", {
+        description: "The next model checkpoint will apply it to this program.",
+      });
+    } catch (error) {
+      toast.error("Could not steer run", {
+        description: error instanceof Error ? error.message : undefined,
+      });
+    } finally {
+      setSteeringBusy(false);
+    }
+  }, [run.id, steering, refreshRun]);
+
   return (
     <div className="space-y-5">
       <RunControlBar
@@ -434,6 +459,37 @@ function RunDetail({
         cancelling={cancelling}
         resuming={resuming}
       />
+
+      {running && run.acceptingSteering !== false && (
+        <Card>
+          <CardHeader
+            title="Steer this program"
+            subtitle="Additional information is applied at the next model checkpoint and carried through the rest of the run."
+          />
+          <Textarea
+            value={steering}
+            onChange={(event) => setSteering(event.target.value)}
+            rows={3}
+            maxLength={4_000}
+            placeholder="Add a correction, constraint, or new detail for this program…"
+            aria-label="Steering instruction"
+          />
+          <div className="mt-3 flex items-center justify-between gap-3">
+            <span className="text-xs text-slate-500">
+              {(run.steering ?? []).filter((item) => item.status === "pending").length} pending ·{" "}
+              {(run.steering ?? []).filter((item) => item.status === "applied").length} applied
+            </span>
+            <Button
+              onClick={steer}
+              disabled={!steering.trim() || steeringBusy}
+              loading={steeringBusy}
+              icon={<Send className="h-4 w-4" />}
+            >
+              Send steering
+            </Button>
+          </div>
+        </Card>
+      )}
 
       <Card>
         <CardHeader
@@ -694,3 +750,4 @@ function WorkspacesView({
     </div>
   );
 }
+

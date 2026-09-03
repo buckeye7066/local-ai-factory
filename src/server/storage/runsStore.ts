@@ -279,6 +279,52 @@ export async function getRun(id: string): Promise<RunRecord | null> {
   return run ? sanitizeRunRecordForServe(run) : null;
 }
 
+/**
+ * Queue authoritative operator guidance for the next model checkpoint.
+ * The instruction is persisted on the run itself, so a queued run and a
+ * resumable interrupted run do not lose it when the backend is restarted.
+ */
+export async function submitRunSteering(
+  id: string,
+  instruction: string,
+): Promise<
+  | { ok: true; steeringId: string; status: "pending" }
+  | { ok: false; reason: string }
+> {
+  const clean = redactSecrets(instruction.trim());
+  if (!clean) return { ok: false, reason: "Steering instruction is required." };
+  if (clean.length > 4_000) {
+    return {
+      ok: false,
+      reason: "Steering instruction must be 4,000 characters or fewer.",
+    };
+  }
+  const run = await getRunForExecution(id);
+  if (!run) return { ok: false, reason: "Run not found." };
+  if (run.status !== "queued" && run.status !== "running") {
+    return { ok: false, reason: `Run is already ${run.status}.` };
+  }
+  if (run.acceptingSteering === false) {
+    return {
+      ok: false,
+      reason: "This run has passed its final model checkpoint and is releasing work.",
+    };
+  }
+  const steeringId = randomUUID();
+  run.steering ??= [];
+  run.steering.push({
+    id: steeringId,
+    instruction: clean,
+    status: "pending",
+    submittedAt: Date.now(),
+    appliedAt: null,
+    appliedStage: null,
+  });
+  run.updatedAt = Date.now();
+  await saveRun(run);
+  return { ok: true, steeringId, status: "pending" };
+}
+
 export async function listRuns(): Promise<RunSummary[]> {
   await ensureDirs();
   await guardStoreDirs(); // refuse a symlinked/escaping store dir before reading it
@@ -497,3 +543,4 @@ export async function getRunFiles(id: string): Promise<FileContent[]> {
     return [];
   }
 }
+
