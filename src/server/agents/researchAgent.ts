@@ -169,7 +169,7 @@ const CompetitiveComparisonInputSchema = CandidateComparisonSchema.omit({
 const CompetitiveSelectedInputSchema = z.object({
   candidateId: z.string().trim().min(1),
   element: z.string().trim().min(1),
-  why: z.string().trim().min(1),
+  why: z.string().trim().default(""),
   // Preserve otherwise valid evidence when a provider omits this one prose
   // field; mergeCompetitiveResults derives a concrete, tested instruction
   // from the selected element and enforced reuse mode.
@@ -670,7 +670,9 @@ function mergeCompetitiveResults(
       `Integrate ${selected.element} using the enforced ${reuseMode} reuse mode in the target architecture, and add direct acceptance tests tied to the cited evidence.`;
     competitiveRecommendations.push({
       name: `${candidate.name}: ${selected.element}`,
-      why: selected.why,
+      why:
+        selected.why ||
+        `Adopt ${selected.element} as an evidence-backed advantage over the reviewed product.`,
       sourceUrl: candidate.url,
       howToIntegrate: `${legalPrefix}${integrationInstruction}`.trim(),
       candidateId: candidate.id,

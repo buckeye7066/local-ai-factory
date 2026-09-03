@@ -746,7 +746,6 @@ describe("researchAgent competitive selection failure is a named skip", () => {
             {
               candidateId: "product:rival.example",
               element: "single-command task capture",
-              why: "reduces input friction",
               reuseMode: "clean-room-pattern",
               evidenceUrls: [productUrl],
               score: 90,
@@ -766,6 +765,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
       expect(findings.recommendations[0].howToIntegrate).toContain(
         "direct acceptance tests",
       );
+      expect(findings.recommendations[0].why).toContain("single-command task capture");
       expect(provider.prompts[2]).toContain("product:rival.example");
       expect(provider.prompts[2]).not.toContain(
         "REPOSITORY_SENTINEL_MUST_NOT_ENTER_PRODUCT_REVIEW",
