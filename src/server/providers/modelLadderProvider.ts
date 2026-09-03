@@ -66,7 +66,7 @@ export class ModelLadderProvider implements LLMProvider {
   }
 
   private async execute<T>(invoke: (provider: LLMProvider) => Promise<T>): Promise<T> {
-    let firstExhaustion: unknown = null;
+    let lastExhaustion: unknown = null;
     for (let index = this.cursor; index < this.rungs.length; index += 1) {
       const rung = this.rungs[index]!;
       if (!rung.provider.isConfigured()) continue;
@@ -78,16 +78,16 @@ export class ModelLadderProvider implements LLMProvider {
         if (error instanceof ProviderAbortError || !isModelExhaustion(error)) {
           throw error;
         }
-        firstExhaustion ??= error;
+        lastExhaustion = error;
         const nextIndex = this.nextConfigured(index);
-        if (nextIndex === null) throw firstExhaustion;
+        if (nextIndex === null) throw lastExhaustion;
         const next = this.rungs[nextIndex]!;
         this.onFailover(rung.model, next.model, modelFailureText(error));
         this.cursor = nextIndex;
         index = nextIndex - 1;
       }
     }
-    if (firstExhaustion) throw firstExhaustion;
+    if (lastExhaustion) throw lastExhaustion;
     throw new Error("No configured model remains in this provider-family ladder.");
   }
 
