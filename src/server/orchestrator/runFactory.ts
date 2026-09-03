@@ -2918,10 +2918,15 @@ async function executeRun(
         );
         const brainProviders = createReadinessBrainProviders(
           () =>
-            createTierProvider(liveRouting!, liveRouting!.codeProvider, registry, {
-              decorate: countProvider,
-              onFailover: onModelFailover,
-            }),
+            createTierProvider(
+              liveRouting!,
+              liveRouting!.codeProvider,
+              registry,
+              {
+                decorate: countProvider,
+                onFailover: onModelFailover,
+              },
+            ),
           (kind, message) =>
             log(kind === "warn" ? "warning" : "info", message, "final_review"),
         );
