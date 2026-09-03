@@ -547,11 +547,11 @@ describe("researchAgent competitive selection failure is a named skip", () => {
           findings: { summary: "base summary", recommendations: [] },
         },
         PRODUCT_PLAN,
-        // ...then the selection payload is missing `element` -> real ZodError.
+        // ...then the selection payload is missing its essential candidate identity.
         {
           summary: "s",
           comparisons: [],
-          selected: [{ candidateId: "c1", why: "missing element" }],
+          selected: [{ why: "missing candidate identity" }],
         },
       ]);
       const findings = await researchAgent({ provider }, spec, arch, {
@@ -774,7 +774,9 @@ describe("researchAgent competitive selection failure is a named skip", () => {
         reuseMode: "clean-room-pattern",
       });
       expect(findings.recommendations[0].name).toContain("fast capture");
-      expect(findings.recommendations[0].evidenceUrls).toEqual([products[0]!.url]);
+      expect(findings.recommendations[0].evidenceUrls).toEqual([
+        "https://product-1.example",
+      ]);
     } finally {
       spy.mockRestore();
     }
