@@ -71,8 +71,9 @@ async function main() {
     `${COLORS.cyan}▌ Factory Deck — Local AI Software Factory${COLORS.reset}`,
   );
   console.log(`${COLORS.dim}  idea: ${idea}${COLORS.reset}`);
+  const modelLadder = config.modelLadder ?? ["anthropic", "openai", "free"];
   console.log(
-    `${COLORS.dim}  automatic model ladder: ${config.modelLadder.join(" → ")}${COLORS.reset}\n`,
+    `${COLORS.dim}  automatic model ladder: ${modelLadder.join(" → ")}${COLORS.reset}\n`,
   );
 
   const projectId = process.env.FACTORY_PROJECT_ID?.trim();
