@@ -469,7 +469,11 @@ function runnerDeclaredByTest(contents: string): JavascriptRunner | "ambiguous" 
     } else if (ts.isCallExpression(node) && node.arguments.length === 1) {
       const argument = node.arguments[0]!;
       const directRequire =
-        ts.isIdentifier(node.expression) && node.expression.text === "require";
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "require" &&
+        // A locally declared function/parameter named `require` is ordinary
+        // candidate code, not evidence that this test imports a runner.
+        !checker.getSymbolAtLocation(node.expression);
       const dynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
       if ((directRequire || dynamicImport) && ts.isStringLiteralLike(argument)) {
         modules.add(argument.text);
