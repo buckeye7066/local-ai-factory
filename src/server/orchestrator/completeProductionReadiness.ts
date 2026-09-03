@@ -6,6 +6,7 @@ import {
   type ProductionReadinessEvidence,
   type ProductionReadinessReceipt,
   type ReadinessBrainReview,
+  type ReadinessLiveProvider,
 } from "./productionReadinessPolicy.js";
 import {
   markReadinessEvaluating,
@@ -101,10 +102,10 @@ export type PreReleaseReadinessApproval = {
 export async function completePreReleaseReadiness(input: {
   facts: ProductionReadinessFacts;
   leadProvider: LLMProvider;
-  leadProviderName: "openai" | "anthropic" | (() => "openai" | "anthropic");
+  leadProviderName: ReadinessLiveProvider | (() => ReadinessLiveProvider);
   leadModel: string | (() => string);
   challengerProvider: LLMProvider;
-  challengerProviderName: "openai" | "anthropic" | (() => "openai" | "anthropic");
+  challengerProviderName: ReadinessLiveProvider | (() => ReadinessLiveProvider);
   challengerModel: string | (() => string);
 }): Promise<PreReleaseReadinessApproval> {
   const facts = candidateReadinessFacts(input.facts);
@@ -229,10 +230,10 @@ export async function completeProductionReadiness(input: {
   subjectId: string;
   facts: ProductionReadinessFacts;
   leadProvider: LLMProvider;
-  leadProviderName: "openai" | "anthropic" | (() => "openai" | "anthropic");
+  leadProviderName: ReadinessLiveProvider | (() => ReadinessLiveProvider);
   leadModel: string | (() => string);
   challengerProvider: LLMProvider;
-  challengerProviderName: "openai" | "anthropic" | (() => "openai" | "anthropic");
+  challengerProviderName: ReadinessLiveProvider | (() => ReadinessLiveProvider);
   challengerModel: string | (() => string);
 }): Promise<ProductionReadinessCompletion> {
   const evidenceDigest = productionReadinessDigest(input.facts);
