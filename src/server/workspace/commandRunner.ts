@@ -148,11 +148,13 @@ export function isAllowedNpxVerification(args: string[]): boolean {
   }
   if (tool === "vitest") {
     return (
-      args.length === 6 &&
+      (args.length === 6 || args.length === 7) &&
       args[2] === "run" &&
       isSafeDirectJsTest(args[3]!) &&
       args[4] === "--reporter=json" &&
-      isSafeVitestRoot(args[5]!)
+      isSafeVitestRoot(args[5]!) &&
+      (args.length === 6 ||
+        args[6] === "--config=.factory-deck-platform-vitest.config.mjs")
     );
   }
   if (tool === "jest") {

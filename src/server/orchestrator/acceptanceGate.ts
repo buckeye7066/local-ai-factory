@@ -603,6 +603,49 @@ function brittleRegex(pattern: string): string | null {
     : null;
 }
 
+function unwrapTransparentExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function textualContainReceiver(expression: ts.Expression | undefined): boolean {
+  if (!expression) return false;
+  if (
+    (ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression)) &&
+    expression.type.kind === ts.SyntaxKind.StringKeyword
+  ) {
+    return true;
+  }
+  const value = unwrapTransparentExpression(expression);
+  if (ts.isStringLiteralLike(value) || ts.isTemplateExpression(value)) return true;
+  if (ts.isIdentifier(value)) {
+    return /(?:text|output|stdout|stderr|message|content|html|source|body)$/i.test(
+      value.text,
+    );
+  }
+  if (ts.isPropertyAccessExpression(value)) {
+    return /^(?:text|stdout|stderr|message|content|html|source|body)$/i.test(
+      value.name.text,
+    );
+  }
+  return (
+    ts.isCallExpression(value) &&
+    ts.isPropertyAccessExpression(value.expression) &&
+    /^(?:join|toLowerCase|toUpperCase|trim|trimStart|trimEnd|replace|replaceAll|substring|toString)$/i.test(
+      value.expression.name.text,
+    )
+  );
+}
+
 /**
  * Reject negative assertions whose matcher is broader than the thing it is
  * supposed to exclude. These are especially dangerous in generated tests:
@@ -623,10 +666,25 @@ function brittleNegatedMatcher(
     negated.name.text === "not" &&
     ts.isCallExpression(negated.expression) &&
     ts.isIdentifier(negated.expression.expression) &&
-    negated.expression.expression.text === "expect";
+    negated.expression.expression.text === "expect" &&
+    verifiedAssertionBinding(negated.expression, "expect", executionRoot);
   if (expectNegation) {
-    if (matcher === "toContain" && expected && ts.isStringLiteralLike(expected)) {
-      return brittleSubstring(expected.text);
+    const expectedValue = expected ? unwrapTransparentExpression(expected) : undefined;
+    if (matcher === "toContain" && !expectedValue) {
+      return "negated toContain assertion has no expected value";
+    }
+    if (
+      matcher === "toContain" &&
+      expectedValue &&
+      textualContainReceiver(negated.expression.arguments[0])
+    ) {
+      if (ts.isStringLiteralLike(expectedValue)) {
+        return brittleSubstring(expectedValue.text);
+      }
+      return (
+        "dynamic negated substring assertion; use a direct literal or a " +
+        "token-, line-, or structure-specific assertion"
+      );
     }
     if (matcher === "toMatch" && expected && ts.isRegularExpressionLiteral(expected)) {
       const literal = expected.getText();
@@ -811,7 +869,7 @@ function analyzeCallback(
           (!isAsyncFunction(helper) || expressionResultIsObserved(node, executionRoot))
         ) {
           activeHelpers.add(helper);
-          visit(helper.body, true, executionRoot);
+          visit(helper.body, true, helper);
           activeHelpers.delete(helper);
         }
       }
@@ -829,13 +887,20 @@ function analyzeCallback(
   };
 }
 
-function analyzeJavascript(source: string): FileEvidence {
+function analyzeJavascript(path: string, source: string): FileEvidence {
+  const scriptKind = /\.tsx$/i.test(path)
+    ? ts.ScriptKind.TSX
+    : /\.ts$/i.test(path)
+      ? ts.ScriptKind.TS
+      : /\.jsx$/i.test(path)
+        ? ts.ScriptKind.JSX
+        : ts.ScriptKind.JS;
   const file = ts.createSourceFile(
-    "factory-test.tsx",
+    path,
     source,
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TSX,
+    scriptKind,
   );
   let browserImport = false;
   let skippedOrTodo = false;
@@ -986,9 +1051,23 @@ function analyzePython(source: string): FileEvidence {
     );
     const brittleAssertions: string[] = [];
     for (const entry of statements) {
-      const substring = /^assert\s+(["'])(.*?)\1\s+not\s+in\b/.exec(entry);
-      if (substring) {
-        const issue = brittleSubstring(substring[2] ?? "");
+      const membership = /^assert\s+(.+?)\s+not\s+in\s+(.+)$/.exec(entry);
+      if (membership) {
+        const left = membership[1]?.trim() ?? "";
+        const right = membership[2]?.trim() ?? "";
+        const literal = /^(["'])(.*?)\1$/.exec(left);
+        const textualRight =
+          /(?:text|output|stdout|stderr|message|content|html|source|body)(?:\W|$)/i.test(
+            right,
+          ) ||
+          /^(?:["']|f["'])/.test(right) ||
+          /\.(?:lower|upper|strip|lstrip|rstrip|replace|join)\s*\(/.test(right);
+        const issue = literal
+          ? brittleSubstring(literal[2] ?? "")
+          : textualRight
+            ? "dynamic negated substring assertion; use a direct literal or a " +
+              "token-, line-, or structure-specific assertion"
+            : null;
         if (issue && !brittleAssertions.includes(issue)) brittleAssertions.push(issue);
       }
       const negativeRegex =
@@ -1018,7 +1097,7 @@ function analyzePython(source: string): FileEvidence {
 }
 
 function analyzeFile(path: string, source: string): FileEvidence {
-  return /\.py$/i.test(path) ? analyzePython(source) : analyzeJavascript(source);
+  return /\.py$/i.test(path) ? analyzePython(source) : analyzeJavascript(path, source);
 }
 
 export function acceptanceRequirements(

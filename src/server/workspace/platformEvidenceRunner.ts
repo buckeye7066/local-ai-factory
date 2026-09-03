@@ -9,6 +9,7 @@ import {
   readdir,
   readlink,
   rm,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -49,6 +50,21 @@ export type PlatformEvidenceHold = {
 type CheckpointExecutedCommand = NonNullable<
   FactoryCheckpoint["verification"]
 >["executed"][number];
+
+export const PLATFORM_VITEST_CONFIG = ".factory-deck-platform-vitest.config.mjs";
+const PLATFORM_VITEST_CONFIG_SOURCE =
+  "// Engine-owned isolation: do not inherit Factory Deck's ancestor config.\\nexport default {};\\n";
+const LOCAL_VITEST_CONFIG = /^(?:vitest|vite)\\.config\\.(?:js|cjs|mjs|ts|cts|mts)$/i;
+
+async function hasLocalVitestConfig(workspacePath: string): Promise<boolean> {
+  const entries = await readdir(workspacePath, { withFileTypes: true });
+  return entries.some((entry) => entry.isFile() && LOCAL_VITEST_CONFIG.test(entry.name));
+}
+
+export function commandForPlatformProof(command: VerificationCommand, isolatedVitest: boolean): VerificationCommand {
+  if (!isolatedVitest || command.runner !== "vitest") return command;
+  return { ...command, args: [...command.args, `--config=${PLATFORM_VITEST_CONFIG}`] };
+}
 
 export type PlatformArtifactSnapshot = Record<string, string>;
 
@@ -595,20 +611,34 @@ export async function recordCurrentPlatformEvidence(
       );
     }
 
+    const isolatedVitest =
+      plan.commands.some((command) => command.runner === "vitest") &&
+      !(await hasLocalVitestConfig(disposable.workspacePath));
+    const platformVitestConfig = join(disposable.workspacePath, PLATFORM_VITEST_CONFIG);
     const executed: CheckpointExecutedCommand[] = [];
-    for (const command of plan.commands) {
-      const result = await runCommand(
-        { bin: command.bin, args: command.args, cwd: disposable.workspacePath },
-        {
-          workspaceRoot: disposable.root,
-          allowScriptExecution: input.allowScriptExecution,
-          requireHostSandbox: true,
-          timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
-          ...(command.directTestPath
-            ? { maxCapturedOutputBytes: 32 * 1024 * 1024 }
-            : {}),
-        },
-      );
+    for (const plannedCommand of plan.commands) {
+      const command = commandForPlatformProof(plannedCommand, isolatedVitest);
+      const needsIsolatedConfig = isolatedVitest && plannedCommand.runner === "vitest";
+      if (needsIsolatedConfig) {
+        await writeFile(platformVitestConfig, PLATFORM_VITEST_CONFIG_SOURCE, { encoding: "utf8", flag: "wx" });
+      }
+      let result: CommandResult;
+      try {
+        result = await runCommand(
+          { bin: command.bin, args: command.args, cwd: disposable.workspacePath },
+          {
+            workspaceRoot: disposable.root,
+            allowScriptExecution: input.allowScriptExecution,
+            requireHostSandbox: true,
+            timeoutMs: command.isTest ? 45 * 60_000 : 15 * 60_000,
+            ...(command.directTestPath
+              ? { maxCapturedOutputBytes: 32 * 1024 * 1024 }
+              : {}),
+          },
+        );
+      } finally {
+        if (needsIsolatedConfig) await rm(platformVitestConfig, { force: true });
+      }
       const outputTail = checkpointOutputTail(result.stdout, result.stderr);
       if (!result.executed || result.exitCode !== 0) {
         throw new Error(

@@ -260,7 +260,7 @@ function packageTestCommand(
       : pinCandidateRoot && (manager === "pnpm" || manager === "yarn")
         ? ["test", "--root=."]
         : ["test"];
-  return { bin: manager, args, isTest: true };
+  return {\n    bin: manager,\n    args,\n    isTest: true,\n    ...(pinCandidateRoot ? { runner: "vitest" as const } : {}),\n  };
 }
 
 function javascriptCommands(

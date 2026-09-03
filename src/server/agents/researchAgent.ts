@@ -12,12 +12,24 @@ import {
 } from "../tools/competitiveIntelligence.js";
 import type { ProductSpec, Architecture } from "../../shared/schemas.js";
 
-const LicensePolicySchema = z.enum([
+const LICENSE_POLICIES = [
   "direct-use",
   "conditional-review",
   "reference-only",
   "not-applicable",
-]);
+] as const;
+const LicensePolicySchema = z.preprocess((value) => {
+  if (typeof value !== "string") return "reference-only";
+  const normalized = value.trim().toLowerCase().replace(/[ _]+/g, "-");
+  const exact = LICENSE_POLICIES.find((policy) => policy === normalized);
+  if (exact) return exact;
+  // Provider prose such as "compatible" is not evidence of direct-reuse
+  // permission. Preserve the recommendation, but require human/legal review.
+  if (normalized === "compatible") return "conditional-review";
+  // This field belongs to advisory tool research. Unknown provider wording
+  // must neither kill mandatory competitor discovery nor grant reuse rights.
+  return "reference-only";
+}, z.enum(LICENSE_POLICIES));
 const ReuseModeSchema = z.enum([
   "dependency",
   "direct-code",
