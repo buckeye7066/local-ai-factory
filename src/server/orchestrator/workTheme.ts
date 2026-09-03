@@ -193,6 +193,14 @@ export class ThemedProvider implements LLMProvider {
     return this.inner.isConfigured();
   }
 
+  currentProvider(): LLMProvider["name"] {
+    return this.inner.currentProvider?.() ?? this.inner.name;
+  }
+
+  currentModel(): string {
+    return this.inner.currentModel?.() ?? this.currentProvider();
+  }
+
   private themeForCall(): WorkTheme | undefined {
     return this.fixed ?? currentWorkTheme();
   }
