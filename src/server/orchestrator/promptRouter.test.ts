@@ -33,4 +33,22 @@ describe("routePrompt", () => {
       true,
     );
   });
+
+  it("splits newline and semicolon sections without leaking across repos", () => {
+    const routes = routePrompt(
+      "FlexFactor: add prompt routing\nFactory Deck: add steering; FlexFactor: document the option",
+      targets,
+    );
+    expect(routes[0]!.prompt).toContain("add prompt routing");
+    expect(routes[0]!.prompt).toContain("document the option");
+    expect(routes[0]!.prompt).not.toContain("add steering");
+    expect(routes[1]!.prompt).toContain("add steering");
+    expect(routes[1]!.prompt).not.toContain("document the option");
+  });
+
+  it("leaves an unmentioned target empty instead of leaking named work", () => {
+    const routes = routePrompt("FlexFactor: repair billing.", targets);
+    expect(routes[0]!.prompt).toContain("repair billing");
+    expect(routes[1]!.prompt).toBe("");
+  });
 });

@@ -104,16 +104,22 @@ export async function createPortfolioSession(
     prompt: redactSecrets(clean),
     status: "queued",
     currentTarget: 0,
-    targets: targets.map((target) => ({
-      id: target.id,
-      name: target.name,
-      repoSource: target.repoSource,
-      prompt: redactSecrets(routeById.get(target.id)!.prompt),
-      routeEvidence: routeById.get(target.id)!.evidence,
-      status: "queued",
-      runId: null,
-      error: null,
-    })),
+    targets: targets.flatMap((target) => {
+      const route = routeById.get(target.id)!;
+      if (!route.prompt) return [];
+      return [
+        {
+          id: target.id,
+          name: target.name,
+          repoSource: target.repoSource,
+          prompt: redactSecrets(route.prompt),
+          routeEvidence: route.evidence,
+          status: "queued" as const,
+          runId: null,
+          error: null,
+        },
+      ];
+    }),
     steering: [],
     createdAt: now,
     updatedAt: now,

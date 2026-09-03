@@ -44,6 +44,35 @@ function mentions(segment: string, target: PromptTarget): boolean {
   });
 }
 
+function promptSegments(prompt: string, targets: PromptTarget[]): string[] {
+  const segments: string[] = [];
+  for (const rawLine of prompt.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const clauses: string[] = [];
+    for (const part of line.split(/;\s+/)) {
+      if (
+        clauses.length === 0 ||
+        SHARED.test(part) ||
+        targets.some((target) => mentions(part, target))
+      ) {
+        clauses.push(part);
+      } else {
+        clauses[clauses.length - 1] += `; ${part}`;
+      }
+    }
+    for (const clause of clauses) {
+      segments.push(
+        ...clause
+          .split(/(?<=[.!?])\s+(?=(?:[-*]\s*)?[\[A-Za-z0-9])/)
+          .map((part) => part.trim())
+          .filter(Boolean),
+      );
+    }
+  }
+  return segments.length ? segments : [prompt];
+}
+
 /**
  * Deterministically split one owner prompt among selected programs.
  * Explicit program/repo names win; shared and genuinely unscoped requirements
@@ -60,26 +89,26 @@ export function routePrompt(prompt: string, targets: PromptTarget[]): PromptRout
     return [{ targetId: targets[0]!.id, prompt: clean, evidence: "single" }];
   }
 
-  const segments = clean
-    .split(/(?<=[.!?])\s+(?=(?:[-*]\s*)?[\[A-Za-z0-9])/)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const segments = promptSegments(clean, targets);
   const routed = new Map(targets.map((target) => [target.id, [] as string[]]));
   const evidence = new Map<string, PromptRoute["evidence"]>(
     targets.map((target) => [target.id, "shared"]),
   );
   let lastNamed: PromptTarget[] = [];
 
-  for (const segment of segments.length ? segments : [clean]) {
+  for (const segment of segments) {
     const named = targets.filter((target) => mentions(segment, target));
-    const chosen = SHARED.test(segment)
+    const shared = SHARED.test(segment);
+    const chosen = shared
       ? targets
       : named.length
         ? named
         : CONTINUATION.test(segment) && lastNamed.length
           ? lastNamed
           : targets;
-    if (named.length) lastNamed = named;
+    if (shared) lastNamed = [];
+    else if (named.length) lastNamed = named;
+    else if (!(CONTINUATION.test(segment) && lastNamed.length)) lastNamed = [];
     for (const target of chosen) {
       routed.get(target.id)!.push(segment);
       if (named.includes(target)) evidence.set(target.id, "named");
