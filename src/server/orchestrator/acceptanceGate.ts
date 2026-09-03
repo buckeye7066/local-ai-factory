@@ -617,119 +617,6 @@ function unwrapTransparentExpression(expression: ts.Expression): ts.Expression {
   return current;
 }
 
-function forOfLiteralValues(call: ts.CallExpression, identifier: string): string[] {
-  let current: ts.Node | undefined = call.parent;
-  while (current && !ts.isSourceFile(current)) {
-    if (ts.isBlock(current) || ts.isCaseBlock(current)) {
-      const statements = ts.isBlock(current)
-        ? current.statements
-        : current.clauses.flatMap((clause) => [...clause.statements]);
-      if (
-        statements.some(
-          (statement) =>
-            ts.isVariableStatement(statement) &&
-            declarationListBinds(statement.declarationList, identifier),
-        )
-      ) {
-        return [];
-      }
-    }
-    if (
-      ts.isForOfStatement(current) &&
-      ts.isVariableDeclarationList(current.initializer) &&
-      (current.initializer.flags & ts.NodeFlags.Const) !== 0
-    ) {
-      const bindsIdentifier = current.initializer.declarations.some(
-        (declaration) =>
-          ts.isIdentifier(declaration.name) && declaration.name.text === identifier,
-      );
-      if (bindsIdentifier) {
-        const expression = unwrapTransparentExpression(current.expression);
-        if (!ts.isArrayLiteralExpression(expression)) return [];
-        return expression.elements
-          .filter(ts.isStringLiteralLike)
-          .map((element) => element.text);
-      }
-    }
-    if (
-      (ts.isForStatement(current) ||
-        ts.isForInStatement(current) ||
-        ts.isForOfStatement(current)) &&
-      current.initializer &&
-      ts.isVariableDeclarationList(current.initializer) &&
-      declarationListBinds(current.initializer, identifier)
-    ) {
-      return [];
-    }
-    if (
-      ts.isCatchClause(current) &&
-      current.variableDeclaration &&
-      bindingNameContains(current.variableDeclaration.name, identifier)
-    ) {
-      return [];
-    }
-    if (
-      ts.isFunctionLike(current) &&
-      current.parameters.some((parameter) =>
-        bindingNameContains(parameter.name, identifier),
-      )
-    ) {
-      return [];
-    }
-    current = current.parent;
-  }
-  return [];
-}
-
-function usesUnshadowedParameter(
-  call: ts.CallExpression,
-  identifier: string,
-  helper: JavascriptHelper,
-): boolean {
-  let current: ts.Node | undefined = call.parent;
-  while (current && current !== helper) {
-    if (ts.isBlock(current) || ts.isCaseBlock(current)) {
-      const statements = ts.isBlock(current)
-        ? current.statements
-        : current.clauses.flatMap((clause) => [...clause.statements]);
-      if (
-        statements.some(
-          (statement) =>
-            ts.isVariableStatement(statement) &&
-            declarationListBinds(statement.declarationList, identifier),
-        )
-      ) {
-        return false;
-      }
-    }
-    if (
-      (ts.isForStatement(current) ||
-        ts.isForInStatement(current) ||
-        ts.isForOfStatement(current)) &&
-      current.initializer &&
-      ts.isVariableDeclarationList(current.initializer) &&
-      declarationListBinds(current.initializer, identifier)
-    ) {
-      return false;
-    }
-    if (
-      ts.isCatchClause(current) &&
-      current.variableDeclaration &&
-      bindingNameContains(current.variableDeclaration.name, identifier)
-    ) {
-      return false;
-    }
-    if (ts.isFunctionLike(current)) return false;
-    current = current.parent;
-  }
-  return Boolean(
-    current === helper &&
-      helper.parameters.some((parameter) =>
-        bindingNameContains(parameter.name, identifier),
-      ),
-  );
-}
-
 /**
  * Reject negative assertions whose matcher is broader than the thing it is
  * supposed to exclude. These are especially dangerous in generated tests:
@@ -740,7 +627,6 @@ function usesUnshadowedParameter(
 function brittleNegatedMatcher(
   call: ts.CallExpression,
   executionRoot: JavascriptHelper,
-  parameterLiterals: ReadonlyMap<string, readonly string[]>,
 ): string | null {
   if (!ts.isPropertyAccessExpression(call.expression)) return null;
   const matcher = call.expression.name.text;
@@ -751,20 +637,18 @@ function brittleNegatedMatcher(
     negated.name.text === "not" &&
     ts.isCallExpression(negated.expression) &&
     ts.isIdentifier(negated.expression.expression) &&
-    negated.expression.expression.text === "expect";
+    negated.expression.expression.text === "expect" &&
+    verifiedAssertionBinding(negated.expression, "expect", executionRoot);
   if (expectNegation) {
-    if (matcher === "toContain" && expected && ts.isStringLiteralLike(expected)) {
-      return brittleSubstring(expected.text);
-    }
-    if (matcher === "toContain" && expected && ts.isIdentifier(expected)) {
-      const propagated = usesUnshadowedParameter(call, expected.text, executionRoot)
-        ? parameterLiterals.get(expected.text)
-        : undefined;
-      const values = propagated ?? forOfLiteralValues(call, expected.text);
-      for (const value of values) {
-        const issue = brittleSubstring(value);
-        if (issue) return issue;
+    const expectedValue = expected ? unwrapTransparentExpression(expected) : undefined;
+    if (matcher === "toContain" && expectedValue) {
+      if (ts.isStringLiteralLike(expectedValue)) {
+        return brittleSubstring(expectedValue.text);
       }
+      return (
+        "dynamic negated substring assertion; use a direct literal or a " +
+        "token-, line-, or structure-specific assertion"
+      );
     }
     if (matcher === "toMatch" && expected && ts.isRegularExpressionLiteral(expected)) {
       const literal = expected.getText();
@@ -801,9 +685,8 @@ function analyzeCallback(
   const inspectCall = (
     call: ts.CallExpression,
     executionRoot: JavascriptHelper,
-    parameterLiterals: ReadonlyMap<string, readonly string[]>,
   ): void => {
-    const brittle = brittleNegatedMatcher(call, executionRoot, parameterLiterals);
+    const brittle = brittleNegatedMatcher(call, executionRoot);
     if (brittle && !brittleAssertions.includes(brittle)) {
       brittleAssertions.push(brittle);
     }
@@ -896,7 +779,6 @@ function analyzeCallback(
     node: ts.Node,
     root = false,
     executionRoot: JavascriptHelper = callback,
-    parameterLiterals: ReadonlyMap<string, readonly string[]> = new Map(),
   ): void => {
     if (
       !root &&
@@ -910,24 +792,22 @@ function analyzeCallback(
     }
     if (ts.isBlock(node)) {
       for (const statement of node.statements) {
-        visit(statement, false, executionRoot, parameterLiterals);
+        visit(statement, false, executionRoot);
         if (statementDefinitelyTerminates(statement)) break;
       }
       return;
     }
     if (ts.isIfStatement(node)) {
       if (node.expression.kind === ts.SyntaxKind.FalseKeyword) {
-        if (node.elseStatement)
-          visit(node.elseStatement, false, executionRoot, parameterLiterals);
+        if (node.elseStatement) visit(node.elseStatement, false, executionRoot);
         return;
       }
       if (node.expression.kind === ts.SyntaxKind.TrueKeyword) {
-        visit(node.thenStatement, false, executionRoot, parameterLiterals);
+        visit(node.thenStatement, false, executionRoot);
         return;
       }
-      visit(node.thenStatement, false, executionRoot, parameterLiterals);
-      if (node.elseStatement)
-        visit(node.elseStatement, false, executionRoot, parameterLiterals);
+      visit(node.thenStatement, false, executionRoot);
+      if (node.elseStatement) visit(node.elseStatement, false, executionRoot);
       return;
     }
     if (
@@ -937,7 +817,7 @@ function analyzeCallback(
       return;
     }
     if (ts.isCallExpression(node)) {
-      inspectCall(node, executionRoot, parameterLiterals);
+      inspectCall(node, executionRoot);
       if (ts.isIdentifier(node.expression)) {
         const binding = resolveVisibleBinding(
           node,
@@ -952,37 +832,13 @@ function analyzeCallback(
           !isGeneratorHelper(helper) &&
           (!isAsyncFunction(helper) || expressionResultIsObserved(node, executionRoot))
         ) {
-          const helperLiterals = new Map<string, readonly string[]>();
-          helper.parameters.forEach((parameter, index) => {
-            if (!ts.isIdentifier(parameter.name)) return;
-            const argument = node.arguments[index];
-            if (!argument) return;
-            const value = unwrapTransparentExpression(argument);
-            if (ts.isStringLiteralLike(value)) {
-              helperLiterals.set(parameter.name.text, [value.text]);
-              return;
-            }
-            if (ts.isIdentifier(value)) {
-              const propagated = usesUnshadowedParameter(
-                node,
-                value.text,
-                executionRoot,
-              )
-                ? parameterLiterals.get(value.text)
-                : undefined;
-              const values = propagated ?? forOfLiteralValues(node, value.text);
-              if (values.length > 0) helperLiterals.set(parameter.name.text, values);
-            }
-          });
           activeHelpers.add(helper);
-          visit(helper.body, true, helper, helperLiterals);
+          visit(helper.body, true, helper);
           activeHelpers.delete(helper);
         }
       }
     }
-    ts.forEachChild(node, (child) =>
-      visit(child, false, executionRoot, parameterLiterals),
-    );
+    ts.forEachChild(node, (child) => visit(child, false, executionRoot));
   };
   visit(callback.body, true);
   return {
