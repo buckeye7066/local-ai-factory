@@ -459,7 +459,14 @@ async function evaluateCompetitiveDossier(
   spec: ProductSpec,
   arch: Architecture,
   dossier: CompetitiveDossier,
+  productOnly = false,
 ): Promise<CompetitiveSelection> {
+  const reviewCandidates = productOnly
+    ? dossier.candidates.filter(
+        (candidate) =>
+          candidate.kind === "product" && candidate.sourceEvidence.length > 0,
+      )
+    : dossier.candidates;
   return deps.provider.generateJson<CompetitiveSelection>({
     system:
       `${SYSTEM_PREAMBLE}\nYou are the COMPETITIVE INTELLIGENCE reviewer. Compare only the supplied, ` +
@@ -472,16 +479,19 @@ async function evaluateCompetitiveDossier(
       `TARGET SPEC:\n${JSON.stringify(spec)}`,
       `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
       `COVERAGE:\n${JSON.stringify(dossier.coverage)}`,
-      `DISCOVERY DOSSIER:\n${JSON.stringify(dossier.candidates.map(compactCandidate))}`,
-      `Return a feature-by-feature comparison for every credible candidate and a selected list of concrete elements ` +
-        `worth integrating. Candidate kind=product means a market competitor; kind=repository means an inspectable ` +
-        `open-source implementation. Cover AT LEAST five distinct kind=product competitors in the comparisons when ` +
-        `coverage contains five verified products. Repositories are valuable implementation evidence but NEVER count ` +
-        `toward that five-product floor. When product coverage is below target, compare every supplied product and say ` +
-        `the shortfall plainly. For each product competitor name the single most valuable idea worth adopting - ` +
-        `the thing it does better than this app - respecting its license policy. Every selected candidateId must ` +
-        `exactly match the dossier. Cite file/page URLs in evidenceUrls. ` +
-        `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
+      `DISCOVERY DOSSIER:\n${JSON.stringify(reviewCandidates.map(compactCandidate))}`,
+      productOnly
+        ? `This is a focused corrective review. Return an object with exactly three top-level fields: a string summary, a comparisons array, and a selected array. Compare and select an actionable clean-room advantage from at least five distinct supplied products; never wrap those arrays inside summary.`
+        : `Return a feature-by-feature comparison for every credible candidate and a selected list of concrete elements ` +
+          `worth integrating. Candidate kind=product means a market competitor; kind=repository means an inspectable ` +
+          `open-source implementation. Cover AT LEAST five distinct kind=product competitors in the comparisons when ` +
+          `coverage contains five verified products. Repositories are valuable implementation evidence but NEVER count ` +
+          `toward that five-product floor. When product coverage is below target, compare every supplied product and say ` +
+          `the shortfall plainly. For each product competitor name the single most valuable idea worth adopting - ` +
+          `the thing it does better than this app - respecting its license policy. Every selected candidateId must ` +
+          `exactly match the dossier. Cite file/page URLs in evidenceUrls. ` +
+          `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
+
     ].join("\n\n"),
     schema: CompetitiveSelectionSchema,
     schemaName: "CompetitiveSelection",
@@ -569,6 +579,40 @@ function mergeCompetitiveResults(
   });
 }
 
+function qualifyingProductAdvantageCount(
+  findings: ResearchFindings,
+  dossier: CompetitiveDossier,
+): number {
+  const productIds = new Set(
+    dossier.candidates
+      .filter(
+        (candidate) =>
+          candidate.kind === "product" && candidate.sourceEvidence.length > 0,
+      )
+      .map((candidate) => candidate.id),
+  );
+  const comparedIds = new Set(
+    findings.comparisons
+      .filter(
+        (comparison) =>
+          productIds.has(comparison.candidateId) &&
+          comparison.origin === "competitive-selection" &&
+          comparison.decision !== "reject",
+      )
+      .map((comparison) => comparison.candidateId),
+  );
+  return new Set(
+    findings.recommendations
+      .filter(
+        (recommendation) =>
+          recommendation.origin === "competitive-selection" &&
+          recommendation.reuseMode !== "reference-only" &&
+          comparedIds.has(recommendation.candidateId),
+      )
+      .map((recommendation) => recommendation.candidateId),
+  ).size;
+}
+
 /**
  * Research existing tools plus, when requested by the production pipeline,
  * autonomously discover and compare competing open-source implementations.
@@ -625,6 +669,40 @@ export async function researchAgent(
     });
   }
   let merged = mergeCompetitiveResults(base, dossier, selection);
+  const coverage = dossier.coverage ?? auditFrom(dossier).coverage;
+  if (
+    coverage.productCoverageMet &&
+    qualifyingProductAdvantageCount(merged, dossier) < MIN_PRODUCT_COMPETITORS
+  ) {
+    // A broad review can be structurally valid yet spend its budget on
+    // repositories or return no actionable products. Give the same run-scoped
+    // paid orchestrator one focused correction using only verified products.
+    try {
+      const focusedSelection = await evaluateCompetitiveDossier(
+        deps,
+        spec,
+        arch,
+        dossier,
+        true,
+      );
+      const focused = mergeCompetitiveResults(base, dossier, focusedSelection);
+      if (
+        qualifyingProductAdvantageCount(focused, dossier) >
+        qualifyingProductAdvantageCount(merged, dossier)
+      ) {
+        merged = focused;
+      }
+    } catch (err) {
+      if (err instanceof ProviderAbortError) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      merged = ResearchFindingsSchema.parse({
+        ...merged,
+        summary:
+          `${merged.summary}\n\nFocused product-review correction failed: ` +
+          `${msg.slice(0, 300)}.`,
+      });
+    }
+  }
   const deadSources = (dossier.sources ?? []).filter(
     (source) => !source.ok || source.status === "failed",
   );
@@ -651,7 +729,6 @@ Discovery source returned an honest empty result: ${emptySources
         .join("; ")}.`,
     });
   }
-  const coverage = dossier.coverage ?? auditFrom(dossier).coverage;
   if (!coverage.productCoverageMet) {
     // No silent substitution: repositories cannot satisfy the owner's floor
     // of five distinct, evidence-verified PRODUCT competitors.
