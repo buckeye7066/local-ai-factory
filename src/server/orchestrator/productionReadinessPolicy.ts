@@ -9,11 +9,13 @@ export const PRODUCTION_READINESS_POLICY = Object.freeze({
   mandatory: true,
   purposeBound: true,
   ownerExternalMatters: "owner-managed-outside-cyberland",
-  leadBrain: Object.freeze({ identity: "lead", route: "paid-model-ladder" }),
+  leadBrain: Object.freeze({ identity: "lead", route: "automatic-model-ladder" }),
   independentBrains: Object.freeze([
-    Object.freeze({ identity: "challenger", route: "paid-model-ladder" }),
+    Object.freeze({ identity: "challenger", route: "automatic-model-ladder" }),
   ]),
 });
+
+export type ReadinessLiveProvider = "openai" | "anthropic" | "free";
 
 export type ReadinessBrainIdentity =
   | "lead"
@@ -34,7 +36,7 @@ export type ReadinessBlockerCategory =
 
 export type ReadinessBrainReview = {
   identity: ReadinessBrainIdentity;
-  provider: "openai" | "anthropic";
+  provider: ReadinessLiveProvider;
   model: string;
   evidenceDigest: string;
   decision: "ready" | "not_ready";
@@ -110,6 +112,9 @@ export type ProductionReadinessReceipt = {
     lead: boolean;
     challenger: boolean;
     independentReviews: boolean;
+    /** Every semantic judgment came from a live paid or AI Time free/local route. */
+    liveModels: boolean;
+    /** Legacy diagnostic only; no longer a release requirement. */
     paidModels: boolean;
     sameEvidence: boolean;
     /** Legacy diagnostics retained for persisted v1 receipt compatibility. */
@@ -156,13 +161,15 @@ export function isSolReview(review: ReadinessBrainReview): boolean {
   );
 }
 
-function isPaidReviewerSlot(
+function isLiveReviewerSlot(
   review: ReadinessBrainReview,
   identity: "lead" | "challenger",
 ): boolean {
   return (
     review.identity === identity &&
-    (review.provider === "openai" || review.provider === "anthropic") &&
+    (review.provider === "openai" ||
+      review.provider === "anthropic" ||
+      review.provider === "free") &&
     review.model.trim().length > 0
   );
 }
@@ -268,10 +275,10 @@ export function evaluateProductionReadiness(
   const expectedReviewDigestValid = isReadinessEvidenceDigest(expectedReviewDigest);
   add(expectedReviewDigestValid, "The readiness-review evidence digest is malformed.");
   const leadReviews = evidence.reviews.filter((review) =>
-    isPaidReviewerSlot(review, "lead"),
+    isLiveReviewerSlot(review, "lead"),
   );
   const challengerReviews = evidence.reviews.filter((review) =>
-    isPaidReviewerSlot(review, "challenger"),
+    isLiveReviewerSlot(review, "challenger"),
   );
   const eligibleReviews = [...leadReviews, ...challengerReviews];
   const independentReviews =
@@ -292,12 +299,21 @@ export function evaluateProductionReadiness(
     challengerReviews.every(
       (review) => review.evidenceDigest === expectedReviewDigest && reviewReady(review),
     );
-  const paidModels =
+  const liveModels =
     independentReviews &&
     eligibleReviews.every(
       (review) =>
-        (review.provider === "openai" || review.provider === "anthropic") &&
+        (review.provider === "openai" ||
+          review.provider === "anthropic" ||
+          review.provider === "free") &&
         review.model.trim().length > 0,
+    );
+  // Retained only so persisted v1 receipts remain readable. It describes what
+  // happened; it does not select a route or block a valid free-terminal run.
+  const paidModels =
+    independentReviews &&
+    eligibleReviews.every(
+      (review) => review.provider === "openai" || review.provider === "anthropic",
     );
   const independentFamilies =
     new Set(eligibleReviews.map((review) => review.provider)).size >= 2;
@@ -316,8 +332,8 @@ export function evaluateProductionReadiness(
     "The readiness review did not contain exactly two independently executed reviewer slots.",
   );
   add(
-    paidModels,
-    "The readiness review did not record two actual paid model judgments.",
+    liveModels,
+    "The readiness review did not record two actual live model judgments.",
   );
   add(
     sameEvidence,
@@ -342,6 +358,7 @@ export function evaluateProductionReadiness(
       lead,
       challenger,
       independentReviews,
+      liveModels,
       paidModels,
       sameEvidence,
       sol,
