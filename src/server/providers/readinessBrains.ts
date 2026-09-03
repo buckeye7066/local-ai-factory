@@ -84,9 +84,7 @@ export function createReadinessBrainProviders(
   const makeRoute = (reviewer: "lead" | "challenger"): ReadinessProviderRoute => {
     const observed = new ObservedReadinessProvider(makeProvider());
     if (!observed.isConfigured()) {
-      throw new Error(
-        `No live model route is configured for the ${reviewer} review.`,
-      );
+      throw new Error(`No live model route is configured for the ${reviewer} review.`);
     }
     log(
       "info",
