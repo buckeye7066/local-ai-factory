@@ -207,12 +207,9 @@ export async function steerPortfolioSession(
   }
   const clean = prompt.trim();
   if (!clean) return { ok: false, reason: "Steering prompt is required." };
-  const eligible = session.targets.filter(
-    (target) => target.status === "queued" || target.status === "running",
-  );
   const routes = routePrompt(
     clean,
-    eligible.map((target) => ({
+    session.targets.map((target) => ({
       id: target.id,
       name: target.name,
       source: target.repoSource.location,
@@ -221,6 +218,7 @@ export async function steerPortfolioSession(
   const targetIds: string[] = [];
   for (const route of routes) {
     const target = session.targets.find((item) => item.id === route.targetId)!;
+    if (target.status !== "queued" && target.status !== "running") continue;
     if (target.status === "queued" || !target.runId) {
       target.prompt += `\n\nADDITIONAL OPERATOR STEERING:\n${route.prompt}`;
       targetIds.push(target.id);
