@@ -205,6 +205,22 @@ const CompetitiveSelectionShape = z.object({
 });
 type CompetitiveSelection = z.infer<typeof CompetitiveSelectionShape>;
 
+const TargetedProductReviewSchema = z.object({
+  summary: ProviderSummarySchema.default(""),
+  matchedFeature: z.string().trim().min(1),
+  strength: z.string().trim().min(1),
+  gap: z.string().trim().min(1),
+  decision: z.enum(["integrate", "adapt", "reference", "reject"]),
+  rationale: z.string().trim().min(1),
+  element: z.string().trim().min(1),
+  why: z.string().trim().default(""),
+  howToIntegrate: z.string().trim().default(""),
+  reuseMode: ActionableReuseModeSchema,
+  evidenceUrls: z.array(HttpUrlSchema).default([]),
+  score: z.number().min(0).max(100).default(0),
+});
+type TargetedProductReview = z.infer<typeof TargetedProductReviewSchema>;
+
 function competitiveSelectionSchema(
   candidates: CompetitiveCandidate[],
   requiredCount: number,
@@ -608,6 +624,29 @@ const MAX_REVIEW_DESCRIPTION_CHARS = 600;
 const MAX_REVIEW_EVIDENCE_ITEMS = 2;
 const MAX_REVIEW_EVIDENCE_CHARS = 1_000;
 
+function reviewableProductCandidates(dossier: CompetitiveDossier) {
+  const productTarget = Math.max(
+    MIN_PRODUCT_COMPETITORS,
+    dossier.coverage?.productTarget ?? MIN_PRODUCT_COMPETITORS,
+  );
+  const candidates = dossier.candidates
+    .filter(
+      (candidate) =>
+        candidate.kind === "product" &&
+        !candidate.inspectionError &&
+        candidate.sourceEvidence.length > 0 &&
+        canonicalEvidenceUrlSet([
+          candidate.url,
+          ...candidate.sourceEvidence.map((item) => item.url),
+        ]).size > 0,
+    )
+    .slice(0, productTarget + COMPETITIVE_REVIEW_HEADROOM);
+  return {
+    candidates,
+    requiredCount: Math.min(productTarget, candidates.length),
+  };
+}
+
 function compactProductCandidate(candidate: CompetitiveCandidate) {
   return {
     id: candidate.id,
@@ -701,29 +740,13 @@ async function evaluateCompetitiveDossier(
   arch: Architecture,
   dossier: CompetitiveDossier,
 ): Promise<CompetitiveSelection> {
-  const productTarget = Math.max(
-    MIN_PRODUCT_COMPETITORS,
-    dossier.coverage?.productTarget ?? MIN_PRODUCT_COMPETITORS,
-  );
   // Repository source trees are useful to deterministic discovery and the
   // ordinary implementation recommendations, but they made the production
   // product-review prompt exceed 43k input tokens. The two paid responses then
   // hit their output limits, and truncation salvage retained only a summary.
   // Review only verified market products here, with two spares so the judge
   // can reject weak candidates while still satisfying the five-product gate.
-  const candidates = dossier.candidates
-    .filter(
-      (candidate) =>
-        candidate.kind === "product" &&
-        !candidate.inspectionError &&
-        candidate.sourceEvidence.length > 0 &&
-        canonicalEvidenceUrlSet([
-          candidate.url,
-          ...candidate.sourceEvidence.map((item) => item.url),
-        ]).size > 0,
-    )
-    .slice(0, productTarget + COMPETITIVE_REVIEW_HEADROOM);
-  const requiredCount = Math.min(productTarget, candidates.length);
+  const { candidates, requiredCount } = reviewableProductCandidates(dossier);
   if (requiredCount === 0) {
     return {
       comparisons: [],
@@ -763,6 +786,109 @@ async function evaluateCompetitiveDossier(
     intent: { role: "judge", needs: ["structured_json"] },
     temperature: 0.1,
     maxTokens: 8000,
+  });
+}
+
+async function evaluateProductsIndividually(
+  deps: AgentDeps,
+  spec: ProductSpec,
+  arch: Architecture,
+  dossier: CompetitiveDossier,
+): Promise<CompetitiveSelection> {
+  const { candidates, requiredCount } = reviewableProductCandidates(dossier);
+  if (requiredCount === 0) {
+    return {
+      comparisons: [],
+      selected: [],
+      summary: "Targeted product review found no verified evidence to evaluate.",
+    };
+  }
+
+  const comparisons: CompetitiveSelection["comparisons"] = [];
+  const selected: CompetitiveSelection["selected"] = [];
+  const failures: string[] = [];
+
+  for (const candidate of candidates) {
+    if (selected.length >= requiredCount) break;
+    try {
+      const review = await deps.provider.generateJson<TargetedProductReview>({
+        system:
+          `${SYSTEM_PREAMBLE}\nYou are the TARGETED COMPETITIVE INTELLIGENCE reviewer. Review only the one supplied, ` +
+          `evidence-verified product. Identify one concrete behavior it does better than the target app and one ` +
+          `target-app gap it exposes. Do not invent facts, products, URLs, source code, or licenses. Product behavior ` +
+          `may be adopted only as a clean-room pattern. Reject the product when its supplied evidence supports no relevant advantage.`,
+        prompt: [
+          `TARGET SPEC:\n${JSON.stringify(spec)}`,
+          `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
+          `VERIFIED PRODUCT AND INSPECTED EVIDENCE:\n${JSON.stringify(compactProductCandidate(candidate))}`,
+          `Return the single-product review. The orchestrator owns candidate identity and evidence attachment; do not ` +
+            `return a candidateId. Every strength, gap, element, and rationale must be specific to the supplied evidence.`,
+        ].join("\n\n"),
+        schema: TargetedProductReviewSchema,
+        schemaName: "TargetedProductReview",
+        intent: { role: "judge", needs: ["structured_json"] },
+        temperature: 0.1,
+        maxTokens: 1800,
+      });
+      if (review.decision === "reject") continue;
+
+      const allowedEvidence = canonicalEvidenceUrlSet([
+        candidate.url,
+        ...candidate.sourceEvidence.map((evidence) => evidence.url),
+      ]);
+      const suppliedEvidence = matchingEvidenceUrls(
+        review.evidenceUrls,
+        allowedEvidence,
+      );
+      const evidenceUrls =
+        suppliedEvidence.length > 0
+          ? suppliedEvidence
+          : matchingEvidenceUrls(
+              [
+                candidate.url,
+                ...candidate.sourceEvidence.map((evidence) => evidence.url),
+              ],
+              allowedEvidence,
+            );
+      if (evidenceUrls.length === 0) continue;
+
+      comparisons.push({
+        candidateId: candidate.id,
+        name: candidate.name,
+        score: review.score,
+        matchedFeatures: [review.matchedFeature],
+        strengths: [review.strength],
+        gaps: [review.gap],
+        evidenceUrls,
+        decision: review.decision,
+        rationale: review.rationale,
+      });
+      selected.push({
+        candidateId: candidate.id,
+        element: review.element,
+        why: review.why,
+        howToIntegrate: review.howToIntegrate,
+        reuseMode: review.reuseMode,
+        evidenceUrls,
+        score: review.score,
+      });
+    } catch (err) {
+      if (err instanceof ProviderAbortError) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      failures.push(`${candidate.name}: ${message.slice(0, 120)}`);
+    }
+  }
+
+  return competitiveSelectionSchema(candidates, requiredCount).parse({
+    comparisons,
+    selected,
+    summary:
+      `Targeted paid product review produced ${selected.length} evidence-linked advantage(s).` +
+      (failures.length
+        ? ` ${failures.length} candidate review(s) failed validation: ${failures
+            .slice(0, 3)
+            .join("; ")}.`
+        : ""),
   });
 }
 
@@ -860,6 +986,40 @@ function mergeCompetitiveResults(
   });
 }
 
+function qualifyingProductAdvantageCount(
+  findings: ResearchFindings,
+  dossier: CompetitiveDossier,
+): number {
+  const productIds = new Set(
+    dossier.candidates
+      .filter(
+        (candidate) =>
+          candidate.kind === "product" && candidate.sourceEvidence.length > 0,
+      )
+      .map((candidate) => candidate.id),
+  );
+  const comparedIds = new Set(
+    findings.comparisons
+      .filter(
+        (comparison) =>
+          productIds.has(comparison.candidateId) &&
+          comparison.origin === "competitive-selection" &&
+          comparison.decision !== "reject",
+      )
+      .map((comparison) => comparison.candidateId),
+  );
+  return new Set(
+    findings.recommendations
+      .filter(
+        (recommendation) =>
+          recommendation.origin === "competitive-selection" &&
+          recommendation.reuseMode !== "reference-only" &&
+          comparedIds.has(recommendation.candidateId),
+      )
+      .map((recommendation) => recommendation.candidateId),
+  ).size;
+}
+
 /**
  * Research existing tools plus, when requested by the production pipeline,
  * autonomously discover and compare competing open-source implementations.
@@ -893,6 +1053,8 @@ export async function researchAgent(
     });
   }
 
+  const coverage = dossier.coverage ?? auditFrom(dossier).coverage;
+
   // RESEARCH IS ADVISORY — IT MUST NEVER KILL THE RUN (2026-08-16, live
   // GrantFlow slice: the competitive-selection call failed schema validation
   // after ~$10 of billed retries and the whole slice died before the builder
@@ -906,16 +1068,57 @@ export async function researchAgent(
   } catch (err) {
     if (err instanceof ProviderAbortError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
-    return ResearchFindingsSchema.parse({
-      ...base,
+    if (!coverage.productCoverageMet) {
+      return ResearchFindingsSchema.parse({
+        ...base,
+        summary:
+          `${base.summary}\n\nCompetitive selection FAILED and was SKIPPED — ` +
+          `continuing without competitor recommendations (${msg.slice(0, 300)}). ` +
+          `${dossier.candidates.length} discovered candidate(s) are recorded in the audit.`,
+        competitiveAudit: auditFrom(dossier),
+      });
+    }
+    selection = CompetitiveSelectionShape.parse({
+      comparisons: [],
+      selected: [],
       summary:
-        `${base.summary}\n\nCompetitive selection FAILED and was SKIPPED — ` +
-        `continuing without competitor recommendations (${msg.slice(0, 300)}). ` +
-        `${dossier.candidates.length} discovered candidate(s) are recorded in the audit.`,
-      competitiveAudit: auditFrom(dossier),
+        `Bulk competitive review failed validation (${msg.slice(0, 240)}). ` +
+        `Continuing with evidence-scoped single-product paid reviews.`,
     });
   }
   let merged = mergeCompetitiveResults(base, dossier, selection);
+  if (
+    coverage.productCoverageMet &&
+    qualifyingProductAdvantageCount(merged, dossier) < MIN_PRODUCT_COMPETITORS
+  ) {
+    // A malformed bulk row must not discard every otherwise useful product.
+    // Review one verified product per paid call so identity and inspected
+    // evidence remain attached by the orchestrator rather than model prose.
+    try {
+      const targetedSelection = await evaluateProductsIndividually(
+        deps,
+        spec,
+        arch,
+        dossier,
+      );
+      const targeted = mergeCompetitiveResults(base, dossier, targetedSelection);
+      if (
+        qualifyingProductAdvantageCount(targeted, dossier) >
+        qualifyingProductAdvantageCount(merged, dossier)
+      ) {
+        merged = targeted;
+      }
+    } catch (err) {
+      if (err instanceof ProviderAbortError) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      merged = ResearchFindingsSchema.parse({
+        ...merged,
+        summary:
+          `${merged.summary}\n\nCompetitive selection FAILED and was SKIPPED after ` +
+          `the evidence-scoped product correction also failed (${msg.slice(0, 300)}).`,
+      });
+    }
+  }
   const deadSources = (dossier.sources ?? []).filter(
     (source) => !source.ok || source.status === "failed",
   );
@@ -942,7 +1145,6 @@ Discovery source returned an honest empty result: ${emptySources
         .join("; ")}.`,
     });
   }
-  const coverage = dossier.coverage ?? auditFrom(dossier).coverage;
   if (!coverage.productCoverageMet) {
     // No silent substitution: repositories cannot satisfy the owner's floor
     // of five distinct, evidence-verified PRODUCT competitors.
