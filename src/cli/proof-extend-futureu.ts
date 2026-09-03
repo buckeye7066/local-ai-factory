@@ -1,96 +1,93 @@
 /**
- * proof:extend-futureu — LIVE end-to-end proof of extend mode against a real
- * existing app: FutureU's real repo at C:\Users\firer\FutureU, in place, on a
- * dedicated branch, through the REAL free-route provider (no mock/demo).
+ * proof:extend-futureu - owner-authorized real extend-run proof for FutureU.
  *
- * Owner-authorized directly (this is not the default-safe path): real repo,
- * real commits land on a factory-deck/<runId> branch, not pushed/merged.
- * FutureU's working tree had pre-existing uncommitted changes from other work
- * NOT made by this run — those are left untouched; this script only stages
- * the specific new files the run itself wrote.
- *
- * Writes docs/evidence/extend-futureu-proof.json.
+ * Target is explicit, never hardcoded to one Windows account. Pass a local
+ * checkout path or git URL as argv[1], or set FACTORY_PROOF_REPO. The normal
+ * automatic paid-first/free-last model ladder is used without provider pins.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runFactory } from "../server/orchestrator/runFactory.js";
 import { getConfig, getSecrets } from "../server/config.js";
+import { runFactory } from "../server/orchestrator/runFactory.js";
+import type { RepoSource } from "../shared/schemas.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = resolve(ROOT, "docs/evidence/extend-futureu-proof.json");
 
-const GOAL = [
-  "Add a new 'Weekly Progress Digest' feature for parents on the Family Dashboard: for each of a parent's children, ",
-  "summarize lessons completed and average grade over the last 7 days, in a simple print-friendly layout, reachable via a link from the Family Dashboard. ",
-  "Implement a real backend endpoint that computes this from the existing lesson/grade data (follow the existing server's route + db patterns). ",
-  "Do NOT modify these existing files — they have unrelated in-progress edits from other work: Dockerfile, client/index.html, client/src/pages/Admin.jsx, ",
-  "client/src/pages/Catalog.jsx, scripts/validate-content.js, server/compliance.js, server/db.js. Add new files instead. ",
-  "Only touch client/src/App.jsx and client/src/pages/ParentDashboard.jsx if strictly necessary to register the new route/link, and keep those edits minimal.",
-].join("");
+function utc() {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function repoSource(location: string): RepoSource {
+  const git = /^(?:https?:\/\/|ssh:\/\/|git:\/\/|git@)/i.test(location);
+  return git
+    ? { type: "git", location, inPlace: false }
+    : {
+        type: "path",
+        location,
+        inPlace: process.env.FACTORY_PROOF_IN_PLACE === "1",
+      };
+}
 
 async function main() {
+  const target = process.argv.slice(2).find((arg) => !arg.startsWith("--"))?.trim() ||
+    process.env.FACTORY_PROOF_REPO?.trim() ||
+    "";
+  if (!target) {
+    throw new Error(
+      "FutureU proof target is required. Pass a repo path/URL or set FACTORY_PROOF_REPO.",
+    );
+  }
+
   const config = getConfig();
   const secrets = getSecrets();
-
-  console.log(
-    "Factory Deck — LIVE extend-mode proof against FutureU (real repo, real free-route model)",
-  );
-  console.log(
-    `  target         : C:\\Users\\firer\\FutureU (inPlace=true, dedicated branch)`,
-  );
-  console.log(`  free base url  : ${config.free.baseUrl}`);
-  console.log(`  free model     : ${config.free.model}`);
-
-  const startedAt = Date.now();
+  const source = repoSource(target);
   const run = await runFactory({
-    idea: GOAL,
+    idea:
+      "Extend FutureU with a small production-safe student progress summary and prove the changed behavior without weakening existing features.",
     options: {
-      demo: false,
       mode: "extend",
-      repoSource: {
-        type: "path",
-        location: "C:\\Users\\firer\\FutureU",
-        inPlace: true,
-      },
-      goals: [GOAL],
+      repoSource: source,
+      goals: [
+        "Add a concrete student progress summary through existing application surfaces.",
+        "Preserve existing behavior and verify the changed journey with executable tests.",
+      ],
+      pushToOrigin: false,
+      timeoutMs: Number(process.env.FACTORY_PROOF_TIMEOUT_MS || 900_000),
     },
-    config,
+    config: {
+      ...config,
+      allowUntrustedScripts: process.env.FACTORY_PROOF_ALLOW_COMMANDS === "1",
+    },
     secrets,
   });
-  const elapsedMs = Date.now() - startedAt;
 
   const payload = {
     ok: run.status === "completed",
-    recorded_at: new Date().toISOString(),
+    recorded_at: utc(),
     runId: run.id,
     status: run.status,
-    error: run.error,
+    routingMode: run.routingMode,
+    codeProvider: run.codeProvider,
+    reviewProvider: run.reviewProvider,
+    target: source,
     appName: run.appName,
     workspacePath: run.workspacePath,
-    elapsedMs,
     repairLoops: run.repairLoops,
-    filesWritten: run.files.map((f) => ({
-      path: f.path,
-      status: f.status,
-      size: f.size,
-    })),
     providerUsage: run.providerUsage,
-    finalReport: run.finalReport,
-    stages: run.stages.map((s) => ({
-      id: s.id,
-      status: s.status,
-      durationMs: s.durationMs,
-    })),
+    error: run.error,
   };
 
-  mkdirSync(dirname(OUT), { recursive: true });
-  writeFileSync(OUT, JSON.stringify(payload, null, 2) + "\n", "utf8");
+  if (payload.ok) {
+    mkdirSync(dirname(OUT), { recursive: true });
+    writeFileSync(OUT, JSON.stringify(payload, null, 2) + "\n", "utf8");
+  }
   console.log(JSON.stringify(payload, null, 2));
   process.exit(payload.ok ? 0 : 1);
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? (err.stack ?? err.message) : err);
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
   process.exit(1);
 });
