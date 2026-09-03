@@ -179,6 +179,52 @@ describe("comparative evidence gate", () => {
     expect(short.reasons.join("; ")).toMatch(/4\/5/);
   });
 
+  it("rejects surplus competitive entries restored from legacy checkpoints", () => {
+    const surplus = FactoryCheckpointSchema.parse({
+      schemaVersion: 3,
+      runId: randomUUID(),
+      idea: "resume surplus research",
+      options: {},
+      research: findings(6),
+      updatedAt: Date.now(),
+    }).research!;
+
+    const surplusGate = assessRequiredCompetitiveEvidence(surplus);
+    expect(surplusGate).toMatchObject({
+      ok: false,
+      productTarget: 5,
+      productComparedCount: 6,
+      productSelectedCount: 6,
+    });
+    expect(surplusGate.reasons.join("; ")).toMatch(
+      /competitive comparison entries are 6\/5/i,
+    );
+    expect(surplusGate.reasons.join("; ")).toMatch(
+      /competitive selected-advantage entries are 6\/5/i,
+    );
+    expect(shouldAttemptResearch(true, true, surplus)).toBe(true);
+
+    const duplicateSelection = findings();
+    duplicateSelection.recommendations.push({
+      ...duplicateSelection.recommendations[0]!,
+      name: "Duplicate restored advantage",
+    });
+    const restoredDuplicate = FactoryCheckpointSchema.parse({
+      schemaVersion: 3,
+      runId: randomUUID(),
+      idea: "resume duplicate selection",
+      options: {},
+      research: duplicateSelection,
+      updatedAt: Date.now(),
+    }).research!;
+    const duplicateGate = assessRequiredCompetitiveEvidence(restoredDuplicate);
+    expect(duplicateGate.ok).toBe(false);
+    expect(duplicateGate.productSelectedCount).toBe(5);
+    expect(duplicateGate.reasons.join("; ")).toMatch(
+      /competitive selected-advantage entries are 6\/5/i,
+    );
+  });
+
   it("recomputes the five-product floor and rejects invented citations", () => {
     const manipulated = findings();
     manipulated.competitiveAudit!.coverage.productTarget = 1;
@@ -321,12 +367,6 @@ describe("comparative evidence gate", () => {
 
   it("turns selected advantages into acceptance criteria and durable evidence", () => {
     const research = findings();
-    research.recommendations.unshift(
-      ...Array.from({ length: 4 }, (_, index) => ({
-        ...research.recommendations[0]!,
-        name: `Duplicate product one ${index + 1}`,
-      })),
-    );
     const enriched = withCompetitiveAcceptanceCriteria(spec, research);
     const criteria = enriched.acceptanceCriteria.filter((item) =>
       item.startsWith("[COMP-"),
