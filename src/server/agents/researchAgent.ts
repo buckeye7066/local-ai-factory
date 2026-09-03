@@ -250,13 +250,17 @@ function hydrateCompetitiveCandidateIds(
   const selection = raw as Record<string, unknown>;
   const candidateIds = new Set(reviewCandidates.map((candidate) => candidate.id));
   const identityTokens = new Map(
-    reviewCandidates.map((candidate) => [candidate.id, candidateIdentityTokens(candidate)]),
+    reviewCandidates.map((candidate) => [
+      candidate.id,
+      candidateIdentityTokens(candidate),
+    ]),
   );
 
   const resolveCandidateId = (value: unknown): string | undefined => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     const item = value as Record<string, unknown>;
-    const explicitId = typeof item.candidateId === "string" ? item.candidateId.trim() : "";
+    const explicitId =
+      typeof item.candidateId === "string" ? item.candidateId.trim() : "";
     if (candidateIds.has(explicitId)) return explicitId;
 
     const hints = [item.candidateId, item.name, item.url, item.sourceUrl]
@@ -285,7 +289,10 @@ function hydrateCompetitiveCandidateIds(
   const comparisons = Array.isArray(selection.comparisons)
     ? selection.comparisons.map((value) => {
         const candidateId = resolveCandidateId(value);
-        return candidateId && value && typeof value === "object" && !Array.isArray(value)
+        return candidateId &&
+          value &&
+          typeof value === "object" &&
+          !Array.isArray(value)
           ? { ...(value as Record<string, unknown>), candidateId }
           : value;
       })
@@ -300,14 +307,21 @@ function hydrateCompetitiveCandidateIds(
           comparisons.length === selectedValues.length
         ) {
           const comparison = comparisons[index];
-          if (comparison && typeof comparison === "object" && !Array.isArray(comparison)) {
+          if (
+            comparison &&
+            typeof comparison === "object" &&
+            !Array.isArray(comparison)
+          ) {
             const comparisonId = (comparison as Record<string, unknown>).candidateId;
             if (typeof comparisonId === "string" && candidateIds.has(comparisonId)) {
               candidateId = comparisonId;
             }
           }
         }
-        return candidateId && value && typeof value === "object" && !Array.isArray(value)
+        return candidateId &&
+          value &&
+          typeof value === "object" &&
+          !Array.isArray(value)
           ? { ...(value as Record<string, unknown>), candidateId }
           : value;
       })
