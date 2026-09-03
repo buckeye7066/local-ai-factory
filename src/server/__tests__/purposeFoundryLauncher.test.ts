@@ -19,7 +19,7 @@ describe("Purpose Foundry desktop launcher", () => {
   it("repairs the Foundry shortcut whenever Factory Deck starts", async () => {
     const factory = await script("start-factory.cmd");
     const installerAt = factory.indexOf("Install-Purpose-Foundry-Icon.ps1");
-    const launcherAt = factory.indexOf("start-factory.ps1");
+    const launcherAt = factory.indexOf("Sync-FactoryRuntime.ps1");
     expect(installerAt).toBeGreaterThan(0);
     expect(launcherAt).toBeGreaterThan(installerAt);
     expect(factory).toContain("-Quiet");
@@ -31,18 +31,29 @@ describe("Purpose Foundry desktop launcher", () => {
 
   it("resolves exactly one Git executable before synchronizing the Factory runtime", async () => {
     const sync = await script("Sync-FactoryRuntime.ps1");
-    expect(sync).toContain("Get-Command git -CommandType Application -All");
+    expect(sync).toContain("Microsoft.PowerShell.Core\\Get-Command git");
     expect(sync).toContain("Select-Object -First 1");
     expect(sync).toContain("$script:GitExe = [string]$git.Source");
     expect(sync).toContain("& $script:GitExe -C $WorkingDirectory @Arguments");
     expect(sync).not.toContain("& $git.Source -C");
   });
 
-  it("opens Foundry mode and preserves errors without bypassing policy", async () => {
+  it("shields the entire PowerShell launcher from duplicate Windows application shims", async () => {
+    const sync = await script("Sync-FactoryRuntime.ps1");
+    expect(sync).toContain("function Get-Command");
+    expect(sync).toContain("Microsoft.PowerShell.Core\\Get-Command @params");
+    expect(sync).toContain("return $found | Select-Object -First 1");
+    expect(sync).toContain("# Dot-source the selected launcher");
+    expect(sync).toContain(". $launcher");
+    expect(sync).toMatch(/covers node, pnpm, corepack, git, fcc-server/);
+  });
+
+  it("opens Foundry mode through the same synchronized runtime and preserves errors", async () => {
     const foundry = await script("start-purpose-foundry.cmd");
     expect(foundry).toContain("Install-Purpose-Foundry-Icon.ps1");
     expect(foundry).toContain("FACTORY_START_PATH=?mode=foundry");
-    expect(foundry).toContain("start-factory.ps1");
+    expect(foundry).toContain("Sync-FactoryRuntime.ps1");
+    expect(foundry).not.toContain("start-factory.ps1");
     expect(foundry).not.toContain("-ExecutionPolicy Bypass");
     expect(foundry).toContain('set "FOUNDRY_EXIT=%ERRORLEVEL%"');
     expect(foundry).toContain("Purpose Foundry could not start.");
