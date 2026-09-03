@@ -19,7 +19,7 @@ const LICENSE_POLICIES = [
   "not-applicable",
 ] as const;
 const LicensePolicySchema = z.preprocess((value) => {
-  if (typeof value !== "string") return "not-applicable";
+  if (typeof value !== "string") return "reference-only";
   const normalized = value.trim().toLowerCase().replace(/[ _]+/g, "-");
   const exact = LICENSE_POLICIES.find((policy) => policy === normalized);
   if (exact) return exact;
@@ -28,7 +28,7 @@ const LicensePolicySchema = z.preprocess((value) => {
   if (normalized === "compatible") return "conditional-review";
   // This field belongs to advisory tool research. Unknown provider wording
   // must neither kill mandatory competitor discovery nor grant reuse rights.
-  return "not-applicable";
+  return "reference-only";
 }, z.enum(LICENSE_POLICIES));
 const ReuseModeSchema = z.enum([
   "dependency",
