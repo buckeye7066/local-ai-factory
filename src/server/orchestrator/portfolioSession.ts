@@ -42,12 +42,22 @@ const PortfolioSessionSchema = z.object({
 export type PortfolioSession = z.infer<typeof PortfolioSessionSchema>;
 export type PortfolioTargetInput = { name: string; repoSource: RepoSource };
 
+type PortfolioExecutionTarget = {
+  repoSource: RepoSource;
+  prompt: string;
+};
+
 const SESSION_DIR = resolve(
   process.cwd(),
   process.env.FACTORY_DATA_DIR || ".factory",
   "sessions",
 );
 const sessions = new Map<string, PortfolioSession>();
+
+// Raw operator inputs are execution-only and intentionally never persisted.
+// Durable/API session state is redacted, while the active process retains the
+// exact Git credential URL and configuration prompt needed to do the work.
+const executionInputs = new Map<string, Map<string, PortfolioExecutionTarget>>();
 
 function sessionPath(id: string): string {
   if (!z.string().uuid().safeParse(id).success) throw new Error("Invalid session id.");
@@ -100,32 +110,47 @@ export async function createPortfolioSession(
   const routes = routePrompt(clean, targets);
   const routeById = new Map(routes.map((route) => [route.targetId, route]));
   const now = Date.now();
+  const executionByTarget = new Map<string, PortfolioExecutionTarget>();
+  const sessionTargets = targets.flatMap((target) => {
+    const route = routeById.get(target.id)!;
+    if (!route.prompt) return [];
+    executionByTarget.set(target.id, {
+      repoSource: target.repoSource,
+      prompt: route.prompt,
+    });
+    return [
+      {
+        id: target.id,
+        name: target.name,
+        repoSource: redactDeep(target.repoSource),
+        prompt: redactSecrets(route.prompt),
+        routeEvidence: route.evidence,
+        status: "queued" as const,
+        runId: null,
+        error: null,
+      },
+    ];
+  });
+  if (!sessionTargets.length) {
+    throw new Error("The session prompt did not route work to any selected program.");
+  }
   const session: PortfolioSession = {
     id: randomUUID(),
-    prompt: clean,
+    prompt: redactSecrets(clean),
     status: "queued",
     currentTarget: 0,
-    targets: targets.flatMap((target) => {
-      const route = routeById.get(target.id)!;
-      if (!route.prompt) return [];
-      return [
-        {
-          id: target.id,
-          name: target.name,
-          repoSource: target.repoSource,
-          prompt: route.prompt,
-          routeEvidence: route.evidence,
-          status: "queued" as const,
-          runId: null,
-          error: null,
-        },
-      ];
-    }),
+    targets: sessionTargets,
     steering: [],
     createdAt: now,
     updatedAt: now,
   };
-  await saveSession(session);
+  executionInputs.set(session.id, executionByTarget);
+  try {
+    await saveSession(session);
+  } catch (error) {
+    executionInputs.delete(session.id);
+    throw error;
+  }
   return redactDeep(session);
 }
 
@@ -136,14 +161,22 @@ export function startPortfolioSession(
 ): void {
   const session = sessions.get(sessionId);
   if (!session) throw new Error("Portfolio session not found.");
+  const executionByTarget = executionInputs.get(sessionId);
+  if (!executionByTarget) {
+    throw new Error(
+      "Portfolio execution inputs are unavailable after backend restart; start a new session so raw credentials are never recovered from persisted data.",
+    );
+  }
   void (async () => {
     session.status = "running";
     await saveSession(session);
     for (let index = 0; index < session.targets.length; index += 1) {
       const target = session.targets[index]!;
+      const executionTarget = executionByTarget.get(target.id);
+      if (!executionTarget) throw new Error(`Execution input is missing for ${target.name}.`);
       session.currentTarget = index;
       target.status = "running";
-      const startedPrompt = target.prompt;
+      const startedPrompt = executionTarget.prompt;
       await saveSession(session);
       try {
         const run = await underWorkTheme(
@@ -155,7 +188,7 @@ export function startPortfolioSession(
                 options: {
                   routingMode: "auto",
                   mode: "extend",
-                  repoSource: target.repoSource,
+                  repoSource: executionTarget.repoSource,
                   goals: [startedPrompt],
                   pushToOrigin: true,
                 },
@@ -165,12 +198,10 @@ export function startPortfolioSession(
               async (created) => {
                 target.runId = created.id;
                 await saveSession(session);
-                // Covers steering submitted in the tiny interval between marking
-                // this target running and the run record being created.
-                if (target.prompt !== startedPrompt) {
+                if (executionTarget.prompt !== startedPrompt) {
                   await submitRunSteering(
                     created.id,
-                    target.prompt.slice(startedPrompt.length).trim(),
+                    executionTarget.prompt.slice(startedPrompt.length).trim(),
                   );
                 }
               },
@@ -191,7 +222,9 @@ export function startPortfolioSession(
       ? "failed"
       : "completed";
     await saveSession(session);
+    executionInputs.delete(session.id);
   })().catch(async (error) => {
+    executionInputs.delete(session.id);
     session.status = "failed";
     const active = session.targets[session.currentTarget];
     if (active && active.status === "running") {
@@ -213,17 +246,18 @@ export async function steerPortfolioSession(
   const session = sessions.get(id);
   if (!session) return { ok: false, reason: "Portfolio session not found." };
   if (session.status !== "queued" && session.status !== "running") {
-    return {
-      ok: false,
-      reason: `Portfolio session is already ${session.status}.`,
-    };
+    return { ok: false, reason: `Portfolio session is already ${session.status}.` };
   }
   const clean = prompt.trim();
   if (!clean) return { ok: false, reason: "Steering prompt is required." };
   if (clean.length > 4_000) {
+    return { ok: false, reason: "Steering prompt must be 4,000 characters or fewer." };
+  }
+  const executionByTarget = executionInputs.get(id);
+  if (!executionByTarget) {
     return {
       ok: false,
-      reason: "Steering prompt must be 4,000 characters or fewer.",
+      reason: "Execution inputs are unavailable after backend restart; start a new session.",
     };
   }
   const routes = routePrompt(
@@ -231,7 +265,7 @@ export async function steerPortfolioSession(
     session.targets.map((target) => ({
       id: target.id,
       name: target.name,
-      source: target.repoSource.location,
+      source: executionByTarget.get(target.id)?.repoSource.location ?? target.repoSource.location,
     })),
   );
   const applicable = routes
@@ -247,15 +281,15 @@ export async function steerPortfolioSession(
   const active = applicable.find(
     ({ target }) => target.status === "running" && target.runId,
   );
-  const queuedOverflow = applicable.find(
-    ({ route, target }) =>
-      target.id !== active?.target.id &&
-      target.prompt.length + route.prompt.length + 34 > 24_000,
-  );
+  const queuedOverflow = applicable.find(({ route, target }) => {
+    if (target.id === active?.target.id) return false;
+    const executionTarget = executionByTarget.get(target.id);
+    return !executionTarget || executionTarget.prompt.length + route.prompt.length + 34 > 24_000;
+  });
   if (queuedOverflow) {
     return {
       ok: false,
-      reason: `Queued steering for ${queuedOverflow.target.name} exceeds the session prompt limit.`,
+      reason: `Queued steering for ${queuedOverflow.target.name} exceeds the session prompt limit or lacks execution input.`,
     };
   }
   if (active?.target.runId) {
@@ -265,7 +299,9 @@ export async function steerPortfolioSession(
   }
   for (const { route, target } of applicable) {
     if (target.id === active?.target.id) continue;
-    target.prompt += `\n\nADDITIONAL OPERATOR STEERING:\n${route.prompt}`;
+    const executionTarget = executionByTarget.get(target.id)!;
+    executionTarget.prompt += `\n\nADDITIONAL OPERATOR STEERING:\n${route.prompt}`;
+    target.prompt += `\n\nADDITIONAL OPERATOR STEERING:\n${redactSecrets(route.prompt)}`;
     targetIds.push(target.id);
   }
   if (!targetIds.length) {
