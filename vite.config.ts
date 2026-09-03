@@ -15,6 +15,8 @@ export default defineConfig({
     // exact "PORT HELD BY A PROTECTED PROCESS" class EVA reported nightly for
     // are-we-mice/mind-over-math on 3001.
     port: 5190,
+    host: "127.0.0.1",
+    strictPort: true,
     proxy: {
       "/api": {
         target: "http://127.0.0.1:5179",
