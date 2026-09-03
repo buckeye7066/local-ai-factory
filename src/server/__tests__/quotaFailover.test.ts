@@ -133,9 +133,7 @@ describe("QuotaFailoverProvider", () => {
     const primary = fake("anthropic", "quota", true, "Anthropic credits exhausted");
     const alt = fake("openai", "quota", true, "OpenAI quota exceeded");
     const p = new QuotaFailoverProvider(primary, [alt]);
-    await expect(p.generateJson({} as never)).rejects.toThrow(
-      /OpenAI quota exceeded/,
-    );
+    await expect(p.generateJson({} as never)).rejects.toThrow(/OpenAI quota exceeded/);
     expect(alt.calls).toBe(1);
   });
 
