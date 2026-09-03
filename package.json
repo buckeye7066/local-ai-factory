@@ -49,7 +49,8 @@
     "memory:recall": "node scripts/obsidian-memory.mjs recall",
     "memory:note": "node scripts/obsidian-memory.mjs note",
     "predev": "npm run memory:startup",
-    "prestart": "npm run memory:startup"
+    "prestart": "npm run memory:startup",
+    "prebuild": "npm run memory:startup"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
