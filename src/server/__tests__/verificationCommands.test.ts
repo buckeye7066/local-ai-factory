@@ -644,6 +644,38 @@ describe("verificationCommandsForWorkspace", () => {
     },
   );
 
+  it("ignores a locally shadowed require call when selecting a runner", () => {
+    const path = workspace();
+    writeFileSync(
+      join(path, "package.json"),
+      JSON.stringify({
+        scripts: { test: "node ./scripts/run-tests.mjs" },
+        devDependencies: { vitest: "3", jest: "30", "@jest/globals": "30" },
+      }),
+    );
+    writeFileSync(join(path, "package-lock.json"), "{}\n");
+
+    const plan = verificationPlanForWorkspace(path, {
+      generatedTests: [
+        {
+          path: "tests/vitest-local-require.test.ts",
+          contents: [
+            "import { test } from 'vitest';",
+            "const require = (name: string) => ({ name });",
+            "require('@jest/globals');",
+            "test('v', () => {});",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(plan.incomplete).toEqual([]);
+    expect(plan.commands.find((command) => command.directTestPath)).toMatchObject({
+      directTestPath: "tests/vitest-local-require.test.ts",
+      runner: "vitest",
+    });
+  });
+
   it("ignores runner-looking comments, fixture strings, templates, and regexes", () => {
     const path = workspace();
     writeFileSync(
