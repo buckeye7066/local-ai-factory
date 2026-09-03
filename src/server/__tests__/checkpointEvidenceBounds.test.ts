@@ -1,7 +1,10 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
+import {
+  FactoryCheckpointSchema,
+  type FactoryCheckpoint,
+} from "../orchestrator/checkpoint.js";
 import {
   MAX_PERSISTED_PASSED_TEST_NAMES,
   MAX_PERSISTED_TEST_NAME_CHARS,
@@ -18,6 +21,26 @@ afterAll(async () => {
 });
 
 describe("checkpoint evidence bounds", () => {
+  it("preserves prototype-named platform artifact keys while parsing", () => {
+    const checkpoint = FactoryCheckpointSchema.parse({
+      schemaVersion: 3,
+      runId: crypto.randomUUID(),
+      idea: "Preserve the complete artifact seal",
+      options: {},
+      verification: {
+        platformArtifactSnapshot: JSON.parse(
+          '{"__proto__":"file:regular:exact-digest"}',
+        ),
+      },
+      updatedAt: Date.now(),
+    });
+    const restored = checkpoint.verification!.platformArtifactSnapshot!;
+
+    expect(Object.getPrototypeOf(restored)).toBeNull();
+    expect(Object.hasOwn(restored, "__proto__")).toBe(true);
+    expect(restored["__proto__"]).toBe("file:regular:exact-digest");
+  });
+
   it("bounds reporter-controlled titles in the persisted JSON", async () => {
     vi.resetModules();
     const { saveRunCheckpoint } = await import("../storage/runsStore.js");
