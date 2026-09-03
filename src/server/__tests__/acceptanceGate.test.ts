@@ -149,6 +149,18 @@ describe("assessGeneratedTests", () => {
       /brittle negated substring/i,
     );
 
+    const loopBoundSubstring = assessGeneratedTests(
+      cliSpec,
+      cliBuild,
+      withAssertion(`for (const featureWord of ["collaboration", "sync"]) {
+  expect(output).not.toContain(featureWord);
+}`),
+    );
+    expect(loopBoundSubstring.ok).toBe(false);
+    expect(loopBoundSubstring.errors.join("\n")).toMatch(
+      /brittle negated substring "sync"/i,
+    );
+
     const regex = assessGeneratedTests(
       cliSpec,
       cliBuild,
