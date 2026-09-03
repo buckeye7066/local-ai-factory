@@ -603,6 +603,29 @@ function brittleRegex(pattern: string): string | null {
     : null;
 }
 
+function forOfLiteralValues(call: ts.CallExpression, identifier: string): string[] {
+  let current: ts.Node | undefined = call.parent;
+  while (current && !ts.isSourceFile(current)) {
+    if (
+      ts.isForOfStatement(current) &&
+      ts.isVariableDeclarationList(current.initializer) &&
+      ts.isArrayLiteralExpression(current.expression)
+    ) {
+      const bindsIdentifier = current.initializer.declarations.some(
+        (declaration) =>
+          ts.isIdentifier(declaration.name) && declaration.name.text === identifier,
+      );
+      if (bindsIdentifier) {
+        return current.expression.elements
+          .filter(ts.isStringLiteralLike)
+          .map((element) => element.text);
+      }
+    }
+    current = current.parent;
+  }
+  return [];
+}
+
 /**
  * Reject negative assertions whose matcher is broader than the thing it is
  * supposed to exclude. These are especially dangerous in generated tests:
@@ -627,6 +650,12 @@ function brittleNegatedMatcher(
   if (expectNegation) {
     if (matcher === "toContain" && expected && ts.isStringLiteralLike(expected)) {
       return brittleSubstring(expected.text);
+    }
+    if (matcher === "toContain" && expected && ts.isIdentifier(expected)) {
+      for (const value of forOfLiteralValues(call, expected.text)) {
+        const issue = brittleSubstring(value);
+        if (issue) return issue;
+      }
     }
     if (matcher === "toMatch" && expected && ts.isRegularExpressionLiteral(expected)) {
       const literal = expected.getText();
