@@ -149,16 +149,13 @@ const ResearchActionSchema = z.object({
 });
 type ResearchAction = z.infer<typeof ResearchActionSchema>;
 
-const ProviderSummarySchema = z.preprocess(
-  (value) => {
-    if (value === undefined || value === null) return "";
-    // Models occasionally return a useful structured recap even when the
-    // contract asks for prose. Preserve it without relaxing any evidence,
-    // comparison, or selection field.
-    return typeof value === "string" ? value : JSON.stringify(value);
-  },
-  z.string(),
-);
+const ProviderSummarySchema = z.preprocess((value) => {
+  if (value === undefined || value === null) return "";
+  // Models occasionally return a useful structured recap even when the
+  // contract asks for prose. Preserve it without relaxing any evidence,
+  // comparison, or selection field.
+  return typeof value === "string" ? value : JSON.stringify(value);
+}, z.string());
 
 const CompetitiveSelectionSchema = z
   .object({
