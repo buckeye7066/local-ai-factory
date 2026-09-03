@@ -140,12 +140,7 @@ describe("QuotaFailoverProvider", () => {
       true,
       "Anthropic credit balance is too low",
     );
-    const openai = fake(
-      "openai",
-      "quota",
-      true,
-      "OpenAI has no credits remaining",
-    );
+    const openai = fake("openai", "quota", true, "OpenAI has no credits remaining");
     const free = fake("free", "ok");
     const ladder = new QuotaFailoverProvider(anthropic, [openai, free]);
 
@@ -171,9 +166,7 @@ describe("QuotaFailoverProvider", () => {
     );
     const alt = fake("openai", "quota", true, "OpenAI quota exceeded");
     const p = new QuotaFailoverProvider(primary, [alt]);
-    await expect(p.generateJson({} as never)).rejects.toThrow(
-      /OpenAI quota exceeded/,
-    );
+    await expect(p.generateJson({} as never)).rejects.toThrow(/OpenAI quota exceeded/);
     expect(alt.calls).toBe(1);
   });
 
