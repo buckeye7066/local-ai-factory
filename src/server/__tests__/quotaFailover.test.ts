@@ -25,15 +25,13 @@ function fake(
     isConfigured: () => configured,
     async generateText() {
       p.calls += 1;
-      if (behavior === "quota")
-        throw new Error(quotaMessage);
+      if (behavior === "quota") throw new Error(quotaMessage);
       if (behavior === "badRequest") throw new Error("400 invalid model parameter");
       return { text: `served by ${name}`, provider: name };
     },
     async generateJson<T>() {
       p.calls += 1;
-      if (behavior === "quota")
-        throw new Error(quotaMessage);
+      if (behavior === "quota") throw new Error(quotaMessage);
       if (behavior === "badRequest") throw new Error("400 unknown field");
       return { served: name } as unknown as T;
     },
@@ -132,7 +130,12 @@ describe("QuotaFailoverProvider", () => {
   });
 
   it("surfaces the terminal refusal when every alternate is also dry", async () => {
-    const primary = fake("anthropic", "quota", true, "Anthropic credits exhausted");
+    const primary = fake(
+      "anthropic",
+      "quota",
+      true,
+      "Anthropic credits exhausted",
+    );
     const alt = fake("openai", "quota", true, "OpenAI quota exceeded");
     const p = new QuotaFailoverProvider(primary, [alt]);
     await expect(p.generateJson({} as never)).rejects.toThrow(
