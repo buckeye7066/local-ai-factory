@@ -491,7 +491,6 @@ async function evaluateCompetitiveDossier(
           `the thing it does better than this app - respecting its license policy. Every selected candidateId must ` +
           `exactly match the dossier. Cite file/page URLs in evidenceUrls. ` +
           `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
-
     ].join("\n\n"),
     schema: CompetitiveSelectionSchema,
     schemaName: "CompetitiveSelection",
