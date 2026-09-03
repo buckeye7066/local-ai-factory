@@ -729,7 +729,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
         decision: "adapt",
         rationale: "Useful behavior",
       }));
-      const selected = products.map((product, index) => ({
+      const selected: unknown[] = products.map((product, index) => ({
         candidateId: product.id,
         element: `capture pattern ${index + 1}`,
         why: "reduces friction",
@@ -738,6 +738,10 @@ describe("researchAgent competitive selection failure is a named skip", () => {
         evidenceUrls: [product.url],
         score: 90 - index,
       }));
+      selected[0] = {
+        candidateId: products[0]!.id,
+        reuseMode: "pattern-or-direct-use-allowed-but-not-needed",
+      };
       const provider = new ScriptedProvider([
         {
           thought: "nothing external needed",
@@ -766,6 +770,13 @@ describe("researchAgent competitive selection failure is a named skip", () => {
       expect(findings.summary).toContain("focused review complete");
       expect(findings.comparisons).toHaveLength(5);
       expect(findings.recommendations).toHaveLength(5);
+      expect(findings.recommendations[0]).toMatchObject({
+        reuseMode: "clean-room-pattern",
+      });
+      expect(findings.recommendations[0].name).toContain("fast capture");
+      expect(findings.recommendations[0].evidenceUrls).toEqual([
+        products[0]!.url,
+      ]);
     } finally {
       spy.mockRestore();
     }
