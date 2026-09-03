@@ -57,13 +57,17 @@ export function commandForPlatformProof(
   };
 }
 
-export function replaceHostPlatformEvidence<T extends CheckpointExecutedCommand>(
+export function replaceHostPlatformEvidence<
+  T extends CheckpointExecutedCommand,
+>(
   existing: readonly T[],
   hostPlatform: PlatformProofHost,
   current: readonly T[],
 ): T[] {
   if (current.some((entry) => entry.hostPlatform !== hostPlatform)) {
-    throw new Error(`Refused: imported evidence was not executed on ${hostPlatform}.`);
+    throw new Error(
+      `Refused: imported evidence was not executed on ${hostPlatform}.`,
+    );
   }
   return [
     ...existing.filter((entry) => entry.hostPlatform !== hostPlatform),
@@ -124,7 +128,9 @@ export async function validatePlatformEvidenceHold(
     getRunCheckpoint(runId),
   ]);
   if (!run || !checkpoint) {
-    throw new Error("The held Factory run or its private checkpoint is missing.");
+    throw new Error(
+      "The held Factory run or its private checkpoint is missing.",
+    );
   }
   const blockers = platformEvidenceBlockersFromRunError(run.error);
   if (run.status !== "failed" || run.resumable !== true || !blockers) {
@@ -180,8 +186,9 @@ export async function recordCurrentPlatformEvidence(
   if (plan.incomplete.length > 0 || plan.commands.length === 0) {
     throw new Error(
       `Cross-platform verification plan is incomplete: ${
-        plan.incomplete.map((item) => `${item.command}: ${item.reason}`).join("; ") ||
-        "no executable commands"
+        plan.incomplete
+          .map((item) => `${item.command}: ${item.reason}`)
+          .join("; ") || "no executable commands"
       }.`,
     );
   }
