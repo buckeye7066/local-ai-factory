@@ -17,16 +17,18 @@ the deck is what actually happened.
 
 ### Automatic model ladder
 
-| Rung       | Credential/setting     | Default model         |
-| ---------- | ---------------------- | --------------------- |
-| Anthropic  | `ANTHROPIC_API_KEY`    | `claude-fable-5-1`     |
-| OpenAI     | `OPENAI_API_KEY`       | `gpt-5.5`             |
-| Free/local | `FACTORY_FREE_ENABLED` | `claude-sonnet-4-5`   |
+| Rung       | Credential/setting                  | Default model sequence |
+| ---------- | ----------------------------------- | ---------------------- |
+| Anthropic  | `ANTHROPIC_API_KEY`                 | `claude-fable-5-1 → claude-opus-5 → claude-sonnet-5 → claude-haiku-4-5` |
+| OpenAI     | `OPENAI_API_KEY`                    | `gpt-5.5` (extend with `FACTORY_OPENAI_MODEL_LADDER`) |
+| Free/local | `FACTORY_FREE_ENABLED` + AI Time   | strongest available frontier route |
 
 Every live run uses one orchestrated route. `FACTORY_MODEL_LADDER` orders
 configured paid provider families strongest-to-weaker; the default is
-`anthropic,openai`. Credit, quota, capacity, model availability, or an
-owner-configured paid budget ceiling advances a sticky run cursor. The strongest
+`anthropic,openai`. Each family's model list is flattened into one run-scoped
+sequence, so exactly one paid model is used until credit, quota, capacity,
+model availability, or an owner-configured paid budget ceiling advances the
+sticky cursor. The strongest
 available FCC/AI-Time free rotation is always appended last and cannot be moved
 ahead of configured paid capacity.
 

@@ -18,6 +18,7 @@ describe("config", () => {
       "claude-haiku-4-5",
     ]);
     expect(cfg.openaiModel).toBe("gpt-5.5");
+    expect(cfg.openaiModels).toEqual(["gpt-5.5"]);
     expect(cfg.maxRepairLoops).toBe(3);
     expect(cfg.maxModelCallsPerRun).toBe(30);
     // Untrusted project code is not executed on the host by default. Owners
@@ -52,6 +53,17 @@ describe("config", () => {
         loadSecrets({ ANTHROPIC_API_KEY: "sk-anthropic", OPENAI_API_KEY: "sk-openai" }),
       ).anthropicModels,
     ).toEqual(cfg.anthropicModels);
+  });
+
+  it("keeps one explicit strongest-to-weakest OpenAI model ladder", () => {
+    const cfg = loadConfig({
+      OPENAI_MODEL: "gpt-5.5",
+      FACTORY_OPENAI_MODEL_LADDER: "gpt-5.6-pro, gpt-5.5; gpt-5",
+    });
+    expect(cfg.openaiModels).toEqual(["gpt-5.6-pro", "gpt-5.5", "gpt-5"]);
+    expect(
+      toHealth(cfg, loadSecrets({ OPENAI_API_KEY: "sk-openai" })).openaiModels,
+    ).toEqual(cfg.openaiModels);
   });
 
   it("does not prepend the legacy model to an explicit Anthropic ladder", () => {

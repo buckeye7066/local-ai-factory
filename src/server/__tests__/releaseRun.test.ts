@@ -294,12 +294,14 @@ describe("releaseRun", () => {
     expect(calls.some((c) => c[1] === "merge")).toBe(false);
   });
 
-  it("holds a repo with no CI because absence is not passing evidence", async () => {
+  it("merges a repo with no CI after confirming absence and binding the exact tested SHA", async () => {
     const { impl, calls } = fakeGh([
       () => ok("https://github.com/buckeye7066/GrantFlow/pull/112"),
       () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
       () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
       () => ok("no checks reported on the 'factory-deck/testrun1' branch"),
+      (a) => (a[1] === "merge" ? ok("merged") : ok("")),
+      (a) => (a[1] === "view" ? ok("MERGED no-ci-merge-sha") : ok("")),
     ]);
     const res = await releaseRun({
       ...BASE,
@@ -310,9 +312,18 @@ describe("releaseRun", () => {
       noChecksConfirmations: 3,
       ghImpl: impl,
     });
-    expect(res.released).toBe(false);
-    expect(res.reason).toMatch(/no reported CI checks|absence/i);
-    expect(calls.some((call) => call[1] === "merge")).toBe(false);
+    expect(res.released).toBe(true);
+    expect(res.mergedSha).toBe("no-ci-merge-sha");
+    expect(res.reason).toMatch(/confirmed absence of host CI/i);
+    expect(
+      calls.some(
+        (call) =>
+          call[1] === "merge" &&
+          call.includes("--squash") &&
+          call.includes("--match-head-commit") &&
+          call.includes(VERIFIED_SHA),
+      ),
+    ).toBe(true);
   });
 
   it("leaves the PR open when the repo reports no checks for the entire window", async () => {
@@ -470,6 +481,32 @@ describe("releaseRun", () => {
       ghImpl: impl,
     });
     expect(res.prUrl).toMatch(/pull\/7/);
+  });
+
+  it("recognizes an auto-merged existing PR on resume and verifies its exact head", async () => {
+    const { impl, calls } = fakeGh([
+      () => fail("a pull request for branch already exists"),
+      (a) =>
+        a[1] === "view"
+          ? ok(
+              "https://github.com/buckeye7066/GrantFlow/pull/107\tMERGED\tabc123verified\tmerged789",
+            )
+          : ok(""),
+    ]);
+    const res = await releaseRun({
+      ...BASE,
+      qaPassed: true,
+      testStatus: "passing",
+      ghImpl: impl,
+    });
+    expect(res).toMatchObject({
+      released: true,
+      state: "merged",
+      mergedSha: "merged789",
+    });
+    expect(res.reason).toMatch(/already merged.*exact verified commit/i);
+    expect(calls.some((call) => call[1] === "checks")).toBe(false);
+    expect(calls.some((call) => call[1] === "merge")).toBe(false);
   });
 
   it("holds when the PR head differs from the verified delivered commit", async () => {

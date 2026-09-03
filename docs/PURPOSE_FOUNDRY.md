@@ -15,7 +15,7 @@ their implementations:
 
 | Station             | Adapter                      | Work performed                                                                                                                                                                                                                                                       |
 | ------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scout               | FlexFactor CLI               | Profiles the target and produces a Repo Rewards scouting report.                                                                                                                                                                                                     |
+| Scout               | authenticated Program Scout jobs API | Creates or resumes a real RepoRewards Program Scout job, polls research/specification/generation/verification, and completes only for a verified branch whose verification SHA equals its head SHA. |                                                                                                                                                                                                     |
 | Repo Rewards        | HTTP search API              | Searches for maintained, relevant open-source components and records the result set.                                                                                                                                                                                 |
 | PromoPilot          | authenticated HTTP API       | Collects control-plane, campaign, attribution, destination, and advertisement data.                                                                                                                                                                                  |
 | Factory Deck        | local run API                | Receives the completed discovery and market handoffs, builds or extends the named target, and waits for its durable run result.                                                                                                                                      |
@@ -71,12 +71,16 @@ Mechanical guards (Factory Deck, not GrantFlow):
   appends it to every extend idea, and the Factory Deck station also appends it
   to posted `goals` (plus a one-line `idea` pointer) when a target exists
 
-Every Foundry project uses one automatic internal model ladder: strongest
-configured paid capacity first, weaker paid capacity next, and free/local last.
-Legacy `free` and `paid` record values normalize to that same behavior. Scout
-and FlexFactor are optional child stations; when selected, FlexFactor runs its
-own equivalent orchestrator and chooses its own ladder instead of being pinned
-by Purpose Foundry to a second route.
+Every Foundry project uses one automatic internal model ladder: each configured
+paid model is a distinct strongest-to-weakest sticky rung, and AI Time's
+strongest available free/local rotation is the final rung. A paid rung is used
+alone until credit, quota, capacity, model availability, or the configured
+budget ceiling is exhausted; only then does the project advance once to the
+next model.
+Legacy `free` and `paid` record values normalize to that same behavior.
+Program Scout and RepoRewards are mandatory discovery stations; FlexFactor
+remains an optional child station and chooses its own ladder instead of being
+pinned by Purpose Foundry to a second route.
 
 ## Adapter configuration
 
@@ -84,8 +88,10 @@ by Purpose Foundry to a second route.
 # Existing Obsidian intake
 PURPOSE_FOUNDRY_OBSIDIAN_INBOX=C:\Users\YourUserName\Documents\Obsidian Vault\Purpose Foundry
 
-# Existing deployed/local programs
+# Existing deployed/local programs (RepoRewards and Program Scout share this app)
 PURPOSE_FOUNDRY_REPO_REWARDS_URL=https://web-production-d7db7.up.railway.app
+PURPOSE_FOUNDRY_PROGRAM_SCOUT_URL=https://web-production-d7db7.up.railway.app
+PURPOSE_FOUNDRY_PROGRAM_SCOUT_TOKEN=the-existing-scout-api-token
 PURPOSE_FOUNDRY_PROMOPILOT_URL=https://promopilot-production-6370.up.railway.app
 PURPOSE_FOUNDRY_PROMOPILOT_TOKEN=the-existing-promopilot-admin-token
 PURPOSE_FOUNDRY_APP_STORE_PUBLISHER_URL=http://127.0.0.1:4000
@@ -102,9 +108,10 @@ PURPOSE_FOUNDRY_WATCH_URLS=https://example.app/health,https://api.example.app/he
 ```
 
 The `PURPOSE_FOUNDRY_FLEXFACTOR_MAX_COST` flag remains FlexFactor's own child
-process guard; it does not replace Factory Deck's per-call ledger. Cloud Scout
-does not send program context unless
-`PURPOSE_FOUNDRY_ALLOW_REMOTE_PROGRAM_CONTEXT=1` is explicitly configured.
+process guard; it does not replace Factory Deck's per-call ledger. Program
+Scout is no longer a FlexFactor script alias: it uses the authenticated Scout
+jobs API and persists the returned research, specification, branch, and
+verification evidence as its station artifact.
 
 No Purpose Foundry/Publisher shared secret is required. Foundry sends a fixed
 non-secret client marker that Publisher accepts only in local loopback mode and
@@ -138,6 +145,11 @@ progress through:
   "evidence": { "tests": ["command and result"] }
 }
 ```
+
+For an existing repository, the Factory Deck station also refuses completion
+until the verified commit is confirmed merged on the repository's default
+branch (normally `main`). A pushed branch or auto-merge-pending PR stays
+resumable and visible as needs attention.
 
 The control plane advances only after a station records its outcome. An
 external program may still report its own event through this endpoint; the

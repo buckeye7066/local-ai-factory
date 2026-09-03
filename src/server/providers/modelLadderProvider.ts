@@ -32,8 +32,9 @@ export class ModelLadderProvider implements LLMProvider {
     const seen = new Set<string>();
     this.rungs = rungs.filter((rung) => {
       const model = rung.model.trim();
-      if (!model || seen.has(model)) return false;
-      seen.add(model);
+      const key = `${rung.provider.name}:${model}`;
+      if (!model || seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
     if (this.rungs.length === 0) {
@@ -88,7 +89,7 @@ export class ModelLadderProvider implements LLMProvider {
       }
     }
     if (lastExhaustion) throw lastExhaustion;
-    throw new Error("No configured model remains in this provider-family ladder.");
+    throw new Error("No configured model remains in the automatic paid-to-free ladder.");
   }
 
   generateText(input: GenerateTextInput): Promise<GenerateTextResult> {

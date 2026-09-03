@@ -35,12 +35,37 @@ describe("provider registry selection", () => {
     );
   });
 
-  it("prefers FREE over a configured paid key", () => {
+  it("exposes one exact paid-model ladder with AI Time free as the final rung", () => {
+    const configured = loadConfig({
+      FACTORY_FREE_ENABLED: "1",
+      FACTORY_ANTHROPIC_MODEL_LADDER:
+        "claude-fable-5-1,claude-opus-5,claude-sonnet-5",
+      FACTORY_OPENAI_MODEL_LADDER: "gpt-5.6-pro,gpt-5.5",
+      FACTORY_MODEL_LADDER: "anthropic,openai",
+    });
+    const reg = createProviderRegistry(
+      configured,
+      loadSecrets({ ANTHROPIC_API_KEY: "sk-a", OPENAI_API_KEY: "sk-o" }),
+    );
+    const rungs = reg
+      .automaticRungs!()
+      .map((rung) => `${rung.provider.name}:${rung.model}`);
+    expect(rungs.slice(0, -1)).toEqual([
+      "anthropic:claude-fable-5-1",
+      "anthropic:claude-opus-5",
+      "anthropic:claude-sonnet-5",
+      "openai:gpt-5.6-pro",
+      "openai:gpt-5.5",
+    ]);
+    expect(rungs.at(-1)).toMatch(/^free:(aitime:best-free|fcc:)/);
+  });
+
+  it("keeps the legacy free-route diagnostic resolver separate from production", () => {
     const reg = createProviderRegistry(
       cfg,
       loadSecrets({ ANTHROPIC_API_KEY: "sk-a", OPENAI_API_KEY: "sk-o" }),
     );
-    // Paid keys present, but the live chain still starts on free.
+    // This resolver is retained for the explicit free-route diagnostic only.
     expect(reg.resolveLive(undefined, "free").name).toBe("free");
     expect(reg.availableLive().sort()).toEqual(["anthropic", "free", "openai"]);
     expect(reg.available().sort()).toEqual([
