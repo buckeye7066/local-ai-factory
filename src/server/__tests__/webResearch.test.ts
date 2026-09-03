@@ -718,7 +718,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
       .spyOn(ci, "buildCompetitiveDossier")
       .mockResolvedValue(productDossier as never);
     try {
-      const comparisons = products.map((product, index) => ({
+      const comparisons: unknown[] = products.map((product, index) => ({
         candidateId: product.id,
         name: product.name,
         score: 90 - index,
@@ -729,6 +729,16 @@ describe("researchAgent competitive selection failure is a named skip", () => {
         decision: "adapt",
         rationale: "Useful behavior",
       }));
+      comparisons[0] = {
+        name: products[0]!.name,
+        score: 90,
+        matchedFeatures: ["fast capture"],
+        strengths: ["fast capture"],
+        gaps: ["no local JSON"],
+        evidenceUrls: [products[0]!.url],
+        decision: "adapt",
+        rationale: "Useful behavior",
+      };
       const selected: unknown[] = products.map((product, index) => ({
         candidateId: product.id,
         element: `capture pattern ${index + 1}`,
@@ -739,7 +749,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
         score: 90 - index,
       }));
       selected[0] = {
-        candidateId: products[0]!.id,
+        name: products[0]!.name,
         reuseMode: "pattern-or-direct-use-allowed-but-not-needed",
       };
       const provider = new ScriptedProvider([
