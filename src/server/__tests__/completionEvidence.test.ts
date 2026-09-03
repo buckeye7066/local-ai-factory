@@ -193,7 +193,7 @@ describe("deterministic completion evidence", () => {
     put(
       root,
       "package.json",
-      JSON.stringify({ dependencies: { react: "18", vite: "6" } }),
+      JSON.stringify({ dependencies: { react: "18", "react-dom": "18" } }),
     );
     put(
       root,
@@ -224,7 +224,7 @@ describe("deterministic completion evidence", () => {
     put(
       root,
       "package.json",
-      JSON.stringify({ dependencies: { react: "18", vite: "6" } }),
+      JSON.stringify({ dependencies: { react: "18", "react-dom": "18" } }),
     );
     put(
       root,
@@ -250,7 +250,7 @@ describe("deterministic completion evidence", () => {
     put(
       root,
       "package.json",
-      JSON.stringify({ dependencies: { react: "18", vite: "6" } }),
+      JSON.stringify({ dependencies: { react: "18", "react-dom": "18" } }),
     );
     const webkitOnly = assessPlatformCompatibility(root, [
       {
@@ -278,13 +278,33 @@ describe("deterministic completion evidence", () => {
     expect(stamped.android.verified).toBe(true);
   });
 
+  it("does not mistake a React Native package for a browser UI", () => {
+    const root = workspace("react-native-platforms");
+    put(
+      root,
+      "package.json",
+      JSON.stringify({ dependencies: { react: "18", "react-native": "0.76" } }),
+    );
+    put(root, "android/app/build.gradle", "plugins { id 'com.android.application' }");
+    put(root, "ios/App.xcodeproj/project.pbxproj", "// project");
+
+    const missing = assessPlatformCompatibility(root, []);
+    expect(missing.webkit).toMatchObject({ applicable: false, verified: true });
+    expect(missing.ios).toMatchObject({ applicable: true, verified: false });
+    expect(missing.android).toMatchObject({ applicable: true, verified: false });
+  });
+
   it("keeps desktop operating systems distinct and never infers the unexecuted host", () => {
     const root = workspace("desktop-platforms");
     put(root, "package.json", JSON.stringify({ bin: { app: "./cli.js" } }));
+    put(root, "src/app.ts", "export const run = () => 'cli';\n");
     const command = [{ command: "npm test", exitCode: 0 }];
     const windows = assessPlatformCompatibility(root, command, "win32");
     expect(windows.windows.verified).toBe(true);
     expect(windows.macos.verified).toBe(false);
+    expect(windows.webkit).toMatchObject({ applicable: false, verified: true });
+    expect(windows.ios).toMatchObject({ applicable: false, verified: true });
+    expect(windows.android).toMatchObject({ applicable: false, verified: true });
     const mac = assessPlatformCompatibility(root, command, "darwin");
     expect(mac.windows.verified).toBe(false);
     expect(mac.macos.verified).toBe(true);
