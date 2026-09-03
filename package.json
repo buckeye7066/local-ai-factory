@@ -43,7 +43,13 @@
     "lint": "prettier --check \"src/**/*.{ts,tsx,css}\"",
     "lint:changed": "node scripts/lint-changed.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
-    "install:purpose-foundry-icon": "powershell -NoLogo -NoProfile -File scripts/Install-Purpose-Foundry-Icon.ps1"
+    "install:purpose-foundry-icon": "powershell -NoLogo -NoProfile -File scripts/Install-Purpose-Foundry-Icon.ps1",
+    "memory:startup": "node scripts/obsidian-memory.mjs startup",
+    "memory:health": "node scripts/obsidian-memory.mjs health",
+    "memory:recall": "node scripts/obsidian-memory.mjs recall",
+    "memory:note": "node scripts/obsidian-memory.mjs note",
+    "predev": "npm run memory:startup",
+    "prestart": "npm run memory:startup"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
