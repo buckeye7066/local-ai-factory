@@ -184,6 +184,14 @@ export async function capturePlatformArtifactSnapshot(
       a.name.localeCompare(b.name),
     );
     for (const entry of entries) {
+      // Backslash is an ordinary filename byte on POSIX but a separator on
+      // Windows. Reject it before portable-key normalization so `a\\b` can
+      // never collide with the distinct POSIX entry `a/b` in the artifact seal.
+      if (entry.name.includes("\\")) {
+        throw new Error(
+          `Unsupported candidate artifact entry name containing a backslash: ${JSON.stringify(entry.name)}.`,
+        );
+      }
       const absolute = join(directory, entry.name);
       const path = relative(workspacePath, absolute).replace(/\\/g, "/");
       if (entry.isDirectory() && ARTIFACT_EXCLUDED_DIRS.has(entry.name)) {
