@@ -3,13 +3,11 @@ import { motion } from "framer-motion";
 import {
   Rocket,
   Wand2,
-  TriangleAlert,
   ArrowRight,
   MessageCircleQuestion,
   Sparkles,
   GitBranch,
 } from "lucide-react";
-import { cn } from "../../lib/cn.js";
 import { Button } from "../ui/Button.js";
 import { Textarea } from "../ui/Textarea.js";
 import { Input } from "../ui/Input.js";
@@ -43,7 +41,6 @@ export function NewRunHero({
   starting: boolean;
   onStart: (idea: string, options: RunOptions) => void;
 }) {
-  const admissionReady = health?.readinessBrainFloorConfigured ?? false;
   const [idea, setIdea] = useState("");
   // Demo/simulate mode is not an owner surface — a run without a provider
   // fails loudly with the real missing-credential error instead of silently
@@ -159,7 +156,6 @@ export function NewRunHero({
           repoName={repoName}
           setRepoName={setRepoName}
           nameCheck={nameCheck}
-          admissionReady={admissionReady}
           health={health}
           starting={starting}
           start={start}
@@ -246,7 +242,6 @@ function NewAppPanel({
   repoName,
   setRepoName,
   nameCheck,
-  admissionReady,
   health,
   starting,
   start,
@@ -256,7 +251,6 @@ function NewAppPanel({
   repoName: string;
   setRepoName: (v: string) => void;
   nameCheck: NameCheck;
-  admissionReady: boolean;
   health: Health | null;
   starting: boolean;
   start: () => void;
@@ -338,18 +332,6 @@ function NewAppPanel({
           ))}
         </div>
 
-        {/* Warnings / helpers (provider routing renders above, shared with
-            extend mode) */}
-        <div className="mt-5 space-y-2">
-          {!admissionReady && (
-            <Helper tone="amber" icon={<TriangleAlert className="h-3.5 w-3.5" />}>
-              Production admission requires at least one configured paid rung. The
-              independent reviewers use the same paid-first ladder; free/local can
-              finish ordinary work after paid exhaustion but cannot issue the receipt.
-            </Helper>
-          )}
-        </div>
-
         {/* Action row */}
         <div className="mt-6 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
           <SafetySettingsPreview health={health} />
@@ -375,32 +357,5 @@ function NewAppPanel({
         <kbd className="rounded bg-white/10 px-1">Enter</kbd> to launch.
       </motion.p>
     </>
-  );
-}
-
-function Helper({
-  tone,
-  icon,
-  children,
-}: {
-  tone: "amber" | "violet" | "cyan";
-  icon: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex items-start gap-2 rounded-xl border px-3 py-2 text-xs leading-relaxed",
-        tone === "amber" && "border-amber-400/25 bg-amber-400/[0.06] text-amber-200",
-        tone === "violet" &&
-          "border-aurora-violet/25 bg-aurora-violet/[0.06] text-violet-200",
-        tone === "cyan" && "border-aurora-cyan/25 bg-aurora-cyan/[0.06] text-cyan-100",
-      )}
-    >
-      <span className="mt-0.5 shrink-0">{icon}</span>
-      <span className="[&_code]:rounded [&_code]:bg-black/30 [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[11px]">
-        {children}
-      </span>
-    </div>
   );
 }

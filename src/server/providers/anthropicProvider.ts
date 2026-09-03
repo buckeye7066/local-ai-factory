@@ -96,6 +96,14 @@ export class AnthropicProvider implements LLMProvider {
     if (reservation) abandonPaidCall(reservation);
   }
 
+  currentProvider(): LLMProvider["name"] {
+    return this.name;
+  }
+
+  currentModel(): string {
+    return this.model;
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
     const text = await withRetry(

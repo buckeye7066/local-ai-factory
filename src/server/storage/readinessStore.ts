@@ -15,7 +15,7 @@ const READINESS_DIR = join(DATA_ROOT, "readiness");
 
 const BrainReviewSchema = z.object({
   identity: z.enum(["lead", "challenger", "sol", "fable", "opus"]),
-  provider: z.enum(["openai", "anthropic"]),
+  provider: z.enum(["openai", "anthropic", "free"]),
   model: z.string().min(1),
   evidenceDigest: z.string().min(1),
   decision: z.enum(["ready", "not_ready"]),
@@ -47,10 +47,12 @@ const ReceiptSchema = z.object({
   evidenceDigest: z.string(),
   brainFloor: z.object({
     // Defaults preserve readability of receipts written before the unified
-    // paid-ladder reviewer slots were introduced.
+    // automatic-ladder reviewer slots were introduced.
     lead: z.boolean().default(false),
     challenger: z.boolean().default(false),
     independentReviews: z.boolean().default(false),
+    liveModels: z.boolean().default(false),
+    // Legacy diagnostic; no longer controls readiness.
     paidModels: z.boolean().default(false),
     sol: z.boolean(),
     fableOrOpus: z.boolean(),

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, posix, relative, resolve } from "node:path";
-import { readinessBrainFloor, type AppConfig, type AppSecrets } from "../config.js";
+import type { AppConfig, AppSecrets } from "../config.js";
 import type {
   RunRecord,
   RunOptions,
@@ -371,14 +371,6 @@ function isPaidProvider(
   return name === "anthropic" || name === "openai";
 }
 
-function assertReadinessBrainFloor(config: AppConfig, secrets: AppSecrets): void {
-  const floor = readinessBrainFloor(config, secrets);
-  if (floor.configured) return;
-  throw new MissingProviderCredentialError([
-    "at least one configured paid model in FACTORY_MODEL_LADDER",
-  ]);
-}
-
 class StaleCheckpointSpecificationError extends Error {
   constructor(message: string) {
     super(message);
@@ -478,7 +470,6 @@ function createRecord(args: StartRunArgs): RunRecord {
   if (!demo && registry.availableLive().length === 0) {
     throw new MissingProviderCredentialError(registry.missingCredentialNames());
   }
-  if (!demo) assertReadinessBrainFloor(config, secrets);
 
   // Reject live requests that explicitly ask for offline providers.
   if (!demo) {
@@ -2921,16 +2912,41 @@ async function executeRun(
       if (!restoredApproval.executed) {
         log(
           "model_call",
-          "Mandatory pre-release review: launching independent lead and challenger judgments through the same paid-first model ladder on the exact candidate-byte digest.",
+          "Mandatory pre-release review: launching independent lead and challenger judgments through the same automatic paid-first-to-free model ladder on the exact candidate-byte digest.",
           "final_review",
         );
         const brainProviders = createReadinessBrainProviders(
-          config,
-          secrets,
+          () => {
+            // Each parallel judgment gets an independent registry/rotator so
+            // one live AI Time selection cannot relabel the other's evidence.
+            const readinessRegistry = createProviderRegistry(
+              config,
+              secrets,
+              (kind, message) =>
+                log(kind === "warn" ? "warning" : "info", message, "final_review"),
+              callSignal,
+            );
+            const readinessRouting = selectRunRouting(
+              {
+                routingMode: "auto",
+                codeProvider: liveRouting!.codeProvider,
+                reviewProvider: liveRouting!.reviewProvider,
+              },
+              readinessRegistry,
+              config,
+            );
+            return createTierProvider(
+              readinessRouting,
+              readinessRouting.codeProvider,
+              readinessRegistry,
+              {
+                decorate: countProvider,
+                onFailover: onModelFailover,
+              },
+            );
+          },
           (kind, message) =>
             log(kind === "warn" ? "warning" : "info", message, "final_review"),
-          callSignal,
-          countProvider,
         );
         preReleaseApproval = await completePreReleaseReadiness({
           facts: candidateFacts,
@@ -3776,7 +3792,6 @@ async function prepareResume(
       if (registry.availableLive().length === 0) {
         throw new MissingProviderCredentialError(registry.missingCredentialNames());
       }
-      assertReadinessBrainFloor(config, secrets);
       const requested = [providers?.codeProvider, providers?.reviewProvider].filter(
         (name): name is ProviderName => Boolean(name),
       );

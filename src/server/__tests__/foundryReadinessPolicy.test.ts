@@ -16,6 +16,7 @@ const receipt: ProductionReadinessReceipt = {
     lead: true,
     challenger: true,
     independentReviews: true,
+    liveModels: true,
     paidModels: true,
     sameEvidence: true,
     sol: false,

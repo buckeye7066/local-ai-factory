@@ -517,6 +517,14 @@ export class BudgetGatedProvider implements LLMProvider {
     return this.inner.isConfigured();
   }
 
+  currentProvider(): ProviderName {
+    return this.inner.currentProvider?.() ?? this.inner.name;
+  }
+
+  currentModel(): string {
+    return this.inner.currentModel?.() ?? this.currentProvider();
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const reservation = reservePaidCall(this.name, input);
     try {

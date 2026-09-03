@@ -58,8 +58,12 @@ export interface LLMProvider {
   name: ProviderName;
   /** True when the concrete provider reserves every billable SDK attempt itself. */
   paidBudgetManaged?: boolean;
-  /** True only when the provider has a usable API key (stub is always ready). */
+  /** True only when the provider has usable backing capacity. */
   isConfigured(): boolean;
+  /** Actual provider family serving the current ladder rung. */
+  currentProvider?(): ProviderName;
+  /** Actual model serving the current ladder rung. */
+  currentModel?(): string;
   generateText(input: GenerateTextInput): Promise<GenerateTextResult>;
   generateJson<T>(input: GenerateJsonInput<T>): Promise<T>;
 }

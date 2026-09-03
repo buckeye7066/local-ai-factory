@@ -68,10 +68,8 @@ describe("automatic model ladder UI wiring", () => {
     );
 
     expect(
-      screen.getByText(
-        /Production admission requires at least one configured paid rung/i,
-      ),
-    ).toBeTruthy();
+      screen.queryByText(/Production admission requires a configured paid rung/i),
+    ).toBeNull();
   });
 
   it("shows one ordered ladder and sends only automatic routing", async () => {

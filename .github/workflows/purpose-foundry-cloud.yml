@@ -1,6 +1,6 @@
 name: purpose-foundry-cloud
 run-name: "Purpose Foundry cloud proof @ ${{ github.sha }} (attempt ${{ github.run_attempt }})"
-# A marker-bearing main commit starts the exact paid proof; skipped runs are never evidence.
+# A marker-bearing main commit starts the exact automatic-ladder proof; skipped runs are never evidence.
 
 on:
   push:
@@ -36,6 +36,10 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Provision AI Time terminal free rung
+        shell: bash
+        run: bash scripts/ci/provision-aitime-free-fallback.sh
+
       - name: Build generated-code verification sandbox
         shell: bash
         run: |
@@ -45,7 +49,7 @@ jobs:
             scripts/ci
           mkdir -p "${RUNNER_TEMP}/factory-verification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
-      - name: Run paid production line to the platform hold
+      - name: Run automatic production line to the platform hold
         shell: bash
         env:
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
@@ -54,7 +58,7 @@ jobs:
           OPENAI_MODEL: gpt-5.5
           FACTORY_SOL_MODEL: gpt-5.5
           FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
-          FACTORY_FREE_ENABLED: "0"
+          FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
           FACTORY_VERIFICATION_SANDBOX_IMAGE: "local-ai-factory-verifier:${{ github.sha }}"
@@ -73,8 +77,6 @@ jobs:
           FACTORY_PAID_MAX_USD_PER_DAY: "35"
           CI: "true"
         run: |
-          test -n "$ANTHROPIC_API_KEY" || { echo "No Anthropic production credential is configured."; exit 1; }
-          test -n "$OPENAI_API_KEY" || { echo "No OpenAI production credential is configured."; exit 1; }
           setsid pnpm server > purpose-foundry-seed-server.log 2>&1 &
           server_pid=$!
           trap 'kill -- "-$server_pid" 2>/dev/null || true' EXIT
@@ -234,6 +236,10 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Provision AI Time terminal free rung
+        shell: bash
+        run: bash scripts/ci/provision-aitime-free-fallback.sh
+
       - name: Restore cross-platform candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -249,7 +255,7 @@ jobs:
             scripts/ci
           mkdir -p "${RUNNER_TEMP}/factory-verification-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
-      - name: Resume paid Purpose Foundry production line
+      - name: Resume automatic Purpose Foundry production line
         shell: bash
         env:
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
@@ -258,7 +264,7 @@ jobs:
           OPENAI_MODEL: gpt-5.5
           FACTORY_SOL_MODEL: gpt-5.5
           FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
-          FACTORY_FREE_ENABLED: "0"
+          FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
           FACTORY_VERIFICATION_SANDBOX_IMAGE: "local-ai-factory-verifier:${{ github.sha }}"
@@ -277,8 +283,6 @@ jobs:
           FACTORY_PAID_MAX_USD_PER_DAY: "35"
           CI: "true"
         run: |
-          test -n "$ANTHROPIC_API_KEY" || { echo "No Anthropic production credential is configured."; exit 1; }
-          test -n "$OPENAI_API_KEY" || { echo "No OpenAI production credential is configured."; exit 1; }
           setsid pnpm server > purpose-foundry-server.log 2>&1 &
           server_pid=$!
           trap 'kill -- "-$server_pid" 2>/dev/null || true' EXIT

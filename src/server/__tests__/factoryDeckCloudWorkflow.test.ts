@@ -22,9 +22,13 @@ const foundrySmoke = readFileSync(
   resolve("scripts/ci/run-purpose-foundry-smoke.mjs"),
   "utf8",
 );
+const freeFallback = readFileSync(
+  resolve("scripts/ci/provision-aitime-free-fallback.sh"),
+  "utf8",
+);
 
-describe("paid cloud workflow contract", () => {
-  it("pins the current strongest Anthropic model for paid production", () => {
+describe("automatic cloud model-ladder contract", () => {
+  it("attempts the current strongest Anthropic model first", () => {
     for (const workflow of [factory, foundry]) {
       expect(workflow).toContain("ANTHROPIC_MODEL: claude-fable-5-1");
       expect(workflow).toContain("FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1");
@@ -91,17 +95,17 @@ describe("paid cloud workflow contract", () => {
     );
   });
 
-  it("uses the same credential fallbacks in validation and paid execution", () => {
+  it("keeps paid credential fallbacks optional on both model-execution phases", () => {
     expect(
       factory.match(
         /secrets\.PAID_PRODUCTION_ANTHROPIC_KEY \|\| secrets\.ANTHROPIC_API_KEY/g,
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     expect(
       factory.match(
         /secrets\.PAID_PRODUCTION_OPENAI_KEY \|\| secrets\.OPENAI_API_KEY/g,
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     expect(
       foundry.match(
         /secrets\.PAID_PRODUCTION_ANTHROPIC_KEY \|\| secrets\.ANTHROPIC_API_KEY/g,
@@ -114,13 +118,41 @@ describe("paid cloud workflow contract", () => {
     ).toHaveLength(2);
   });
 
-  it("keeps Purpose Foundry's real paid end-to-end smoke and upload reserve", () => {
+  it("keeps Purpose Foundry's real end-to-end smoke and upload reserve", () => {
     expect(foundry).toContain('PURPOSE_FOUNDRY_FACTORY_TIMEOUT_MS: "19200000"');
     expect(foundry).toContain('PURPOSE_FOUNDRY_SMOKE_TIMEOUT_MS: "19200000"');
     expect(foundry).toContain("node scripts/ci/run-purpose-foundry-smoke.mjs");
     expect(foundry).toContain("purpose-foundry-server.log");
     expect(foundry).toContain(".factory/**");
     expect(foundry).toContain("workspaces/**");
+  });
+
+  it.each([
+    ["Factory Deck", factory],
+    ["Purpose Foundry", foundry],
+  ])(
+    "%s provisions one real AI Time free terminal rung in both execution phases",
+    (_name, workflow) => {
+      expect(
+        workflow.match(/bash scripts\/ci\/provision-aitime-free-fallback\.sh/g),
+      ).toHaveLength(2);
+      expect(workflow.match(/FACTORY_FREE_ENABLED: "1"/g)).toHaveLength(2);
+      expect(workflow).not.toContain('FACTORY_FREE_ENABLED: "0"');
+      expect(workflow).not.toMatch(/No (?:Anthropic|OpenAI) production credential/);
+    },
+  );
+
+  it("provisions and probes a real local model without mock or stub evidence", () => {
+    expect(freeFallback).toContain("ollama/ollama:latest");
+    expect(freeFallback).toContain("qwen2.5-coder:14b");
+    expect(freeFallback).toContain("qwen3:8b");
+    expect(freeFallback).toContain('cost_class: "local-unlimited"');
+    expect(freeFallback).toContain('api: "ollama"');
+    expect(freeFallback).toContain("/api/chat");
+    expect(freeFallback).toContain(
+      "No AI Time free candidate could serve a real inference.",
+    );
+    expect(freeFallback).not.toMatch(/mock|stub/i);
   });
 
   it("uses greenfield proofs whose tests can be independently executed", () => {
@@ -135,7 +167,7 @@ describe("paid cloud workflow contract", () => {
     expect(foundrySmoke).not.toContain("minimal accessible task checklist");
   });
 
-  it("proves one exact CLI candidate on Windows and macOS before paid finalization", () => {
+  it("proves one exact CLI candidate on Windows and macOS before automatic-ladder finalization", () => {
     expect(factory).toContain("runs-on: windows-latest");
     expect(factory).toContain("runs-on: macos-latest");
     expect(factory).toContain("needs: windows");

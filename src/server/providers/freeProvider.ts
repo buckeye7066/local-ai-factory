@@ -308,6 +308,14 @@ export class FreeProvider implements LLMProvider {
       .join("");
   }
 
+  currentProvider(): LLMProvider["name"] {
+    return this.name;
+  }
+
+  currentModel(): string {
+    return this.opts.model;
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const msg = await this.streamWithProgress({
       model: this.opts.model,

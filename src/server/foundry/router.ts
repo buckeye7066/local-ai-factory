@@ -3,7 +3,6 @@ import type { NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { safeErrorMessage } from "../errors.js";
 import { RoutingModeSchema } from "../../shared/schemas.js";
-import { getConfig, getSecrets, readinessBrainFloor } from "../config.js";
 import { loadReadinessState } from "../storage/readinessStore.js";
 import {
   evaluateFoundryCompletion,
@@ -511,14 +510,6 @@ export function createFoundryRouter(
           const station = project.stations.find((item) => item.stationId === stationId);
           if (station?.status === "not_selected") station.status = "queued";
         }
-      }
-      const brainFloor = readinessBrainFloor(getConfig(), getSecrets());
-      if (!brainFloor.configured) {
-        res.status(409).json({
-          error:
-            "Purpose Foundry is blocked until at least one paid model is configured in the unified readiness ladder.",
-        });
-        return;
       }
       if (
         project.status === "running" ||

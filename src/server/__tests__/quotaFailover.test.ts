@@ -133,6 +133,30 @@ describe("QuotaFailoverProvider", () => {
     expect(sameName.calls).toBe(0);
   });
 
+  it("continues through every dry paid family to the terminal free rung", async () => {
+    const anthropic = fake(
+      "anthropic",
+      "quota",
+      true,
+      "Anthropic credit balance is too low",
+    );
+    const openai = fake("openai", "quota", true, "OpenAI has no credits remaining");
+    const free = fake("free", "ok");
+    const ladder = new QuotaFailoverProvider(anthropic, [openai, free]);
+
+    const first = await ladder.generateJson<{ served: string }>({} as never);
+    const second = await ladder.generateText({
+      prompt: "stay demoted",
+    } as never);
+
+    expect(first.served).toBe("free");
+    expect(second.provider).toBe("free");
+    expect(anthropic.calls).toBe(1);
+    expect(openai.calls).toBe(1);
+    expect(free.calls).toBe(2);
+    expect(ladder.currentProvider()).toBe("free");
+  });
+
   it("surfaces the terminal refusal when every alternate is also dry", async () => {
     const primary = fake(
       "anthropic",

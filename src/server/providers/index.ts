@@ -40,10 +40,9 @@ export { ProviderAbortError } from "./types.js";
 export const OFFLINE_PROVIDERS = new Set<ProviderName>(["mock", "stub"]);
 
 /**
- * Raised when a provider-routing operation has no usable live build provider.
- * The mandatory paid-ladder review floor is enforced separately at non-demo
- * run admission and receipt issuance; it must never erase the final free/local
- * ladder rung used for ordinary work.
+ * Raised when the single automatic ladder has no usable live provider.
+ * Paid capacity and free/local capacity are rungs in that one route; mock and
+ * stub providers never satisfy live admission or readiness.
  */
 export class MissingProviderCredentialError extends Error {
   readonly missing: string[];
@@ -54,8 +53,7 @@ export class MissingProviderCredentialError extends Error {
     super(
       `Live factory operation blocked: required provider capability missing: ${list}. ` +
         `Live work uses one paid-first model ladder with free/local last; mock/stub are never a live fallback. ` +
-        `Non-demo admission and production-readiness receipts additionally require ` +
-        `two independent judgments through the configured paid ladder.`,
+        `Production-readiness receipts require two independent live judgments through that same ladder.`,
     );
     this.name = "MissingProviderCredentialError";
     this.missing = missing;

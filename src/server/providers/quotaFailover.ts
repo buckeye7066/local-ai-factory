@@ -50,6 +50,16 @@ export class QuotaFailoverProvider implements LLMProvider {
     return this.providers.some((provider) => provider.isConfigured());
   }
 
+  currentProvider(): LLMProvider["name"] {
+    const provider = this.providers[this.cursor]!;
+    return provider.currentProvider?.() ?? provider.name;
+  }
+
+  currentModel(): string {
+    const provider = this.providers[this.cursor]!;
+    return provider.currentModel?.() ?? this.currentProvider();
+  }
+
   private nextConfigured(after: number): number | null {
     for (let index = after + 1; index < this.providers.length; index += 1) {
       if (this.providers[index]!.isConfigured()) return index;
