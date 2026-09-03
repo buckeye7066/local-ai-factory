@@ -6,6 +6,7 @@ import type {
   ReadinessBlockerCategory,
   ReadinessBrainIdentity,
   ReadinessBrainReview,
+  ReadinessLiveProvider,
 } from "../orchestrator/productionReadinessPolicy.js";
 
 const ReviewDraftSchema = z.object({
@@ -39,7 +40,7 @@ type Deferred<T> = T | (() => T);
 type ReviewInput = {
   provider: LLMProvider;
   identity: Deferred<ReadinessBrainIdentity>;
-  providerName?: Deferred<"openai" | "anthropic">;
+  providerName?: Deferred<ReadinessLiveProvider>;
   model: Deferred<string>;
   evidence: Omit<ProductionReadinessEvidence, "reviews">;
   phase?: "pre-release" | "final";
@@ -58,9 +59,13 @@ export async function productionReadinessAgent(
   input: ReviewInput,
 ): Promise<ReadinessBrainReview> {
   const initialProvider = resolveDeferred(input.providerName ?? input.provider.name);
-  if (initialProvider !== "openai" && initialProvider !== "anthropic") {
+  if (
+    initialProvider !== "openai" &&
+    initialProvider !== "anthropic" &&
+    initialProvider !== "free"
+  ) {
     throw new Error(
-      `Production readiness review requires a paid provider, not ${initialProvider}.`,
+      `Production readiness review requires a live provider, not ${initialProvider}.`,
     );
   }
   const preReleaseContract =
@@ -99,9 +104,13 @@ export async function productionReadinessAgent(
   const identity = resolveDeferred(input.identity);
   const model = resolveDeferred(input.model);
   const resolvedProvider = resolveDeferred(input.providerName ?? input.provider.name);
-  if (resolvedProvider !== "openai" && resolvedProvider !== "anthropic") {
+  if (
+    resolvedProvider !== "openai" &&
+    resolvedProvider !== "anthropic" &&
+    resolvedProvider !== "free"
+  ) {
     throw new Error(
-      `Production readiness review requires a paid provider, not ${resolvedProvider}.`,
+      `Production readiness review requires a live provider, not ${resolvedProvider}.`,
     );
   }
   if (!model.trim()) throw new Error("Production readiness review model is missing.");
@@ -126,10 +135,10 @@ export async function productionReadinessAgent(
  */
 export async function independentProductionReadinessReviews(input: {
   leadProvider: LLMProvider;
-  leadProviderName: Deferred<"openai" | "anthropic">;
+  leadProviderName: Deferred<ReadinessLiveProvider>;
   leadModel: Deferred<string>;
   challengerProvider: LLMProvider;
-  challengerProviderName: Deferred<"openai" | "anthropic">;
+  challengerProviderName: Deferred<ReadinessLiveProvider>;
   challengerModel: Deferred<string>;
   evidence: Omit<ProductionReadinessEvidence, "reviews">;
   phase?: "pre-release" | "final";
