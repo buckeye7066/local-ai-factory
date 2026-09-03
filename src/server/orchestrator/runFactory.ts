@@ -2916,11 +2916,39 @@ async function executeRun(
           "final_review",
         );
         const brainProviders = createReadinessBrainProviders(
-          () =>
-            createTierProvider(liveRouting!, liveRouting!.codeProvider, registry, {
-              decorate: countProvider,
-              onFailover: onModelFailover,
-            }),
+          () => {
+            // Each parallel judgment gets an independent registry/rotator so
+            // one live AI Time selection cannot relabel the other's evidence.
+            const readinessRegistry = createProviderRegistry(
+              config,
+              secrets,
+              (kind, message) =>
+                log(
+                  kind === "warn" ? "warning" : "info",
+                  message,
+                  "final_review",
+                ),
+              callSignal,
+            );
+            const readinessRouting = selectRunRouting(
+              {
+                routingMode: "auto",
+                codeProvider: liveRouting!.codeProvider,
+                reviewProvider: liveRouting!.reviewProvider,
+              },
+              readinessRegistry,
+              config,
+            );
+            return createTierProvider(
+              readinessRouting,
+              readinessRouting.codeProvider,
+              readinessRegistry,
+              {
+                decorate: countProvider,
+                onFailover: onModelFailover,
+              },
+            );
+          },
           (kind, message) =>
             log(kind === "warn" ? "warning" : "info", message, "final_review"),
         );
