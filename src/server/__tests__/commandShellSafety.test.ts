@@ -2,10 +2,20 @@ import { describe, it, expect } from "vitest";
 import { argsAreShellSafe, runCommand } from "../workspace/commandRunner.js";
 
 describe("argsAreShellSafe", () => {
-  it("accepts plain package-manager argv tokens", () => {
+  it("accepts plain package-manager argv tokens and quoted path spaces", () => {
     expect(argsAreShellSafe("pnpm", ["install"])).toBe(true);
     expect(argsAreShellSafe("pnpm", ["run", "build"])).toBe(true);
     expect(argsAreShellSafe("npx", ["tsc", "--noEmit"])).toBe(true);
+    expect(
+      argsAreShellSafe("npx", [
+        "--no-install",
+        "vitest",
+        "run",
+        "src/profile flow.test.ts",
+        "--reporter=json",
+        "--root=packages/web app",
+      ]),
+    ).toBe(true);
   });
 
   it("rejects every shell metacharacter", () => {
@@ -15,7 +25,6 @@ describe("argsAreShellSafe", () => {
       "run|whoami",
       "build > out.txt",
       'x"y',
-      "a b",
       "`cmd`",
       "$(cmd)",
       "%PATH%",

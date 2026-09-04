@@ -2,7 +2,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertHostVerificationSandboxIsolation,
   buildVerificationSandboxPlan,
+  hostVerificationSandboxConfig,
   verificationNetwork,
   verificationSandboxConfig,
 } from "../workspace/verificationSandbox.js";
@@ -124,5 +126,93 @@ describe("generated-code verification sandbox", () => {
         args: ["test"],
       }),
     ).toThrow(/must not overlap/i);
+  });
+
+  it("requires a non-privileged host account for Windows and macOS proofs", () => {
+    const mac = hostVerificationSandboxConfig(
+      {
+        FACTORY_PLATFORM_PROOF_USER: "factoryproof",
+        FACTORY_PLATFORM_PROOF_STATE_ROOT: stateRoot,
+      },
+      "darwin",
+    );
+    expect(mac).toEqual({ user: "factoryproof", stateRoot });
+
+    const launcher = resolve(join(tmpdir(), "windows-proof-launcher.ps1"));
+    const windows = hostVerificationSandboxConfig(
+      {
+        FACTORY_PLATFORM_PROOF_USER: "factoryproof",
+        FACTORY_PLATFORM_PROOF_STATE_ROOT: stateRoot,
+        FACTORY_PLATFORM_PROOF_WINDOWS_LAUNCHER: launcher,
+        FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD: "ephemeral-password",
+      },
+      "win32",
+    );
+    expect(windows).toEqual({
+      user: "factoryproof",
+      stateRoot,
+      windowsLauncher: launcher,
+      windowsPassword: "ephemeral-password",
+    });
+
+    expect(() =>
+      hostVerificationSandboxConfig(
+        {
+          FACTORY_PLATFORM_PROOF_USER: "Administrator",
+          FACTORY_PLATFORM_PROOF_STATE_ROOT: stateRoot,
+          FACTORY_PLATFORM_PROOF_WINDOWS_LAUNCHER: launcher,
+          FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD: "password",
+        },
+        "win32",
+      ),
+    ).toThrow(/privileged/i);
+    expect(() =>
+      hostVerificationSandboxConfig(
+        {
+          FACTORY_PLATFORM_PROOF_USER: "factoryproof",
+          FACTORY_PLATFORM_PROOF_STATE_ROOT: stateRoot,
+        },
+        "win32",
+      ),
+    ).toThrow(/launcher.*password/i);
+    expect(() =>
+      hostVerificationSandboxConfig(
+        {
+          FACTORY_PLATFORM_PROOF_USER: "factoryproof",
+          FACTORY_PLATFORM_PROOF_STATE_ROOT: stateRoot,
+        },
+        "linux",
+      ),
+    ).toThrow(/only on Windows and macOS/i);
+  });
+
+  it("keeps restricted-account state and launchers outside generated workspaces", () => {
+    const config = {
+      user: "factoryproof",
+      stateRoot,
+      windowsLauncher: resolve(join(tmpdir(), "windows-proof-launcher.ps1")),
+      windowsPassword: "password",
+    };
+    expect(() =>
+      assertHostVerificationSandboxIsolation(config, workspaceRoot),
+    ).not.toThrow();
+    expect(() =>
+      assertHostVerificationSandboxIsolation(
+        { ...config, stateRoot: join(workspaceRoot, "state") },
+        workspaceRoot,
+      ),
+    ).toThrow(/must not overlap/i);
+    expect(() =>
+      assertHostVerificationSandboxIsolation(
+        { ...config, windowsLauncher: join(workspaceRoot, "launcher.ps1") },
+        workspaceRoot,
+      ),
+    ).toThrow(/launcher.*outside/i);
+    expect(() =>
+      assertHostVerificationSandboxIsolation(
+        { ...config, windowsLauncher: join(stateRoot, "launcher.ps1") },
+        workspaceRoot,
+      ),
+    ).toThrow(/launcher.*writable sandbox state/i);
   });
 });

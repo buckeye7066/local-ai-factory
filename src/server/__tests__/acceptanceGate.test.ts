@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessGeneratedTests,
   assessExecutedCoverage,
+  mappedTestNamesForPath,
 } from "../orchestrator/acceptanceGate.js";
 import type {
   FileBuild,
@@ -760,6 +761,9 @@ expect(actualIds).not.toContain(forbiddenId);`),
 
   it("requires the exact mapped title to appear in valid direct runner evidence", () => {
     const testPlan = plan(validJourney);
+    expect(mappedTestNamesForPath(testPlan, "./tests/profile.spec.ts")).toEqual([
+      "profile persists after reload",
+    ]);
     expect(
       assessExecutedCoverage(testPlan, [
         {

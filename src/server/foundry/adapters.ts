@@ -24,7 +24,7 @@ import {
   type ResolvedRunRouting,
 } from "../orchestrator/runFactory.js";
 import { platformEvidenceBlockersFromRunError } from "../orchestrator/platformEvidenceHold.js";
-import { getRun } from "../storage/runsStore.js";
+import { getRun, getRunCheckpoint } from "../storage/runsStore.js";
 import {
   loadReadinessState,
   recordReadinessEvaluation,
@@ -104,6 +104,23 @@ export type AdapterDescriptor = {
   configured: boolean;
   destination: string;
 };
+
+export function isActionablePlatformEvidenceHold(
+  checkpoint: {
+    testWriterComplete?: boolean;
+    verification?: {
+      fileDigests?: Record<string, string>;
+      platformArtifactSnapshot?: Record<string, string>;
+    };
+  } | null,
+): boolean {
+  return Boolean(
+    checkpoint?.testWriterComplete &&
+      checkpoint.verification &&
+      Object.keys(checkpoint.verification.fileDigests ?? {}).length > 0 &&
+      Object.keys(checkpoint.verification.platformArtifactSnapshot ?? {}).length > 0,
+  );
+}
 
 type ProcessResult = { stdout: string; stderr: string; exitCode: number };
 type ProcessRunner = (
@@ -816,7 +833,12 @@ export class FoundryAdapters {
     // the station shows WHAT failed and the suggested fix, not just "failed".
     const errorLedger = Array.isArray(run.errorLedger) ? run.errorLedger : [];
     const platformBlockers = platformEvidenceBlockersFromRunError(run.error);
-    if (run.status === "failed" && run.resumable === true && platformBlockers) {
+    const platformCheckpoint = platformBlockers ? await getRunCheckpoint(run.id) : null;
+    const actionablePlatformHold = isActionablePlatformEvidenceHold(platformCheckpoint);
+    // External platform holds remain visible to Foundry without advertising
+    // the ordinary same-host resume action that cannot satisfy them. A missing
+    // or corrupt checkpoint is irrecoverable and must remain an honest failure.
+    if (run.status === "failed" && platformBlockers && actionablePlatformHold) {
       return {
         status: "needs_attention",
         summary: `Factory Deck run ${run.id} is waiting for trusted cross-platform execution: ${platformBlockers.join("; ")}`,

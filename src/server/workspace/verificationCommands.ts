@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { normalizeTestPath } from "./testPaths.js";
+import ts from "typescript";
+import { normalizeSafeRelativePath, normalizeTestPath } from "./testPaths.js";
 
 export interface VerificationCommand {
   bin: string;
@@ -121,6 +122,123 @@ function packageScriptCommand(
 }
 
 /**
+ * Parse the deliberately small package-script subset whose runner and root we
+ * can prove without invoking a shell. Expansions and compound commands are
+ * rejected because their effective Vitest root cannot be known statically.
+ */
+function plainScriptWords(source: string): string[] | null {
+  const words: string[] = [];
+  let word = "";
+  let quote: '"' | null = null;
+  const finishWord = () => {
+    if (word) words.push(word);
+    word = "";
+  };
+
+  for (const character of source.trim()) {
+    // A package script's CR/LF is a shell command boundary, not ordinary word
+    // spacing. Reject it even after a backslash so containment is unambiguous.
+    if (character === "\r" || character === "\n") return null;
+    // This parser accepts only the intersection of POSIX and cmd.exe quoting.
+    // In particular, a POSIX backslash does not escape &, |, or other command
+    // separators on Windows, and single quotes are not cmd.exe quotes.
+    if (character === "\\") {
+      return null;
+    }
+    if (quote) {
+      if (character === quote) quote = null;
+      else if (/[;&|<>()$`%!^]/.test(character)) return null;
+      else word += character;
+      continue;
+    }
+    if (character === '"') {
+      quote = '"';
+      continue;
+    }
+    if (character === "'") return null;
+    if (/\s/.test(character)) {
+      finishWord();
+      continue;
+    }
+    // Package-manager scripts run through a shell. An unquoted `#` starts a
+    // comment on POSIX, which would discard an engine-appended `--root=.` and
+    // let Vitest rediscover configuration above the candidate workspace.
+    if (/[#;&|<>()$`%!^]/.test(character)) return null;
+    word += character;
+  }
+  if (quote) return null;
+  finishWord();
+  return words.length > 0 ? words : null;
+}
+
+interface VitestScript {
+  root: string;
+  ownsRoot: boolean;
+}
+
+const SAFE_VITEST_FLAGS = new Set(["--coverage=false", "--passWithNoTests", "--run"]);
+const SAFE_VITEST_PATH_OPTIONS = new Set(["--config", "--dir", "--root"]);
+
+/** Canonicalize equivalent, contained Vitest root spellings. */
+function normalizeSafeVitestRoot(raw: string): string | null {
+  const slashed = raw.replace(/\\/g, "/");
+  if (slashed.startsWith("/") || /^[A-Za-z]:/.test(slashed)) return null;
+  const withoutPrefix = slashed.replace(/^\.\/+/, "");
+  const withoutTrailingSlash = withoutPrefix.replace(/\/+$/, "");
+  if (!withoutTrailingSlash || withoutTrailingSlash === ".") return ".";
+  const normalized = normalizeSafeRelativePath(withoutTrailingSlash);
+  if (!normalized) return null;
+  const parts = normalized.split("/").filter((part) => part !== ".");
+  return parts.join("/") || ".";
+}
+
+function runnerScriptWords(
+  script: unknown,
+  runner: "vitest" | "jest",
+): string[] | null {
+  if (typeof script !== "string") return null;
+  const words = plainScriptWords(script);
+  return words?.[0] === runner ? words : null;
+}
+
+function inspectVitestScript(script: unknown): VitestScript | null {
+  const words = runnerScriptWords(script, "vitest");
+  if (!words) return null;
+  let root: string | undefined;
+  const seenPathOptions = new Set<string>();
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index]!;
+    if (index === 1 && word === "run") continue;
+    if (SAFE_VITEST_FLAGS.has(word)) continue;
+
+    const equals = word.indexOf("=");
+    const option = equals < 0 ? word : word.slice(0, equals);
+    if (!SAFE_VITEST_PATH_OPTIONS.has(option) || seenPathOptions.has(option)) {
+      return null;
+    }
+    seenPathOptions.add(option);
+    let candidate: string | undefined;
+    if (equals < 0) {
+      candidate = words[index + 1];
+      index += 1;
+    } else {
+      candidate = word.slice(equals + 1);
+    }
+    if (!candidate || candidate.startsWith("-")) return null;
+    const normalized = normalizeSafeVitestRoot(candidate);
+    if (!normalized) return null;
+    if (option === "--root") root = normalized;
+  }
+  return { root: root ?? ".", ownsRoot: root !== undefined };
+}
+
+function directVitestPath(path: string, root: string): string | null {
+  if (root === ".") return path;
+  const prefix = `${root}/`;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : null;
+}
+
+/**
  * A restored candidate can live below the Factory Deck checkout. Vitest's
  * config discovery must never escape that candidate and adopt an ancestor
  * `vitest.config.*`, so simple Vitest host scripts receive an explicit root.
@@ -134,19 +252,19 @@ function packageTestCommand(
     scripts && typeof scripts === "object"
       ? (scripts as Record<string, unknown>).test
       : undefined;
-  const simpleVitest =
-    typeof testScript === "string" && /^\s*vitest(?:\s+run)?\s*$/.test(testScript);
+  const vitest = inspectVitestScript(testScript);
+  const pinCandidateRoot = Boolean(vitest && !vitest.ownsRoot);
   const args =
-    simpleVitest && manager === "npm"
+    pinCandidateRoot && manager === "npm"
       ? ["test", "--", "--root=."]
-      : simpleVitest && manager === "pnpm"
+      : pinCandidateRoot && (manager === "pnpm" || manager === "yarn")
         ? ["test", "--root=."]
         : ["test"];
   return {
     bin: manager,
     args,
     isTest: true,
-    ...(simpleVitest ? { runner: "vitest" as const } : {}),
+    ...(pinCandidateRoot ? { runner: "vitest" as const } : {}),
   };
 }
 
@@ -303,6 +421,90 @@ function dependencies(pkg: Record<string, unknown> | null): Set<string> {
   return out;
 }
 
+type JavascriptRunner = "vitest" | "jest";
+
+function runnerDeclaredByTest(contents: string): JavascriptRunner | "ambiguous" | null {
+  const fileName = "generated-test.tsx";
+  const compilerOptions: ts.CompilerOptions = {
+    jsx: ts.JsxEmit.Preserve,
+    module: ts.ModuleKind.ESNext,
+    noLib: true,
+    noResolve: true,
+    target: ts.ScriptTarget.Latest,
+  };
+  const parsedSource = ts.createSourceFile(
+    fileName,
+    contents,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const compilerHost = ts.createCompilerHost(compilerOptions, true);
+  compilerHost.getSourceFile = (requested) =>
+    requested === fileName ? parsedSource : undefined;
+  compilerHost.fileExists = (requested) => requested === fileName;
+  compilerHost.readFile = (requested) =>
+    requested === fileName ? contents : undefined;
+  compilerHost.writeFile = () => {};
+  const program = ts.createProgram([fileName], compilerOptions, compilerHost);
+  const source = program.getSourceFile(fileName) ?? parsedSource;
+  const checker = program.getTypeChecker();
+  const modules = new Set<string>();
+  let vitestApi = false;
+  let jestApi = false;
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      const clause = node.importClause;
+      const runtimeImport =
+        !clause ||
+        (!clause.isTypeOnly &&
+          (Boolean(clause.name) ||
+            !clause.namedBindings ||
+            ts.isNamespaceImport(clause.namedBindings) ||
+            clause.namedBindings.elements.some((element) => !element.isTypeOnly)));
+      if (runtimeImport) modules.add(node.moduleSpecifier.text);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      !node.isTypeOnly &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      node.moduleReference.expression &&
+      ts.isStringLiteralLike(node.moduleReference.expression)
+    ) {
+      modules.add(node.moduleReference.expression.text);
+    } else if (ts.isCallExpression(node) && node.arguments.length === 1) {
+      const argument = node.arguments[0]!;
+      const directRequire =
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "require" &&
+        // A locally declared function/parameter named `require` is ordinary
+        // candidate code, not evidence that this test imports a runner.
+        !checker.getSymbolAtLocation(node.expression);
+      const dynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      if ((directRequire || dynamicImport) && ts.isStringLiteralLike(argument)) {
+        modules.add(argument.text);
+      }
+    }
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      (node.expression.text === "vi" || node.expression.text === "jest") &&
+      // Imports already establish their runner through `modules`. API syntax
+      // is evidence only for an unshadowed runner global; a local parameter,
+      // variable, or import named `vi`/`jest` is ordinary candidate code.
+      !checker.getSymbolAtLocation(node.expression)
+    ) {
+      if (node.expression.text === "vi") vitestApi = true;
+      if (node.expression.text === "jest") jestApi = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  const vitest = modules.has("vitest") || vitestApi;
+  const jest = modules.has("@jest/globals") || jestApi;
+  if (vitest && jest) return "ambiguous";
+  return vitest ? "vitest" : jest ? "jest" : null;
+}
+
 function hasPlaywrightConfig(workspacePath: string): boolean {
   return ["js", "cjs", "mjs", "ts", "cts", "mts"].some((ext) =>
     exists(workspacePath, `playwright.config.${ext}`),
@@ -347,10 +549,19 @@ export function verificationPlanForWorkspace(
     packageJson?.scripts && typeof packageJson.scripts === "object"
       ? (packageJson.scripts as Record<string, unknown>)
       : {};
+  const testScriptText = typeof scripts.test === "string" ? scripts.test.trim() : "";
+  const vitestScript = inspectVitestScript(scripts.test);
   if (exists(workspacePath, "package.json") && !managerResolution.manager) {
     incomplete.push({
       command: "package manager",
       reason: managerResolution.reason ?? "package manager could not be resolved",
+    });
+  }
+  if (/^vitest(?:\s|$)/i.test(testScriptText) && !vitestScript) {
+    incomplete.push({
+      command: "host tests",
+      reason:
+        "Vitest test script has compound, unsupported, absolute, traversing, or ambiguous options that cannot be contained to the candidate",
     });
   }
   const quality = ["lint", "typecheck", "build"]
@@ -363,6 +574,9 @@ export function verificationPlanForWorkspace(
   const direct: VerificationCommand[] = [];
   const browserHarness =
     input.trustedBrowserHarness ?? hasPlaywrightHarness(workspacePath);
+  const jestScript = runnerScriptWords(scripts.test, "jest");
+  const vitestAvailable = deps.has("vitest") || Boolean(vitestScript);
+  const jestAvailable = deps.has("jest") || Boolean(jestScript);
 
   for (const generated of input.generatedTests ?? []) {
     const path = normalizeTestPath(generated.path);
@@ -406,15 +620,70 @@ export function verificationPlanForWorkspace(
       });
       continue;
     }
-    if (deps.has("vitest") || String(scripts.test ?? "").includes("vitest")) {
+    const declaredRunner = runnerDeclaredByTest(generated.contents);
+    let runner: JavascriptRunner | null = null;
+    if (declaredRunner === "ambiguous") {
+      incomplete.push({
+        command: path,
+        reason: "generated test mixes explicit Vitest and Jest APIs",
+      });
+      continue;
+    }
+    if (declaredRunner === "vitest") {
+      if (!vitestAvailable) {
+        incomplete.push({
+          command: path,
+          reason:
+            "generated test explicitly requires Vitest, but no local Vitest runner is declared",
+        });
+        continue;
+      }
+      runner = "vitest";
+    } else if (declaredRunner === "jest") {
+      if (!jestAvailable) {
+        incomplete.push({
+          command: path,
+          reason:
+            "generated test explicitly requires Jest, but no local Jest runner is declared",
+        });
+        continue;
+      }
+      runner = "jest";
+    } else if (vitestAvailable && !jestAvailable) {
+      runner = "vitest";
+    } else if (jestAvailable && !vitestAvailable) {
+      runner = "jest";
+    } else if (vitestAvailable && jestAvailable && vitestScript && !jestScript) {
+      runner = "vitest";
+    } else if (vitestAvailable && jestAvailable && jestScript && !vitestScript) {
+      runner = "jest";
+    }
+
+    if (runner === "vitest") {
+      const root = vitestScript?.root ?? ".";
+      const testPath = directVitestPath(path, root);
+      if (!testPath) {
+        incomplete.push({
+          command: path,
+          reason: `generated Vitest test is outside the candidate-owned root ${root}`,
+        });
+        continue;
+      }
       direct.push({
         bin: "npx",
-        args: ["--no-install", "vitest", "run", path, "--reporter=json", "--root=."],
+        args: [
+          "--no-install",
+          "vitest",
+          "run",
+          testPath,
+          "--reporter=json",
+          `--root=${root}`,
+        ],
         isTest: true,
         runner: "vitest",
         directTestPath: path,
       });
-    } else if (deps.has("jest") || String(scripts.test ?? "").includes("jest")) {
+    } else if (runner === "jest") {
       direct.push({
         bin: "npx",
         args: ["--no-install", "jest", "--runTestsByPath", path, "--json"],
@@ -426,7 +695,9 @@ export function verificationPlanForWorkspace(
       incomplete.push({
         command: path,
         reason:
-          "no declared local Vitest/Jest/Pytest runner can execute this generated test directly",
+          vitestAvailable && jestAvailable
+            ? "both Vitest and Jest are declared, but this generated test has no unambiguous runner identity"
+            : "no declared local Vitest/Jest/Pytest runner can execute this generated test directly",
       });
     }
   }
