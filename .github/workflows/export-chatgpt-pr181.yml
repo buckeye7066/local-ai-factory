@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/export-chatgpt-pr181.yml
       - .github/chatgpt-pr181-patch/**
+      - .github/chatgpt-pr181-integration/**
   workflow_dispatch:
 
 permissions:
@@ -27,7 +28,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Assemble and authenticate the repair patch
+      - name: Assemble and authenticate the primary repair patch
         shell: bash
         run: |
           set -euo pipefail
@@ -37,8 +38,6 @@ jobs:
           import sys
 
           text = Path(sys.argv[1]).read_text(encoding="utf-8")
-          # Normalize four transported headers that gained a single leading
-          # space, then normalize the separately bounded extra-plus segment.
           text = "\n".join(
               line[1:] if line.startswith(" diff --git ") else line
               for line in text.split("\n")
@@ -60,10 +59,20 @@ jobs:
           git apply --check "$RUNNER_TEMP/repair.patch"
           git apply "$RUNNER_TEMP/repair.patch"
 
+      - name: Assemble and authenticate the integration repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/chatgpt-pr181-integration/part-* > "$RUNNER_TEMP/integration.patch"
+          echo "b1de4ac4ea5e3374f820a0f9d0353cee09a50e559392dda8632baf8ae01d3f6f  $RUNNER_TEMP/integration.patch" | sha256sum --check --strict -
+          git apply --check "$RUNNER_TEMP/integration.patch"
+          git apply "$RUNNER_TEMP/integration.patch"
+
       - name: Remove one-time transfer machinery
         shell: bash
         run: |
           rm -rf .github/chatgpt-pr181-patch
+          rm -rf .github/chatgpt-pr181-integration
           rm -f .github/workflows/export-chatgpt-pr181.yml
           rm -f .github/workflows/hash-pr181-parts.yml
 
