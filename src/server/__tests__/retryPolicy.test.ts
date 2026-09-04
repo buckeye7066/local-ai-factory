@@ -61,6 +61,27 @@ describe("withRetry", () => {
     ).rejects.toBe(refusal);
     expect(calls).toBe(1);
   });
+
+  it("converts a paid-provider SDK 404 into typed model exhaustion", async () => {
+    let calls = 0;
+    const sdkNotFound = Object.assign(new Error("model: claude-unknown"), {
+      name: "NotFoundError",
+      status: 404,
+    });
+    let caught: unknown;
+    try {
+      await withRetry("anthropic.generateText", async () => {
+        calls += 1;
+        throw sdkNotFound;
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ProviderModelUnavailableError);
+    expect(caught).not.toBe(sdkNotFound);
+    expect(calls).toBe(1);
+  });
 });
 
 describe("schema failures are not transport faults (2026-08-16)", () => {

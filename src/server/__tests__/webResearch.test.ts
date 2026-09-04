@@ -345,6 +345,28 @@ describe("webFetchTool network boundary", () => {
       truncated: false,
     });
   });
+
+  it("preserves HTML block boundaries in competitive evidence text", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        "<ul><li>Offline ticket sales</li><li>Synchronization connects cloud invoices</li><li>Recovery experts restore damaged disks</li></ul>",
+        {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        },
+      ),
+    );
+    const result = await webFetchTool("https://example.com/features", 1_000, {
+      fetch: fetchImpl,
+      lookup: publicLookup,
+    });
+
+    expect(result.textExcerpt.split("\n")).toEqual([
+      "Offline ticket sales",
+      "Synchronization connects cloud invoices",
+      "Recovery experts restore damaged disks",
+    ]);
+  });
 });
 
 const spec: ProductSpec = {

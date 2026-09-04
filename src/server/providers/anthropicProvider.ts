@@ -119,6 +119,10 @@ export class AnthropicProvider implements LLMProvider {
     return this.resolvedModel;
   }
 
+  async prepareCall(): Promise<void> {
+    await this.modelId();
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
     const text = await withRetry(

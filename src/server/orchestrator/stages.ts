@@ -111,16 +111,29 @@ export class CountingProvider implements LLMProvider {
     return this.inner.currentModel?.() ?? this.currentProvider();
   }
 
-  private tick() {
+  private checkAdmission() {
     // A cancel request stops the run before the next model call.
     throwIfCancelled(this.run.id);
     if (this.run.providerUsage.totalCalls >= this.limit) {
       throw new ModelBudgetError(this.limit);
     }
+  }
+
+  private tick() {
+    this.checkAdmission();
     this.run.providerUsage.totalCalls += 1;
     if (this.attribution === "declared") {
       this.run.providerUsage[this.name].calls += 1;
     }
+  }
+
+  private async prepare(): Promise<void> {
+    // Catalog lookup and a catalog-proven local refusal are not model calls.
+    // Check the cap before doing even that network lookup, then charge only
+    // after preparation proves this rung can reach inference. `tick` checks
+    // again after the await so concurrent calls cannot jointly cross the cap.
+    this.checkAdmission();
+    await this.inner.prepareCall?.();
   }
 
   /** Credit the provider that actually served the call just completed. */
@@ -134,6 +147,7 @@ export class CountingProvider implements LLMProvider {
   }
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
+    await this.prepare();
     this.tick();
     try {
       return await this.inner.generateText(input);
@@ -143,6 +157,7 @@ export class CountingProvider implements LLMProvider {
   }
 
   async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
+    await this.prepare();
     this.tick();
     try {
       return await this.inner.generateJson(input);

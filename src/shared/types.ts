@@ -60,6 +60,11 @@ export interface LLMProvider {
   paidBudgetManaged?: boolean;
   /** True only when the provider has usable backing capacity. */
   isConfigured(): boolean;
+  /**
+   * Resolve non-generative prerequisites before a logical model call is
+   * admitted to the run budget. This hook must not perform inference.
+   */
+  prepareCall?(): Promise<void>;
   /** Actual provider family serving the current ladder rung. */
   currentProvider?(): ProviderName;
   /** Actual model serving the current ladder rung. */

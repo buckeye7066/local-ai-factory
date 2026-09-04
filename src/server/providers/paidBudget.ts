@@ -517,6 +517,10 @@ export class BudgetGatedProvider implements LLMProvider {
     return this.inner.isConfigured();
   }
 
+  prepareCall(): Promise<void> {
+    return this.inner.prepareCall?.() ?? Promise.resolve();
+  }
+
   currentProvider(): ProviderName {
     return this.inner.currentProvider?.() ?? this.inner.name;
   }

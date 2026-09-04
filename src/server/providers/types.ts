@@ -131,6 +131,20 @@ export async function withRetry<T>(
         throw err;
       }
       if (err instanceof ProviderModelUnavailableError) throw err;
+      // These retry labels wrap only generation endpoints on the official
+      // paid providers. Their SDKs report an unavailable/inaccessible model
+      // as 404, sometimes with no useful words beyond `model: <id>`. Convert
+      // that response to the typed, sanitized exhaustion signal so the outer
+      // ladder can continue instead of losing status in the generic wrapper.
+      const status = (err as { status?: unknown })?.status;
+      if (
+        status === 404 &&
+        (label.startsWith("anthropic.") || label.startsWith("openai."))
+      ) {
+        throw new ProviderModelUnavailableError(
+          `${label} model unavailable (provider returned 404).`,
+        );
+      }
       if (isNonRetryable(err)) break;
       if (i < attempts - 1) {
         const backoff = Math.min(8000, 400 * 2 ** i);
