@@ -67,9 +67,13 @@ export function createCachedModelResolver(args: {
     const available = catalog.filter((model) =>
       isGenerativeModel(args.provider, model.id, args.preferred),
     );
-    const ordered = resolvePreferredModels(args.provider, args.preferred, available);
+    const assignments = resolvePreferredAssignments(
+      args.provider,
+      args.preferred,
+      available,
+    );
     const requestedIndex = args.preferred.indexOf(requestedModel);
-    const resolved = requestedIndex >= 0 ? ordered[requestedIndex] : undefined;
+    const resolved = requestedIndex >= 0 ? assignments[requestedIndex]?.id : undefined;
     if (resolved) {
       const resolution = `${requestedModel}\u0000${resolved}`;
       if (!loggedResolutions.has(resolution)) {
@@ -104,9 +108,57 @@ export function resolvePreferredModels(
   preferred: readonly string[],
   available: readonly CatalogModel[],
 ): string[] {
+  return resolvePreferredAssignments(provider, preferred, available)
+    .filter((model): model is CatalogModel => model !== undefined)
+    .map(({ id }) => id);
+}
+
+function resolvePreferredAssignments(
+  provider: Extract<ProviderName, "anthropic" | "openai">,
+  preferred: readonly string[],
+  available: readonly CatalogModel[],
+): Array<CatalogModel | undefined> {
   const unique = [
     ...new Map(available.map((model) => [model.id.toLowerCase(), model])).values(),
   ];
+  const assignments = new Array<CatalogModel | undefined>(preferred.length);
+  const pinnedIds = new Set<string>();
+
+  // A dated model is an immutable owner pin. Reserve its exact catalog entry
+  // in that rung (or leave that rung unavailable) before deriving automatic
+  // substitutions for flexible aliases. This prevents a missing early pin
+  // from shifting every later configured rung onto the wrong model.
+  preferred.forEach((configured, index) => {
+    if (!isDatedSnapshot(configured)) return;
+    const exact = unique.find(
+      (candidate) =>
+        candidate.id.toLowerCase() === configured.toLowerCase() &&
+        !pinnedIds.has(candidate.id.toLowerCase()),
+    );
+    if (!exact) return;
+    assignments[index] = exact;
+    pinnedIds.add(exact.id.toLowerCase());
+  });
+
+  const flexiblePositions = preferred
+    .map((configured, index) => ({ configured, index }))
+    .filter(({ configured }) => !isDatedSnapshot(configured));
+  const flexible = resolveFlexibleModels(
+    provider,
+    flexiblePositions.map(({ configured }) => configured),
+    unique.filter((candidate) => !pinnedIds.has(candidate.id.toLowerCase())),
+  );
+  flexiblePositions.forEach(({ index }, flexibleIndex) => {
+    assignments[index] = flexible[flexibleIndex];
+  });
+  return assignments;
+}
+
+function resolveFlexibleModels(
+  provider: Extract<ProviderName, "anthropic" | "openai">,
+  preferred: readonly string[],
+  available: readonly CatalogModel[],
+): CatalogModel[] {
   const selected: CatalogModel[] = [];
   const selectedIds = new Set<string>();
 
@@ -115,7 +167,7 @@ export function resolvePreferredModels(
   // slots with newly discovered models. This preserves intentional gpt-4.1
   // and o-series routes even when the same account also exposes newer IDs.
   for (const configured of preferred) {
-    const match = unique
+    const match = available
       .filter(
         (candidate) =>
           !selectedIds.has(candidate.id.toLowerCase()) &&
@@ -127,15 +179,15 @@ export function resolvePreferredModels(
     selectedIds.add(match.id.toLowerCase());
   }
 
-  const remaining = unique
+  const remaining = available
     .filter((candidate) => !selectedIds.has(candidate.id.toLowerCase()))
     .sort((left, right) => compareModelStrength(provider, preferred, left, right))
     .slice(0, Math.max(0, preferred.length - selected.length));
   selected.push(...remaining);
 
-  return selected
-    .sort((left, right) => compareModelStrength(provider, preferred, left, right))
-    .map(({ id }) => id);
+  return selected.sort((left, right) =>
+    compareModelStrength(provider, preferred, left, right),
+  );
 }
 
 /**
@@ -172,13 +224,19 @@ function modelMatches(configured: string, available: string): boolean {
   const requested = configured.toLowerCase();
   const candidate = available.toLowerCase();
   if (candidate === requested) return true;
-  const snapshotSuffix = /-(?:latest|\d{8}|\d{4}-\d{2}-\d{2})$/;
-  const requestedBase = requested.replace(snapshotSuffix, "");
-  const candidateBase = candidate.replace(snapshotSuffix, "");
-  return (
-    requestedBase === candidateBase &&
-    (requestedBase !== requested || candidateBase !== candidate)
-  );
+  // A dated configuration is an immutable pin, never an alias for another
+  // date. Only an undated or explicit `latest` configuration may resolve to
+  // a provider-listed dated snapshot (or its undated account alias).
+  if (isDatedSnapshot(requested)) return false;
+  const requestedBase = requested.replace(/-latest$/, "");
+  const candidateBase = candidate
+    .replace(/-(?:\d{8}|\d{4}-\d{2}-\d{2})$/, "")
+    .replace(/-latest$/, "");
+  return requestedBase === candidateBase;
+}
+
+function isDatedSnapshot(model: string): boolean {
+  return /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/i.test(model);
 }
 
 function modelQualityTier(

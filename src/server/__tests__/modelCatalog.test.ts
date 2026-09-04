@@ -108,6 +108,45 @@ describe("provider model catalog ordering", () => {
     await expect(resolver("gpt-4.1")).resolves.toBe("gpt-4.1-2025-04-14");
   });
 
+  it("keeps a configured dated snapshot pinned to that exact date", async () => {
+    const resolver = createCachedModelResolver({
+      provider: "openai",
+      preferred: ["gpt-4.1-2025-04-14"],
+      load: async () => [
+        { id: "gpt-4.1-2025-05-01", created: 300 },
+        { id: "gpt-4.1-2025-04-14", created: 100 },
+      ],
+      log: () => {},
+    });
+
+    await expect(resolver("gpt-4.1-2025-04-14")).resolves.toBe("gpt-4.1-2025-04-14");
+  });
+
+  it("rejects an unavailable dated pin without shifting later flexible rungs", async () => {
+    const preferred = ["gpt-4.1-2025-04-14", "gpt-5.6-sol", "gpt-5.6-terra"];
+    const available = [
+      { id: "gpt-4.1-2025-05-01", created: 400 },
+      { id: "gpt-5.6-sol", created: 300 },
+      { id: "gpt-5.6-terra", created: 200 },
+    ];
+    const resolver = createCachedModelResolver({
+      provider: "openai",
+      preferred,
+      load: async () => available,
+      log: () => {},
+    });
+
+    expect(resolvePreferredModels("openai", preferred, available)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+    ]);
+    await expect(resolver("gpt-4.1-2025-04-14")).rejects.toThrow(
+      /model unavailable in the account catalog/,
+    );
+    await expect(resolver("gpt-5.6-sol")).resolves.toBe("gpt-5.6-sol");
+    await expect(resolver("gpt-5.6-terra")).resolves.toBe("gpt-5.6-terra");
+  });
+
   it("allows only one configured probe when the account catalog is unreachable", async () => {
     let loads = 0;
     const resolver = createCachedModelResolver({

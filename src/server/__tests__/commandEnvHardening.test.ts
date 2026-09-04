@@ -8,6 +8,7 @@ import {
 import { CountingProvider, ModelBudgetError } from "../orchestrator/stages.js";
 import { ModelLadderProvider } from "../providers/modelLadderProvider.js";
 import { ProviderModelUnavailableError } from "../providers/types.js";
+import { PaidBudgetExhaustedError } from "../providers/paidBudget.js";
 import type { LLMProvider, GenerateTextResult } from "../../shared/types.js";
 import type { RunRecord } from "../../shared/schemas.js";
 
@@ -176,6 +177,63 @@ describe("CountingProvider — model-call budget (#5)", () => {
       totalCalls: 1,
       anthropic: { calls: 0 },
       openai: { calls: 1 },
+    });
+  });
+
+  it("does not charge a global paid-budget refusal or probe another paid rung", async () => {
+    const run = fakeRun();
+    let redundantPaidCalls = 0;
+    const capped: LLMProvider = {
+      name: "anthropic",
+      isConfigured: () => true,
+      async generateText() {
+        throw new PaidBudgetExhaustedError("paid-rescue cap reached");
+      },
+      async generateJson<T>() {
+        throw new PaidBudgetExhaustedError("paid-rescue cap reached") as T;
+      },
+    };
+    const redundantPaid: LLMProvider = {
+      name: "openai",
+      isConfigured: () => true,
+      async generateText() {
+        redundantPaidCalls += 1;
+        return { text: "must not run", provider: "openai" };
+      },
+      async generateJson<T>() {
+        redundantPaidCalls += 1;
+        return {} as T;
+      },
+    };
+    const free: LLMProvider = {
+      name: "free",
+      isConfigured: () => true,
+      async generateText() {
+        return { text: "free", provider: "free" };
+      },
+      async generateJson<T>() {
+        return {} as T;
+      },
+    };
+    const ladder = new ModelLadderProvider([
+      { model: "claude-capped", provider: new CountingProvider(capped, run, 1) },
+      {
+        model: "gpt-redundant",
+        provider: new CountingProvider(redundantPaid, run, 1),
+      },
+      { model: "free-live", provider: new CountingProvider(free, run, 1) },
+    ]);
+
+    await expect(ladder.generateText({ system: "s", prompt: "p" })).resolves.toEqual({
+      text: "free",
+      provider: "free",
+    });
+    expect(redundantPaidCalls).toBe(0);
+    expect(run.providerUsage).toMatchObject({
+      totalCalls: 1,
+      anthropic: { calls: 0 },
+      openai: { calls: 0 },
+      free: { calls: 1 },
     });
   });
 });

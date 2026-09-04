@@ -6,6 +6,7 @@ import type {
 } from "../../shared/types.js";
 import {
   isModelExhaustion,
+  isPaidBudgetExhaustion,
   isQuotaRefusal,
   modelFailureText,
 } from "./modelExhaustion.js";
@@ -66,14 +67,11 @@ export class ModelLadderProvider implements LLMProvider {
 
   private nextConfigured(
     after: number,
-    excludedProvider?: LLMProvider["name"],
+    excludedProviders: ReadonlySet<LLMProvider["name"]> = new Set(),
   ): number | null {
     for (let index = after + 1; index < this.rungs.length; index += 1) {
       const candidate = this.rungs[index]!.provider;
-      if (
-        candidate.isConfigured() &&
-        (!excludedProvider || candidate.name !== excludedProvider)
-      ) {
+      if (candidate.isConfigured() && !excludedProviders.has(candidate.name)) {
         return index;
       }
     }
@@ -98,10 +96,12 @@ export class ModelLadderProvider implements LLMProvider {
         // one model ID. Probing every remaining same-family rung only repeats a
         // billable refusal. Model-scoped availability and capacity failures do
         // still walk the configured family ladder.
-        const exhaustedProvider = isQuotaRefusal(error)
-          ? rung.provider.name
-          : undefined;
-        const nextIndex = this.nextConfigured(index, exhaustedProvider);
+        const excludedProviders = isPaidBudgetExhaustion(error)
+          ? new Set<LLMProvider["name"]>(["anthropic", "openai"])
+          : isQuotaRefusal(error)
+            ? new Set<LLMProvider["name"]>([rung.provider.name])
+            : undefined;
+        const nextIndex = this.nextConfigured(index, excludedProviders);
         if (nextIndex === null) throw lastExhaustion;
         const next = this.rungs[nextIndex]!;
         this.onFailover(

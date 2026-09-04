@@ -76,4 +76,11 @@ describe("repository hygiene", () => {
     );
     expect(offenders).toEqual([]);
   });
+
+  it("recursively assigns code owners to GitHub control-plane directories", () => {
+    const codeowners = readFileSync(resolve(ROOT, ".github/CODEOWNERS"), "utf8");
+    expect(codeowners).toContain("/.github/workflows/** @buckeye7066");
+    expect(codeowners).toContain("/.github/ISSUE_TEMPLATE/** @buckeye7066");
+    expect(codeowners).not.toMatch(/^\/\.github\/(?:workflows|ISSUE_TEMPLATE)\/$/m);
+  });
 });

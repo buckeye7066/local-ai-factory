@@ -38,6 +38,11 @@ export function isQuotaRefusal(error: unknown): boolean {
   return QUOTA_SIGNS.some((pattern) => pattern.test(text));
 }
 
+/** A local owner-configured paid cap blocks every paid provider family. */
+export function isPaidBudgetExhaustion(error: unknown): boolean {
+  return (error as { name?: unknown })?.name === "PaidBudgetExhaustedError";
+}
+
 /**
  * True only for a route-scoped exhaustion condition where another model can
  * reasonably serve the same request. Authentication failures, malformed
@@ -46,7 +51,7 @@ export function isQuotaRefusal(error: unknown): boolean {
 export function isModelExhaustion(error: unknown): boolean {
   const name = (error as { name?: unknown })?.name;
   if (name === "ProviderAbortError") return false;
-  if (name === "PaidBudgetExhaustedError") return true;
+  if (isPaidBudgetExhaustion(error)) return true;
   if (name === "ProviderModelUnavailableError") return true;
   const status = (error as { status?: unknown })?.status;
   if (status === 402 || status === 429 || status === 529) return true;

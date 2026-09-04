@@ -15,6 +15,7 @@ import type {
 import { throwIfCancelled } from "./cancellation.js";
 import { redactSecrets } from "../security/redact.js";
 import { snapshotRoute } from "../providers/freeRoute.js";
+import { PaidBudgetExhaustedError } from "../providers/paidBudget.js";
 
 /**
  * stages.ts — pure helpers the orchestrator uses to mutate a RunRecord:
@@ -127,6 +128,19 @@ export class CountingProvider implements LLMProvider {
     }
   }
 
+  private undoTick() {
+    this.run.providerUsage.totalCalls = Math.max(
+      0,
+      this.run.providerUsage.totalCalls - 1,
+    );
+    if (this.attribution === "declared") {
+      this.run.providerUsage[this.name].calls = Math.max(
+        0,
+        this.run.providerUsage[this.name].calls - 1,
+      );
+    }
+  }
+
   private async prepare(): Promise<void> {
     // Catalog lookup and a catalog-proven local refusal are not model calls.
     // Check the cap before doing even that network lookup, then charge only
@@ -149,20 +163,36 @@ export class CountingProvider implements LLMProvider {
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     await this.prepare();
     this.tick();
+    let counted = true;
     try {
       return await this.inner.generateText(input);
+    } catch (error) {
+      // Paid-budget admission fails before provider I/O. It is not a model
+      // call and must leave room for the ladder's terminal free rung.
+      if (error instanceof PaidBudgetExhaustedError) {
+        this.undoTick();
+        counted = false;
+      }
+      throw error;
     } finally {
-      this.creditServed();
+      if (counted) this.creditServed();
     }
   }
 
   async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
     await this.prepare();
     this.tick();
+    let counted = true;
     try {
       return await this.inner.generateJson(input);
+    } catch (error) {
+      if (error instanceof PaidBudgetExhaustedError) {
+        this.undoTick();
+        counted = false;
+      }
+      throw error;
     } finally {
-      this.creditServed();
+      if (counted) this.creditServed();
     }
   }
 }

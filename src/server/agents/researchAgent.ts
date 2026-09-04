@@ -744,6 +744,10 @@ function normalizedPhrase(value: string): string {
     .replace(/\s+/g, " ");
 }
 
+function containsNormalizedPhrase(segment: string, phrase: string): boolean {
+  return ` ${segment} `.includes(` ${phrase} `);
+}
+
 function targetEvidencePhrases(spec: ProductSpec): string[] {
   return [
     ...new Set(
@@ -794,14 +798,14 @@ function coherentEvidenceMatches(
 ): CoherentEvidenceMatch[] {
   const segments = inspectedText
     .split(/(?<=[.!?])\s+|[\r\n]+/)
-    .map((statement) => ({
-      statement: statement.replace(/\s+/g, " ").trim().slice(0, 260),
-      normalized: normalizedPhrase(statement),
-    }))
+    .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
+    .map((statement) => ({ statement, normalized: normalizedPhrase(statement) }))
     .filter((segment) => segment.normalized.length > 0);
 
   return targetEvidencePhrases(spec).flatMap((phrase): CoherentEvidenceMatch[] => {
-    const exact = segments.find((segment) => segment.normalized.includes(phrase));
+    const exact = segments.find((segment) =>
+      containsNormalizedPhrase(segment.normalized, phrase),
+    );
     if (exact) {
       return [
         {
