@@ -987,18 +987,33 @@ const COMPETING_SUBJECTS = new Set([
   "alternatives",
   "competitor",
   "competitors",
+  "others",
   "rival",
   "rivals",
 ]);
 
 const PRODUCT_SUBJECTS = new Set([
   "application",
+  "applications",
+  "companies",
+  "company",
   "platform",
+  "platforms",
   "product",
+  "products",
+  "provider",
+  "providers",
   "service",
+  "services",
   "software",
+  "solution",
+  "solutions",
   "system",
+  "systems",
   "tool",
+  "tools",
+  "vendor",
+  "vendors",
 ]);
 
 /**
