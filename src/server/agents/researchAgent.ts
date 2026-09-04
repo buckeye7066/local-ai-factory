@@ -796,30 +796,44 @@ const POST_FEATURE_NEGATIONS = new Set([
   "lacking",
   "missing",
   "never",
+  "no",
   "not",
   "omitted",
+  "removed",
   "unavailable",
   "unsupported",
 ]);
 
 function isNegatedFeatureSpan(tokens: string[], start: number, end: number): boolean {
   const before = tokens.slice(Math.max(0, start - 6), start);
+  const inside = tokens.slice(start, end + 1);
   const after = tokens.slice(end + 1, Math.min(tokens.length, end + 7));
   return (
     before.some((token) => PRE_FEATURE_NEGATIONS.has(token)) ||
+    inside.some(
+      (token) => PRE_FEATURE_NEGATIONS.has(token) || POST_FEATURE_NEGATIONS.has(token),
+    ) ||
     after.some((token) => POST_FEATURE_NEGATIONS.has(token))
   );
 }
 
-function containsAffirmativePhrase(segment: string, phrase: string): boolean {
+function containsPhraseWithMatchingPolarity(segment: string, phrase: string): boolean {
   const tokens = segment.split(" ").filter(Boolean);
   const phraseTokens = phrase.split(" ").filter(Boolean);
   if (phraseTokens.length === 0 || phraseTokens.length > tokens.length) return false;
+  const targetIsNegated = isNegatedFeatureSpan(
+    phraseTokens,
+    0,
+    phraseTokens.length - 1,
+  );
   for (let start = 0; start <= tokens.length - phraseTokens.length; start += 1) {
     if (!phraseTokens.every((token, offset) => tokens[start + offset] === token)) {
       continue;
     }
-    if (!isNegatedFeatureSpan(tokens, start, start + phraseTokens.length - 1)) {
+    if (
+      isNegatedFeatureSpan(tokens, start, start + phraseTokens.length - 1) ===
+      targetIsNegated
+    ) {
       return true;
     }
   }
@@ -882,7 +896,7 @@ function coherentEvidenceMatches(
 
   return targetEvidencePhrases(spec).flatMap((phrase): CoherentEvidenceMatch[] => {
     const exact = segments.find((segment) =>
-      containsAffirmativePhrase(segment.normalized, phrase),
+      containsPhraseWithMatchingPolarity(segment.normalized, phrase),
     );
     if (exact) {
       return [
@@ -898,6 +912,12 @@ function coherentEvidenceMatches(
 
     const featureTerms = meaningfulTerms(phrase);
     if (featureTerms.length < 2) return [];
+    const phraseTokens = phrase.split(" ").filter(Boolean);
+    const targetIsNegated = isNegatedFeatureSpan(
+      phraseTokens,
+      0,
+      phraseTokens.length - 1,
+    );
     const required =
       featureTerms.length <= 3
         ? featureTerms.length
@@ -923,7 +943,7 @@ function coherentEvidenceMatches(
           negated,
         };
       })
-      .filter((segment) => !segment.negated)
+      .filter((segment) => segment.negated === targetIsNegated)
       .sort((left, right) => right.terms.length - left.terms.length)[0];
     return bestOverlap && bestOverlap.terms.length >= required
       ? [

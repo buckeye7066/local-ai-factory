@@ -297,11 +297,20 @@ export function createAnthropicModelResolver(args: {
     log: args.log,
     signal: args.signal,
     load: async () => {
-      const page = await client.models.list({ limit: 100 }, { signal: args.signal });
-      return page.data.map((model) => ({
-        id: model.id,
-        created: Date.parse(model.created_at) || 0,
-      }));
+      const models: CatalogModel[] = [];
+      // The Models API is newest-first and paginated. A successful first page
+      // is not proof that an older immutable pin is absent, so consume the
+      // SDK's auto-paginating iterator before making availability decisions.
+      for await (const model of client.models.list(
+        { limit: 100 },
+        { signal: args.signal },
+      )) {
+        models.push({
+          id: model.id,
+          created: Date.parse(model.created_at) || 0,
+        });
+      }
+      return models;
     },
   });
 }

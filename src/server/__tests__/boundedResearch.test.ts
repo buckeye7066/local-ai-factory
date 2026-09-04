@@ -287,6 +287,140 @@ describe("bounded production research", () => {
     }
   });
 
+  it("rejects postfix denials of an otherwise exact feature phrase", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    const denials = [
+      "Offline workflow synchronization is no longer supported.",
+      "Offline workflow synchronization was removed.",
+      "Offline workflow synchronization has been removed.",
+      "Offline workflow synchronization is no longer available.",
+      "Offline workflow synchronization is no longer provided.",
+    ];
+    input.candidates.forEach((candidate, index) => {
+      candidate.sourceEvidence[0]!.excerpt = denials[index]!;
+    });
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["offline workflow synchronization"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("requires overlap evidence to share the target requirement's polarity", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "This product can store plaintext credentials.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["do not store plaintext credentials"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("retains evidence whose negative polarity matches a negative target", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "This product does not store plaintext credentials.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["do not store plaintext credentials"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toHaveLength(5);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects a denial embedded between noncontiguous overlap terms", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Offline workflow does not provide durable synchronization.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["offline workflow durable synchronization"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("does not qualify a feature outside the persisted evidence statement", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();
