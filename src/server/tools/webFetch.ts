@@ -360,21 +360,94 @@ function decodeCssEscapes(value: string): string {
     );
 }
 
+type HtmlAttribute = {
+  name: string;
+  value: string;
+};
+
+function actualTagAttributes(rawTag: string): HtmlAttribute[] {
+  const opening = rawTag.match(/^<\s*[a-z][\w:-]*/i);
+  if (!opening) return [];
+
+  const attributes: HtmlAttribute[] = [];
+  let cursor = opening[0].length;
+  while (cursor < rawTag.length) {
+    while (/\s/.test(rawTag[cursor] ?? "")) cursor += 1;
+    const current = rawTag[cursor];
+    if (!current || current === ">" || /^\/\s*>/.test(rawTag.slice(cursor))) break;
+
+    const nameStart = cursor;
+    while (
+      cursor < rawTag.length &&
+      !/[\s=\/>]/.test(rawTag[cursor] ?? "")
+    ) {
+      cursor += 1;
+    }
+    if (cursor === nameStart) {
+      cursor += 1;
+      continue;
+    }
+
+    const name = rawTag.slice(nameStart, cursor).toLowerCase();
+    while (/\s/.test(rawTag[cursor] ?? "")) cursor += 1;
+    let rawValue = "";
+    if (rawTag[cursor] === "=") {
+      cursor += 1;
+      while (/\s/.test(rawTag[cursor] ?? "")) cursor += 1;
+      const quote = rawTag[cursor];
+      if (quote === '"' || quote === "'") {
+        cursor += 1;
+        const valueStart = cursor;
+        while (cursor < rawTag.length && rawTag[cursor] !== quote) cursor += 1;
+        rawValue = rawTag.slice(valueStart, cursor);
+        if (rawTag[cursor] === quote) cursor += 1;
+      } else {
+        const valueStart = cursor;
+        while (
+          cursor < rawTag.length &&
+          !/[\s>]/.test(rawTag[cursor] ?? "")
+        ) {
+          cursor += 1;
+        }
+        rawValue = rawTag.slice(valueStart, cursor);
+      }
+    }
+
+    // Browser HTML parsing decodes character references in attribute values
+    // before CSS/ARIA semantics are evaluated. Decode exactly this one layer;
+    // a second encoded layer must remain literal and non-authoritative.
+    attributes.push({ name, value: decodeHtmlEntities(rawValue) });
+  }
+  return attributes;
+}
+
 function openingTagSuppressesText(tag: string, rawTag: string): boolean {
   if (NON_RENDERED_ELEMENTS.has(tag)) return true;
-  if (/\s(?:hidden|inert)(?=\s|=|\/?\>)/i.test(rawTag)) return true;
-  if (/\saria-hidden\s*=\s*(?:["']true["']|true)(?=\s|\/?\>)/i.test(rawTag)) {
+  const attributes = actualTagAttributes(rawTag);
+  if (attributes.some(({ name }) => name === "hidden" || name === "inert")) {
     return true;
   }
-  const style = rawTag.match(/\sstyle\s*=\s*(?:(["'])([\s\S]*?)\1|([^\s>]+))/i);
-  if (!style) return false;
-  const rawStyle = style?.[2] ?? style?.[3] ?? "";
-  const normalizedStyle = decodeCssEscapes(rawStyle.replace(/\/\*[\s\S]*?\*\//g, ""));
+  if (
+    attributes.some(
+      ({ name, value }) =>
+        name === "aria-hidden" && value.trim().toLowerCase() === "true",
+    )
+  ) {
+    return true;
+  }
+
+  const styles = attributes
+    .filter(({ name }) => name === "style")
+    .map(({ value }) =>
+      decodeCssEscapes(value.replace(/\/\*[\s\S]*?\*\//g, "")),
+    );
   // An unterminated CSS comment makes the remainder of the declaration
   // non-authoritative. Suppress rather than guessing that it renders.
-  if (normalizedStyle.includes("/*")) return true;
-  return /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|content-visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(
-    normalizedStyle,
+  if (styles.some((style) => style.includes("/*"))) return true;
+  return styles.some((style) =>
+    /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|content-visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(
+      style,
+    ),
   );
 }
 
