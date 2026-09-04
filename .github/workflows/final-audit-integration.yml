@@ -110,6 +110,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           source_path = Path('src/server/workspace/verificationCommands.ts')
           source = source_path.read_text()
@@ -127,21 +128,18 @@ jobs:
 
           test_path = Path('src/server/__tests__/verificationCommands.test.ts')
           test = test_path.read_text()
-          old = '''    expect(hostTest).toEqual({
-            bin: "yarn",
-            args: ["test", "--root=."],
-            isTest: true,
-          });'''
-          new = '''    expect(hostTest).toEqual({
-            bin: "yarn",
-            args: ["test", "--root=."],
-            isTest: true,
-            runner: "vitest",
-          });'''
-          count = test.count(old)
+          pattern = re.compile(
+              r'(it\("pins argument-bearing Yarn Vitest scripts to the candidate root", \(\) => \{.*?'
+              r'expect\(hostTest\)\.toEqual\(\{\s*'
+              r'bin: "yarn",\s*'
+              r'args: \["test", "--root=\."\],\s*'
+              r'isTest: true,)(\s*\}\);)',
+              re.S,
+          )
+          test, count = pattern.subn(r'\1\n      runner: "vitest",\2', test, count=1)
           if count != 1:
               raise SystemExit(f'expected one Yarn host-test assertion, found {count}')
-          test_path.write_text(test.replace(old, new, 1))
+          test_path.write_text(test)
           PY
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
