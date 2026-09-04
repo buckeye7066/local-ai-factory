@@ -823,9 +823,12 @@ const DENIAL_PREDICATES = new Set([
 ]);
 
 const POLARITY_SCOPE_BOUNDARIES = new Set([
+  "and",
   "although",
   "but",
   "however",
+  "nor",
+  "or",
   "whereas",
   "yet",
 ]);
@@ -839,6 +842,7 @@ function featureSpanPolarity(
 ): FeaturePolarity {
   const operatorIndexes: number[] = [];
   const denialIndexes: number[] = [];
+  let separatedPolaritySignal = false;
   // `tokens` is already one bounded clause (see coherentEvidenceMatches).
   // Scan the complete clause: a fixed lookaround silently loses valid
   // long-range negation such as "does not under any circumstances ... encrypt".
@@ -854,6 +858,9 @@ function featureSpanPolarity(
           ? tokens.slice(end + 1, index)
           : [];
     if (!inside && between.some((item) => POLARITY_SCOPE_BOUNDARIES.has(item))) {
+      if (POLARITY_OPERATORS.has(token) || DENIAL_PREDICATES.has(token)) {
+        separatedPolaritySignal = true;
+      }
       continue;
     }
 
@@ -882,6 +889,18 @@ function featureSpanPolarity(
   // a one-bit direction cannot safely establish their individual scopes.
   // Fail closed instead of using parity to turn two denials into affirmation.
   if (new Set(denialIndexes.map((index) => tokens[index])).size > 1) {
+    return "ambiguous";
+  }
+  // A coordinator can either begin a new predicate ("does not collect and
+  // does not encrypt") or extend the previous operator's scope ("does not
+  // collect or encrypt"). If the matched predicate has no local signal, the
+  // direction is not provable without syntax, so fail closed instead of
+  // silently treating it as affirmative.
+  if (
+    operatorIndexes.length === 0 &&
+    denialIndexes.length === 0 &&
+    separatedPolaritySignal
+  ) {
     return "ambiguous";
   }
   const flips = operatorIndexes.length + (denialIndexes.length > 0 ? 1 : 0);
@@ -958,8 +977,15 @@ function coherentEvidenceMatches(
 ): CoherentEvidenceMatch[] {
   // Product-page HTML is decoded exactly once by webFetchTool. Re-decoding
   // here would turn double-encoded, visibly literal text into new evidence.
+  const unresolvedEntityMarker = "\uE000";
   const segments = inspectedText
+    // One-boundary decoding deliberately leaves a second encoded layer
+    // visible. Replace unresolved references before splitting so their
+    // semicolon cannot manufacture a new affirmative clause, and reject only
+    // the affected clause from semantic matching.
+    .replace(/&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/gi, unresolvedEntityMarker)
     .split(/(?<=[.!?])\s+|[;:\r\n]+|\b(?:although|but|however|whereas)\b/i)
+    .filter((raw) => !raw.includes(unresolvedEntityMarker))
     .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
     .map((statement) => ({ statement, normalized: normalizedPhrase(statement) }))
     .filter((segment) => segment.normalized.length > 0);
