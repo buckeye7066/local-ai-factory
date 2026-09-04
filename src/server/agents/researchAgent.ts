@@ -998,7 +998,7 @@ function coherentEvidenceMatches(
     // visible. Replace unresolved references before splitting so their
     // semicolon cannot manufacture a new affirmative clause, and reject only
     // the affected clause from semantic matching.
-    .replace(/&(?:#[0-9]+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]+;)/gi, unresolvedEntityMarker)
+    .replace(/&(?:#[0-9]+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]+;?)/gi, unresolvedEntityMarker)
     .split(/(?<=[.!?])\s+|[;:\r\n]+|\b(?:although|but|however|whereas)\b/i)
     .filter((raw) => !raw.includes(unresolvedEntityMarker))
     .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
@@ -1027,6 +1027,10 @@ function coherentEvidenceMatches(
     // phrase path above; otherwise two generic words can manufacture support
     // for a materially different capability.
     if (featureTerms.length < 3) return [];
+    // Approximate evidence must retain the target's leading defining terms,
+    // not merely most of its nouns. This keeps a different action such as
+    // "export" from standing in for "encrypt" through high lexical overlap.
+    const definingTerms = featureTerms.slice(0, Math.min(2, featureTerms.length));
     const phraseTokens = phrase.split(" ").filter(Boolean);
     const targetPolarity = featureSpanPolarity(
       phraseTokens,
@@ -1065,7 +1069,9 @@ function coherentEvidenceMatches(
       })
       .filter((segment) => segment.polarity === targetPolarity)
       .sort((left, right) => right.terms.length - left.terms.length)[0];
-    return bestOverlap && bestOverlap.terms.length >= required
+    return bestOverlap &&
+      bestOverlap.terms.length >= required &&
+      definingTerms.every((term) => bestOverlap.terms.includes(term))
       ? [
           {
             phrase,
