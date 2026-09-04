@@ -1065,7 +1065,10 @@ const FUTURE_PERIODS = new Set([
 ]);
 
 function featureSpanIsCurrent(tokens: string[], start: number, end: number): boolean {
-  const context = tokens.filter((_token, index) => index < start || index > end);
+  // Inspect the entire clause for prospective/future markers.
+  // For exact contiguous matches, future language cannot sit inside the phrase;
+  // for approximate overlap, intervening tokens between matched terms must be visible.
+  const context = tokens;
   if (context.some((token) => PROSPECTIVE_EVIDENCE_MARKERS.has(token))) {
     return false;
   }
