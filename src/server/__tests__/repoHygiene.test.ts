@@ -21,7 +21,9 @@ describe("repository hygiene", () => {
   });
 
   it("uses one authoritative pnpm lockfile", () => {
-    const pkg = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8")) as {
+    const pkg = JSON.parse(
+      readFileSync(resolve(ROOT, "package.json"), "utf8"),
+    ) as {
       packageManager?: string;
     };
     expect(pkg.packageManager).toMatch(/^pnpm@/);
@@ -33,8 +35,12 @@ describe("repository hygiene", () => {
 
   it("does not track failed proof receipts as current evidence", () => {
     const failed: string[] = [];
-    for (const path of trackedFiles().filter((name) => /^docs\/evidence\/.*-proof\.json$/i.test(name))) {
-      const data = JSON.parse(readFileSync(resolve(ROOT, path), "utf8")) as { ok?: unknown };
+    for (const path of trackedFiles().filter((name) =>
+      /^docs\/evidence\/.*-proof\.json$/i.test(name),
+    )) {
+      const data = JSON.parse(readFileSync(resolve(ROOT, path), "utf8")) as {
+        ok?: unknown;
+      };
       if (data.ok !== true) failed.push(path);
     }
     expect(failed).toEqual([]);
@@ -42,8 +48,10 @@ describe("repository hygiene", () => {
 
   it("contains no developer-specific Windows user path in executable source", () => {
     const offenders: string[] = [];
-    const executable = trackedFiles().filter((path) =>
-      /^(?:src|scripts|\.github)\//.test(path) && /\.(?:ts|tsx|js|mjs|cjs|ps1|cmd|ya?ml)$/i.test(path),
+    const executable = trackedFiles().filter(
+      (path) =>
+        /^(?:src|scripts|\.github)\//.test(path) &&
+        /\.(?:ts|tsx|js|mjs|cjs|ps1|cmd|ya?ml)$/i.test(path),
     );
     for (const path of executable) {
       const text = readFileSync(resolve(ROOT, path), "utf8");
