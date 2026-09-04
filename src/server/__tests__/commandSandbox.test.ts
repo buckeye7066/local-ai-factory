@@ -118,6 +118,31 @@ describe("#2/#3 model-authored scripts require explicit approval", () => {
     expect(res.allowed).toBe(false);
     expect(res.reason).toMatch(/restricted OS account/i);
   });
+
+  it("refuses approved project code when no integrated sandbox is configured", async () => {
+    const ws = tmp();
+    const image = process.env.FACTORY_VERIFICATION_SANDBOX_IMAGE;
+    const state = process.env.FACTORY_VERIFICATION_SANDBOX_STATE_ROOT;
+    delete process.env.FACTORY_VERIFICATION_SANDBOX_IMAGE;
+    delete process.env.FACTORY_VERIFICATION_SANDBOX_STATE_ROOT;
+    try {
+      const res = await runCommand(
+        { bin: "pnpm", args: ["test"], cwd: ws },
+        { workspaceRoot: ws, allowScriptExecution: true },
+      );
+      expect(res.executed).toBe(false);
+      expect(res.allowed).toBe(false);
+      expect(res.reason).toMatch(/require a configured verification sandbox/i);
+    } finally {
+      if (image === undefined) delete process.env.FACTORY_VERIFICATION_SANDBOX_IMAGE;
+      else process.env.FACTORY_VERIFICATION_SANDBOX_IMAGE = image;
+      if (state === undefined) {
+        delete process.env.FACTORY_VERIFICATION_SANDBOX_STATE_ROOT;
+      } else {
+        process.env.FACTORY_VERIFICATION_SANDBOX_STATE_ROOT = state;
+      }
+    }
+  });
 });
 
 describe("engine-owned npx verification grammar", () => {

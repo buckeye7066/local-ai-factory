@@ -124,7 +124,7 @@ export function App() {
     };
   }, [refreshRuns]);
 
-  // Start a run. Every run is real work — there is no demo/simulate path.
+  // Start either a live run or the explicitly labelled, delivery-gated demo.
   const startRun = useCallback(
     async (idea: string, options: RunOptions) => {
       setStarting(true);
@@ -176,7 +176,7 @@ export function App() {
         } else {
           toast.warning("Run finished without a verified ready outcome", {
             description: run.demo
-              ? "This was a simulation; mock output is never delivered."
+              ? "This was an offline demo; mock output is never delivered or production-ready."
               : "Open the run for its delivery and verification status.",
           });
         }

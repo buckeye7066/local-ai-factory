@@ -2,15 +2,13 @@
  * removedOptions.ts — options that were REMOVED from Factory Deck's owner
  * surface and must now fail loudly.
  *
- * Owner order: there are no dry-run / simulate / report-only / test-mode
- * options in owner tooling. "Removed" means an invocation that names the old
- * flag FAILS. It is never silently ignored (that turns an owner's real request
- * into a no-op), and it is never downgraded into a confirmation prompt (that is
- * the same guardrail wearing a different hat).
+ * Dry-run / simulate / report-only remain removed because they imply a real
+ * run without doing one. demo:true is different: it is an explicit,
+ * owner-visible zero-credit preview whose records are permanently marked
+ * demo and whose delivery/readiness gates refuse production side effects.
  *
- * The mock/stub providers still exist, but ONLY as in-process fixtures for the
- * unit suite, which calls runFactory()/startRun() directly and never crosses
- * the HTTP boundary. Nothing an owner can reach may request simulated output.
+ * "Removed" means an invocation that names an old flag FAILS. It is never
+ * silently ignored and never downgraded into a confirmation prompt.
  */
 
 /** A removed option and the message explaining what to do instead. */
@@ -21,14 +19,12 @@ export interface RemovedOption {
 }
 
 const NO_SIMULATION =
-  "Factory Deck has no demo, mock, or simulate mode — every run does real " +
-  "work against real providers. Start the FREE route " +
-  '("Claude Code - FREE (Ollama)") or set a paid ANTHROPIC_API_KEY / ' +
-  "OPENAI_API_KEY.";
+  "Factory Deck does not support dry-run, simulate, or report-only no-ops. " +
+  "Use options.demo=true for a clearly marked, zero-credit offline preview, " +
+  "or omit the flag for real work.";
 
 /** Options removed from `POST /api/runs` and `POST /api/epics` `options`. */
 export const REMOVED_RUN_OPTIONS: readonly RemovedOption[] = [
-  { key: "demo", message: NO_SIMULATION },
   { key: "dryRun", message: NO_SIMULATION },
   { key: "simulate", message: NO_SIMULATION },
   { key: "reportOnly", message: NO_SIMULATION },

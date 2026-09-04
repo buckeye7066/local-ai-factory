@@ -532,6 +532,21 @@ function clipRemovesText(property: string, value: string): boolean {
   );
 }
 
+function transparentTextColor(value: string): boolean {
+  const normalized = value.toLowerCase().replace(/\s+/g, "").trim();
+  if (normalized === "transparent") return true;
+  if (/^#[0-9a-f]{3}0$/i.test(normalized) || /^#[0-9a-f]{6}00$/i.test(normalized)) {
+    return true;
+  }
+  const slashAlpha = normalized.match(/\/([^/)]+)\)$/)?.[1];
+  const legacyAlpha = normalized
+    .match(/^(?:rgba|hsla)\((.*)\)$/)?.[1]
+    ?.split(",")
+    .at(-1);
+  const alpha = slashAlpha ?? legacyAlpha;
+  return alpha !== undefined && cssZero(alpha);
+}
+
 function propertyValuesSuppressText(get: (property: string) => string): boolean {
   const display = get("display").trim().toLowerCase();
   const visibility = get("visibility").trim().toLowerCase();
@@ -557,8 +572,8 @@ function propertyValuesSuppressText(get: (property: string) => string): boolean 
     transformCollapsesText(get("transform")) ||
     clipRemovesText("clip", get("clip")) ||
     clipRemovesText("clip-path", get("clip-path")) ||
-    color === "transparent" ||
-    textFill === "transparent" ||
+    transparentTextColor(color) ||
+    transparentTextColor(textFill) ||
     cssZero(get("font-size")) ||
     zeroSizedAndClipped
   );

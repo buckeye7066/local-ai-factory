@@ -23,8 +23,8 @@ import {
  *  - SCRIPT GATE: any allowlisted command is refused unless
  *    `allowScriptExecution` is enabled — including dependency installs. The
  *    server keeps it disabled by default because cwd containment is not an OS
- *    sandbox. An owner may opt in only when Factory Deck itself runs inside a
- *    disposable container/VM with a workspace-only writable mount. An install is
+ *    sandbox. Approval alone is insufficient: the runner also requires its
+ *    integrated Linux container or restricted Windows/macOS account. An install is
  *    NOT safe by itself: a generated `.pnpmfile.cjs` runs project-controlled
  *    code during resolution, and `--ignore-scripts` does NOT disable it. So
  *    installs are gated with everything else, and when executed they
@@ -50,9 +50,8 @@ import {
  *    purpose; rebuild's exposure is bounded to lockfile packages' own gyp
  *    builds (no `.pnpmfile.cjs`, no arbitrary workspace scripts).
  *
- * NOTE: `isInsideWorkspace` remains only a cwd boundary. When
- * FACTORY_VERIFICATION_SANDBOX_IMAGE is configured on Linux, every generated
- * command is additionally executed in a locked-down container with only the
+ * NOTE: `isInsideWorkspace` remains only a cwd boundary. On Linux, every
+ * approved generated command executes in a configured locked-down container with only the
  * workspace and an empty per-run state directory mounted writable. Windows and
  * macOS cloud proofs require a dedicated low-privilege account whose only
  * writable roots are the candidate and an empty per-run cache directory.
@@ -503,8 +502,8 @@ export interface RunCommandOptions {
   /**
    * Approval to execute model-authored scripts/binaries (test, build, run,
    * typecheck, npx). The server passes config.allowUntrustedScripts, which
-   * defaults to FALSE because this module is not an OS sandbox. Enable only
-   * when the whole Factory Deck process is externally sandboxed.
+   * defaults to FALSE because this module is not an OS sandbox. Enabling it
+   * still requires a configured, integrated verification sandbox.
    */
   allowScriptExecution?: boolean;
   /** Require a dedicated low-privilege OS account (Windows/macOS cloud proof). */
@@ -642,6 +641,11 @@ export async function runCommand(
     if (opts.requireHostSandbox && !hostSandbox) {
       return refuse(
         "Refused: cross-platform proof requires a dedicated restricted OS account.",
+      );
+    }
+    if (isScriptExecuting(req.bin, req.args) && !sandbox && !hostSandbox) {
+      return refuse(
+        "Refused: approved untrusted commands require a configured verification sandbox; host execution is disabled.",
       );
     }
     if (sandbox && hostSandbox) {

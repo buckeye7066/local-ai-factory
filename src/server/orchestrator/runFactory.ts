@@ -18,7 +18,7 @@ import type {
   GoalContract,
   CompetitiveResearchSummary,
 } from "../../shared/schemas.js";
-import { freshStages } from "../../shared/schemas.js";
+import { freshStages, isValidRunId } from "../../shared/schemas.js";
 import type { FileEdit } from "../../shared/schemas.js";
 import type {
   LLMProvider,
@@ -203,6 +203,8 @@ export interface StartRunArgs {
   options: RunOptions;
   config: AppConfig;
   secrets: AppSecrets;
+  /** Pre-reserved by the atomic HTTP idempotency store. */
+  runId?: string;
 }
 
 /**
@@ -501,6 +503,10 @@ export function createTierProvider(
 /** Create the initial queued record. Providers are resolved at queue time. */
 function createRecord(args: StartRunArgs): RunRecord {
   const { config, secrets, options } = args;
+  const id = args.runId ?? randomUUID();
+  if (!isValidRunId(id)) {
+    throw new Error("Refused: run id is not a valid UUID.");
+  }
   const registry = createProviderRegistry(config, secrets);
   // Explicit demo only. Missing live capacity must never coerce to mock success.
   const demo = options.demo === true;
@@ -532,7 +538,7 @@ function createRecord(args: StartRunArgs): RunRecord {
     : selectRunRouting(options, registry, config);
 
   return {
-    id: randomUUID(),
+    id,
     // Persisted + API-served copy: redact secret-shaped content. The RAW idea is
     // still passed to the model from `args.idea` (see executeRun) so generation
     // is unaffected — only the durable/served copy is scrubbed.
@@ -1211,10 +1217,12 @@ async function executeRun(
     testResult: "passing" | "failing" | "skipped" | "unknown" | "not_run",
     auditSeq: number | null,
   ) => {
+    const attributionCheckpoint = await getRunCheckpoint(run.id).catch(() => null);
     const attr = buildAttribution(run, {
       allowUntrustedScripts: config.allowUntrustedScripts,
       testResult,
       auditSeq,
+      checkpoint: attributionCheckpoint,
     });
     const path = await writeAttribution(attr);
     run.attribution = attr;

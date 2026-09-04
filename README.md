@@ -180,12 +180,13 @@ This is designed to be safe to run on your own machine:
 - **Generated files are jailed to `./workspaces`.** Writes go through
   `safeResolve`, which rejects absolute paths and `..` traversal
   (`src/server/workspace/fileWriter.ts`).
-- **Generated commands are blocked by default.** The allowlist and `shell: false`
-  reduce command-injection risk, but a process whose current directory is a
-  workspace is **not** contained there by the operating system. Keep
-  `ALLOW_UNTRUSTED_SCRIPTS=false` unless Factory Deck itself runs in a disposable
-  container/VM with a workspace-only writable mount, no host secrets, and an
-  appropriate network policy (`src/server/workspace/commandRunner.ts`).
+- **Generated commands fail closed without a sandbox.** The allowlist and
+  `shell: false` reduce command-injection risk, but cwd is not containment.
+  `ALLOW_UNTRUSTED_SCRIPTS=true` is only an approval gate; Linux additionally
+  requires `FACTORY_VERIFICATION_SANDBOX_IMAGE` and an isolated
+  `FACTORY_VERIFICATION_SANDBOX_STATE_ROOT`. Windows/macOS proof jobs require
+  their dedicated restricted-account settings. No configured sandbox means no
+  generated command is spawned (`src/server/workspace/commandRunner.ts`).
 
 ## Cost control
 

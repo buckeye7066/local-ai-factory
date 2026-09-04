@@ -277,6 +277,9 @@ describe("webFetchTool readable HTML extraction", () => {
     "clip: rect(0, 0, 0, 0)",
     "clip-path: inset(50%)",
     "font-size: 0",
+    "color: transparent",
+    "color: rgba(0, 0, 0, 0)",
+    "color: #0000",
   ])("rejects text hidden by a visual CSS technique: %s", async (declaration) => {
     const fetch = vi.fn(async () =>
       Promise.resolve(

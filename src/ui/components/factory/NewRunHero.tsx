@@ -44,10 +44,9 @@ export function NewRunHero({
   onStart: (idea: string, options: RunOptions) => void;
 }) {
   const [idea, setIdea] = useState("");
-  // Demo/simulate mode is not an owner surface — a run without a provider
-  // fails loudly with the real missing-credential error instead of silently
-  // producing a mock app. The option no longer exists at all: the server
-  // rejects options.demo outright.
+  // Explicit zero-credit preview. This never activates implicitly when live
+  // providers are unavailable and the server permanently delivery-gates it.
+  const [offlineDemo, setOfflineDemo] = useState(false);
   const [runMode, setRunMode] = useState<"new" | "extend" | "portfolio">("new");
   // The owner names a brand-new app/repo up front. Factory Deck never invents
   // one and never buries the build in an anonymous workspace folder.
@@ -57,12 +56,25 @@ export function NewRunHero({
   // up by PromoPilot; unchecked, it is still built, saved to GitHub, and
   // hosted - just never listed or promoted.
   const [publish, setPublish] = useState(true);
-  const nameCheck = useRepoNameCheck(repoName);
+  const nameCheck = useRepoNameCheck(repoName, !offlineDemo);
 
   // Every owner submission selects the one orchestrated route. Legacy tier
   // values remain readable on the server but are never emitted by this UI.
   const startWithRouting = (ideaText: string, options: RunOptions) =>
-    onStart(ideaText, { ...options, routingMode: "auto" });
+    onStart(ideaText, {
+      ...options,
+      routingMode: "auto",
+      ...(offlineDemo && options.mode === "new"
+        ? {
+            demo: true,
+            publish: false,
+            pushToOrigin: false,
+            newRepo: options.newRepo
+              ? { ...options.newRepo, createRemote: false }
+              : undefined,
+          }
+        : {}),
+    });
 
   const start = () => {
     const trimmed = idea.trim();
@@ -70,7 +82,11 @@ export function NewRunHero({
     startWithRouting(trimmed, {
       publish,
       mode: "new",
-      newRepo: { name: repoName.trim(), private: true },
+      newRepo: {
+        name: repoName.trim(),
+        private: true,
+        ...(offlineDemo ? { createRemote: false } : {}),
+      },
     });
   };
 
@@ -120,7 +136,11 @@ export function NewRunHero({
             },
           ]}
           active={runMode}
-          onChange={(id) => setRunMode(id as "new" | "extend" | "portfolio")}
+          onChange={(id) => {
+            const next = id as "new" | "extend" | "portfolio";
+            setRunMode(next);
+            if (next !== "new") setOfflineDemo(false);
+          }}
         />
       </motion.div>
 
@@ -131,19 +151,42 @@ export function NewRunHero({
 
       {runMode === "new" && (
         <motion.div variants={slideUp} className="mx-auto mt-4 max-w-3xl">
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-amber-300/20 bg-amber-300/[0.04] p-3 text-sm text-slate-300 transition-colors hover:bg-amber-300/[0.07]">
+            <input
+              type="checkbox"
+              checked={offlineDemo}
+              onChange={(event) => setOfflineDemo(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-amber-300"
+            />
+            <span>
+              <span className="font-medium text-white">
+                Offline demo — zero paid credits
+              </span>
+              <span className="block text-xs text-slate-400">
+                Build a deterministic mock preview in an isolated workspace. Demo output
+                is never delivered, published, deployed, or marked production-ready.
+              </span>
+            </span>
+          </label>
+        </motion.div>
+      )}
+
+      {runMode === "new" && (
+        <motion.div variants={slideUp} className="mx-auto mt-4 max-w-3xl">
           <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/5 bg-white/[0.03] p-3 text-sm text-slate-300 transition-colors hover:bg-white/[0.05]">
             <input
               type="checkbox"
               checked={publish}
               onChange={(e) => setPublish(e.target.checked)}
+              disabled={offlineDemo}
               className="mt-0.5 h-4 w-4 accent-aurora-violet"
             />
             <span>
               <span className="font-medium text-white">Publish this app</span>
               <span className="block text-xs text-slate-400">
-                List the finished app in your Axiom BioLabs app store and let PromoPilot
-                promote it. Uncheck for something that is just for you - it still gets
-                built, saved to GitHub, and hosted, but never listed or promoted.
+                {offlineDemo
+                  ? "Disabled for offline demos."
+                  : "List the finished app in your Axiom BioLabs app store and let PromoPilot promote it. Uncheck for something that is just for you - it still gets built, saved to GitHub, and hosted, but never listed or promoted."}
               </span>
             </span>
           </label>
@@ -168,6 +211,7 @@ export function NewRunHero({
           health={health}
           starting={starting}
           start={start}
+          offlineDemo={offlineDemo}
         />
       )}
     </motion.div>
@@ -420,7 +464,7 @@ interface NameCheck {
  * could not check may still collide, and saying otherwise would be a claim the
  * UI did not verify.
  */
-function useRepoNameCheck(name: string): NameCheck {
+function useRepoNameCheck(name: string, checkRemote = true): NameCheck {
   const trimmed = name.trim();
   const problem = trimmed ? repoNameProblem(trimmed) : null;
   const [state, setState] = useState<Omit<NameCheck, "problem">>({
@@ -431,7 +475,7 @@ function useRepoNameCheck(name: string): NameCheck {
   });
 
   useEffect(() => {
-    if (!trimmed || problem) {
+    if (!trimmed || problem || !checkRemote) {
       setState({
         availability: "idle",
         fullName: null,
@@ -468,7 +512,7 @@ function useRepoNameCheck(name: string): NameCheck {
       active = false;
       clearTimeout(timer);
     };
-  }, [trimmed, problem]);
+  }, [trimmed, problem, checkRemote]);
 
   return { problem, ...state };
 }
@@ -482,6 +526,7 @@ function NewAppPanel({
   health,
   starting,
   start,
+  offlineDemo,
 }: {
   idea: string;
   setIdea: (v: string) => void;
@@ -491,11 +536,12 @@ function NewAppPanel({
   health: Health | null;
   starting: boolean;
   start: () => void;
+  offlineDemo: boolean;
 }) {
   const nameReady =
     repoName.trim().length > 0 &&
     !nameCheck.problem &&
-    nameCheck.availability !== "exists";
+    (offlineDemo || nameCheck.availability !== "exists");
 
   return (
     <>
@@ -507,7 +553,9 @@ function NewAppPanel({
           htmlFor="repo-name"
           className="mb-2 block text-xs font-medium text-slate-400"
         >
-          Name your app / repo (a private GitHub repo is created with this name)
+          {offlineDemo
+            ? "Name your demo app (kept in its isolated workspace)"
+            : "Name your app / repo (a private GitHub repo is created with this name)"}
         </label>
         <Input
           id="repo-name"
@@ -517,7 +565,11 @@ function NewAppPanel({
           aria-label="App and repository name"
         />
         <div className="mt-2 min-h-[1.25rem] text-[11px]">
-          {nameCheck.problem ? (
+          {offlineDemo && !nameCheck.problem ? (
+            <span className="text-amber-300">
+              Offline demo only — no GitHub repository will be created.
+            </span>
+          ) : nameCheck.problem ? (
             <span className="text-red-300">{nameCheck.problem}</span>
           ) : nameCheck.checking ? (
             <span className="text-slate-500">Checking GitHub…</span>
@@ -580,7 +632,7 @@ function NewAppPanel({
             icon={<Rocket className="h-4.5 w-4.5" />}
             className="group"
           >
-            Start Factory Run
+            {offlineDemo ? "Start Offline Demo" : "Start Factory Run"}
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </Button>
         </div>

@@ -815,6 +815,7 @@ export function isMeaningfulProductEvidence(
   const text = result.textExcerpt.trim();
   if (
     !result.ok ||
+    result.truncated === true ||
     !/^(?:text\/|application\/(?:json|ld\+json|xml|xhtml\+xml))/i.test(
       result.contentType.trim(),
     ) ||

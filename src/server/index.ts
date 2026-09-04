@@ -45,11 +45,7 @@ import {
 } from "./storage/runsStore.js";
 import { rollbackWorkspace } from "./workspace/cleanup.js";
 import { githubLogin, githubRepoExists } from "./workspace/gitOps.js";
-import {
-  lookupIdempotency,
-  rememberIdempotency,
-  isIdempotencyConflict,
-} from "./storage/idempotency.js";
+import { startIdempotently } from "./storage/idempotency.js";
 import { appendAuditEvent } from "./storage/auditLog.js";
 import { authorizeApiRequest, resolveBindHost } from "./security/access.js";
 import { snapshotRoute, getThresholds, probeLiveness } from "./providers/freeRoute.js";
@@ -334,13 +330,14 @@ function validRunIdParam(req: Request, res: Response): string | null {
 }
 
 /**
- * Reject any request that names a REMOVED run option (demo / dryRun /
- * simulate / reportOnly). The decision itself lives in removedOptions.ts so it
+ * Reject any request that names a removed no-op option (dryRun / simulate /
+ * reportOnly). Explicit demo runs are accepted and remain delivery-gated.
+ * The decision itself lives in removedOptions.ts so it
  * is unit-testable without booting the server.
  *
  * @returns true when the request was rejected (the caller must stop).
  */
-function rejectRemovedDemoOption(req: Request, res: Response): boolean {
+function rejectRemovedRunOption(req: Request, res: Response): boolean {
   const rejection = findRemovedRunOption(req.body?.options);
   if (!rejection) return false;
   res.status(rejection.status).json(rejection.body);
@@ -380,7 +377,7 @@ app.post(
       });
       return;
     }
-    if (rejectRemovedDemoOption(req, res)) return;
+    if (rejectRemovedRunOption(req, res)) return;
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
       const first = parsed.error.issues[0];
@@ -396,25 +393,6 @@ app.post(
         : "";
     const idempotencyKey = parsed.data.idempotencyKey?.trim() || headerKey || undefined;
 
-    if (idempotencyKey) {
-      if (await isIdempotencyConflict(idempotencyKey, idea)) {
-        res.status(409).json({
-          error: "Idempotency-Key was already used with a different idea.",
-        });
-        return;
-      }
-      const existing = await lookupIdempotency(idempotencyKey, idea);
-      if (existing) {
-        await appendAuditEvent({
-          type: "idempotency.hit",
-          runId: existing.runId,
-          detail: idempotencyKey,
-        });
-        res.status(200).json({ runId: existing.runId, idempotent: true });
-        return;
-      }
-    }
-
     // A from-scratch app must be named by the owner, and the name has to be
     // one GitHub will actually accept and is not already taken — checked HERE,
     // before a multi-hour build, not at delivery time when it is too late to
@@ -427,7 +405,7 @@ app.post(
         res.status(400).json({ error: `Invalid repo name: ${problem}` });
         return;
       }
-      if (newRepo.createRemote !== false) {
+      if (parsed.data.demo !== true && newRepo.createRemote !== false) {
         const owner =
           newRepo.owner?.trim() ||
           process.env.FACTORY_GITHUB_OWNER?.trim() ||
@@ -449,15 +427,56 @@ app.post(
       }
     }
 
-    const options = { ...parsed.data, idempotencyKey };
-    let run;
+    const options = parsed.data.demo
+      ? {
+          ...parsed.data,
+          demo: true,
+          publish: false,
+          pushToOrigin: false,
+          newRepo: parsed.data.newRepo
+            ? { ...parsed.data.newRepo, createRemote: false }
+            : undefined,
+          idempotencyKey,
+        }
+      : { ...parsed.data, idempotencyKey };
+    let run: ReturnType<typeof startRun>;
     try {
       // Bind a directed WorkTheme for the whole async run subtree so every
       // rotated/concurrent model stays on the same open issue (ALS propagates
       // into saveRun().then(executeRun) when started inside this wrapper).
-      run = underWorkTheme({ idea, stage: "build" }, () =>
-        startRun({ idea, options, config, secrets }),
-      );
+      if (idempotencyKey) {
+        const outcome = await startIdempotently(idempotencyKey, idea, (reservedRunId) =>
+          underWorkTheme({ idea, stage: "build" }, () =>
+            startRun({
+              idea,
+              options,
+              config,
+              secrets,
+              runId: reservedRunId,
+            }),
+          ),
+        );
+        if (outcome.status === "conflict") {
+          res.status(409).json({
+            error: "Idempotency-Key was already used with a different idea.",
+          });
+          return;
+        }
+        if (outcome.status === "existing") {
+          await appendAuditEvent({
+            type: "idempotency.hit",
+            runId: outcome.runId,
+            detail: idempotencyKey,
+          });
+          res.status(200).json({ runId: outcome.runId, idempotent: true });
+          return;
+        }
+        run = outcome.value;
+      } else {
+        run = underWorkTheme({ idea, stage: "build" }, () =>
+          startRun({ idea, options, config, secrets }),
+        );
+      }
     } catch (err) {
       if (err instanceof MissingProviderCredentialError) {
         res.status(409).json({
@@ -468,14 +487,12 @@ app.post(
             "Start the FREE route (run the 'Claude Code - FREE (Ollama)' shortcut, " +
             "or set FACTORY_FREE_ENABLED=1 with fcc-server running). " +
             "A paid ANTHROPIC_API_KEY / OPENAI_API_KEY is optional and used only " +
-            "as a rescue tier. There is no offline/mock fallback.",
+            "as a rescue tier. For a clearly marked zero-credit preview, set " +
+            "options.demo=true; demo output is never released.",
         });
         return;
       }
       throw err;
-    }
-    if (idempotencyKey) {
-      await rememberIdempotency(idempotencyKey, idea, run.id);
     }
     res.status(201).json({ runId: run.id });
   }),
@@ -668,12 +685,19 @@ app.post(
       res.status(400).json({ error: "Field 'idea' is required." });
       return;
     }
-    if (rejectRemovedDemoOption(req, res)) return;
+    if (rejectRemovedRunOption(req, res)) return;
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
       res
         .status(400)
         .json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
+      return;
+    }
+    if (parsed.data.demo) {
+      res.status(400).json({
+        error:
+          "Offline demo is available for a single /api/runs job only; epic planning requires live providers.",
+      });
       return;
     }
     // Validate the selected economic tier before returning 202. Previously a
