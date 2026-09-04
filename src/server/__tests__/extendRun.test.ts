@@ -78,7 +78,7 @@ describe("extend mode (end-to-end, offline mock)", () => {
     expect(run.finalReport).not.toBeNull();
   }, 40_000);
 
-  it("operates directly on the real path when repoSource.inPlace is explicitly set", async () => {
+  it("forces an explicit demo inPlace request into an isolated copy", async () => {
     const src = await makeExistingRepo();
     const workspaceRoot = await mkdtemp(join(tmpdir(), "factory-extend-ws2-"));
     cleanupPaths.push(workspaceRoot);
@@ -97,23 +97,21 @@ describe("extend mode (end-to-end, offline mock)", () => {
     });
 
     expect(run.status).toBe("completed");
-    expect(resolve(run.workspacePath ?? "")).toBe(resolve(src));
+    expect(resolve(run.workspacePath ?? "")).not.toBe(resolve(src));
     const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
       cwd: src,
     })
       .toString()
       .trim();
-    // PARKING FIX (2026-08-16): the run's work lives on its own
-    // factory-deck/<id> branch, but the owner's working tree is put BACK on
-    // the branch they started on. Leaving a real repo parked on the run's
-    // branch is the FlexFactor defect that stranded five repos.
+    // Zero-credit mock output never creates or checks out a run branch in the
+    // owner's repository, even when the request explicitly asks for inPlace.
     expect(branch).not.toMatch(/^factory-deck\//);
     const runBranches = execFileSync("git", ["branch", "--list", "factory-deck/*"], {
       cwd: src,
     })
       .toString()
       .trim();
-    expect(runBranches).toMatch(/factory-deck\//);
+    expect(runBranches).toBe("");
   }, 40_000);
 
   it("greenfield 'new' mode is unaffected — same behavior as before extend mode existed", async () => {

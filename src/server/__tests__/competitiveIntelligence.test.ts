@@ -283,6 +283,14 @@ describe("competitive discovery", () => {
         textExcerpt: "A real product page with features and workflows. ".repeat(8),
       }),
     ).toBe(true);
+    expect(
+      isMeaningfulProductEvidence({
+        ...base,
+        contentType: "text/html; charset=utf-8",
+        textExcerpt: "An incomplete product page with plausible features. ".repeat(8),
+        truncated: true,
+      }),
+    ).toBe(false);
   });
 
   it("requires redirect continuity and product-relevant evidence for the strict gate", () => {

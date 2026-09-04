@@ -43,6 +43,12 @@ export default defineConfig({
     // ceiling never hides a real failure, it only stops load from inventing
     // one. (Forks-per-file was tried first and made it worse: more processes,
     // more contention.)
+    // Full-run integration tests intentionally share one durable audit/history
+    // store. Running those files in parallel creates an artificial multi-app
+    // workload against the same singleton state and can make unrelated tests
+    // consume each other's bounded lock wait. Cross-process locking is proven
+    // separately in processFileLock.test.ts with real child processes.
+    fileParallelism: false,
     testTimeout: 60_000,
     hookTimeout: 60_000,
   },

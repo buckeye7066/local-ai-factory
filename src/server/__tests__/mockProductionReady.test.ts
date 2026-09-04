@@ -129,6 +129,17 @@ describe("mock end-to-end job (#242)", () => {
     expect(run.attribution?.testResult).toBe("unknown");
     expect(run.attribution?.commitPath).toBeTruthy();
     expect(run.attribution?.rollbackPath).toBe(run.workspacePath);
+    expect(run.attribution?.generatedFiles.length).toBeGreaterThan(0);
+    expect(
+      run.attribution?.generatedFiles.every((file) =>
+        /^[a-f0-9]{64}$/.test(file.sha256),
+      ),
+    ).toBe(true);
+    expect(run.attribution?.verifiedCommitSha).toBeNull();
+    expect(run.attribution?.approval.evidenceDigest).toBeNull();
+    expect(run.attribution?.approval.approved).toBeNull();
+    expect(run.attribution?.testReceipt?.digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(run.attribution?.rollback?.workspacePath).toBe(run.workspacePath);
     await access(run.attribution!.commitPath!);
     const attrRaw = await readFile(run.attribution!.commitPath!, "utf8");
     const attr = JSON.parse(attrRaw);

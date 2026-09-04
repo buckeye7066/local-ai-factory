@@ -18,7 +18,7 @@ import type {
   GoalContract,
   CompetitiveResearchSummary,
 } from "../../shared/schemas.js";
-import { freshStages } from "../../shared/schemas.js";
+import { freshStages, isValidRunId } from "../../shared/schemas.js";
 import type { FileEdit } from "../../shared/schemas.js";
 import type {
   LLMProvider,
@@ -115,7 +115,7 @@ import {
   getRunForExecution,
 } from "../storage/runsStore.js";
 import { appendCheckpointCommandOutput, type FactoryCheckpoint } from "./checkpoint.js";
-import { appendAuditEvent } from "../storage/auditLog.js";
+import { appendAuditEvent, verifyAuditChain } from "../storage/auditLog.js";
 import { buildAttribution, writeAttribution } from "../storage/attribution.js";
 import {
   makeLog,
@@ -203,6 +203,8 @@ export interface StartRunArgs {
   options: RunOptions;
   config: AppConfig;
   secrets: AppSecrets;
+  /** Pre-reserved by the atomic HTTP idempotency store. */
+  runId?: string;
 }
 
 /**
@@ -501,6 +503,10 @@ export function createTierProvider(
 /** Create the initial queued record. Providers are resolved at queue time. */
 function createRecord(args: StartRunArgs): RunRecord {
   const { config, secrets, options } = args;
+  const id = args.runId ?? randomUUID();
+  if (!isValidRunId(id)) {
+    throw new Error("Refused: run id is not a valid UUID.");
+  }
   const registry = createProviderRegistry(config, secrets);
   // Explicit demo only. Missing live capacity must never coerce to mock success.
   const demo = options.demo === true;
@@ -532,7 +538,7 @@ function createRecord(args: StartRunArgs): RunRecord {
     : selectRunRouting(options, registry, config);
 
   return {
-    id: randomUUID(),
+    id,
     // Persisted + API-served copy: redact secret-shaped content. The RAW idea is
     // still passed to the model from `args.idea` (see executeRun) so generation
     // is unaffected — only the durable/served copy is scrubbed.
@@ -1215,8 +1221,11 @@ async function executeRun(
       allowUntrustedScripts: config.allowUntrustedScripts,
       testResult,
       auditSeq,
+      // `checkpoint` is the canonical live value updated before every durable
+      // save. A transient/malformed disk read must not erase terminal receipts.
+      checkpoint,
     });
-    const path = await writeAttribution(attr);
+    const { path, manifestSha256 } = await writeAttribution(attr);
     run.attribution = attr;
     log("info", `Attribution written: ${path}`);
     // The error ledger is mirrored to disk and announced ONCE at run end, on
@@ -1236,8 +1245,16 @@ async function executeRun(
       type: "attribution.written",
       runId: run.id,
       detail: path,
-      meta: { testResult },
+      meta: { testResult, manifestSha256 },
     });
+    const audit = await verifyAuditChain();
+    if (!audit.ok) {
+      throw new Error(
+        `Refused: attribution manifest is not bound to an intact audit chain${
+          audit.badSeq === null ? "" : ` at sequence ${audit.badSeq}`
+        }.`,
+      );
+    }
   };
 
   /** inPlace runs restore the owner's branch on EVERY exit path (see finally). */
@@ -1319,6 +1336,13 @@ async function executeRun(
           goalsForSpec = checkpoint.options.goals?.length
             ? checkpoint.options.goals
             : [checkpoint.idea];
+        }
+        if (run.demo && repoSource.inPlace === true) {
+          repoSource = { ...repoSource, inPlace: false };
+          log(
+            "warning",
+            "Demo mode forced repository ingestion into an isolated workspace.",
+          );
         }
         log(
           "info",
@@ -4199,15 +4223,34 @@ async function failBackgroundRun(run: RunRecord, error: unknown): Promise<void> 
   await saveRun(run).catch(() => {});
 }
 
-/** Fire-and-forget: returns the queued record immediately, runs in background. */
-export function startRun(args: StartRunArgs): RunRecord {
+function launchBackgroundRun(args: StartRunArgs): {
+  run: RunRecord;
+  persisted: Promise<void>;
+} {
   const run = createRecord(args);
   putRunInMemory(run);
-  void appendAuditEvent({ type: "run.queued", runId: run.id })
-    .then(() => saveRun(run))
+  const persisted = appendAuditEvent({ type: "run.queued", runId: run.id }).then(() =>
+    saveRun(run),
+  );
+  void persisted
     .then(() => executeRun(run, args))
     .catch((error: unknown) => failBackgroundRun(run, error));
-  return run;
+  return { run, persisted };
+}
+
+/** Fire-and-forget: returns the queued record immediately, runs in background. */
+export function startRun(args: StartRunArgs): RunRecord {
+  return launchBackgroundRun(args).run;
+}
+
+/**
+ * Start in the background only after the queued run is durably discoverable.
+ * HTTP idempotency commits its receipt after this boundary, never before it.
+ */
+export async function startRunPersisted(args: StartRunArgs): Promise<RunRecord> {
+  const launched = launchBackgroundRun(args);
+  await launched.persisted;
+  return launched.run;
 }
 
 /** Await the full run (used by the CLI). */

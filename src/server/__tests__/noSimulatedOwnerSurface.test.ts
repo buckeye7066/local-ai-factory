@@ -21,13 +21,12 @@ import {
 import type { RunDestination } from "../../shared/schemas.js";
 
 /**
- * Simulated output must never reach an owner surface or an owner's repo.
+ * Explicit demo output may reach the owner as a zero-credit preview, but it
+ * must never reach an owner's repo or be confused with a live run.
  *
  * Two measured defects motivate this file:
  *
- *  1. The Sidebar's "Demo Mode" button was still wired after the UI was
- *     supposed to have dropped it, so one click started a mock run.
- *  2. `deliverRun` was NOT demo-gated (release-to-main and deploy were). A
+ * `deliverRun` was NOT demo-gated (release-to-main and deploy were). A
  *     demo run against an attached repo committed 8 files of canned stub
  *     source — OVERWRITING the repo's own package.json and README — onto a
  *     `factory-deck/<id>` branch, and reported status "delivered".
@@ -37,19 +36,25 @@ import type { RunDestination } from "../../shared/schemas.js";
  * they assert on the repo's actual contents and on the rejection payload.
  */
 
-describe("removed run options — naming one FAILS, it is never ignored", () => {
-  it("rejects options.demo with a 400 that names what was removed", () => {
-    const rejection = findRemovedRunOption({ demo: true });
-    expect(rejection).not.toBeNull();
-    expect(rejection?.status).toBe(400);
-    expect(rejection?.body.removed).toBe("options.demo");
-    expect(rejection?.body.error).toMatch(/has been removed/i);
+describe("owner run options — demo is explicit; ambiguous no-op flags fail", () => {
+  it("forces demo extensions into an isolated repository copy", () => {
+    const routeSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+    const orchestratorSource = readFileSync(
+      new URL("../orchestrator/runFactory.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(routeSource).toMatch(
+      /repoSource:\s*parsed\.data\.repoSource[\s\S]*?inPlace:\s*false/,
+    );
+    expect(orchestratorSource).toContain(
+      "repoSource = { ...repoSource, inPlace: false };",
+    );
   });
 
-  it("rejects the flag by PRESENCE, so demo:false is refused too", () => {
-    // A falsy value still names an option Factory Deck does not have.
-    // Accepting it silently would tell the caller the option was honoured.
-    expect(findRemovedRunOption({ demo: false })?.body.removed).toBe("options.demo");
+  it("accepts an explicit demo option for the zero-credit owner preview", () => {
+    expect(findRemovedRunOption({ demo: true })).toBeNull();
+    expect(findRemovedRunOption({ demo: false })).toBeNull();
   });
 
   it("rejects every removed sibling flag, not just demo", () => {

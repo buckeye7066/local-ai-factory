@@ -30,7 +30,7 @@ const NAMED_HTML_ENTITIES: Readonly<Record<string, string>> = {
  */
 export function decodeHtmlEntities(value: string): string {
   return value.replace(
-    /&(?:#([0-9]+)|#x([0-9a-f]+)|([a-z]+));/gi,
+    /&(?:#([0-9]+);?|#x([0-9a-f]+);?|([a-z]+);)/gi,
     (
       entity,
       decimal: string | undefined,

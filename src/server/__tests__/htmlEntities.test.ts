@@ -28,6 +28,12 @@ describe("bounded HTML entity decoding", () => {
     expect(decodeHtmlEntities("a&#9;b&#10;c&#13;d")).toBe("a\tb\nc\rd");
   });
 
+  it("decodes valid semicolon-less numeric references using HTML termination rules", () => {
+    expect(decodeHtmlEntities("display&#58none; display&#x3anone")).toBe(
+      "display:none; display:none",
+    );
+  });
+
   it("decodes one HTML layer without materializing double-encoded text", () => {
     expect(decodeHtmlEntities("do&amp;#32;not")).toBe("do&#32;not");
   });

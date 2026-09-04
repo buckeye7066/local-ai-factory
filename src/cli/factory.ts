@@ -6,39 +6,20 @@ import {
 import { loadReadinessState } from "../server/storage/readinessStore.js";
 import { getRun } from "../server/storage/runsStore.js";
 import type { RunOptions } from "../shared/schemas.js";
-import { factoryIdeaFromInputs } from "./factoryInput.js";
+import { FactoryCliArgumentError, parseFactoryCliInputs } from "./factoryInput.js";
 
 /**
  * cli/factory.ts — run the assembly line from the terminal.
  *
- *   pnpm factory "build me a habit tracker"   (real work against real providers)
+ *   pnpm factory "build me a habit tracker"          (real providers)
+ *   pnpm factory --demo "build me a habit tracker"   (zero-credit preview)
  *
- * There is no demo / mock / simulate mode: every invocation does real work
- * (owner order — no dry-run or report-only modes in owner tooling). `--demo`
- * was removed and now EXITS NON-ZERO rather than silently proceeding.
+ * The explicit --demo route is permanently marked offline, never delivered,
+ * and never described as production-ready. Ambiguous dry-run/simulate flags
+ * remain hard errors rather than silently changing a real request into a no-op.
  */
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Flags that were removed outright; naming one is a hard error, not a warning. */
-const REMOVED_FLAGS = ["--demo", "--dry-run", "--simulate", "--report-only"];
-
-function parseArgs(argv: string[]): { idea: string } {
-  const args = argv.slice(2);
-  const named = REMOVED_FLAGS.filter((f) => args.includes(f));
-  if (named.length) {
-    console.error(
-      `${COLORS.red}✘ ${named.join(", ")} ${named.length > 1 ? "were" : "was"} removed.${COLORS.reset}`,
-    );
-    console.error(
-      `${COLORS.dim}  Factory Deck has no demo, mock, simulate, or dry-run mode.\n` +
-        `  Every run does real work through the single automatic model ladder.\n` +
-        `  Configure at least one live paid or free/local model.${COLORS.reset}`,
-    );
-    process.exit(2);
-  }
-  return { idea: factoryIdeaFromInputs(argv) };
-}
 
 const COLORS: Record<string, string> = {
   reset: "\x1b[0m",
@@ -63,7 +44,17 @@ function paint(kind: string, msg: string): string {
 }
 
 async function main() {
-  const { idea } = parseArgs(process.argv);
+  let parsed: { idea: string; demo: boolean };
+  try {
+    parsed = parseFactoryCliInputs(process.argv);
+  } catch (error) {
+    if (error instanceof FactoryCliArgumentError) {
+      console.error(`${COLORS.red}✘ ${error.message}${COLORS.reset}`);
+      process.exit(2);
+    }
+    throw error;
+  }
+  const { idea, demo } = parsed;
   const config = getConfig();
   const secrets = getSecrets();
 
@@ -71,13 +62,22 @@ async function main() {
     `${COLORS.cyan}▌ Factory Deck — Local AI Software Factory${COLORS.reset}`,
   );
   console.log(`${COLORS.dim}  idea: ${idea}${COLORS.reset}`);
-  const modelLadder = config.modelLadder ?? ["anthropic", "openai", "free"];
-  console.log(
-    `${COLORS.dim}  automatic model ladder: ${modelLadder.join(" → ")}${COLORS.reset}\n`,
-  );
+  if (demo) {
+    console.log(
+      `${COLORS.yellow}  mode: zero-credit offline demo (never delivered or production-ready)${COLORS.reset}\n`,
+    );
+  } else {
+    const modelLadder = config.modelLadder ?? ["anthropic", "openai", "free"];
+    console.log(
+      `${COLORS.dim}  automatic model ladder: ${modelLadder.join(" → ")}${COLORS.reset}\n`,
+    );
+  }
 
   const projectId = process.env.FACTORY_PROJECT_ID?.trim();
-  const options: RunOptions = projectId ? { projectId } : {};
+  const options: RunOptions = {
+    ...(projectId ? { projectId } : {}),
+    ...(demo ? { demo: true, publish: false, pushToOrigin: false } : {}),
+  };
   let started;
   try {
     started = startRun({ idea, options, config, secrets });
@@ -109,7 +109,17 @@ async function main() {
       run.status === "failed" ||
       run.status === "cancelled"
     ) {
-      if (run.status === "completed" && run.finalReport) {
+      if (run.status === "completed" && run.finalReport && run.demo) {
+        const r = run.finalReport;
+        console.log(
+          `\n${COLORS.yellow}✔ ${r.appName} — OFFLINE DEMO COMPLETE${COLORS.reset}`,
+        );
+        console.log(`  ${r.summary}`);
+        console.log(`  ${COLORS.cyan}Workspace:${COLORS.reset} ${r.workspacePath}`);
+        console.log(
+          `  ${COLORS.dim}Mock output only: zero paid credits; no delivery, release, deployment, or production-readiness claim.${COLORS.reset}`,
+        );
+      } else if (run.status === "completed" && run.finalReport) {
         const readiness = await loadReadinessState(run.id);
         if (readiness?.status !== "ready" || readiness.receipt?.ready !== true) {
           console.log(

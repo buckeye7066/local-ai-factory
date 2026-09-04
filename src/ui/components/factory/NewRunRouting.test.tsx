@@ -49,6 +49,38 @@ afterEach(() => {
 });
 
 describe("automatic model ladder UI wiring", () => {
+  it("starts an explicit zero-credit demo without any remote side effects", () => {
+    const onStart = vi.fn();
+    render(<NewRunHero health={health} starting={false} onStart={onStart} />);
+
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Offline demo — zero paid credits/i,
+      }),
+    );
+    fireEvent.change(screen.getByLabelText(/App and repository name/i), {
+      target: { value: "offline-preview" },
+    });
+    fireEvent.change(screen.getByLabelText(/Describe the app you want/i), {
+      target: { value: "Build a zero-credit preview" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Start Offline Demo/i }));
+
+    expect(onStart).toHaveBeenCalledWith("Build a zero-credit preview", {
+      routingMode: "auto",
+      demo: true,
+      publish: false,
+      pushToOrigin: false,
+      mode: "new",
+      newRepo: {
+        name: "offline-preview",
+        private: true,
+        createRemote: false,
+      },
+    });
+    expect(api.checkRepoName).not.toHaveBeenCalled();
+  });
+
   it("warns when the mandatory brain floor is missing despite a live free rung", () => {
     render(
       <NewRunHero

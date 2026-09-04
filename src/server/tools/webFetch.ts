@@ -1,9 +1,11 @@
 import { lookup as dnsLookup } from "node:dns/promises";
+import { randomUUID } from "node:crypto";
 import { decodeHtmlEntities } from "./htmlEntities.js";
 import { BlockList, isIP } from "node:net";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { Readable } from "node:stream";
+import { Window, type CSSRule, type CSSStyleDeclaration } from "happy-dom";
 
 /**
  * webFetch.ts — the resolver agent's "real internet access" tool.
@@ -29,6 +31,9 @@ export interface WebFetchResult {
 const MAX_BYTES = 200_000;
 const MAX_EXCERPT = 4000;
 const MAX_REDIRECTS = 5;
+const MAX_STYLESHEETS = 8;
+const MAX_STYLESHEET_BYTES = 200_000;
+const MAX_STYLED_ELEMENTS = 5_000;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 export interface LookupAddress {
@@ -219,8 +224,49 @@ async function pinnedFetch(
   });
 }
 
+type FetchedHttpResource = {
+  response: Response;
+  finalUrl: URL;
+};
+
+async function fetchHttpResource(
+  initialUrl: URL,
+  signal: AbortSignal,
+  fetchImpl: WebFetchDependencies["fetch"],
+  lookup: NonNullable<WebFetchDependencies["lookup"]>,
+  transport: NonNullable<WebFetchDependencies["transport"]>,
+): Promise<FetchedHttpResource> {
+  let current = new URL(initialUrl);
+  for (let redirects = 0; ; redirects += 1) {
+    const addresses = await assertPublicTarget(current, lookup, signal);
+    const response = fetchImpl
+      ? await fetchImpl(current, {
+          method: "GET",
+          redirect: "manual",
+          signal,
+          headers: { "user-agent": "factory-deck-resolver/1.0" },
+        })
+      : await transport(current, addresses, signal);
+    if (!REDIRECT_STATUSES.has(response.status)) {
+      return { response, finalUrl: current };
+    }
+
+    const location = response.headers.get("location");
+    if (!location) throw new Error(`Redirect ${response.status} omitted Location.`);
+    if (redirects >= MAX_REDIRECTS) {
+      throw new Error(`Too many redirects (maximum ${MAX_REDIRECTS}).`);
+    }
+    current = new URL(location, current);
+    if (!isHttpUrl(current.href)) {
+      throw new Error("Redirect target is not an http(s) URL.");
+    }
+    await response.body?.cancel("following validated redirect").catch(() => {});
+  }
+}
+
 async function readBoundedBody(
   response: Response,
+  maxBytes = MAX_BYTES,
 ): Promise<{ bytes: Uint8Array; truncated: boolean }> {
   if (!response.body) return { bytes: new Uint8Array(), truncated: false };
   const reader = response.body.getReader();
@@ -232,7 +278,7 @@ async function readBoundedBody(
       const next = await reader.read();
       if (next.done) break;
       const chunk = next.value;
-      const remaining = MAX_BYTES - total;
+      const remaining = maxBytes - total;
       if (chunk.byteLength > remaining) {
         if (remaining > 0) {
           chunks.push(chunk.subarray(0, remaining));
@@ -417,7 +463,17 @@ function actualTagAttributes(rawTag: string): HtmlAttribute[] {
 function openingTagSuppressesText(tag: string, rawTag: string): boolean {
   if (NON_RENDERED_ELEMENTS.has(tag)) return true;
   const attributes = actualTagAttributes(rawTag);
-  if (attributes.some(({ name }) => name === "hidden" || name === "inert")) {
+  if (
+    attributes.some(
+      ({ name }) => name === "hidden" || name === "inert" || name === "popover",
+    )
+  ) {
+    return true;
+  }
+  // Popovers are closed until script/user activation and a closed <details>
+  // hides its disclosure body. Scripts are intentionally not executed here, so
+  // neither inactive subtree can establish visible production evidence.
+  if (tag === "details" && !attributes.some(({ name }) => name === "open")) {
     return true;
   }
   if (
@@ -435,11 +491,200 @@ function openingTagSuppressesText(tag: string, rawTag: string): boolean {
   // An unterminated CSS comment makes the remainder of the declaration
   // non-authoritative. Suppress rather than guessing that it renders.
   if (styles.some((style) => style.includes("/*"))) return true;
-  return styles.some((style) =>
-    /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|content-visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(
-      style,
-    ),
+  return styles.some(declarationBlockSuppressesText);
+}
+
+function cssZero(value: string): boolean {
+  const normalized = value.trim();
+  return normalized.length > 0 && /^[-+]?(?:0+|0*\.0+)(?:[a-z]+|%)?$/i.test(normalized);
+}
+
+function transformCollapsesText(value: string): boolean {
+  const normalized = value.toLowerCase().trim();
+  if (!normalized || normalized === "none") return false;
+  if (
+    [...normalized.matchAll(/\bscale(?:x|y)\(([^)]+)\)/g)].some((match) =>
+      cssZero(match[1] ?? ""),
+    ) ||
+    [...normalized.matchAll(/\bscale\(([^)]+)\)/g)].some((match) =>
+      (match[1] ?? "")
+        .split(/[\s,]+/)
+        .slice(0, 2)
+        .some(cssZero),
+    ) ||
+    [...normalized.matchAll(/\bscale3d\(([^)]+)\)/g)].some((match) =>
+      (match[1] ?? "")
+        .split(/[\s,]+/)
+        .slice(0, 2)
+        .some(cssZero),
+    )
+  ) {
+    return true;
+  }
+  for (const match of normalized.matchAll(/\bmatrix\(([^)]+)\)/g)) {
+    const matrix = (match[1] ?? "").split(",");
+    if (matrix.length !== 6) continue;
+    const [a, b, c, d] = matrix.slice(0, 4).map(Number);
+    if ([a, b, c, d].every(Number.isFinite) && Math.abs(a! * d! - b! * c!) === 0) {
+      return true;
+    }
+  }
+  for (const match of normalized.matchAll(/\bmatrix3d\(([^)]+)\)/g)) {
+    const matrix = (match[1] ?? "").split(",").map(Number);
+    if (matrix.length !== 16 || !matrix.every(Number.isFinite)) continue;
+    const [m11, m12, m13, , m21, m22, m23] = matrix;
+    const cross = [
+      m12! * m23! - m13! * m22!,
+      m13! * m21! - m11! * m23!,
+      m11! * m22! - m12! * m21!,
+    ];
+    if (cross.every((component) => Math.abs(component) <= Number.EPSILON)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function standaloneScaleCollapsesText(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized !== "" &&
+    normalized !== "none" &&
+    normalized.split(/\s+/).slice(0, 2).some(cssZero)
   );
+}
+
+function clipRemovesText(property: string, value: string): boolean {
+  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized || normalized === "none" || normalized === "auto") return false;
+  if (property === "clip") {
+    const values = normalized
+      .match(/^rect\((.*)\)$/)?.[1]
+      ?.split(/[\s,]+/)
+      .filter(Boolean);
+    return values?.length === 4 && values.every(cssZero);
+  }
+  const inset = normalized.match(/^inset\(([^)]*)\)$/)?.[1];
+  if (inset !== undefined) {
+    const offsets = inset
+      .split(/\s+round\s+/i)[0]!
+      .trim()
+      .split(/\s+/);
+    if (offsets.length >= 1 && offsets.length <= 4) {
+      const a = offsets[0]!;
+      const b = offsets[1] ?? a;
+      const c = offsets[2] ?? a;
+      const d = offsets[3] ?? b;
+      const percent = (token: string): number | null => {
+        if (cssZero(token)) return 0;
+        const match = token.match(/^([-+]?(?:\d+(?:\.\d*)?|\.\d+))%$/);
+        return match ? Number(match[1]) : null;
+      };
+      const [top, right, bottom, left] = [a, b, c, d].map(percent);
+      if (
+        (top !== null && bottom !== null && top + bottom >= 100) ||
+        (left !== null && right !== null && left + right >= 100)
+      ) {
+        return true;
+      }
+    }
+  }
+  if (/^(?:circle|ellipse)\(\s*0(?:[a-z]+|%)?\b/.test(normalized)) return true;
+
+  const polygon = normalized.match(/^polygon\((.*)\)$/)?.[1];
+  if (polygon !== undefined) {
+    const body = polygon.replace(/^\s*(?:evenodd|nonzero)\s*,/i, "");
+    const points = body.split(",").map((point) => point.trim().split(/\s+/));
+    const coordinate = (token: string): number | null => {
+      if (cssZero(token)) return 0;
+      const match = token.match(/^([-+]?(?:\d+(?:\.\d*)?|\.\d+))%$/);
+      return match ? Number(match[1]) : null;
+    };
+    const parsed = points.map(([x = "", y = ""]) => [coordinate(x), coordinate(y)]);
+    if (parsed.length >= 3 && parsed.every(([x, y]) => x !== null && y !== null)) {
+      let twiceArea = 0;
+      for (let index = 0; index < parsed.length; index += 1) {
+        const [x1, y1] = parsed[index]! as [number, number];
+        const [x2, y2] = parsed[(index + 1) % parsed.length]! as [number, number];
+        twiceArea += x1 * y2 - x2 * y1;
+      }
+      if (Math.abs(twiceArea) <= Number.EPSILON) return true;
+    }
+  }
+  return false;
+}
+
+function transparentTextColor(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "transparent") return true;
+  const shortHex = normalized.match(/^#[0-9a-f]{4}$/)?.[0];
+  if (shortHex?.endsWith("0")) return true;
+  const longHex = normalized.match(/^#[0-9a-f]{8}$/)?.[0];
+  if (longHex?.endsWith("00")) return true;
+  const colorFunction = normalized.match(
+    /^(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\((.*)\)$/,
+  )?.[1];
+  if (colorFunction === undefined) return false;
+  const slashAlpha = colorFunction.includes("/")
+    ? colorFunction.slice(colorFunction.lastIndexOf("/") + 1)
+    : undefined;
+  if (slashAlpha !== undefined) return cssZero(slashAlpha);
+  const commaParts = colorFunction.split(",");
+  return commaParts.length === 4 && cssZero(commaParts[3]!);
+}
+
+function propertyValuesSuppressText(get: (property: string) => string): boolean {
+  const display = get("display").trim().toLowerCase();
+  const visibility = get("visibility").trim().toLowerCase();
+  const contentVisibility = get("content-visibility").trim().toLowerCase();
+  const opacity = get("opacity").trim();
+  const filter = get("filter").toLowerCase().replace(/\s+/g, "");
+  const color = get("color").trim().toLowerCase();
+  const textFill = get("-webkit-text-fill-color").trim().toLowerCase();
+  const overflow = get("overflow").trim().toLowerCase();
+  const overflowX = get("overflow-x").trim().toLowerCase() || overflow;
+  const overflowY = get("overflow-y").trim().toLowerCase() || overflow;
+  const clips = (value: string) => /\b(?:clip|hidden)\b/.test(value);
+  const zeroWidthAndClipped =
+    (cssZero(get("width")) || cssZero(get("max-width"))) && clips(overflowX);
+  const zeroHeightAndClipped =
+    (cssZero(get("height")) || cssZero(get("max-height"))) && clips(overflowY);
+  return (
+    display === "none" ||
+    visibility === "hidden" ||
+    visibility === "collapse" ||
+    contentVisibility === "hidden" ||
+    (opacity !== "" && Number.parseFloat(opacity) <= 0) ||
+    /opacity\([-+]?(?:0+|0*\.0+)%?\)/.test(filter) ||
+    transformCollapsesText(get("transform")) ||
+    standaloneScaleCollapsesText(get("scale")) ||
+    clipRemovesText("clip", get("clip")) ||
+    clipRemovesText("clip-path", get("clip-path")) ||
+    transparentTextColor(color) ||
+    transparentTextColor(textFill) ||
+    cssZero(get("font-size")) ||
+    zeroWidthAndClipped ||
+    zeroHeightAndClipped
+  );
+}
+
+function declarationBlockSuppressesText(style: string): boolean {
+  const declarations = new Map<string, string>();
+  for (const declaration of style.split(";")) {
+    const separator = declaration.indexOf(":");
+    if (separator < 0) continue;
+    const property = declaration.slice(0, separator).trim().toLowerCase();
+    const value = declaration
+      .slice(separator + 1)
+      .replace(/\s*!important\s*$/i, "")
+      .trim();
+    if (property) declarations.set(property, value);
+  }
+  return propertyValuesSuppressText((property) => declarations.get(property) ?? "");
+}
+
+function styleDeclarationSuppressesText(style: CSSStyleDeclaration): boolean {
+  return propertyValuesSuppressText((property) => style.getPropertyValue(property));
 }
 
 type HtmlMarkupToken = {
@@ -527,8 +772,309 @@ function nextHtmlMarkup(
   return null;
 }
 
+type HtmlStylesheetScan = {
+  instrumentedHtml: string;
+  markerAttribute: string;
+  markerCount: number;
+  embeddedStyles: string[];
+  stylesheetLinks: string[];
+  baseHref?: string;
+};
+
+function scanHtmlStylesheets(html: string, xmlMode: boolean): HtmlStylesheetScan {
+  const markerAttribute = `data-factory-node-${randomUUID().replaceAll("-", "")}`;
+  const embeddedStyles: string[] = [];
+  const stylesheetLinks: string[] = [];
+  let baseHref: string | undefined;
+  let markerCount = 0;
+  let emittedThrough = 0;
+  let searchFrom = 0;
+  let rawTextTag: string | undefined;
+  let rawTextStart = 0;
+  let instrumentedHtml = "";
+
+  for (
+    let markup = nextHtmlMarkup(html, searchFrom, xmlMode);
+    markup;
+    markup = nextHtmlMarkup(html, searchFrom, xmlMode)
+  ) {
+    searchFrom = markup.end;
+    const tag = markup.tag;
+    if (rawTextTag) {
+      if (!tag || !markup.closing || tag !== rawTextTag) continue;
+      if (rawTextTag === "style") {
+        embeddedStyles.push(html.slice(rawTextStart, markup.start));
+      }
+      rawTextTag = undefined;
+    }
+
+    instrumentedHtml += html.slice(emittedThrough, markup.start);
+    let raw = markup.raw;
+    if (tag && !markup.closing) {
+      const attributes = actualTagAttributes(raw);
+      if (tag === "base" && baseHref === undefined) {
+        baseHref = attributes.find(({ name }) => name === "href")?.value;
+      }
+      if (
+        tag === "link" &&
+        attributes.some(
+          ({ name, value }) =>
+            name === "rel" && value.toLowerCase().split(/\s+/).includes("stylesheet"),
+        )
+      ) {
+        const href = attributes.find(({ name }) => name === "href")?.value;
+        if (href) stylesheetLinks.push(href);
+      }
+
+      // Linked styles are fetched above through the address-pinned transport
+      // and applied as inert text. Never give happy-dom the original <link>:
+      // rel=preload/modulepreload and future link types can initiate their own
+      // network requests while the untrusted document is connected.
+      if (tag === "link") raw = "";
+
+      const ending = raw.match(/\/?\s*>$/);
+      if (ending?.index !== undefined) {
+        const marker = String(markerCount);
+        markerCount += 1;
+        raw = `${raw.slice(0, ending.index)} ${markerAttribute}="${marker}"${raw.slice(
+          ending.index,
+        )}`;
+      }
+      if (RAW_TEXT_ELEMENTS.has(tag)) {
+        rawTextTag = tag;
+        rawTextStart = markup.end;
+      }
+    }
+    instrumentedHtml += raw;
+    emittedThrough = markup.end;
+  }
+
+  if (rawTextTag === "style") {
+    embeddedStyles.push(html.slice(rawTextStart));
+  }
+  instrumentedHtml += html.slice(emittedThrough);
+  return {
+    instrumentedHtml,
+    markerAttribute,
+    markerCount,
+    embeddedStyles,
+    stylesheetLinks,
+    baseHref,
+  };
+}
+
+function cssForConservativeRendering(css: string): string {
+  const normalized = decodeCssEscapes(css.replace(/\/\*[\s\S]*?\*\//g, ""));
+  if (normalized.includes("/*")) {
+    throw new Error("Stylesheet contains an unterminated CSS comment.");
+  }
+  return normalized;
+}
+
+function hasUnresolvedStylesheetImport(css: string): boolean {
+  return /@import\b/i.test(cssForConservativeRendering(css));
+}
+
+function potentiallyHiddenSelectors(window: Window): string[] {
+  const selectors: string[] = [];
+  const visit = (rule: CSSRule): void => {
+    if ("selectorText" in rule && "style" in rule) {
+      const styleRule = rule as CSSRule & {
+        selectorText: string;
+        style: CSSStyleDeclaration;
+      };
+      if (styleDeclarationSuppressesText(styleRule.style)) {
+        selectors.push(styleRule.selectorText);
+      }
+    }
+    if ("cssRules" in rule) {
+      for (const child of (rule as CSSRule & { cssRules: CSSRule[] }).cssRules) {
+        visit(child);
+      }
+    }
+  };
+  for (const sheet of Array.from(window.document.styleSheets)) {
+    for (const rule of Array.from(sheet.cssRules)) visit(rule);
+  }
+  return selectors;
+}
+
+function stylesheetSuppressedNodes(
+  scan: HtmlStylesheetScan,
+  externalStyles: readonly string[],
+  finalUrl: URL,
+): ReadonlySet<string> {
+  if (scan.markerCount > MAX_STYLED_ELEMENTS) {
+    throw new Error(
+      `HTML contains too many styled elements (maximum ${MAX_STYLED_ELEMENTS}).`,
+    );
+  }
+
+  const styles = [...scan.embeddedStyles, ...externalStyles];
+  if (styles.some(hasUnresolvedStylesheetImport)) {
+    throw new Error("Stylesheet imports cannot be verified safely.");
+  }
+
+  const window = new Window({
+    url: finalUrl.href,
+    settings: {
+      disableJavaScriptEvaluation: true,
+      disableJavaScriptFileLoading: true,
+      disableCSSFileLoading: true,
+      disableIframePageLoading: true,
+      handleDisabledFileLoadingAsSuccess: true,
+      // Computed-style evaluation does not need network access. Intercept all
+      // asynchronous and synchronous resource requests in case a current or
+      // future DOM element tries to load beyond the explicitly vetted CSS
+      // path above.
+      fetch: {
+        interceptor: {
+          beforeAsyncRequest: async ({ window: resourceWindow }) =>
+            new resourceWindow.Response("", {
+              status: 200,
+              statusText: "Blocked DOM resource",
+            }),
+          beforeSyncRequest: ({ window: resourceWindow, request }) => ({
+            status: 204,
+            statusText: "Blocked DOM resource",
+            ok: true,
+            url: request.url,
+            redirected: false,
+            headers: new resourceWindow.Headers(),
+            body: null,
+          }),
+        },
+      },
+      navigation: {
+        disableMainFrameNavigation: true,
+        disableChildFrameNavigation: true,
+        disableChildPageNavigation: true,
+        disableFallbackToSetURL: true,
+      },
+    },
+  });
+  try {
+    window.document.write(scan.instrumentedHtml);
+    const styleCopies = [...externalStyles, ...styles.map(cssForConservativeRendering)];
+    for (const css of styleCopies) {
+      const style = window.document.createElement("style");
+      style.textContent = css;
+      window.document.head.append(style);
+    }
+
+    // A page can hide evidence only in a conditional group such as @media,
+    // @supports, @container, or @layer. The extractor has no authoritative
+    // user viewport/capability profile, so treat every directly hidden selector
+    // as potentially active. This can conservatively omit visible text, but it
+    // cannot promote a conditionally hidden claim into production evidence.
+    const conditionalVisibility = potentiallyHiddenSelectors(window);
+    if (conditionalVisibility.length > 0) {
+      const style = window.document.createElement("style");
+      style.textContent = conditionalVisibility
+        .map((selector) => `${selector} { display: none !important; }`)
+        .join("\n");
+      window.document.head.append(style);
+    }
+
+    const suppressed = new Set<string>();
+    for (const element of window.document.querySelectorAll(
+      `[${scan.markerAttribute}]`,
+    )) {
+      const marker = element.getAttribute(scan.markerAttribute);
+      if (marker === null) continue;
+      const computed = window.getComputedStyle(element);
+      if (styleDeclarationSuppressesText(computed)) {
+        suppressed.add(marker);
+      }
+    }
+    return suppressed;
+  } finally {
+    window.close();
+  }
+}
+
+async function loadExternalStylesheets(
+  scan: HtmlStylesheetScan,
+  pageUrl: URL,
+  signal: AbortSignal,
+  fetchImpl: WebFetchDependencies["fetch"],
+  lookup: NonNullable<WebFetchDependencies["lookup"]>,
+  transport: NonNullable<WebFetchDependencies["transport"]>,
+): Promise<string[]> {
+  let baseUrl = pageUrl;
+  if (scan.baseHref) {
+    baseUrl = new URL(scan.baseHref, pageUrl);
+    if (!isHttpUrl(baseUrl.href)) {
+      throw new Error("Stylesheet base URL is not an http(s) URL.");
+    }
+  }
+
+  const stylesheetUrls = [
+    ...new Set(
+      scan.stylesheetLinks.map((href) => {
+        const stylesheetUrl = new URL(href, baseUrl);
+        if (!isHttpUrl(stylesheetUrl.href)) {
+          throw new Error("Stylesheet URL is not an http(s) URL.");
+        }
+        return stylesheetUrl.href;
+      }),
+    ),
+  ];
+  if (stylesheetUrls.length > MAX_STYLESHEETS) {
+    throw new Error(
+      `HTML references too many stylesheets (maximum ${MAX_STYLESHEETS}).`,
+    );
+  }
+
+  const styles: string[] = [];
+  let totalBytes = 0;
+  for (const href of stylesheetUrls) {
+    const fetched = await fetchHttpResource(
+      new URL(href),
+      signal,
+      fetchImpl,
+      lookup,
+      transport,
+    );
+    const contentType = fetched.response.headers.get("content-type")?.toLowerCase();
+    if (!fetched.response.ok) {
+      await fetched.response.body?.cancel("stylesheet request failed").catch(() => {});
+      throw new Error(
+        `Stylesheet request failed with status ${fetched.response.status}.`,
+      );
+    }
+    if (!contentType?.includes("text/css")) {
+      await fetched.response.body
+        ?.cancel("stylesheet response had an invalid content type")
+        .catch(() => {});
+      throw new Error("Stylesheet response is not text/css.");
+    }
+    const remaining = MAX_STYLESHEET_BYTES - totalBytes;
+    if (remaining <= 0) {
+      await fetched.response.body
+        ?.cancel("stylesheet byte budget exhausted")
+        .catch(() => {});
+      throw new Error("Stylesheet responses exceeded the byte budget.");
+    }
+    const bounded = await readBoundedBody(fetched.response, remaining);
+    if (bounded.truncated) {
+      throw new Error("Stylesheet responses exceeded the byte budget.");
+    }
+    totalBytes += bounded.bytes.byteLength;
+    styles.push(new TextDecoder("utf-8", { fatal: false }).decode(bounded.bytes));
+  }
+  return styles;
+}
+
 /** Extract visible/readable HTML text without promoting hidden page payloads. */
-function toReadableText(html: string, xmlSelfClosing = false): string {
+function toReadableText(
+  html: string,
+  xmlSelfClosing = false,
+  stylesheetMarkers?: {
+    attribute: string;
+    suppressed: ReadonlySet<string>;
+  },
+): string {
   const stack: Array<{ tag: string; suppressed: boolean; rawText: boolean }> = [];
   let suppressedDepth = 0;
   let cursor = 0;
@@ -572,7 +1118,14 @@ function toReadableText(html: string, xmlSelfClosing = false): string {
     }
 
     const parentSuppressed = suppressedDepth > 0;
-    const suppressed = parentSuppressed || openingTagSuppressesText(tag, rawTag);
+    const attributes = stylesheetMarkers ? actualTagAttributes(rawTag) : [];
+    const stylesheetSuppressed = attributes.some(
+      ({ name, value }) =>
+        name === stylesheetMarkers?.attribute &&
+        stylesheetMarkers.suppressed.has(value),
+    );
+    const suppressed =
+      parentSuppressed || stylesheetSuppressed || openingTagSuppressesText(tag, rawTag);
     // In text/html, a trailing slash does not self-close ordinary elements;
     // XHTML served as XML does honor it. HTML void elements close in either
     // mode.
@@ -615,48 +1168,65 @@ export async function webFetchTool(
     const lookup = dependencies.lookup ?? defaultLookup;
     const transport = dependencies.transport ?? pinnedFetch;
     const signal = AbortSignal.timeout(timeoutMs);
-    let current = new URL(url);
-
-    for (let redirects = 0; ; redirects += 1) {
-      const addresses = await assertPublicTarget(current, lookup, signal);
-      const res = fetchImpl
-        ? await fetchImpl(current, {
-            method: "GET",
-            redirect: "manual",
-            signal,
-            headers: { "user-agent": "factory-deck-resolver/1.0" },
-          })
-        : await transport(current, addresses, signal);
-      if (REDIRECT_STATUSES.has(res.status)) {
-        const location = res.headers.get("location");
-        if (!location) throw new Error(`Redirect ${res.status} omitted Location.`);
-        if (redirects >= MAX_REDIRECTS) {
-          throw new Error(`Too many redirects (maximum ${MAX_REDIRECTS}).`);
-        }
-        current = new URL(location, current);
-        if (!isHttpUrl(current.href)) {
-          throw new Error("Redirect target is not an http(s) URL.");
-        }
-        await res.body?.cancel("following validated redirect").catch(() => {});
-        continue;
+    const fetched = await fetchHttpResource(
+      new URL(url),
+      signal,
+      fetchImpl,
+      lookup,
+      transport,
+    );
+    const contentType = fetched.response.headers.get("content-type") ?? "";
+    const bounded = await readBoundedBody(fetched.response);
+    const raw = new TextDecoder("utf-8", { fatal: false }).decode(bounded.bytes);
+    const normalizedContentType = contentType.toLowerCase();
+    let text = raw;
+    if (normalizedContentType.includes("html")) {
+      // Visibility and attribution are properties of the complete document.
+      // A stylesheet after the byte boundary can hide a claim that appears in
+      // the retained prefix, so partial HTML must never become evidence text.
+      if (bounded.truncated) {
+        return {
+          ok: false,
+          status: fetched.response.status,
+          contentType,
+          finalUrl: fetched.finalUrl.href,
+          textExcerpt: "",
+          truncated: true,
+          error: "HTML response exceeded the byte limit and cannot be verified safely.",
+        };
       }
-
-      const contentType = res.headers.get("content-type") ?? "";
-      const bounded = await readBoundedBody(res);
-      const raw = new TextDecoder("utf-8", { fatal: false }).decode(bounded.bytes);
-      const normalizedContentType = contentType.toLowerCase();
-      const text = normalizedContentType.includes("html")
-        ? toReadableText(raw, normalizedContentType.includes("xhtml"))
-        : raw;
-      return {
-        ok: res.ok,
-        status: res.status,
-        contentType,
-        finalUrl: current.href,
-        textExcerpt: text.slice(0, MAX_EXCERPT),
-        truncated: bounded.truncated,
-      };
+      const xmlMode = normalizedContentType.includes("xhtml");
+      const scan = scanHtmlStylesheets(raw, xmlMode);
+      if (scan.embeddedStyles.length > 0 || scan.stylesheetLinks.length > 0) {
+        const externalStyles = await loadExternalStylesheets(
+          scan,
+          fetched.finalUrl,
+          signal,
+          fetchImpl,
+          lookup,
+          transport,
+        );
+        const suppressed = stylesheetSuppressedNodes(
+          scan,
+          externalStyles,
+          fetched.finalUrl,
+        );
+        text = toReadableText(scan.instrumentedHtml, xmlMode, {
+          attribute: scan.markerAttribute,
+          suppressed,
+        });
+      } else {
+        text = toReadableText(raw, xmlMode);
+      }
     }
+    return {
+      ok: fetched.response.ok,
+      status: fetched.response.status,
+      contentType,
+      finalUrl: fetched.finalUrl.href,
+      textExcerpt: text.slice(0, MAX_EXCERPT),
+      truncated: bounded.truncated,
+    };
   } catch (err) {
     return {
       ok: false,
