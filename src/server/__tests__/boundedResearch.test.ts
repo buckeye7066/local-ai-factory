@@ -890,6 +890,7 @@ describe("bounded production research", () => {
     "When possible, the application will encrypt stored plaintext credentials using hardware keys.",
     "After launch, the product will encrypt stored plaintext credentials using hardware keys.",
     "When you join the waitlist, your application will encrypt stored plaintext credentials using hardware keys.",
+    "When you sign up for the waitlist, your application will encrypt stored plaintext credentials using hardware keys.",
   ])("rejects an unfulfilled modal promise: %s", async (excerpt) => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();

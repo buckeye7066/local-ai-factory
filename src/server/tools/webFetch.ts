@@ -492,8 +492,10 @@ function cssZero(value: string): boolean {
 function transformCollapsesText(value: string): boolean {
   const normalized = value.toLowerCase().replace(/\s+/g, "");
   if (!normalized || normalized === "none") return false;
+  const scale = normalized.match(/(?:^|\))scale\(([^)]+)\)/)?.[1]?.split(",");
   if (
     /(?:^|\))scale(?:x|y)?\([-+]?0*(?:\.0+)?\)/.test(normalized) ||
+    (scale !== undefined && scale.slice(0, 2).some(cssZero)) ||
     (/(?:^|\))scale3d\([^,]+,[^,]+,[^)]+\)/.test(normalized) &&
       normalized
         .match(/scale3d\(([^)]+)\)/)?.[1]
@@ -819,10 +821,10 @@ function stylesheetSuppressedNodes(
       // path above.
       fetch: {
         interceptor: {
-          beforeAsyncRequest: async ({ window: resourceWindow, request }) =>
+          beforeAsyncRequest: async ({ window: resourceWindow }) =>
             new resourceWindow.Response("", {
               status: 200,
-              statusText: `Blocked DOM resource: ${request.url}`,
+              statusText: "Blocked DOM resource",
             }),
           beforeSyncRequest: ({ window: resourceWindow, request }) => ({
             status: 204,

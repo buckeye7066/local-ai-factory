@@ -273,6 +273,7 @@ describe("webFetchTool readable HTML extraction", () => {
   it.each([
     "opacity: 0",
     "transform: scale(0)",
+    "transform: scale(0, 1)",
     "clip: rect(0, 0, 0, 0)",
     "clip-path: inset(50%)",
     "font-size: 0",

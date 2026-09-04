@@ -1162,6 +1162,18 @@ const CURRENT_OPERATION_ACTIONS = new Set([
   "upload",
 ]);
 
+const DEFERRED_MODAL_OBJECTS = new Set([
+  "preregister",
+  "preregistered",
+  "preregistration",
+  "prelaunch",
+  "preorder",
+  "preordered",
+  "preview",
+  "waitlist",
+  "waitlisted",
+]);
+
 const FUTURE_PERIODS = new Set([
   "day",
   "days",
@@ -1213,6 +1225,9 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
     const hasCurrentOperation = subjectWindow.some((token) =>
       CURRENT_OPERATION_ACTIONS.has(token),
     );
+    const hasDeferredObject = subjectWindow.some((token) =>
+      DEFERRED_MODAL_OBJECTS.has(token),
+    );
     const hasCurrentProductSubject = subjectWindow.some(
       (token, subjectIndex) =>
         CURRENT_MODAL_SUBJECTS.has(token) ||
@@ -1222,6 +1237,7 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
       triggerIndex < 0 ||
       !hasSecondPersonActor ||
       !hasCurrentOperation ||
+      hasDeferredObject ||
       !hasCurrentProductSubject
     ) {
       return false;
