@@ -1,0 +1,57 @@
+--- a/src/server/storage/processFileLock.ts
++++ b/src/server/storage/processFileLock.ts
+@@ -156,7 +156,7 @@
+     if (!stat.isFile()) {
+       throw new Error("Refused: process-lock ticket log is not a regular file.");
+     }
+-    const identity = `${stat.dev}:${stat.ino}`;
++    const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+     let cache = ticketCaches.get(queue);
+     if (!cache || cache.identity !== identity || stat.size < cache.offset) {
+       cache = resetTicketCache(identity);
+@@ -326,8 +326,17 @@
+ 
+     const deadline = Date.now() + timeoutMs;
+     for (;;) {
+-      const tickets = await readTicketOrder(queue);
+-      const ownTicket = tickets.get(token);
++      let tickets = await readTicketOrder(queue);
++      let ownTicket = tickets.get(token);
++      if (ownTicket === undefined) {
++        // A queue can be removed and recreated at the same path while this
++        // process still holds an incremental parser cache. Filesystems may
++        // recycle inode numbers, so a missing token is the authoritative cue
++        // to discard the cache and re-read the immutable log from byte zero.
++        ticketCaches.delete(queue);
++        tickets = await readTicketOrder(queue);
++        ownTicket = tickets.get(token);
++      }
+       if (ownTicket === undefined) {
+         throw new Error("Refused: process-lock ticket was not durably recorded.");
+       }
+--- a/src/server/__tests__/processFileLock.test.ts
++++ b/src/server/__tests__/processFileLock.test.ts
+@@ -64,6 +64,23 @@
+     await second!.release();
+   });
+ 
++  it("forgets cached ticket state when a queue is recreated at the same path", async () => {
++    const first = await acquireProcessFileLock(lockPath, { pollMs: 1 });
++    expect(first).not.toBeNull();
++    await first!.release();
++
++    const queue = _processLockQueuePathForTests(lockPath);
++    await rm(queue, { recursive: true, force: true });
++
++    const second = await acquireProcessFileLock(lockPath, {
++      timeoutMs: 1_000,
++      pollMs: 1,
++    });
++    expect(second).not.toBeNull();
++    await second!.release();
++    await expect(readdir(queue)).resolves.toEqual(["tickets.log"]);
++  });
++
+   it("reclaims a dead contender by its unique UUID pathname", async () => {
+     const queue = _processLockQueuePathForTests(lockPath);
+     await mkdir(queue, { recursive: true });
