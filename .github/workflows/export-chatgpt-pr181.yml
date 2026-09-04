@@ -9,6 +9,7 @@ on:
       - .github/chatgpt-pr181-integration/**
       - .github/chatgpt-pr181-cache-fix/**
       - .github/chatgpt-pr181-suite-isolation/**
+      - .github/chatgpt-pr181-audit-scale/**
   workflow_dispatch:
 
 permissions:
@@ -121,6 +122,15 @@ jobs:
           git apply --check "$RUNNER_TEMP/suite.patch"
           git apply "$RUNNER_TEMP/suite.patch"
 
+      - name: Authenticate and apply bounded audit verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/chatgpt-pr181-audit-scale/patch.diff "$RUNNER_TEMP/audit-scale.patch"
+          echo "01f094cab2af76bcb7dceccd0c2791354abef0e76b84dc9f3549bdb0577bb6e8  $RUNNER_TEMP/audit-scale.patch" | sha256sum --check --strict -
+          git apply --check "$RUNNER_TEMP/audit-scale.patch"
+          git apply "$RUNNER_TEMP/audit-scale.patch"
+
       - name: Remove one-time transfer machinery
         shell: bash
         run: |
@@ -128,6 +138,7 @@ jobs:
           rm -rf .github/chatgpt-pr181-integration
           rm -rf .github/chatgpt-pr181-cache-fix
           rm -rf .github/chatgpt-pr181-suite-isolation
+          rm -rf .github/chatgpt-pr181-audit-scale
           rm -f .github/workflows/export-chatgpt-pr181.yml
           rm -f .github/workflows/hash-pr181-parts.yml
 
