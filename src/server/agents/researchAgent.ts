@@ -507,6 +507,13 @@ async function planProductDiscovery(
 export interface ResearchOptions {
   /** Preserve the small legacy research loop for tests and constrained callers. */
   competitive?: boolean;
+  /**
+   * Production competitive discovery has a strict wall-clock and model-call
+   * budget: RepoRewards/web inspection plus one bulk judgment. It skips the
+   * separate conversational tool loop and query-planning call, and never
+   * fans a failed bulk response out into five more local-model calls.
+   */
+  executionMode?: "standard" | "bounded-production";
 }
 
 const MAX_STEPS = 5;
@@ -672,6 +679,212 @@ function compactProductCandidate(candidate: CompetitiveCandidate) {
         excerpt: evidence.excerpt.slice(0, MAX_REVIEW_EVIDENCE_CHARS),
       })),
   };
+}
+
+const EVIDENCE_STOPWORDS = new Set([
+  "about",
+  "after",
+  "also",
+  "application",
+  "because",
+  "before",
+  "between",
+  "build",
+  "data",
+  "desktop",
+  "durable",
+  "from",
+  "have",
+  "into",
+  "local",
+  "must",
+  "persistent",
+  "platform",
+  "product",
+  "records",
+  "service",
+  "software",
+  "system",
+  "task",
+  "team",
+  "teams",
+  "that",
+  "their",
+  "there",
+  "these",
+  "this",
+  "through",
+  "tool",
+  "tools",
+  "user",
+  "users",
+  "when",
+  "where",
+  "which",
+  "with",
+  "workflow",
+]);
+
+function meaningfulTerms(value: string): string[] {
+  return [
+    ...new Set(
+      value
+        .toLowerCase()
+        .match(/[a-z][a-z0-9-]{3,}/g)
+        ?.filter((term) => !EVIDENCE_STOPWORDS.has(term)) ?? [],
+    ),
+  ];
+}
+
+function evidenceStatement(candidate: CompetitiveCandidate, terms: string[]): string {
+  const excerpts = candidate.sourceEvidence
+    .map((item) => item.excerpt.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const sentences = excerpts.flatMap((excerpt) =>
+    excerpt.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.length >= 24),
+  );
+  const matching = sentences.find((sentence) => {
+    const normalized = sentence.toLowerCase();
+    return terms.some((term) => normalized.includes(term));
+  });
+  return (matching ?? sentences[0] ?? excerpts[0] ?? candidate.description)
+    .slice(0, 260)
+    .trim();
+}
+
+function normalizedPhrase(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function targetEvidencePhrases(spec: ProductSpec): string[] {
+  return [
+    ...new Set(
+      [
+        spec.tagline,
+        ...spec.coreFeatures,
+        ...spec.userFlows,
+        ...spec.acceptanceCriteria,
+      ]
+        .map(normalizedPhrase)
+        .filter(
+          (phrase) =>
+            phrase.length >= 12 && phrase.split(" ").filter(Boolean).length >= 2,
+        ),
+    ),
+  ];
+}
+
+/**
+ * A no-invention fallback for a failed bulk reviewer. It can only select a
+ * product only when inspected official-page text contains a target feature
+ * phrase or at least three non-generic target terms. The emitted strength is
+ * the inspected statement itself; the limitation is explicit. If fewer than
+ * the required five qualify, the existing strict gate still blocks the run.
+ */
+export function evidenceGroundedCompetitiveSelection(
+  spec: ProductSpec,
+  _arch: Architecture,
+  dossier: CompetitiveDossier,
+): CompetitiveSelection {
+  const { candidates, requiredCount } = reviewableProductCandidates(dossier);
+  const targetTerms = meaningfulTerms(
+    JSON.stringify({
+      appName: spec.appName,
+      tagline: spec.tagline,
+      targetUser: spec.targetUser,
+      coreFeatures: spec.coreFeatures,
+      userFlows: spec.userFlows,
+      acceptanceCriteria: spec.acceptanceCriteria,
+    }),
+  );
+  const targetPhrases = targetEvidencePhrases(spec);
+  const qualified = candidates
+    .map((candidate) => {
+      const inspectedText = [
+        ...candidate.sourceEvidence.map((item) => item.excerpt),
+      ].join(" ");
+      const inspectedTerms = new Set(meaningfulTerms(inspectedText));
+      const overlap = targetTerms.filter((term) => inspectedTerms.has(term));
+      const normalizedEvidence = normalizedPhrase(inspectedText);
+      const matchedPhrases = targetPhrases.filter((phrase) =>
+        normalizedEvidence.includes(phrase),
+      );
+      const evidenceUrls = [
+        ...canonicalEvidenceUrlSet([
+          candidate.url,
+          ...candidate.sourceEvidence.map((item) => item.url),
+        ]),
+      ];
+      return { candidate, overlap, matchedPhrases, evidenceUrls };
+    })
+    .filter(
+      (item) =>
+        (item.matchedPhrases.length > 0 || item.overlap.length >= 3) &&
+        item.evidenceUrls.length > 0,
+    )
+    .sort(
+      (a, b) =>
+        b.matchedPhrases.length - a.matchedPhrases.length ||
+        b.overlap.length - a.overlap.length ||
+        a.candidate.name.localeCompare(b.candidate.name),
+    )
+    .slice(0, requiredCount);
+
+  const comparisons: CompetitiveSelection["comparisons"] = [];
+  const selected: CompetitiveSelection["selected"] = [];
+  for (const { candidate, overlap, matchedPhrases, evidenceUrls } of qualified) {
+    const phraseTerms = matchedPhrases.flatMap(meaningfulTerms);
+    const statement = evidenceStatement(candidate, [...overlap, ...phraseTerms]);
+    const score = Math.min(90, 55 + overlap.length * 5 + matchedPhrases.length * 10);
+    comparisons.push({
+      candidateId: candidate.id,
+      name: candidate.name,
+      score,
+      matchedFeatures: [
+        matchedPhrases[0]
+          ? `Inspected evidence contains target feature phrase: ${matchedPhrases[0]}`
+          : `Inspected evidence shares distinctive target concepts: ${overlap.slice(0, 5).join(", ")}`,
+      ],
+      strengths: [`Official product evidence documents: ${statement}`],
+      gaps: [
+        "Evidence verifies public product behavior, not equivalent behavior or acceptance results in the target implementation.",
+      ],
+      evidenceUrls,
+      decision: "adapt",
+      rationale: `The inspected official page ${
+        matchedPhrases[0]
+          ? `contains the target feature phrase "${matchedPhrases[0]}"`
+          : `shares at least three distinctive target concepts (${overlap
+              .slice(0, 5)
+              .join(", ")})`
+      }; any adoption remains clean-room and test-gated.`,
+    });
+    selected.push({
+      candidateId: candidate.id,
+      element: `Evidence-backed ${candidate.name} behavior: ${statement}`,
+      why: "The behavior is present in inspected official evidence and relevant to explicit target terminology.",
+      howToIntegrate:
+        "Reproduce only the documented public behavior as a clean-room pattern, then require a direct acceptance test before treating it as an advantage.",
+      reuseMode: "clean-room-pattern",
+      evidenceUrls,
+      score,
+    });
+  }
+
+  const selection = {
+    comparisons,
+    selected,
+    summary:
+      `The bulk model review was unavailable. Deterministic evidence analysis produced ${selected.length}/${requiredCount} ` +
+      "target-term-aligned clean-room candidate(s); the unchanged production gate decides whether that is sufficient.",
+  };
+  return selected.length === requiredCount
+    ? competitiveSelectionSchema(candidates, requiredCount).parse(selection)
+    : CompetitiveSelectionShape.parse(selection);
 }
 
 function auditFrom(dossier: CompetitiveDossier) {
@@ -1044,7 +1257,14 @@ export async function researchAgent(
   arch: Architecture,
   options: ResearchOptions = {},
 ): Promise<ResearchFindings> {
-  const base = await runToolResearch(deps, spec, arch);
+  const boundedProduction = options.executionMode === "bounded-production";
+  const base = boundedProduction
+    ? ResearchFindingsSchema.parse({
+        summary:
+          "Production research used the bounded RepoRewards and verified-product evidence path.",
+        recommendations: [],
+      })
+    : await runToolResearch(deps, spec, arch);
   if (!options.competitive) return base;
 
   // The run-scoped orchestrator names plausible competitors; deterministic
@@ -1052,10 +1272,12 @@ export async function researchAgent(
   // decide whether any of them count. Planning failure falls back to the
   // deterministic generic queries and remains advisory.
   let productQueries: string[] = [];
-  try {
-    productQueries = await planProductDiscovery(deps, spec, arch);
-  } catch (err) {
-    if (err instanceof ProviderAbortError) throw err;
+  if (!boundedProduction) {
+    try {
+      productQueries = await planProductDiscovery(deps, spec, arch);
+    } catch (err) {
+      if (err instanceof ProviderAbortError) throw err;
+    }
   }
 
   const dossier = await buildCompetitiveDossier(spec, arch, { productQueries });
@@ -1092,16 +1314,19 @@ export async function researchAgent(
         competitiveAudit: auditFrom(dossier),
       });
     }
-    selection = CompetitiveSelectionShape.parse({
-      comparisons: [],
-      selected: [],
-      summary:
-        `Bulk competitive review failed validation (${msg.slice(0, 240)}). ` +
-        `Continuing with evidence-scoped single-product paid reviews.`,
-    });
+    selection = boundedProduction
+      ? evidenceGroundedCompetitiveSelection(spec, arch, dossier)
+      : CompetitiveSelectionShape.parse({
+          comparisons: [],
+          selected: [],
+          summary:
+            `Bulk competitive review failed validation (${msg.slice(0, 240)}). ` +
+            `Continuing with evidence-scoped single-product paid reviews.`,
+        });
   }
   let merged = mergeCompetitiveResults(base, dossier, selection);
   if (
+    !boundedProduction &&
     coverage.productCoverageMet &&
     qualifyingProductAdvantageCount(merged, dossier) < MIN_PRODUCT_COMPETITORS
   ) {

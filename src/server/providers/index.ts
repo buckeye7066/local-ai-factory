@@ -23,6 +23,10 @@ import {
 } from "../rotation/rotatingProvider.js";
 import { ThemedProvider } from "../orchestrator/workTheme.js";
 import { ModelLadderProvider, type ModelLadderRung } from "./modelLadderProvider.js";
+import {
+  createAnthropicModelResolver,
+  createOpenAiModelResolver,
+} from "./modelCatalog.js";
 
 export { AnthropicProvider, OpenAIProvider, StubProvider, MockProvider, FreeProvider };
 export { FailoverProvider };
@@ -113,6 +117,12 @@ export function createProviderRegistry(
   // usage then replaces the in-flight estimate in the local ledger; provider
   // billing can include charges this estimate does not model.
   const anthropicModels = config.anthropicModels ?? [config.anthropicModel];
+  const anthropicModelResolver = createAnthropicModelResolver({
+    apiKey: secrets.anthropicApiKey,
+    preferred: anthropicModels,
+    log,
+    signal,
+  });
   const anthropicRungs: ModelLadderRung[] = anthropicModels.map((model) => ({
     model,
     provider: new AnthropicProvider(
@@ -128,6 +138,7 @@ export function createProviderRegistry(
       },
       signal,
       true,
+      anthropicModelResolver,
     ),
   }));
   const anthropic = new ModelLadderProvider(anthropicRungs, (from, to, reason) =>
@@ -138,6 +149,12 @@ export function createProviderRegistry(
   );
 
   const openaiModels = config.openaiModels ?? [config.openaiModel];
+  const openAiModelResolver = createOpenAiModelResolver({
+    apiKey: secrets.openaiApiKey,
+    preferred: openaiModels,
+    log,
+    signal,
+  });
   const openaiRungs: ModelLadderRung[] = openaiModels.map((model) => ({
     model,
     provider: new OpenAIProvider(
@@ -153,6 +170,7 @@ export function createProviderRegistry(
       },
       signal,
       true,
+      openAiModelResolver,
     ),
   }));
   const openai = new ModelLadderProvider(openaiRungs, (from, to, reason) =>

@@ -12,6 +12,7 @@ import {
   settlePaidCall,
   type PaidCallReservation,
 } from "./paidBudget.js";
+import type { ModelIdResolver } from "./modelCatalog.js";
 
 /**
  * anthropicProvider.ts — Claude via the official SDK.
@@ -35,6 +36,8 @@ export class AnthropicProvider implements LLMProvider {
    * timeout, not by FACTORY_RUN_TIMEOUT_MS or a cancel request.
    */
   private signal?: AbortSignal;
+  private readonly resolveModelId?: ModelIdResolver;
+  private resolvedModel: Promise<string> | null = null;
 
   constructor(
     apiKey: string,
@@ -42,6 +45,7 @@ export class AnthropicProvider implements LLMProvider {
     onUsage: UsageSink = () => {},
     signal?: AbortSignal,
     paidBudgetManaged = false,
+    resolveModelId?: ModelIdResolver,
   ) {
     // Explicit apiKey AND baseURL. This is the PAID tier, and the free route
     // sets ANTHROPIC_BASE_URL-shaped configuration elsewhere in this process;
@@ -54,6 +58,7 @@ export class AnthropicProvider implements LLMProvider {
     this.onUsage = onUsage;
     this.signal = signal;
     this.paidBudgetManaged = paidBudgetManaged;
+    this.resolveModelId = resolveModelId;
   }
 
   isConfigured(): boolean {
@@ -104,11 +109,22 @@ export class AnthropicProvider implements LLMProvider {
     return this.model;
   }
 
+  private async modelId(): Promise<string> {
+    this.resolvedModel ??= this.resolveModelId
+      ? this.resolveModelId(this.model).then((model) => {
+          this.model = model;
+          return model;
+        })
+      : Promise.resolve(this.model);
+    return this.resolvedModel;
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
     const text = await withRetry(
       "anthropic.generateText",
       async () => {
+        const model = await this.modelId();
         // NOTE: no `temperature` — sampling params are rejected (400) on
         // Claude Opus 4.7+/Sonnet 5/Fable 5, so omitting keeps this provider
         // model-agnostic. input.temperature still applies to other providers.
@@ -124,7 +140,7 @@ export class AnthropicProvider implements LLMProvider {
           res = await client.messages
             .stream(
               {
-                model: this.model,
+                model,
                 max_tokens: maxTokens,
                 system: input.system,
                 messages: [{ role: "user", content: input.prompt }],
@@ -162,6 +178,7 @@ fenced code block outside the JSON object. Your entire response must be parseabl
 JSON.parse() as-is.`;
 
     const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> => {
+      const model = await this.modelId();
       // Streamed for the same reason as generateText - large max_tokens
       // non-streaming calls are refused by the SDK outright.
       const reservation = this.reserve(system, prompt, maxTokens);
@@ -170,7 +187,7 @@ JSON.parse() as-is.`;
         res = await client.messages
           .stream(
             {
-              model: this.model,
+              model,
               max_tokens: maxTokens,
               system,
               messages: [{ role: "user", content: prompt }],

@@ -13,6 +13,7 @@ import {
 } from "./types.js";
 import type { UsageSink } from "./anthropicProvider.js";
 import { abandonPaidCall, reservePaidCall, settlePaidCall } from "./paidBudget.js";
+import type { ModelIdResolver } from "./modelCatalog.js";
 
 /**
  * openaiProvider.ts — OpenAI via the official SDK's Responses API.
@@ -33,6 +34,8 @@ export class OpenAIProvider implements LLMProvider {
    * timeout, not by FACTORY_RUN_TIMEOUT_MS or a cancel request.
    */
   private signal?: AbortSignal;
+  private readonly resolveModelId?: ModelIdResolver;
+  private resolvedModel: Promise<string> | null = null;
 
   constructor(
     apiKey: string,
@@ -40,6 +43,7 @@ export class OpenAIProvider implements LLMProvider {
     onUsage: UsageSink = () => {},
     signal?: AbortSignal,
     paidBudgetManaged = false,
+    resolveModelId?: ModelIdResolver,
   ) {
     // Explicit apiKey AND baseURL — same reasoning as the Anthropic tier. An
     // empty-but-PRESENT OPENAI_BASE_URL in the environment is honoured by the
@@ -52,6 +56,7 @@ export class OpenAIProvider implements LLMProvider {
     this.onUsage = onUsage;
     this.signal = signal;
     this.paidBudgetManaged = paidBudgetManaged;
+    this.resolveModelId = resolveModelId;
   }
 
   isConfigured(): boolean {
@@ -101,11 +106,22 @@ export class OpenAIProvider implements LLMProvider {
     return this.model;
   }
 
+  private async modelId(): Promise<string> {
+    this.resolvedModel ??= this.resolveModelId
+      ? this.resolveModelId(this.model).then((model) => {
+          this.model = model;
+          return model;
+        })
+      : Promise.resolve(this.model);
+    return this.resolvedModel;
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
     const text = await withRetry(
       "openai.generateText",
       async () => {
+        const model = await this.modelId();
         const maxTokens = input.maxTokens ?? 4096;
         // NOTE: no `temperature` — gpt-5.x reasoning models reject it (400),
         // same as current Claude models. Model defaults are used instead.
@@ -116,7 +132,7 @@ export class OpenAIProvider implements LLMProvider {
           () =>
             client.responses.create(
               {
-                model: this.model,
+                model,
                 instructions: input.system,
                 input: input.prompt,
                 max_output_tokens: maxTokens,
@@ -144,6 +160,7 @@ You MUST respond with a single valid JSON object matching the "${input.schemaNam
 Do not include markdown fences, comments, or any prose outside the JSON.`;
 
     const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> => {
+      const model = await this.modelId();
       // Prefer json_object when the Responses API accepts it; fall back plain.
       try {
         const res = await this.bill(
@@ -153,7 +170,7 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
           () =>
             client.responses.create(
               {
-                model: this.model,
+                model,
                 instructions,
                 input: prompt,
                 max_output_tokens: maxTokens,
@@ -185,7 +202,7 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
             () =>
               client.responses.create(
                 {
-                  model: this.model,
+                  model,
                   instructions,
                   input: prompt,
                   max_output_tokens: maxTokens,

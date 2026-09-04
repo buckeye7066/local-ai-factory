@@ -46,10 +46,15 @@ export const DEFAULT_ANTHROPIC_MODEL_LADDER = [
   "claude-fable-5-1",
   "claude-opus-5",
   "claude-sonnet-5",
-  "claude-haiku-4-5",
+  "claude-haiku-4-5-20251001",
 ] as const;
 
-export const DEFAULT_OPENAI_MODEL_LADDER = ["gpt-5.5"] as const;
+export const DEFAULT_OPENAI_MODEL_LADDER = [
+  "gpt-6-astra",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+] as const;
 
 function modelIds(value: string | undefined): string[] {
   return (value ?? "")
@@ -177,7 +182,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const anthropicModels = requestedAnthropicModels.length
     ? [...new Set(requestedAnthropicModels)]
     : [...new Set([anthropicModel, ...DEFAULT_ANTHROPIC_MODEL_LADDER])];
-  const openaiModel = env.OPENAI_MODEL || "gpt-5.5";
+  const openaiModel = env.OPENAI_MODEL || "gpt-6-astra";
   const requestedOpenAiModels = modelIds(env.FACTORY_OPENAI_MODEL_LADDER);
   const openaiModels = requestedOpenAiModels.length
     ? [...new Set(requestedOpenAiModels)]

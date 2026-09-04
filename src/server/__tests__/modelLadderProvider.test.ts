@@ -10,12 +10,14 @@ function fake(
   behavior: "ok" | "exhausted" | "badRequest",
   name: "anthropic" | "openai" = "anthropic",
   exhaustionMessage = "model does not exist or you do not have access",
+  actualModel?: string,
 ): LLMProvider & { calls: number } {
   const provider = {
     name,
     paidBudgetManaged: true,
     calls: 0,
     isConfigured: () => true,
+    currentModel: actualModel ? () => actualModel : undefined,
     async generateText() {
       provider.calls += 1;
       if (behavior === "exhausted") {
@@ -76,6 +78,39 @@ describe("ModelLadderProvider", () => {
     await expect(provider.generateText({} as never)).rejects.toThrow(
       /quota exceeded on OpenAI credits/,
     );
+  });
+
+  it("skips the rest of one paid family after an account-wide credit refusal", async () => {
+    const noCredits = fake(
+      "exhausted",
+      "anthropic",
+      "429 You have no credits remaining.",
+    );
+    const redundantAnthropic = fake("ok", "anthropic");
+    const openai = fake("ok", "openai");
+    const provider = new ModelLadderProvider([
+      { model: "claude-fable-5-1", provider: noCredits },
+      { model: "claude-opus-5", provider: redundantAnthropic },
+      { model: "gpt-5.6-sol", provider: openai },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(noCredits.calls).toBe(1);
+    expect(redundantAnthropic.calls).toBe(0);
+    expect(openai.calls).toBe(1);
+    expect(provider.currentProvider()).toBe("openai");
+  });
+
+  it("reports the catalog-resolved model from the active provider", async () => {
+    const resolved = fake("ok", "openai", undefined, "gpt-6-astra");
+    const provider = new ModelLadderProvider([
+      { model: "gpt-configured-alias", provider: resolved },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(provider.currentModel()).toBe("gpt-6-astra");
   });
 
   it("keeps real bad requests loud instead of hiding them with fallback", async () => {
