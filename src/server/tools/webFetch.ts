@@ -492,27 +492,35 @@ function cssZero(value: string): boolean {
 function transformCollapsesText(value: string): boolean {
   const normalized = value.toLowerCase().replace(/\s+/g, "");
   if (!normalized || normalized === "none") return false;
-  const scale = normalized.match(/(?:^|\))scale\(([^)]+)\)/)?.[1]?.split(",");
   if (
-    /(?:^|\))scale(?:x|y)?\([-+]?0*(?:\.0+)?\)/.test(normalized) ||
-    (scale !== undefined && scale.slice(0, 2).some(cssZero)) ||
-    (/(?:^|\))scale3d\([^,]+,[^,]+,[^)]+\)/.test(normalized) &&
-      normalized
-        .match(/scale3d\(([^)]+)\)/)?.[1]
-        ?.split(",")
-        .slice(0, 2)
-        .some(cssZero))
+    [...normalized.matchAll(/\bscale(?:x|y)\(([^)]+)\)/g)].some((match) =>
+      cssZero(match[1] ?? ""),
+    ) ||
+    [...normalized.matchAll(/\bscale\(([^)]+)\)/g)].some((match) =>
+      (match[1] ?? "").split(",").slice(0, 2).some(cssZero),
+    ) ||
+    [...normalized.matchAll(/\bscale3d\(([^)]+)\)/g)].some((match) =>
+      (match[1] ?? "").split(",").slice(0, 2).some(cssZero),
+    )
   ) {
     return true;
   }
-  const matrix = normalized.match(/matrix\(([^)]+)\)/)?.[1]?.split(",");
-  if (matrix?.length === 6) {
+  for (const match of normalized.matchAll(/\bmatrix\(([^)]+)\)/g)) {
+    const matrix = (match[1] ?? "").split(",");
+    if (matrix.length !== 6) continue;
     const [a, b, c, d] = matrix.slice(0, 4).map(Number);
     if ([a, b, c, d].every(Number.isFinite) && Math.abs(a! * d! - b! * c!) === 0) {
       return true;
     }
   }
   return false;
+}
+
+function scalePropertyCollapsesText(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === "none") return false;
+  const axes = normalized.split(/\s+/).slice(0, 2);
+  return axes.some(cssZero);
 }
 
 function clipRemovesText(property: string, value: string): boolean {
@@ -532,19 +540,27 @@ function clipRemovesText(property: string, value: string): boolean {
   );
 }
 
-function transparentTextColor(value: string): boolean {
-  const normalized = value.toLowerCase().replace(/\s+/g, "").trim();
+function transparentColorRemovesText(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
   if (normalized === "transparent") return true;
-  if (/^#[0-9a-f]{3}0$/i.test(normalized) || /^#[0-9a-f]{6}00$/i.test(normalized)) {
-    return true;
-  }
-  const slashAlpha = normalized.match(/\/([^/)]+)\)$/)?.[1];
-  const legacyAlpha = normalized
-    .match(/^(?:rgba|hsla)\((.*)\)$/)?.[1]
-    ?.split(",")
-    .at(-1);
-  const alpha = slashAlpha ?? legacyAlpha;
-  return alpha !== undefined && cssZero(alpha);
+
+  const shortHex = normalized.match(/^#[0-9a-f]{4}$/)?.[0];
+  if (shortHex?.endsWith("0")) return true;
+  const longHex = normalized.match(/^#[0-9a-f]{8}$/)?.[0];
+  if (longHex?.endsWith("00")) return true;
+
+  const colorFunction = normalized.match(
+    /^(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\((.*)\)$/,
+  )?.[1];
+  if (colorFunction === undefined) return false;
+
+  const slashAlpha = colorFunction.includes("/")
+    ? colorFunction.slice(colorFunction.lastIndexOf("/") + 1)
+    : undefined;
+  if (slashAlpha !== undefined) return cssZero(slashAlpha);
+
+  const commaParts = colorFunction.split(",");
+  return commaParts.length === 4 && cssZero(commaParts[3]!);
 }
 
 function propertyValuesSuppressText(get: (property: string) => string): boolean {
@@ -570,10 +586,11 @@ function propertyValuesSuppressText(get: (property: string) => string): boolean 
     (opacity !== "" && Number.parseFloat(opacity) <= 0) ||
     /opacity\([-+]?(?:0+|0*\.0+)%?\)/.test(filter) ||
     transformCollapsesText(get("transform")) ||
+    scalePropertyCollapsesText(get("scale")) ||
     clipRemovesText("clip", get("clip")) ||
     clipRemovesText("clip-path", get("clip-path")) ||
-    transparentTextColor(color) ||
-    transparentTextColor(textFill) ||
+    transparentColorRemovesText(color) ||
+    transparentColorRemovesText(textFill) ||
     cssZero(get("font-size")) ||
     zeroSizedAndClipped
   );

@@ -1174,6 +1174,17 @@ const DEFERRED_MODAL_OBJECTS = new Set([
   "waitlisted",
 ]);
 
+const DEFERRED_MODAL_PHRASES = [
+  ["early", "access"],
+  ["pre", "launch"],
+  ["pre", "order"],
+  ["pre", "register"],
+  ["pre", "registration"],
+  ["wait", "list"],
+] as const;
+
+const EXPECTATION_VERBS = new Set(["expect", "expected", "expecting", "expects"]);
+
 const FUTURE_PERIODS = new Set([
   "day",
   "days",
@@ -1205,6 +1216,13 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
   ) {
     return false;
   }
+  if (
+    tokens.some(
+      (token, index) => EXPECTATION_VERBS.has(token) && tokens[index + 1] === "to",
+    )
+  ) {
+    return false;
+  }
 
   // A bare "we will ..." remains an unfulfilled promise. Product manuals,
   // however, commonly describe current deterministic behavior as "When you
@@ -1225,9 +1243,11 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
     const hasCurrentOperation = subjectWindow.some((token) =>
       CURRENT_OPERATION_ACTIONS.has(token),
     );
-    const hasDeferredObject = subjectWindow.some((token) =>
-      DEFERRED_MODAL_OBJECTS.has(token),
-    );
+    const hasDeferredObject =
+      subjectWindow.some((token) => DEFERRED_MODAL_OBJECTS.has(token)) ||
+      DEFERRED_MODAL_PHRASES.some(
+        (phrase) => tokenSubsequenceStart(subjectWindow, [...phrase]) >= 0,
+      );
     const hasCurrentProductSubject = subjectWindow.some(
       (token, subjectIndex) =>
         CURRENT_MODAL_SUBJECTS.has(token) ||
@@ -1276,16 +1296,30 @@ function featureSpanDescribesCandidate(
   );
   if (attributionSubjects.length === 0) return true;
 
-  // Attribution after the capability governs the predicate just as strongly
-  // as a prefix ("... is a feature of our competitors"). Without syntax-tree
-  // proof that it is only a contrast, production fallback must fail closed.
-  if (attributionSubjects.some((index) => index > end)) {
-    return false;
+  const candidateSubjectBeforeFeature = tokens
+    .slice(0, start)
+    .some(
+      (token, index, prefix) =>
+        token === "we" ||
+        token === "ours" ||
+        ((token === "our" || token === "this" || token === "the") &&
+          PRODUCT_SUBJECTS.has(prefix[index + 1] ?? "")),
+    );
+  const postfixSubjects = attributionSubjects.filter((index) => index > end);
+  if (postfixSubjects.length > 0) {
+    // An explicitly candidate-owned predicate can be followed by a separate
+    // additive competitor predicate. Keep the latter scoped to its own clause
+    // instead of retroactively donating ownership to the feature. Direct
+    // postfix attribution ("a feature of competitors") still fails closed.
+    const additivelySeparated = postfixSubjects.every((index) =>
+      tokens.slice(end + 1, index).includes("and"),
+    );
+    if (!candidateSubjectBeforeFeature || !additivelySeparated) return false;
   }
 
-  const competingSubject = Math.max(
-    ...attributionSubjects.filter((index) => index < start),
-  );
+  const prefixSubjects = attributionSubjects.filter((index) => index < start);
+  if (prefixSubjects.length === 0) return true;
+  const competingSubject = Math.max(...prefixSubjects);
 
   for (let index = competingSubject + 1; index < start; index += 1) {
     const token = tokens[index]!;

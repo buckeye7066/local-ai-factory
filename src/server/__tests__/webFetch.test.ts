@@ -274,12 +274,17 @@ describe("webFetchTool readable HTML extraction", () => {
     "opacity: 0",
     "transform: scale(0)",
     "transform: scale(0, 1)",
+    "transform: translateX(1px) scale(1) scale(0, 1)",
+    "scale: 0",
+    "scale: 0 1",
     "clip: rect(0, 0, 0, 0)",
     "clip-path: inset(50%)",
     "font-size: 0",
-    "color: transparent",
     "color: rgba(0, 0, 0, 0)",
+    "color: rgb(0 0 0 / 0%)",
     "color: #0000",
+    "color: #00000000",
+    "-webkit-text-fill-color: rgba(12, 34, 56, 0)",
   ])("rejects text hidden by a visual CSS technique: %s", async (declaration) => {
     const fetch = vi.fn(async () =>
       Promise.resolve(
