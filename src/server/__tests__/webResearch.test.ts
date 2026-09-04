@@ -387,6 +387,21 @@ describe("webFetchTool network boundary", () => {
       "This product doesn't support offline sync and doesn't retain plaintext secrets.",
     );
   });
+
+  it("decodes exactly one HTML entity layer", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("<main>Policy: do&amp;#32;not store plaintext credentials.</main>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const result = await webFetchTool("https://example.com/policy", 1_000, {
+      fetch: fetchImpl,
+      lookup: publicLookup,
+    });
+
+    expect(result.textExcerpt).toBe("Policy: do&#32;not store plaintext credentials.");
+  });
 });
 
 const spec: ProductSpec = {

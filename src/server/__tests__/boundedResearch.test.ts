@@ -257,7 +257,7 @@ describe("bounded production research", () => {
       "The product never offers offline workflow synchronization.",
       "The product lacks offline workflow synchronization.",
       "Offline workflow synchronization is not supported.",
-      "The product doesn&#39;t provide offline workflow synchronization.",
+      "The product doesn't provide offline workflow synchronization.",
     ];
     input.candidates.forEach((candidate, index) => {
       candidate.sourceEvidence[0]!.excerpt = denials[index]!;
@@ -427,6 +427,70 @@ describe("bounded production research", () => {
     for (const candidate of input.candidates) {
       candidate.sourceEvidence[0]!.excerpt =
         "No setup; we store plaintext credentials.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["do not store plaintext credentials"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("tracks negation across the complete matched clause", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "This product does not under any circumstances make any effort whatsoever to encrypt stored plaintext credentials using hardware keys.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not turn double-encoded visible text into new evidence", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Policy text: do&amp;#32;not store plaintext credentials.";
     }
     const spy = vi
       .spyOn(intelligence, "buildCompetitiveDossier")

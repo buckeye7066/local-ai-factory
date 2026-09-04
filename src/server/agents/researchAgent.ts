@@ -3,7 +3,6 @@ import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 import { ProviderAbortError } from "../providers/types.js";
 import { webSearch } from "../tools/webSearch.js";
 import { webFetchTool } from "../tools/webFetch.js";
-import { decodeHtmlEntities } from "../tools/htmlEntities.js";
 import { canonicalEvidenceUrlSet, matchingEvidenceUrls } from "../tools/evidenceUrl.js";
 import {
   buildCompetitiveDossier,
@@ -738,7 +737,7 @@ function meaningfulTerms(value: string): string[] {
 }
 
 function normalizedPhrase(value: string): string {
-  return decodeHtmlEntities(value)
+  return value
     .toLowerCase()
     .replace(
       /\b(?:ain|aren|can|couldn|didn|doesn|don|hadn|hasn|haven|isn|mustn|shouldn|wasn|weren|won|wouldn)['’]t\b/g,
@@ -840,8 +839,11 @@ function featureSpanPolarity(
 ): FeaturePolarity {
   const operatorIndexes: number[] = [];
   const denialIndexes: number[] = [];
-  const windowStart = Math.max(0, start - 6);
-  const windowEnd = Math.min(tokens.length - 1, end + 6);
+  // `tokens` is already one bounded clause (see coherentEvidenceMatches).
+  // Scan the complete clause: a fixed lookaround silently loses valid
+  // long-range negation such as "does not under any circumstances ... encrypt".
+  const windowStart = 0;
+  const windowEnd = tokens.length - 1;
   for (let index = windowStart; index <= windowEnd; index += 1) {
     const token = tokens[index]!;
     const inside = index >= start && index <= end;
@@ -954,7 +956,9 @@ function coherentEvidenceMatches(
   inspectedText: string,
   evidenceUrl: string,
 ): CoherentEvidenceMatch[] {
-  const segments = decodeHtmlEntities(inspectedText)
+  // Product-page HTML is decoded exactly once by webFetchTool. Re-decoding
+  // here would turn double-encoded, visibly literal text into new evidence.
+  const segments = inspectedText
     .split(/(?<=[.!?])\s+|[;:\r\n]+|\b(?:although|but|however|whereas)\b/i)
     .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
     .map((statement) => ({ statement, normalized: normalizedPhrase(statement) }))

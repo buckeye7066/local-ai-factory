@@ -5,7 +5,11 @@ import {
   productionReadinessAgent,
 } from "../agents/productionReadinessAgent.js";
 import { ModelLadderProvider } from "../providers/modelLadderProvider.js";
-import { ProviderModelUnavailableError, withRetry } from "../providers/types.js";
+import {
+  ProviderExhaustionError,
+  ProviderModelUnavailableError,
+  withRetry,
+} from "../providers/types.js";
 
 function fake(
   behavior: "ok" | "exhausted" | "badRequest",
@@ -98,6 +102,31 @@ describe("ModelLadderProvider", () => {
     await provider.generateText({} as never);
 
     expect(noCredits.calls).toBe(1);
+    expect(redundantAnthropic.calls).toBe(0);
+    expect(openai.calls).toBe(1);
+    expect(provider.currentProvider()).toBe("openai");
+  });
+
+  it("skips the provider family after a terse typed 402 refusal", async () => {
+    const paymentRequired = fake("ok", "anthropic");
+    paymentRequired.generateText = async () => {
+      paymentRequired.calls += 1;
+      throw new ProviderExhaustionError(
+        "anthropic.generateText route exhausted (provider returned 402).",
+        402,
+      );
+    };
+    const redundantAnthropic = fake("ok", "anthropic");
+    const openai = fake("ok", "openai");
+    const provider = new ModelLadderProvider([
+      { model: "claude-fable-5-1", provider: paymentRequired },
+      { model: "claude-opus-5", provider: redundantAnthropic },
+      { model: "gpt-5.6-sol", provider: openai },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(paymentRequired.calls).toBe(1);
     expect(redundantAnthropic.calls).toBe(0);
     expect(openai.calls).toBe(1);
     expect(provider.currentProvider()).toBe("openai");

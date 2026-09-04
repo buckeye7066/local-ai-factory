@@ -96,9 +96,11 @@ export class ModelLadderProvider implements LLMProvider {
         // one model ID. Probing every remaining same-family rung only repeats a
         // billable refusal. Model-scoped availability and capacity failures do
         // still walk the configured family ladder.
+        const providerAccountExhausted =
+          isQuotaRefusal(error) || (error as { status?: unknown })?.status === 402;
         const excludedProviders = isPaidBudgetExhaustion(error)
           ? new Set<LLMProvider["name"]>(["anthropic", "openai"])
-          : isQuotaRefusal(error)
+          : providerAccountExhausted
             ? new Set<LLMProvider["name"]>([rung.provider.name])
             : undefined;
         const nextIndex = this.nextConfigured(index, excludedProviders);

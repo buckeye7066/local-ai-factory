@@ -25,4 +25,8 @@ describe("bounded HTML entity decoding", () => {
   it("retains semantic whitespace entities for later whitespace normalization", () => {
     expect(decodeHtmlEntities("a&#9;b&#10;c&#13;d")).toBe("a\tb\nc\rd");
   });
+
+  it("decodes one HTML layer without materializing double-encoded text", () => {
+    expect(decodeHtmlEntities("do&amp;#32;not")).toBe("do&#32;not");
+  });
 });
