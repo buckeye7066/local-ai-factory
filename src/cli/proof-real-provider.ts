@@ -24,12 +24,17 @@ async function main() {
   const config = getConfig();
   const secrets = getSecrets();
   const idea =
-    process.argv.slice(2).filter((arg) => !arg.startsWith("--")).join(" ").trim() ||
-    "Build a tiny sticky-note counter app";
+    process.argv
+      .slice(2)
+      .filter((arg) => !arg.startsWith("--"))
+      .join(" ")
+      .trim() || "Build a tiny sticky-note counter app";
 
   console.log("Factory Deck - automatic live-ladder proof");
   console.log(`  idea: ${idea}`);
-  console.log(`  ladder: ${(config.modelLadder ?? ["anthropic", "openai", "free"]).join(" -> ")}`);
+  console.log(
+    `  ladder: ${(config.modelLadder ?? ["anthropic", "openai", "free"]).join(" -> ")}`,
+  );
 
   try {
     const run = await runFactory({
@@ -46,8 +51,13 @@ async function main() {
       secrets,
     });
 
-    if (run.demo) throw new Error("Refusing proof: production run was marked demo");
-    if (OFFLINE_PROVIDERS.has(run.codeProvider) || OFFLINE_PROVIDERS.has(run.reviewProvider)) {
+    if (run.demo) {
+      throw new Error("Refusing proof: production run was marked demo");
+    }
+    if (
+      OFFLINE_PROVIDERS.has(run.codeProvider) ||
+      OFFLINE_PROVIDERS.has(run.reviewProvider)
+    ) {
       throw new Error(
         `Refusing proof: offline provider used (code=${run.codeProvider}, review=${run.reviewProvider})`,
       );
