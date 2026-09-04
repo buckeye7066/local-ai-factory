@@ -1,0 +1,26 @@
+-    .toLowerCase();
+-  const zeroSizedAndClipped =
+-    cssZero(get("width")) &&
+-    cssZero(get("height")) &&
+-    /\b(?:clip|hidden)\b/.test(overflow);
++  const overflow = get("overflow").trim().toLowerCase();
++  const overflowX = get("overflow-x").trim().toLowerCase() || overflow;
++  const overflowY = get("overflow-y").trim().toLowerCase() || overflow;
++  const clips = (value: string) => /\b(?:clip|hidden)\b/.test(value);
++  const zeroWidthAndClipped =
++    (cssZero(get("width")) || cssZero(get("max-width"))) && clips(overflowX);
++  const zeroHeightAndClipped =
++    (cssZero(get("height")) || cssZero(get("max-height"))) && clips(overflowY);
+   return (
+     display === "none" ||
+     visibility === "hidden" ||
+@@ -652,7 +663,8 @@ function propertyValuesSuppressText(get: (property: string) => string): boolean
+     transparentTextColor(color) ||
+     transparentTextColor(textFill) ||
+     cssZero(get("font-size")) ||
+-    zeroSizedAndClipped
++    zeroWidthAndClipped ||
++    zeroHeightAndClipped
+   );
+ }
+ 
