@@ -55,7 +55,13 @@ export class OpenAIProvider implements LLMProvider {
     // SDK as a literal base URL and produces a connection error, so the paid
     // client must never be built from the environment.
     this.client = apiKey
-      ? new OpenAI({ apiKey, baseURL: "https://api.openai.com/v1" })
+      ? new OpenAI({
+          apiKey,
+          baseURL: "https://api.openai.com/v1",
+          organization: null,
+          project: null,
+          maxRetries: 0,
+        })
       : null;
     this.model = model;
     this.onUsage = onUsage;
@@ -80,7 +86,11 @@ export class OpenAIProvider implements LLMProvider {
     prompt: string,
     maxTokens: number,
     call: () => Promise<T>,
-    usageOf: (response: T) => { inTokens: number; outTokens: number },
+    usageOf: (response: T) => {
+      inTokens: number;
+      outTokens: number;
+      servedModel?: string;
+    },
     onProviderAttempt: () => void,
   ): Promise<T> {
     const reservation = this.paidBudgetManaged
@@ -94,7 +104,9 @@ export class OpenAIProvider implements LLMProvider {
       if (reservation) abandonPaidCall(reservation);
       throw error;
     }
-    const usage = usageOf(response);
+    const billed = usageOf(response);
+    const usage = { inTokens: billed.inTokens, outTokens: billed.outTokens };
+    if (billed.servedModel?.trim()) this.model = billed.servedModel.trim();
     if (reservation) settlePaidCall(reservation, usage);
     try {
       this.onUsage(usage, this.model);
@@ -155,6 +167,7 @@ export class OpenAIProvider implements LLMProvider {
             (response) => ({
               inTokens: response.usage?.input_tokens ?? 0,
               outTokens: response.usage?.output_tokens ?? 0,
+              servedModel: response.model,
             }),
             () => {
               providerAttemptOccurred = true;
@@ -204,6 +217,7 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
           (response) => ({
             inTokens: response.usage?.input_tokens ?? 0,
             outTokens: response.usage?.output_tokens ?? 0,
+            servedModel: response.model,
           }),
           () => {
             providerAttemptOccurred = true;
@@ -238,6 +252,7 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
             (response) => ({
               inTokens: response.usage?.input_tokens ?? 0,
               outTokens: response.usage?.output_tokens ?? 0,
+              servedModel: response.model,
             }),
             () => {
               providerAttemptOccurred = true;

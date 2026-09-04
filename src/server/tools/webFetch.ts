@@ -1,4 +1,5 @@
 import { lookup as dnsLookup } from "node:dns/promises";
+import { decodeHtmlEntities } from "./htmlEntities.js";
 import { BlockList, isIP } from "node:net";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -267,16 +268,17 @@ function isHttpUrl(url: string): boolean {
 
 /** Strip HTML tags/scripts down to readable text for the excerpt. */
 function toReadableText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<(?:br|hr)\b[^>]*\/?>/gi, "\n")
-    .replace(
-      /<\/?(?:address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)\b[^>]*>/gi,
-      "\n",
-    )
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
+  return decodeHtmlEntities(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<(?:br|hr)\b[^>]*\/?>/gi, "\n")
+      .replace(
+        /<\/?(?:address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)\b[^>]*>/gi,
+        "\n",
+      )
+      .replace(/<[^>]+>/g, " "),
+  )
     .replace(/[\t\f\v ]+/g, " ")
     .replace(/ *\r?\n */g, "\n")
     .replace(/\n{2,}/g, "\n")

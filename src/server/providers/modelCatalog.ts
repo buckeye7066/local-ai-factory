@@ -289,7 +289,9 @@ export function createAnthropicModelResolver(args: {
   if (!args.apiKey) return undefined;
   const client = new Anthropic({
     apiKey: args.apiKey,
+    authToken: null,
     baseURL: "https://api.anthropic.com",
+    maxRetries: 0,
   });
   return createCachedModelResolver({
     provider: "anthropic",
@@ -325,6 +327,9 @@ export function createOpenAiModelResolver(args: {
   const client = new OpenAI({
     apiKey: args.apiKey,
     baseURL: "https://api.openai.com/v1",
+    organization: null,
+    project: null,
+    maxRetries: 0,
   });
   return createCachedModelResolver({
     provider: "openai",

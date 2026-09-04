@@ -257,7 +257,7 @@ describe("bounded production research", () => {
       "The product never offers offline workflow synchronization.",
       "The product lacks offline workflow synchronization.",
       "Offline workflow synchronization is not supported.",
-      "The product doesn't provide offline workflow synchronization.",
+      "The product doesn&#39;t provide offline workflow synchronization.",
     ];
     input.candidates.forEach((candidate, index) => {
       candidate.sourceEvidence[0]!.excerpt = denials[index]!;

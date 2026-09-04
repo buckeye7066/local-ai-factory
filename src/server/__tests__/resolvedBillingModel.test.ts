@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { AnthropicProvider } from "../providers/anthropicProvider.js";
 import { OpenAIProvider } from "../providers/openaiProvider.js";
 
-describe("paid usage identifies the catalog-resolved serving model", () => {
-  it("reports an Anthropic dated snapshot instead of its configured alias", async () => {
+describe("paid usage identifies the API-reported serving model", () => {
+  it("reports Anthropic's response model instead of its requested catalog pin", async () => {
     const observed: Array<{
       usage: { inTokens: number; outTokens: number };
       model: string;
@@ -26,6 +26,7 @@ describe("paid usage identifies the catalog-resolved serving model", () => {
           messages: {
             stream: (request: { model: string }) => {
               finalMessage: () => Promise<{
+                model: string;
                 usage: { input_tokens: number; output_tokens: number };
                 content: Array<{ type: "text"; text: string }>;
               }>;
@@ -39,6 +40,7 @@ describe("paid usage identifies the catalog-resolved serving model", () => {
           requests.push(request);
           return {
             finalMessage: async () => ({
+              model: "claude-haiku-4-5-20251002",
               usage: { input_tokens: 11, output_tokens: 7 },
               content: [{ type: "text", text: "ok" }],
             }),
@@ -54,12 +56,13 @@ describe("paid usage identifies the catalog-resolved serving model", () => {
     expect(observed).toEqual([
       {
         usage: { inTokens: 11, outTokens: 7 },
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-haiku-4-5-20251002",
       },
     ]);
+    expect(provider.currentModel()).toBe("claude-haiku-4-5-20251002");
   });
 
-  it("reports an OpenAI snapshot instead of a substituted configured rung", async () => {
+  it("reports OpenAI's response model instead of its requested catalog pin", async () => {
     const observed: Array<{
       usage: { inTokens: number; outTokens: number };
       model: string;
@@ -81,6 +84,7 @@ describe("paid usage identifies the catalog-resolved serving model", () => {
         client: {
           responses: {
             create: (request: { model: string }) => Promise<{
+              model: string;
               usage: { input_tokens: number; output_tokens: number };
               output_text: string;
             }>;
@@ -92,6 +96,7 @@ describe("paid usage identifies the catalog-resolved serving model", () => {
         create: async (request) => {
           requests.push(request);
           return {
+            model: "gpt-4.1-2025-04-15",
             usage: { input_tokens: 13, output_tokens: 5 },
             output_text: "ok",
           };
@@ -106,8 +111,9 @@ describe("paid usage identifies the catalog-resolved serving model", () => {
     expect(observed).toEqual([
       {
         usage: { inTokens: 13, outTokens: 5 },
-        model: "gpt-4.1-2025-04-14",
+        model: "gpt-4.1-2025-04-15",
       },
     ]);
+    expect(provider.currentModel()).toBe("gpt-4.1-2025-04-15");
   });
 });

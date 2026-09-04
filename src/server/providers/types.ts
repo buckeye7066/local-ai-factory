@@ -72,6 +72,29 @@ export class ProviderModelUnavailableError extends Error {
   }
 }
 
+export type ProviderExhaustionStatus = 402 | 429 | 529;
+
+/**
+ * Sanitized paid-provider refusal that retains only the status needed by the
+ * outer model ladder. The original SDK error may contain response bodies or
+ * request metadata, so it must not escape the provider boundary.
+ */
+export class ProviderExhaustionError extends Error {
+  constructor(
+    message: string,
+    readonly status: ProviderExhaustionStatus,
+  ) {
+    super(message);
+    this.name = "ProviderExhaustionError";
+  }
+}
+
+function isProviderExhaustionStatus(
+  status: unknown,
+): status is ProviderExhaustionStatus {
+  return status === 402 || status === 429 || status === 529;
+}
+
 /**
  * Reject with {@link ProviderAbortError} the moment `signal` fires, whichever
  * settles first. This is the backstop that bounds a call even if the inner
@@ -151,6 +174,16 @@ export async function withRetry<T>(
         await sleep(backoff);
       }
     }
+  }
+  const status = (lastErr as { status?: unknown })?.status;
+  if (
+    isProviderExhaustionStatus(status) &&
+    (label.startsWith("anthropic.") || label.startsWith("openai."))
+  ) {
+    throw new ProviderExhaustionError(
+      `${label} route exhausted (provider returned ${status}).`,
+      status,
+    );
   }
   // Surface a sanitized error only — never include payloads.
   throw new Error(

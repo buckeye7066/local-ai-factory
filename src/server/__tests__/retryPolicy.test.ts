@@ -4,7 +4,9 @@ import {
   withRetry,
   isNonRetryable,
   ProviderModelUnavailableError,
+  ProviderExhaustionError,
 } from "../providers/types.js";
+import { isModelExhaustion } from "../providers/modelExhaustion.js";
 
 function httpError(status: number): Error & { status: number } {
   return Object.assign(new Error(`HTTP ${status}`), { status });
@@ -82,6 +84,30 @@ describe("withRetry", () => {
     expect(caught).not.toBe(sdkNotFound);
     expect(calls).toBe(1);
   });
+
+  it.each([402, 429, 529] as const)(
+    "retains a terse paid-provider %i refusal for the outer model ladder",
+    async (status) => {
+      const sdkError = Object.assign(new Error("request failed"), { status });
+      let caught: unknown;
+      try {
+        await withRetry(
+          "openai.generateText",
+          async () => {
+            throw sdkError;
+          },
+          1,
+        );
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(ProviderExhaustionError);
+      expect((caught as ProviderExhaustionError).status).toBe(status);
+      expect(caught).not.toBe(sdkError);
+      expect(isModelExhaustion(caught)).toBe(true);
+    },
+  );
 });
 
 describe("schema failures are not transport faults (2026-08-16)", () => {

@@ -367,6 +367,26 @@ describe("webFetchTool network boundary", () => {
       "Recovery experts restore damaged disks",
     ]);
   });
+
+  it("decodes HTML apostrophe entities before evidence polarity analysis", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        "<main>This product doesn&#39;t support offline sync and doesn&apos;t retain plaintext secrets.</main>",
+        {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        },
+      ),
+    );
+    const result = await webFetchTool("https://example.com/limitations", 1_000, {
+      fetch: fetchImpl,
+      lookup: publicLookup,
+    });
+
+    expect(result.textExcerpt).toBe(
+      "This product doesn't support offline sync and doesn't retain plaintext secrets.",
+    );
+  });
 });
 
 const spec: ProductSpec = {

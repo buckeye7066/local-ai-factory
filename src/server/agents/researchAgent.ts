@@ -3,6 +3,7 @@ import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 import { ProviderAbortError } from "../providers/types.js";
 import { webSearch } from "../tools/webSearch.js";
 import { webFetchTool } from "../tools/webFetch.js";
+import { decodeHtmlEntities } from "../tools/htmlEntities.js";
 import { canonicalEvidenceUrlSet, matchingEvidenceUrls } from "../tools/evidenceUrl.js";
 import {
   buildCompetitiveDossier,
@@ -737,7 +738,7 @@ function meaningfulTerms(value: string): string[] {
 }
 
 function normalizedPhrase(value: string): string {
-  return value
+  return decodeHtmlEntities(value)
     .toLowerCase()
     .replace(
       /\b(?:ain|aren|can|couldn|didn|doesn|don|hadn|hasn|haven|isn|mustn|shouldn|wasn|weren|won|wouldn)['’]t\b/g,
@@ -953,7 +954,7 @@ function coherentEvidenceMatches(
   inspectedText: string,
   evidenceUrl: string,
 ): CoherentEvidenceMatch[] {
-  const segments = inspectedText
+  const segments = decodeHtmlEntities(inspectedText)
     .split(/(?<=[.!?])\s+|[;:\r\n]+|\b(?:although|but|however|whereas)\b/i)
     .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
     .map((statement) => ({ statement, normalized: normalizedPhrase(statement) }))

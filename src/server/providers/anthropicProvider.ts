@@ -56,7 +56,12 @@ export class AnthropicProvider implements LLMProvider {
     // passing both explicitly makes the SDK ignore every credential env var so
     // free-route settings can never leak into a billable call (and vice versa).
     this.client = apiKey
-      ? new Anthropic({ apiKey, baseURL: "https://api.anthropic.com" })
+      ? new Anthropic({
+          apiKey,
+          authToken: null,
+          baseURL: "https://api.anthropic.com",
+          maxRetries: 0,
+        })
       : null;
     this.model = model;
     this.onUsage = onUsage;
@@ -91,7 +96,9 @@ export class AnthropicProvider implements LLMProvider {
   private recordUsage(
     reservation: PaidCallReservation | null,
     usage: { inTokens: number; outTokens: number },
+    servedModel?: string,
   ): void {
+    if (servedModel?.trim()) this.model = servedModel.trim();
     if (reservation) settlePaidCall(reservation, usage);
     try {
       this.onUsage(usage, this.model);
@@ -163,10 +170,14 @@ export class AnthropicProvider implements LLMProvider {
             this.abandon(reservation);
             throw error;
           }
-          this.recordUsage(reservation, {
-            inTokens: res.usage?.input_tokens ?? 0,
-            outTokens: res.usage?.output_tokens ?? 0,
-          });
+          this.recordUsage(
+            reservation,
+            {
+              inTokens: res.usage?.input_tokens ?? 0,
+              outTokens: res.usage?.output_tokens ?? 0,
+            },
+            res.model,
+          );
           return res.content
             .map((block) => (block.type === "text" ? block.text : ""))
             .join("");
@@ -218,10 +229,14 @@ JSON.parse() as-is.`;
         this.abandon(reservation);
         throw error;
       }
-      this.recordUsage(reservation, {
-        inTokens: res.usage?.input_tokens ?? 0,
-        outTokens: res.usage?.output_tokens ?? 0,
-      });
+      this.recordUsage(
+        reservation,
+        {
+          inTokens: res.usage?.input_tokens ?? 0,
+          outTokens: res.usage?.output_tokens ?? 0,
+        },
+        res.model,
+      );
       const text = res.content
         .map((block) => (block.type === "text" ? block.text : ""))
         .join("");

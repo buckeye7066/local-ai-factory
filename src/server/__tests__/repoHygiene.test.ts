@@ -79,6 +79,7 @@ describe("repository hygiene", () => {
 
   it("recursively assigns code owners to the entire GitHub control plane", () => {
     const codeowners = readFileSync(resolve(ROOT, ".github/CODEOWNERS"), "utf8");
+    expect(codeowners).toMatch(/^\*\s+@buckeye7066$/m);
     expect(codeowners).toContain("/.github/** @buckeye7066");
     expect(codeowners).not.toMatch(/^\/\.github\/(?:workflows|ISSUE_TEMPLATE)\/$/m);
   });
