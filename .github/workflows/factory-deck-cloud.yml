@@ -126,7 +126,7 @@ jobs:
 
       - name: Preserve exact candidate
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: factory-deck-seed-${{ github.run_id }}
           if-no-files-found: error
@@ -186,7 +186,7 @@ jobs:
 
       - name: Preserve Windows evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: factory-deck-windows-${{ github.run_id }}
           if-no-files-found: error
@@ -257,7 +257,7 @@ jobs:
 
       - name: Preserve macOS evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: factory-deck-macos-${{ github.run_id }}
           if-no-files-found: error
@@ -342,7 +342,7 @@ jobs:
 
       - name: Preserve Factory Deck result
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: factory-deck-${{ github.run_id }}
           if-no-files-found: error
