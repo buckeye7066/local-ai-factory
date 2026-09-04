@@ -171,10 +171,13 @@ function compareModelStrength(
 function modelMatches(configured: string, available: string): boolean {
   const requested = configured.toLowerCase();
   const candidate = available.toLowerCase();
+  if (candidate === requested) return true;
+  const snapshotSuffix = /-(?:latest|\d{8}|\d{4}-\d{2}-\d{2})$/;
+  const requestedBase = requested.replace(snapshotSuffix, "");
+  const candidateBase = candidate.replace(snapshotSuffix, "");
   return (
-    candidate === requested ||
-    candidate.startsWith(`${requested}-`) ||
-    requested.startsWith(`${candidate}-`)
+    requestedBase === candidateBase &&
+    (requestedBase !== requested || candidateBase !== candidate)
   );
 }
 

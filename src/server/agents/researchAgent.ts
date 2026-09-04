@@ -736,22 +736,6 @@ function meaningfulTerms(value: string): string[] {
   ];
 }
 
-function evidenceStatement(candidate: CompetitiveCandidate, terms: string[]): string {
-  const excerpts = candidate.sourceEvidence
-    .map((item) => item.excerpt.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  const sentences = excerpts.flatMap((excerpt) =>
-    excerpt.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.length >= 24),
-  );
-  const matching = sentences.find((sentence) => {
-    const normalized = sentence.toLowerCase();
-    return terms.some((term) => normalized.includes(term));
-  });
-  return (matching ?? sentences[0] ?? excerpts[0] ?? candidate.description)
-    .slice(0, 260)
-    .trim();
-}
-
 function normalizedPhrase(value: string): string {
   return value
     .toLowerCase()
@@ -782,20 +766,52 @@ type CoherentEvidenceMatch = {
   phrase: string;
   terms: string[];
   exact: boolean;
+  statement: string;
+  evidenceUrl: string;
 };
+
+function compareCoherentEvidenceStrength(
+  left: CoherentEvidenceMatch,
+  right: CoherentEvidenceMatch,
+): number {
+  if (left.exact !== right.exact) return left.exact ? -1 : 1;
+  if (left.terms.length !== right.terms.length) {
+    return right.terms.length - left.terms.length;
+  }
+  if (left.phrase.length !== right.phrase.length) {
+    return right.phrase.length - left.phrase.length;
+  }
+  return (
+    left.evidenceUrl.localeCompare(right.evidenceUrl) ||
+    left.statement.localeCompare(right.statement)
+  );
+}
 
 function coherentEvidenceMatches(
   spec: ProductSpec,
   inspectedText: string,
+  evidenceUrl: string,
 ): CoherentEvidenceMatch[] {
   const segments = inspectedText
     .split(/(?<=[.!?])\s+|[\r\n]+/)
-    .map(normalizedPhrase)
-    .filter(Boolean);
+    .map((statement) => ({
+      statement: statement.replace(/\s+/g, " ").trim().slice(0, 260),
+      normalized: normalizedPhrase(statement),
+    }))
+    .filter((segment) => segment.normalized.length > 0);
 
   return targetEvidencePhrases(spec).flatMap((phrase): CoherentEvidenceMatch[] => {
-    if (segments.some((segment) => segment.includes(phrase))) {
-      return [{ phrase, terms: meaningfulTerms(phrase), exact: true }];
+    const exact = segments.find((segment) => segment.normalized.includes(phrase));
+    if (exact) {
+      return [
+        {
+          phrase,
+          terms: meaningfulTerms(phrase),
+          exact: true,
+          statement: exact.statement,
+          evidenceUrl,
+        },
+      ];
     }
 
     const featureTerms = meaningfulTerms(phrase);
@@ -806,12 +822,23 @@ function coherentEvidenceMatches(
         : Math.max(3, Math.ceil(featureTerms.length * 0.75));
     const bestOverlap = segments
       .map((segment) => {
-        const segmentTerms = new Set(meaningfulTerms(segment));
-        return featureTerms.filter((term) => segmentTerms.has(term));
+        const segmentTerms = new Set(meaningfulTerms(segment.normalized));
+        return {
+          statement: segment.statement,
+          terms: featureTerms.filter((term) => segmentTerms.has(term)),
+        };
       })
-      .sort((left, right) => right.length - left.length)[0];
-    return bestOverlap && bestOverlap.length >= required
-      ? [{ phrase, terms: bestOverlap, exact: false }]
+      .sort((left, right) => right.terms.length - left.terms.length)[0];
+    return bestOverlap && bestOverlap.terms.length >= required
+      ? [
+          {
+            phrase,
+            terms: bestOverlap.terms,
+            exact: false,
+            statement: bestOverlap.statement,
+            evidenceUrl,
+          },
+        ]
       : [];
   });
 }
@@ -833,21 +860,18 @@ export function evidenceGroundedCompetitiveSelection(
   const { candidates, requiredCount } = reviewableProductCandidates(dossier);
   const qualified = candidates
     .map((candidate) => {
-      const inspectedText = [
-        ...candidate.sourceEvidence.map((item) => item.excerpt),
-      ].join("\n");
-      const featureMatches = coherentEvidenceMatches(spec, inspectedText);
+      const featureMatches = candidate.sourceEvidence
+        .flatMap((item) =>
+          [...canonicalEvidenceUrlSet([item.url])].flatMap((evidenceUrl) =>
+            coherentEvidenceMatches(spec, item.excerpt, evidenceUrl),
+          ),
+        )
+        .sort(compareCoherentEvidenceStrength);
       const exactMatches = featureMatches.filter((match) => match.exact);
       const overlap = [...new Set(featureMatches.flatMap((match) => match.terms))];
-      const evidenceUrls = [
-        ...canonicalEvidenceUrlSet([
-          candidate.url,
-          ...candidate.sourceEvidence.map((item) => item.url),
-        ]),
-      ];
-      return { candidate, overlap, featureMatches, exactMatches, evidenceUrls };
+      return { candidate, overlap, featureMatches, exactMatches };
     })
-    .filter((item) => item.featureMatches.length > 0 && item.evidenceUrls.length > 0)
+    .filter((item) => item.featureMatches.length > 0)
     .sort(
       (a, b) =>
         b.exactMatches.length - a.exactMatches.length ||
@@ -859,15 +883,10 @@ export function evidenceGroundedCompetitiveSelection(
 
   const comparisons: CompetitiveSelection["comparisons"] = [];
   const selected: CompetitiveSelection["selected"] = [];
-  for (const {
-    candidate,
-    overlap,
-    featureMatches,
-    exactMatches,
-    evidenceUrls,
-  } of qualified) {
-    const statement = evidenceStatement(candidate, overlap);
-    const strongestMatch = exactMatches[0] ?? featureMatches[0]!;
+  for (const { candidate, overlap, featureMatches, exactMatches } of qualified) {
+    const strongestMatch = featureMatches[0]!;
+    const statement = strongestMatch.statement;
+    const evidenceUrls = [strongestMatch.evidenceUrl];
     const score = Math.min(90, 55 + overlap.length * 5 + exactMatches.length * 10);
     comparisons.push({
       candidateId: candidate.id,

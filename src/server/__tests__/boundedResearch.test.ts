@@ -53,7 +53,7 @@ function dossier(unrelatedLast = false): CompetitiveDossier {
           excerpt:
             unrelatedLast && number === 5
               ? "Offline ticket sales are available. Synchronization connects cloud invoices. Recovery experts restore damaged disks."
-              : `The official product page documents offline workflow synchronization and durable workflow recovery for team ${number}.`,
+              : `Recovery experts restore damaged disks. The official product page documents offline workflow synchronization and durable workflow recovery for team ${number}.`,
         },
       ],
       inspectionError: "",
@@ -137,6 +137,14 @@ describe("bounded production research", () => {
       expect(findings.recommendations).toHaveLength(5);
       expect(findings.summary).toContain("Deterministic evidence analysis");
       expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(true);
+      for (const comparison of findings.comparisons) {
+        expect(comparison.strengths[0]).toContain(
+          "official product page documents offline workflow synchronization",
+        );
+        expect(comparison.strengths[0]).not.toContain(
+          "Recovery experts restore damaged disks",
+        );
+      }
     } finally {
       spy.mockRestore();
     }
@@ -161,6 +169,49 @@ describe("bounded production research", () => {
       expect(gate.reasons).toContain(
         "competitive selected-advantage entries are 4/5; exactly 5 required",
       );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("emits the statement and URL from the strongest coherent match", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence = [
+        {
+          path: "weak-product-page",
+          url: `${candidate.url}/weak`,
+          excerpt: "Durable task recovery is documented.",
+        },
+        {
+          path: "strong-product-page",
+          url: `${candidate.url}/strong`,
+          excerpt:
+            "The official product page documents reliable offline workflow synchronization for distributed teams.",
+        },
+      ];
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent({ provider }, spec, arch, {
+        competitive: true,
+        executionMode: "bounded-production",
+      });
+
+      expect(findings.comparisons).toHaveLength(5);
+      for (const comparison of findings.comparisons) {
+        expect(comparison.strengths[0]).toContain(
+          "reliable offline workflow synchronization",
+        );
+        expect(comparison.strengths[0]).not.toContain("Durable task recovery");
+        expect(comparison.evidenceUrls).toEqual([
+          `${input.candidates.find((candidate) => candidate.id === comparison.candidateId)!.url}/strong`,
+        ]);
+      }
     } finally {
       spy.mockRestore();
     }

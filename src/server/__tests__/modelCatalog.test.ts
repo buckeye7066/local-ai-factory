@@ -94,6 +94,20 @@ describe("provider model catalog ordering", () => {
     await expect(resolver("o3")).resolves.toBe("o3");
   });
 
+  it("does not treat a weaker arbitrary suffix as a configured model snapshot", async () => {
+    const resolver = createCachedModelResolver({
+      provider: "openai",
+      preferred: ["gpt-4.1"],
+      load: async () => [
+        { id: "gpt-4.1-mini", created: 300 },
+        { id: "gpt-4.1-2025-04-14", created: 100 },
+      ],
+      log: () => {},
+    });
+
+    await expect(resolver("gpt-4.1")).resolves.toBe("gpt-4.1-2025-04-14");
+  });
+
   it("allows only one configured probe when the account catalog is unreachable", async () => {
     let loads = 0;
     const resolver = createCachedModelResolver({
