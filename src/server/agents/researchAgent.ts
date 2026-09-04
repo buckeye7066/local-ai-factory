@@ -748,91 +748,156 @@ function normalizedPhrase(value: string): string {
     .replace(/\s+/g, " ");
 }
 
-const PRE_FEATURE_NEGATIONS = new Set([
-  "absent",
-  "absence",
+const POLARITY_OPERATORS = new Set([
   "avoid",
+  "avoided",
   "avoids",
+  "avoiding",
   "cannot",
-  "discontinued",
-  "denied",
-  "denies",
-  "deny",
-  "disabled",
-  "drops",
-  "dropped",
-  "excluding",
-  "excludes",
+  "fail",
   "fails",
   "failed",
   "failing",
   "lack",
   "lacking",
   "lacks",
-  "missing",
   "never",
   "no",
   "not",
-  "omission",
-  "omitted",
-  "omits",
-  "removed",
-  "removes",
-  "refuses",
   "refuse",
+  "refused",
+  "refuses",
+  "refusing",
   "unable",
-  "unavailable",
-  "unsupported",
   "without",
 ]);
 
-const POST_FEATURE_NEGATIONS = new Set([
+const DENIAL_PREDICATES = new Set([
   "absent",
+  "absence",
+  "delete",
+  "deleted",
+  "deletes",
+  "deleting",
+  "deny",
   "discontinued",
+  "discontinue",
+  "discontinues",
+  "discontinuing",
   "denied",
+  "denies",
+  "denying",
+  "disable",
   "disabled",
+  "disables",
+  "disabling",
+  "drop",
+  "dropped",
+  "drops",
+  "dropping",
+  "eliminate",
+  "eliminated",
+  "eliminates",
+  "eliminating",
+  "exclude",
   "excluded",
+  "excludes",
+  "excluding",
   "impossible",
-  "lacking",
   "missing",
-  "never",
-  "no",
-  "not",
+  "omit",
   "omitted",
+  "omits",
+  "omitting",
+  "remove",
   "removed",
+  "removes",
+  "removing",
+  "retire",
+  "retired",
+  "retires",
+  "retiring",
   "unavailable",
   "unsupported",
+  "withdrawn",
 ]);
 
-function isNegatedFeatureSpan(tokens: string[], start: number, end: number): boolean {
-  const before = tokens.slice(Math.max(0, start - 6), start);
-  const inside = tokens.slice(start, end + 1);
-  const after = tokens.slice(end + 1, Math.min(tokens.length, end + 7));
-  return (
-    before.some((token) => PRE_FEATURE_NEGATIONS.has(token)) ||
-    inside.some(
-      (token) => PRE_FEATURE_NEGATIONS.has(token) || POST_FEATURE_NEGATIONS.has(token),
-    ) ||
-    after.some((token) => POST_FEATURE_NEGATIONS.has(token))
-  );
+const POLARITY_SCOPE_BOUNDARIES = new Set([
+  "although",
+  "but",
+  "however",
+  "whereas",
+  "yet",
+]);
+
+type FeaturePolarity = "affirmed" | "denied" | "ambiguous";
+
+function featureSpanPolarity(
+  tokens: string[],
+  start: number,
+  end: number,
+): FeaturePolarity {
+  const operatorIndexes: number[] = [];
+  const denialIndexes: number[] = [];
+  const windowStart = Math.max(0, start - 6);
+  const windowEnd = Math.min(tokens.length - 1, end + 6);
+  for (let index = windowStart; index <= windowEnd; index += 1) {
+    const token = tokens[index]!;
+    const inside = index >= start && index <= end;
+    const between =
+      index < start
+        ? tokens.slice(index + 1, start)
+        : index > end
+          ? tokens.slice(end + 1, index)
+          : [];
+    if (!inside && between.some((item) => POLARITY_SCOPE_BOUNDARIES.has(item))) {
+      continue;
+    }
+
+    if (POLARITY_OPERATORS.has(token)) {
+      // `no` is normally a determiner, so it governs the match only when it
+      // is inside/directly adjacent to it or forms the postfix `no longer`
+      // construction. This prevents an unrelated `No setup; ...` statement
+      // from lending negative polarity to a later security predicate.
+      if (
+        token === "no" &&
+        !inside &&
+        index !== start - 1 &&
+        index !== end + 1 &&
+        tokens[index + 1] !== "longer"
+      ) {
+        continue;
+      }
+      // `not only` is additive emphasis, not semantic negation.
+      if (token === "not" && tokens[index + 1] === "only") continue;
+      operatorIndexes.push(index);
+    }
+    if (DENIAL_PREDICATES.has(token)) denialIndexes.push(index);
+  }
+
+  // Multiple different denial predicates describe a compound requirement;
+  // a one-bit direction cannot safely establish their individual scopes.
+  // Fail closed instead of using parity to turn two denials into affirmation.
+  if (new Set(denialIndexes.map((index) => tokens[index])).size > 1) {
+    return "ambiguous";
+  }
+  const flips = operatorIndexes.length + (denialIndexes.length > 0 ? 1 : 0);
+  return flips % 2 === 1 ? "denied" : "affirmed";
 }
 
 function containsPhraseWithMatchingPolarity(segment: string, phrase: string): boolean {
   const tokens = segment.split(" ").filter(Boolean);
   const phraseTokens = phrase.split(" ").filter(Boolean);
   if (phraseTokens.length === 0 || phraseTokens.length > tokens.length) return false;
-  const targetIsNegated = isNegatedFeatureSpan(
-    phraseTokens,
-    0,
-    phraseTokens.length - 1,
-  );
+  const targetPolarity = featureSpanPolarity(phraseTokens, 0, phraseTokens.length - 1);
+  if (targetPolarity === "ambiguous") return false;
   for (let start = 0; start <= tokens.length - phraseTokens.length; start += 1) {
     if (!phraseTokens.every((token, offset) => tokens[start + offset] === token)) {
       continue;
     }
     if (
-      isNegatedFeatureSpan(tokens, start, start + phraseTokens.length - 1) ===
-      targetIsNegated
+      featureSpanPolarity(tokens, start, start + phraseTokens.length - 1) ===
+      targetPolarity
     ) {
       return true;
     }
@@ -889,7 +954,7 @@ function coherentEvidenceMatches(
   evidenceUrl: string,
 ): CoherentEvidenceMatch[] {
   const segments = inspectedText
-    .split(/(?<=[.!?])\s+|[\r\n]+/)
+    .split(/(?<=[.!?])\s+|[;:\r\n]+|\b(?:although|but|however|whereas)\b/i)
     .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
     .map((statement) => ({ statement, normalized: normalizedPhrase(statement) }))
     .filter((segment) => segment.normalized.length > 0);
@@ -913,11 +978,16 @@ function coherentEvidenceMatches(
     const featureTerms = meaningfulTerms(phrase);
     if (featureTerms.length < 2) return [];
     const phraseTokens = phrase.split(" ").filter(Boolean);
-    const targetIsNegated = isNegatedFeatureSpan(
+    const targetPolarity = featureSpanPolarity(
       phraseTokens,
       0,
       phraseTokens.length - 1,
     );
+    // A failed model review must not turn approximate lexical similarity into
+    // a semantic rewrite of a denied/compound requirement. Negative targets
+    // remain eligible through the exact-phrase path above; overlap fallback is
+    // deliberately limited to unambiguous affirmative targets.
+    if (targetPolarity !== "affirmed") return [];
     const required =
       featureTerms.length <= 3
         ? featureTerms.length
@@ -930,9 +1000,9 @@ function coherentEvidenceMatches(
         const positions = terms
           .map((term) => segmentTokens.indexOf(term))
           .filter((position) => position >= 0);
-        const negated =
+        const polarity =
           positions.length > 0 &&
-          isNegatedFeatureSpan(
+          featureSpanPolarity(
             segmentTokens,
             Math.min(...positions),
             Math.max(...positions),
@@ -940,10 +1010,10 @@ function coherentEvidenceMatches(
         return {
           statement: segment.statement,
           terms,
-          negated,
+          polarity,
         };
       })
-      .filter((segment) => segment.negated === targetIsNegated)
+      .filter((segment) => segment.polarity === targetPolarity)
       .sort((left, right) => right.terms.length - left.terms.length)[0];
     return bestOverlap && bestOverlap.terms.length >= required
       ? [
