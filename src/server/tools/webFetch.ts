@@ -104,8 +104,7 @@ function isPublicAddress(address: string): boolean {
   if (family === 4) return !blockedIpv4.check(normalized, "ipv4");
   if (family === 6) {
     return (
-      globalIpv6.check(normalized, "ipv6") &&
-      !blockedIpv6.check(normalized, "ipv6")
+      globalIpv6.check(normalized, "ipv6") && !blockedIpv6.check(normalized, "ipv6")
     );
   }
   return false;
@@ -115,10 +114,7 @@ async function defaultLookup(hostname: string): Promise<LookupAddress[]> {
   return dnsLookup(hostname, { all: true, verbatim: true });
 }
 
-async function withAbort<T>(
-  operation: Promise<T>,
-  signal: AbortSignal,
-): Promise<T> {
+async function withAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) throw signal.reason;
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(signal.reason);
@@ -176,8 +172,7 @@ async function pinnedFetch(
   signal: AbortSignal,
 ): Promise<Response> {
   const originalHost = normalizedHostname(url);
-  const selected =
-    addresses.find((entry) => entry.family === 4) ?? addresses[0];
+  const selected = addresses.find((entry) => entry.family === 4) ?? addresses[0];
   if (!selected) throw new Error(`Hostname did not resolve: ${originalHost}`);
   const request = url.protocol === "https:" ? httpsRequest : httpRequest;
   return new Promise<Response>((resolve, reject) => {
@@ -379,8 +374,7 @@ function actualTagAttributes(rawTag: string): HtmlAttribute[] {
   while (cursor < rawTag.length) {
     while (/\s/.test(rawTag[cursor] ?? "")) cursor += 1;
     const current = rawTag[cursor];
-    if (!current || current === ">" || /^\/\s*>/.test(rawTag.slice(cursor)))
-      break;
+    if (!current || current === ">" || /^\/\s*>/.test(rawTag.slice(cursor))) break;
 
     const nameStart = cursor;
     while (cursor < rawTag.length && !/[\s=\/>]/.test(rawTag[cursor] ?? "")) {
@@ -437,9 +431,7 @@ function openingTagSuppressesText(tag: string, rawTag: string): boolean {
 
   const styles = attributes
     .filter(({ name }) => name === "style")
-    .map(({ value }) =>
-      decodeCssEscapes(value.replace(/\/\*[\s\S]*?\*\//g, "")),
-    );
+    .map(({ value }) => decodeCssEscapes(value.replace(/\/\*[\s\S]*?\*\//g, "")));
   // An unterminated CSS comment makes the remainder of the declaration
   // non-authoritative. Suppress rather than guessing that it renders.
   if (styles.some((style) => style.includes("/*"))) return true;
@@ -537,8 +529,7 @@ function nextHtmlMarkup(
 
 /** Extract visible/readable HTML text without promoting hidden page payloads. */
 function toReadableText(html: string, xmlSelfClosing = false): string {
-  const stack: Array<{ tag: string; suppressed: boolean; rawText: boolean }> =
-    [];
+  const stack: Array<{ tag: string; suppressed: boolean; rawText: boolean }> = [];
   let suppressedDepth = 0;
   let cursor = 0;
   let readable = "";
@@ -557,11 +548,7 @@ function toReadableText(html: string, xmlSelfClosing = false): string {
     const top = stack.at(-1);
     // Markup-looking bytes inside raw-text elements cannot close an ancestor
     // or create rendered evidence.
-    if (
-      suppressedDepth > 0 &&
-      top?.rawText &&
-      !(markup.closing && top.tag === tag)
-    ) {
+    if (suppressedDepth > 0 && top?.rawText && !(markup.closing && top.tag === tag)) {
       continue;
     }
     if (markup.closing) {
@@ -585,8 +572,7 @@ function toReadableText(html: string, xmlSelfClosing = false): string {
     }
 
     const parentSuppressed = suppressedDepth > 0;
-    const suppressed =
-      parentSuppressed || openingTagSuppressesText(tag, rawTag);
+    const suppressed = parentSuppressed || openingTagSuppressesText(tag, rawTag);
     // In text/html, a trailing slash does not self-close ordinary elements;
     // XHTML served as XML does honor it. HTML void elements close in either
     // mode.
@@ -596,10 +582,7 @@ function toReadableText(html: string, xmlSelfClosing = false): string {
       stack.push({ tag, suppressed, rawText: RAW_TEXT_ELEMENTS.has(tag) });
       if (suppressed) suppressedDepth += 1;
     }
-    if (
-      !suppressed &&
-      (BLOCK_ELEMENTS.has(tag) || tag === "br" || tag === "hr")
-    ) {
+    if (!suppressed && (BLOCK_ELEMENTS.has(tag) || tag === "br" || tag === "hr")) {
       readable += "\n";
     }
   }
@@ -646,8 +629,7 @@ export async function webFetchTool(
         : await transport(current, addresses, signal);
       if (REDIRECT_STATUSES.has(res.status)) {
         const location = res.headers.get("location");
-        if (!location)
-          throw new Error(`Redirect ${res.status} omitted Location.`);
+        if (!location) throw new Error(`Redirect ${res.status} omitted Location.`);
         if (redirects >= MAX_REDIRECTS) {
           throw new Error(`Too many redirects (maximum ${MAX_REDIRECTS}).`);
         }
@@ -661,9 +643,7 @@ export async function webFetchTool(
 
       const contentType = res.headers.get("content-type") ?? "";
       const bounded = await readBoundedBody(res);
-      const raw = new TextDecoder("utf-8", { fatal: false }).decode(
-        bounded.bytes,
-      );
+      const raw = new TextDecoder("utf-8", { fatal: false }).decode(bounded.bytes);
       const normalizedContentType = contentType.toLowerCase();
       const text = normalizedContentType.includes("html")
         ? toReadableText(raw, normalizedContentType.includes("xhtml"))
