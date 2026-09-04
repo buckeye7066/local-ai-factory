@@ -145,7 +145,7 @@ function localBenchPath(): string {
 
 /**
  * Measured speeds for local models, written by
- * C:\Users\firer\glimmer\tools\bench_local_models.py — the same prompt through
+ * D:\Projects\glimmer\tools\bench_local_models.py — the same prompt through
  * the same Ollama for every local model. Read-only here; a missing or
  * unreadable file means "no measurement", never an error. Twin of
  * flexfactor._local_bench.

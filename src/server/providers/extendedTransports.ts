@@ -13,8 +13,8 @@
  * imported an adapter module that did not exist. Both binaries ARE on PATH on
  * this machine:
  *
- *     claude -> C:\Users\firer\.local\bin\claude.EXE
- *     codex  -> C:\Users\firer\AppData\Roaming\npm\codex.CMD
+ *     claude -> D:\Projects\.local\bin\claude.EXE
+ *     codex  -> D:\Projects\AppData\Roaming\npm\codex.CMD
  *
  * so the filter ADMITTED the routes and the run raised ModuleNotFoundError on
  * selection — precisely the "unbuildable route reaches the rotator, fails at

@@ -48,8 +48,7 @@ async function main() {
   const secrets = getSecrets();
   const source = repoSource(target);
   const run = await runFactory({
-    idea:
-      "Extend FutureU with a small production-safe student progress summary and prove the changed behavior without weakening existing features.",
+    idea: "Extend FutureU with a small production-safe student progress summary and prove the changed behavior without weakening existing features.",
     options: {
       mode: "extend",
       repoSource: source,

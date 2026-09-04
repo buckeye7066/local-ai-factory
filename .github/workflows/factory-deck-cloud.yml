@@ -96,6 +96,34 @@ jobs:
           }
           pnpm exec tsx src/cli/factory-platform-proof.ts validate
 
+      - name: Pack immutable candidate with POSIX metadata
+        shell: bash
+        run: |
+          tar --create --file factory-deck-workspaces.tar \
+            --exclude='*/node_modules' \
+            --exclude='*/node_modules/*' \
+            --exclude='*/__pycache__' \
+            --exclude='*/__pycache__/*' \
+            --exclude='*/.pytest_cache' \
+            --exclude='*/.pytest_cache/*' \
+            --exclude='*/.mypy_cache' \
+            --exclude='*/.mypy_cache/*' \
+            --exclude='*/.ruff_cache' \
+            --exclude='*/.ruff_cache/*' \
+            --exclude='*/.hypothesis' \
+            --exclude='*/.hypothesis/*' \
+            --exclude='*/.tox' \
+            --exclude='*/.tox/*' \
+            --exclude='*/.nox' \
+            --exclude='*/.nox/*' \
+            --exclude='*/.nyc_output' \
+            --exclude='*/.nyc_output/*' \
+            --exclude='*/.coverage' \
+            --exclude='*/.coverage.*' \
+            --exclude='*.pyc' \
+            --exclude='*.pyo' \
+            workspaces
+
       - name: Preserve exact candidate
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -107,8 +135,7 @@ jobs:
           retention-days: 14
           path: |
             .factory/**
-            workspaces/**
-            !workspaces/**/node_modules/**
+            factory-deck-workspaces.tar
 
   windows:
     name: Verify exact candidate on Windows
@@ -141,13 +168,21 @@ jobs:
           name: factory-deck-seed-${{ github.run_id }}
           path: .
 
+      - name: Materialize immutable candidate
+        shell: pwsh
+        run: tar --extract --file factory-deck-workspaces.tar
+
       - name: Execute Windows proof without production secrets
         shell: pwsh
-        env:
-          WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
-          ALLOW_UNTRUSTED_SCRIPTS: "true"
-          CI: "true"
-        run: pnpm exec tsx src/cli/factory-platform-proof.ts record
+        run: ./scripts/ci/run-windows-platform-proof.ps1 -WorkspaceRoot "${{ github.workspace }}/workspaces"
+
+      - name: Stage Windows checkpoint evidence
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force platform-evidence -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path platform-evidence | Out-Null
+          Copy-Item -Path .factory -Destination platform-evidence/.factory -Recurse -Force
 
       - name: Preserve Windows evidence
         if: always()
@@ -159,9 +194,7 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           path: |
-            .factory/**
-            workspaces/**
-            !workspaces/**/node_modules/**
+            platform-evidence/**
 
   macos:
     name: Verify exact candidate on macOS
@@ -188,19 +221,39 @@ jobs:
       - name: Install Factory Deck
         run: pnpm install --frozen-lockfile
 
-      - name: Restore Windows-verified candidate
+      - name: Restore immutable seed candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: factory-deck-seed-${{ github.run_id }}
+          path: .
+
+      - name: Restore Windows checkpoint evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: factory-deck-windows-${{ github.run_id }}
-          path: .
+          path: platform-evidence
+
+      - name: Materialize immutable candidate
+        shell: bash
+        run: tar --extract --file factory-deck-workspaces.tar
+
+      - name: Apply Windows checkpoint evidence
+        shell: bash
+        run: |
+          rm -rf .factory
+          cp -R platform-evidence/.factory .factory
 
       - name: Execute macOS proof without production secrets
-        shell: pwsh
-        env:
-          WORKSPACE_ROOT: "${{ github.workspace }}/workspaces"
-          ALLOW_UNTRUSTED_SCRIPTS: "true"
-          CI: "true"
-        run: pnpm exec tsx src/cli/factory-platform-proof.ts record
+        shell: bash
+        run: bash scripts/ci/run-macos-platform-proof.sh "${{ github.workspace }}/workspaces"
+
+      - name: Stage macOS checkpoint evidence
+        if: always()
+        shell: bash
+        run: |
+          rm -rf platform-evidence
+          mkdir -p platform-evidence
+          cp -R .factory platform-evidence/.factory
 
       - name: Preserve macOS evidence
         if: always()
@@ -212,9 +265,7 @@ jobs:
           include-hidden-files: true
           retention-days: 14
           path: |
-            .factory/**
-            workspaces/**
-            !workspaces/**/node_modules/**
+            platform-evidence/**
 
   build:
     name: Factory Deck cloud build
@@ -245,11 +296,27 @@ jobs:
         shell: bash
         run: bash scripts/ci/provision-aitime-free-fallback.sh
 
-      - name: Restore cross-platform candidate
+      - name: Restore immutable seed candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: factory-deck-seed-${{ github.run_id }}
+          path: .
+
+      - name: Restore macOS checkpoint evidence
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: factory-deck-macos-${{ github.run_id }}
-          path: .
+          path: platform-evidence
+
+      - name: Materialize immutable candidate
+        shell: bash
+        run: tar --extract --file factory-deck-workspaces.tar
+
+      - name: Apply macOS checkpoint evidence
+        shell: bash
+        run: |
+          rm -rf .factory
+          cp -R platform-evidence/.factory .factory
 
       - name: Finalize automatic-ladder readiness on exact candidate
         shell: pwsh

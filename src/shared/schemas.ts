@@ -373,7 +373,7 @@ function coerceToReadableString(val: unknown): string {
 
 const ReadableStringSchema = z.preprocess(coerceToReadableString, z.string());
 
-export const ProductSpecSchema = z.object({
+export const ProductSpecObjectSchema = z.object({
   appName: z.string(),
   tagline: z.string().default(""),
   targetUser: z.string(),
@@ -386,6 +386,19 @@ export const ProductSpecSchema = z.object({
   /** Present on every orchestrated run; stamped by code, never trusted from a model. */
   goalContract: GoalContractSchema.optional(),
 });
+
+export const ProductSpecSchema = ProductSpecObjectSchema.superRefine(
+  (spec, context) => {
+    if (spec.userFlows.length + spec.acceptanceCriteria.length > 256) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["acceptanceCriteria"],
+        message:
+          "userFlows plus acceptanceCriteria cannot exceed the 256-entry executable evidence map",
+      });
+    }
+  },
+);
 export type ProductSpec = z.infer<typeof ProductSpecSchema>;
 
 export const ArchitectureSchema = z.object({
@@ -502,13 +515,16 @@ export const FileBuildSchema = z.object({
 });
 export type FileBuild = z.infer<typeof FileBuildSchema>;
 
+export const MAX_TEST_PLAN_COVERAGE_ENTRIES = 256;
+export const MAX_TEST_NAME_CHARS = 512;
+
 export const TestCoverageSchema = z.object({
   /** Stable engine-assigned user-flow or acceptance-criterion id (UF-n / AC-n). */
   requirementId: z.string(),
   /** Exact generated test path selected by a direct runner command. */
   testPath: z.string(),
   /** Exact active test title that the structured runner must report passed. */
-  testName: z.string(),
+  testName: z.string().trim().min(1).max(MAX_TEST_NAME_CHARS),
   kind: z.enum(["unit", "integration", "browser"]),
 });
 export type TestCoverage = z.infer<typeof TestCoverageSchema>;
@@ -516,7 +532,7 @@ export type TestCoverage = z.infer<typeof TestCoverageSchema>;
 export const TestPlanSchema = z.object({
   testPlan: z.string(),
   /** Prose is diagnostic only; this mapping is the executable acceptance contract. */
-  coverage: z.array(TestCoverageSchema).optional(),
+  coverage: z.array(TestCoverageSchema).max(MAX_TEST_PLAN_COVERAGE_ENTRIES).optional(),
   files: z
     .array(
       z.object({

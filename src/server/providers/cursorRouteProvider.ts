@@ -1,7 +1,7 @@
 /**
  * cursorRouteProvider.ts — Cursor as a rotation POOL.
  *
- * TypeScript sibling of `C:\Users\firer\flexfactor\providers\cursor_provider.py`.
+ * TypeScript sibling of `D:\Projects\flexfactor\providers\cursor_provider.py`.
  * Cursor's subscription is its own quota ledger, so treating it as a distinct
  * pool spreads real load even though the transport is an ordinary
  * OpenAI-compatible HTTP endpoint — which this repo's rotatingProvider already

@@ -1,4 +1,4 @@
-"""Root Windows launcher for IPlay (board path: C:\\Users\\firer\\Iplay\\iplay.pyw)."""
+"""Root Windows launcher for IPlay (board path: D:\\Projects\\Iplay\\iplay.pyw)."""
 import os
 import runpy
 import sys

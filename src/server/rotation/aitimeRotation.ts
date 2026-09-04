@@ -1,8 +1,8 @@
 /**
  * aitimeRotation.ts — pool-first rotation across every model this machine can
- * call. TypeScript twin of `C:\Users\firer\flexfactor\flexfactor_rotation.py`.
+ * call. TypeScript twin of `D:\Projects\flexfactor\flexfactor_rotation.py`.
  *
- * Implements `C:\Users\firer\AITime\docs\rotation-contract.md` v1. AI Time
+ * Implements `D:\Projects\AITime\docs\rotation-contract.md` v1. AI Time
  * publishes the route catalog (`python -m aitime.catalog`); this module decides
  * which route goes next and records what happened. If the policy changes here
  * it changes in the Python twin in the same commit.

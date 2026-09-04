@@ -1,9 +1,15 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { resolve, relative, isAbsolute, join, delimiter } from "node:path";
-import { isJavascriptTestPath, isPythonTestPath } from "./testPaths.js";
 import {
+  isJavascriptTestPath,
+  isPythonTestPath,
+  normalizeSafeRelativePath,
+} from "./testPaths.js";
+import {
+  assertHostVerificationSandboxIsolation,
   buildVerificationSandboxPlan,
+  hostVerificationSandboxConfig,
   verificationSandboxConfig,
 } from "./verificationSandbox.js";
 
@@ -47,7 +53,9 @@ import {
  * NOTE: `isInsideWorkspace` remains only a cwd boundary. When
  * FACTORY_VERIFICATION_SANDBOX_IMAGE is configured on Linux, every generated
  * command is additionally executed in a locked-down container with only the
- * workspace and an empty per-run state directory mounted writable.
+ * workspace and an empty per-run state directory mounted writable. Windows and
+ * macOS cloud proofs require a dedicated low-privilege account whose only
+ * writable roots are the candidate and an empty per-run cache directory.
  */
 
 /** (binary, firstArg) pairs that are permitted. */
@@ -123,6 +131,16 @@ function isSafeDirectJsTest(arg: string): boolean {
   return isJavascriptTestPath(arg);
 }
 
+function isSafeVitestRoot(arg: string): boolean {
+  if (!arg.startsWith("--root=")) return false;
+  return normalizeSafeRelativePath(arg.slice("--root=".length)) !== null;
+}
+
+function isSafeVitestConfig(arg: string): boolean {
+  if (!arg.startsWith("--config=")) return false;
+  return normalizeSafeRelativePath(arg.slice("--config=".length)) !== null;
+}
+
 /** Engine-authored local-runner forms only; npx may never download a package. */
 export function isAllowedNpxVerification(args: string[]): boolean {
   if (args[0] !== "--no-install") return false;
@@ -134,12 +152,22 @@ export function isAllowedNpxVerification(args: string[]): boolean {
     return args.length === 3 && args[2] === "--noEmit";
   }
   if (tool === "vitest") {
+    if (args[4]?.startsWith("--config=")) {
+      return (
+        args.length === 7 &&
+        args[2] === "run" &&
+        isSafeDirectJsTest(args[3]!) &&
+        isSafeVitestConfig(args[4]!) &&
+        args[5] === "--reporter=json" &&
+        isSafeVitestRoot(args[6]!)
+      );
+    }
     return (
       (args.length === 6 || args.length === 7) &&
       args[2] === "run" &&
       isSafeDirectJsTest(args[3]!) &&
       args[4] === "--reporter=json" &&
-      args[5] === "--root=." &&
+      isSafeVitestRoot(args[5]!) &&
       (args.length === 6 ||
         args[6] === "--config=.factory-deck-platform-vitest.config.mjs")
     );
@@ -180,13 +208,49 @@ export interface CommandResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  /** True when bounded capture discarded bytes and structured output is unsafe. */
+  stdoutTruncated?: boolean;
+  /** True when bounded capture discarded bytes and structured output is unsafe. */
+  stderrTruncated?: boolean;
   reason?: string;
 }
 
-const MAX_CAPTURED_OUTPUT = 8_000;
+const DEFAULT_CAPTURED_OUTPUT_BYTES = 8_000;
+const MAX_CAPTURED_OUTPUT_BYTES = 32 * 1024 * 1024;
 
-function appendOutputTail(current: string, chunk: Buffer | string): string {
-  return (current + chunk.toString()).slice(-MAX_CAPTURED_OUTPUT);
+interface OutputCapture {
+  chunks: Buffer[];
+  bytes: number;
+  truncated: boolean;
+}
+
+function appendOutputTail(
+  capture: OutputCapture,
+  chunk: Buffer | string,
+  limit: number,
+): void {
+  const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  capture.chunks.push(data);
+  capture.bytes += data.byteLength;
+  let excess = capture.bytes - limit;
+  if (excess <= 0) return;
+  capture.truncated = true;
+  while (excess > 0 && capture.chunks.length > 0) {
+    const first = capture.chunks[0]!;
+    if (first.byteLength <= excess) {
+      capture.chunks.shift();
+      capture.bytes -= first.byteLength;
+      excess -= first.byteLength;
+    } else {
+      capture.chunks[0] = Buffer.from(first.subarray(excess));
+      capture.bytes -= excess;
+      excess = 0;
+    }
+  }
+}
+
+function capturedOutput(capture: OutputCapture): string {
+  return Buffer.concat(capture.chunks, capture.bytes).toString("utf8");
 }
 
 export function isAllowed(bin: string, args: string[]): boolean {
@@ -215,7 +279,7 @@ export function isScriptExecuting(_bin: string, _args: string[]): boolean {
  * We validate every argv token against a strict character allowlist so no shell
  * metacharacter can ever reach cmd.exe (we spawn cmd with verbatim args).
  */
-const SAFE_ARG = /^[A-Za-z0-9._:@\/=-]+$/;
+const SAFE_ARG = /^[A-Za-z0-9._:@\/= -]+$/;
 
 export function argsAreShellSafe(bin: string, args: string[]): boolean {
   return [bin, ...args].every((a) => SAFE_ARG.test(a));
@@ -333,6 +397,50 @@ export function sanitizeChildEnv(
   return clean;
 }
 
+function hostSandboxChildEnv(
+  base: NodeJS.ProcessEnv,
+  stateRoot: string,
+  user: string,
+): NodeJS.ProcessEnv {
+  const home = join(stateRoot, "home");
+  const temp = join(stateRoot, "tmp");
+  const windowsDrive =
+    process.platform === "win32" && /^[A-Za-z]:/.test(home)
+      ? home.slice(0, 2)
+      : undefined;
+  return {
+    ...base,
+    HOME: home,
+    USERPROFILE: home,
+    USER: user,
+    LOGNAME: user,
+    USERNAME: user,
+    TMPDIR: temp,
+    TMP: temp,
+    TEMP: temp,
+    APPDATA: join(stateRoot, "appdata"),
+    LOCALAPPDATA: join(stateRoot, "localappdata"),
+    ...(windowsDrive
+      ? { HOMEDRIVE: windowsDrive, HOMEPATH: home.slice(windowsDrive.length) }
+      : {}),
+    XDG_CACHE_HOME: join(stateRoot, "cache"),
+    XDG_CONFIG_HOME: join(stateRoot, "config"),
+    XDG_DATA_HOME: join(stateRoot, "data"),
+    COREPACK_HOME: join(stateRoot, "corepack"),
+    PNPM_HOME: join(stateRoot, "pnpm"),
+    npm_config_cache: join(stateRoot, "npm"),
+    YARN_CACHE_FOLDER: join(stateRoot, "yarn"),
+    PIP_CACHE_DIR: join(stateRoot, "pip"),
+    PLAYWRIGHT_BROWSERS_PATH: join(stateRoot, "playwright"),
+    PIP_DISABLE_PIP_VERSION_CHECK: "1",
+    PIP_NO_INPUT: "1",
+    PIP_USER: "1",
+    PIP_BREAK_SYSTEM_PACKAGES: "1",
+    CI: "true",
+    NO_COLOR: "1",
+  };
+}
+
 /**
  * Matches any caller-supplied form of the hardening flags (incl. `=false` and
  * any casing, e.g. `--Ignore-Scripts=false`). Case-insensitive so a mixed-case
@@ -399,6 +507,8 @@ export interface RunCommandOptions {
    * when the whole Factory Deck process is externally sandboxed.
    */
   allowScriptExecution?: boolean;
+  /** Require a dedicated low-privilege OS account (Windows/macOS cloud proof). */
+  requireHostSandbox?: boolean;
   /**
    * Cooperative cancellation. When provided and it returns true, the command is
    * refused before spawning; if it flips true mid-run, the child is force-killed
@@ -406,6 +516,8 @@ export interface RunCommandOptions {
    */
   shouldCancel?: () => boolean;
   timeoutMs?: number;
+  /** Per-stream output ceiling; direct structured runners may request up to 32 MiB. */
+  maxCapturedOutputBytes?: number;
 }
 
 /** Quote a Windows token if it contains a space (our args are metachar-free). */
@@ -424,8 +536,9 @@ function spawnPm(
   runArgs: string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
+  directWindows = false,
 ) {
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && !directWindows) {
     const comspec = process.env.COMSPEC || "cmd.exe";
     // cmd /S /C strips the FIRST and LAST quote character from the line, so a
     // bin path quoted for its spaces ("C:\Program Files\nodejs\npm.cmd" ci)
@@ -489,6 +602,17 @@ export async function runCommand(
     );
   }
 
+  const captureLimit = opts.maxCapturedOutputBytes ?? DEFAULT_CAPTURED_OUTPUT_BYTES;
+  if (
+    !Number.isSafeInteger(captureLimit) ||
+    captureLimit < 1 ||
+    captureLimit > MAX_CAPTURED_OUTPUT_BYTES
+  ) {
+    return refuse(
+      `Refused: output capture limit must be an integer from 1 to ${MAX_CAPTURED_OUTPUT_BYTES} bytes.`,
+    );
+  }
+
   // Cancellation may have been requested between the gate and the spawn.
   if (opts.shouldCancel?.()) {
     return refuse("Refused: run cancelled before command spawn.");
@@ -505,11 +629,120 @@ export async function runCommand(
   const env = sanitizeChildEnv(process.env, opts.workspaceRoot);
   let absBin: string;
   let spawnArgs = runArgs;
+  let spawnEnv = env;
+  let directWindowsSpawn = false;
   let sandboxContainerName: string | null = null;
   let sandboxDockerBin: string | null = null;
+  let hostSandboxKill: { bin: string; args: string[] } | null = null;
   try {
     const sandbox = verificationSandboxConfig(process.env);
-    if (sandbox) {
+    const hostSandbox = opts.requireHostSandbox
+      ? hostVerificationSandboxConfig(process.env, process.platform)
+      : null;
+    if (opts.requireHostSandbox && !hostSandbox) {
+      return refuse(
+        "Refused: cross-platform proof requires a dedicated restricted OS account.",
+      );
+    }
+    if (sandbox && hostSandbox) {
+      return refuse(
+        "Refused: container and host-user verification sandboxes cannot be combined.",
+      );
+    }
+    if (hostSandbox) {
+      assertHostVerificationSandboxIsolation(hostSandbox, opts.workspaceRoot);
+      if (!existsSync(hostSandbox.stateRoot)) {
+        return refuse("Refused: restricted-account sandbox state root does not exist.");
+      }
+      const trustedBin = resolvePmBinary(req.bin, opts.workspaceRoot);
+      if (!trustedBin) {
+        return refuse(
+          `Refused: '${req.bin}' not found on a trusted PATH outside the workspace.`,
+        );
+      }
+      const proofEnv = hostSandboxChildEnv(
+        env,
+        hostSandbox.stateRoot,
+        hostSandbox.user,
+      );
+      if (process.platform === "win32") {
+        const launcher = hostSandbox.windowsLauncher!;
+        if (!existsSync(launcher)) {
+          return refuse("Refused: trusted Windows proof launcher was not found.");
+        }
+        const pwsh = resolvePmBinary("pwsh", opts.workspaceRoot);
+        const taskkill = resolvePmBinary("taskkill", opts.workspaceRoot);
+        if (!pwsh || !taskkill) {
+          return refuse(
+            "Refused: PowerShell/taskkill were not found on a trusted PATH for restricted Windows verification.",
+          );
+        }
+        const request = Buffer.from(
+          JSON.stringify({
+            user: hostSandbox.user,
+            workingDirectory: resolve(req.cwd),
+            executable: trustedBin,
+            arguments: runArgs,
+            environment: proofEnv,
+          }),
+          "utf8",
+        ).toString("base64");
+        absBin = pwsh;
+        spawnArgs = [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          launcher,
+          "-Request",
+          request,
+        ];
+        spawnEnv = {
+          ...env,
+          FACTORY_PLATFORM_PROOF_WINDOWS_PASSWORD: hostSandbox.windowsPassword!,
+        };
+        directWindowsSpawn = true;
+        hostSandboxKill = {
+          bin: taskkill,
+          args: [
+            "/F",
+            "/FI",
+            `USERNAME eq ${process.env.COMPUTERNAME ?? "."}\\${hostSandbox.user}`,
+            "/IM",
+            "*",
+          ],
+        };
+      } else {
+        const sudo = resolvePmBinary("sudo", opts.workspaceRoot);
+        const envBin = resolvePmBinary("env", opts.workspaceRoot);
+        const pkill = resolvePmBinary("pkill", opts.workspaceRoot);
+        if (!sudo || !envBin || !pkill) {
+          return refuse(
+            "Refused: sudo/env/pkill were not found on a trusted PATH for restricted macOS verification.",
+          );
+        }
+        absBin = sudo;
+        spawnArgs = [
+          "-n",
+          "-u",
+          hostSandbox.user,
+          "--",
+          envBin,
+          "-i",
+          ...Object.entries(proofEnv)
+            .filter((entry): entry is [string, string] => entry[1] !== undefined)
+            .map(([key, value]) => `${key}=${value}`),
+          trustedBin,
+          ...runArgs,
+        ];
+        hostSandboxKill = {
+          bin: sudo,
+          args: ["-n", pkill, "-KILL", "-u", hostSandbox.user],
+        };
+      }
+    } else if (sandbox) {
       if (process.platform !== "linux") {
         return refuse(
           "Refused: the integrated verification sandbox is supported only on Linux.",
@@ -567,9 +800,17 @@ export async function runCommand(
   }
 
   return new Promise<CommandResult>((resolveP) => {
-    const child = spawnPm(absBin, spawnArgs, req.cwd, env);
-    let stdout = "";
-    let stderr = "";
+    const child = spawnPm(absBin, spawnArgs, req.cwd, spawnEnv, directWindowsSpawn);
+    const stdoutCapture: OutputCapture = {
+      chunks: [],
+      bytes: 0,
+      truncated: false,
+    };
+    const stderrCapture: OutputCapture = {
+      chunks: [],
+      bytes: 0,
+      truncated: false,
+    };
     let cancelled = false;
     // Kill the whole PROCESS TREE, not just the immediate child. On Windows the
     // immediate child is a cmd.exe wrapper: `child.kill("SIGKILL")` terminates
@@ -578,7 +819,20 @@ export async function runCommand(
     // for as long as the grandchild lives (run d687f5fd: a 120s timeout kill
     // produced a 19.5-minute zombie `npm test`). taskkill /T reaps the tree —
     // the same fix the EVA launcher uses for the identical problem.
+    const killHostSandboxProcesses = () => {
+      if (hostSandboxKill) {
+        try {
+          spawnSync(hostSandboxKill.bin, hostSandboxKill.args, {
+            stdio: "ignore",
+            env: spawnEnv,
+          });
+        } catch {
+          // The launcher process group is still killed below.
+        }
+      }
+    };
     const killTree = () => {
+      killHostSandboxProcesses();
       if (sandboxContainerName && sandboxDockerBin) {
         try {
           spawnSync(sandboxDockerBin, ["kill", sandboxContainerName], {
@@ -632,33 +886,47 @@ export async function runCommand(
     };
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      stdout = appendOutputTail(stdout, chunk);
+      appendOutputTail(stdoutCapture, chunk, captureLimit);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      stderr = appendOutputTail(stderr, chunk);
+      appendOutputTail(stderrCapture, chunk, captureLimit);
     });
     child.on("error", (err) => {
       cleanup();
+      killHostSandboxProcesses();
       resolveP({
         command,
         allowed: true,
         executed: false,
         exitCode: null,
-        stdout,
+        stdout: capturedOutput(stdoutCapture),
         stderr: String(err),
+        ...(stdoutCapture.truncated ? { stdoutTruncated: true } : {}),
         reason: "spawn error",
       });
     });
     child.on("close", (code) => {
       cleanup();
+      // A package script can deliberately detach a child before its immediate
+      // process exits. The proof account is unique to this hosted runner, so
+      // reaping every process owned by it prevents a straggler from racing the
+      // recorder or later workflow steps.
+      killHostSandboxProcesses();
+      const stdout = capturedOutput(stdoutCapture);
+      const stderr = capturedOutput(stderrCapture);
+      const truncation = {
+        ...(stdoutCapture.truncated ? { stdoutTruncated: true } : {}),
+        ...(stderrCapture.truncated ? { stderrTruncated: true } : {}),
+      };
       if (cancelled) {
         resolveP({
           command,
           allowed: true,
           executed: false,
           exitCode: code,
-          stdout: stdout.slice(-8000),
-          stderr: stderr.slice(-8000),
+          stdout,
+          stderr,
+          ...truncation,
           reason: "Cancelled: child process killed on cancel request.",
         });
         return;
@@ -669,8 +937,9 @@ export async function runCommand(
           allowed: true,
           executed: false,
           exitCode: code,
-          stdout: stdout.slice(-8000),
-          stderr: stderr.slice(-8000),
+          stdout,
+          stderr,
+          ...truncation,
           reason: "Timed out: child process tree was killed.",
         });
         return;
@@ -680,8 +949,9 @@ export async function runCommand(
         allowed: true,
         executed: true,
         exitCode: code,
-        stdout: stdout.slice(-8000),
-        stderr: stderr.slice(-8000),
+        stdout,
+        stderr,
+        ...truncation,
       });
     });
   });

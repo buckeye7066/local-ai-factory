@@ -1,7 +1,7 @@
 /**
  * cliProvider.ts — rotation transport backed by a LOCAL, flat-rate CLI.
  *
- * TypeScript sibling of `C:\Users\firer\flexfactor\providers\cli_provider.py`
+ * TypeScript sibling of `D:\Projects\flexfactor\providers\cli_provider.py`
  * (flexfactor a4a02e0). Same properties, this repo's idiom:
  *
  *     api="claude-code"  ->  the `claude` CLI   (flat-rate subscription)

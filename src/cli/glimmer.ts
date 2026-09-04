@@ -18,6 +18,8 @@
  * pin names), so `on` really does route work to Glimmer rather than producing
  * a PinUnavailable.
  */
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   StateStore,
   loadCatalog,
@@ -123,7 +125,7 @@ async function main(): Promise<void> {
       `No Glimmer model is installed in Ollama.\n` +
         `  Official build : ollama pull muse-glimmer:30b\n` +
         `  Your own quant : ollama create muse-glimmer:30b-q4kxl ` +
-        `-f C:\\Users\\firer\\glimmer\\modelfiles\\Modelfile.q4kxl`,
+        `-f ${join(homedir(), "glimmer", "modelfiles", "Modelfile.q4kxl")}`,
     );
   }
   const target = tags.includes(MODEL) ? MODEL : tags[0];

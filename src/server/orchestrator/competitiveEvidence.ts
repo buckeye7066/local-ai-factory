@@ -24,6 +24,8 @@ const COMPARATIVE_INTENT_PATTERNS = [
 /** Comparative market evidence is re-collected at least weekly. */
 export const MAX_COMPETITIVE_EVIDENCE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_FUTURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const ENGINE_COMPETITIVE_CRITERION =
+  /^\[COMP-\d+\] The delivered application implements and verifies /;
 
 /** Comparative language opts a run into the strict five-product evidence gate. */
 export function requiresCompetitiveEvidence(texts: Iterable<string>): boolean {
@@ -109,10 +111,11 @@ export function assessRequiredCompetitiveEvidence(
         },
       ]),
   );
-  const productComparisons = (research?.comparisons ?? []).filter(
-    (comparison) =>
-      comparison.origin === "competitive-selection" &&
-      verifiedProducts.has(comparison.candidateId),
+  const competitiveComparisons = (research?.comparisons ?? []).filter(
+    (comparison) => comparison.origin === "competitive-selection",
+  );
+  const productComparisons = competitiveComparisons.filter((comparison) =>
+    verifiedProducts.has(comparison.candidateId),
   );
   const comparedProductIds = uniquelyActionableComparisonIds(
     productComparisons,
@@ -122,13 +125,15 @@ export function assessRequiredCompetitiveEvidence(
         verifiedProducts.get(comparison.candidateId)!.evidence,
       ),
   );
+  const competitiveRecommendations = (research?.recommendations ?? []).filter(
+    (recommendation) => recommendation.origin === "competitive-selection",
+  );
   const selectedProductIds = new Set(
-    (research?.recommendations ?? [])
+    competitiveRecommendations
       .filter((recommendation) => {
         const candidate = verifiedProducts.get(recommendation.candidateId);
         const sourceUrl = canonicalHttpEvidenceUrl(recommendation.sourceUrl);
         return (
-          recommendation.origin === "competitive-selection" &&
           Boolean(candidate) &&
           recommendation.reuseMode !== "reference-only" &&
           sourceUrl !== null &&
@@ -170,12 +175,22 @@ export function assessRequiredCompetitiveEvidence(
   if (productVerifiedCount < target) {
     reasons.push(`verified product coverage is ${productVerifiedCount}/${target}`);
   }
-  if (comparedProductIds.size < target) {
+  if (competitiveComparisons.length !== target) {
+    reasons.push(
+      `competitive comparison entries are ${competitiveComparisons.length}/${target}; exactly ${target} required`,
+    );
+  }
+  if (comparedProductIds.size !== target) {
     reasons.push(
       `evidence-linked product comparisons are ${comparedProductIds.size}/${target}`,
     );
   }
-  if (qualifiedSelectedProductIds.size < target) {
+  if (competitiveRecommendations.length !== target) {
+    reasons.push(
+      `competitive selected-advantage entries are ${competitiveRecommendations.length}/${target}; exactly ${target} required`,
+    );
+  }
+  if (qualifiedSelectedProductIds.size !== target) {
     reasons.push(
       `comparison-qualified selected product advantages are ${qualifiedSelectedProductIds.size}/${target}`,
     );
@@ -265,7 +280,13 @@ export function withCompetitiveAcceptanceCriteria(
         `[COMP-${index + 1}] The delivered application implements and verifies ` +
         `${recommendation.name}: ${recommendation.howToIntegrate.trim()}`,
     );
-  const acceptanceCriteria = [...spec.acceptanceCriteria];
+  // A resumed legacy checkpoint can contain criteria generated from research
+  // that the current gate has just rejected and recollected. Replace only our
+  // precisely tagged criteria so stale advantages never reach the planner,
+  // while preserving every user/model-authored acceptance criterion.
+  const acceptanceCriteria = spec.acceptanceCriteria.filter(
+    (criterion) => !ENGINE_COMPETITIVE_CRITERION.test(criterion),
+  );
   for (const criterion of additions) {
     if (!acceptanceCriteria.includes(criterion)) acceptanceCriteria.push(criterion);
   }

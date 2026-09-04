@@ -4,7 +4,7 @@
 **Application:** Factory Deck  
 **Repository:** [buckeye7066/local-ai-factory](https://github.com/buckeye7066/local-ai-factory)  
 **Default branch:** `main`  
-**Launcher:** `C:\Users\firer\local-ai-factory\scripts\start-factory.cmd` → `start-factory.ps1`
+**Launcher:** `D:\Projects\local-ai-factory\scripts\start-factory.cmd` → `start-factory.ps1`
 
 ## Intended users
 
@@ -87,4 +87,4 @@ the report surfaces that limitation explicitly.
 
 ## Deployment target
 
-Local Windows factory. GitHub `main` is source of truth. Runtime under `C:\Users\firer\local-ai-factory` must match the exact `main` SHA before Production Ready.
+Local Windows factory. GitHub `main` is source of truth. Runtime under `D:\Projects\local-ai-factory` must match the exact `main` SHA before Production Ready.

@@ -54,6 +54,8 @@ export interface VerificationEvidence {
   incomplete?: Array<{ command: string; reason: string }>;
   /** Exact checked bytes for every path eligible for delivery. */
   fileDigests?: Record<string, string>;
+  /** Complete candidate manifest captured before verification commands run. */
+  platformArtifactSnapshot?: Record<string, string>;
 }
 
 /** Cap the per-command evidence carried inside a QA issue. Errors print last. */

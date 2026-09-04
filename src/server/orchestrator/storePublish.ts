@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultExec, resolveNpmCli, type ExecFn } from "./deployRun.js";
 
@@ -41,7 +42,7 @@ export interface StorePublishResult {
   reason: string;
 }
 
-const DEFAULT_STORE_DIR = "C:\\Users\\firer\\axiombiolabs-html-publish";
+const DEFAULT_STORE_DIR = join(homedir(), "axiombiolabs-html-publish");
 const LIVE_REGISTRY_URL = "https://www.axiombiolabs.org/apps/registry.json";
 const VERCEL_ENTRY = join("vercel", "dist", "vc.js");
 
