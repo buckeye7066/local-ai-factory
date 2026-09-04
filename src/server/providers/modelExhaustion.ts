@@ -34,6 +34,7 @@ export function modelFailureText(error: unknown): string {
 }
 
 export function isQuotaRefusal(error: unknown): boolean {
+  if ((error as { scope?: unknown })?.scope === "account") return true;
   const text = modelFailureText(error);
   return QUOTA_SIGNS.some((pattern) => pattern.test(text));
 }

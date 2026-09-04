@@ -132,6 +132,33 @@ describe("ModelLadderProvider", () => {
     expect(provider.currentProvider()).toBe("openai");
   });
 
+  it("skips same-family rungs after retry sanitizes an account-quota 429", async () => {
+    let rawCalls = 0;
+    const quotaBound = fake("ok", "openai");
+    quotaBound.generateText = async () => {
+      quotaBound.calls += 1;
+      return withRetry("openai.generateText", async () => {
+        rawCalls += 1;
+        throw Object.assign(new Error("insufficient_quota"), { status: 429 });
+      });
+    };
+    const redundantOpenAi = fake("ok", "openai");
+    const anthropic = fake("ok", "anthropic");
+    const provider = new ModelLadderProvider([
+      { model: "gpt-6-astra", provider: quotaBound },
+      { model: "gpt-5.6-sol", provider: redundantOpenAi },
+      { model: "claude-fable-5-1", provider: anthropic },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(rawCalls).toBe(1);
+    expect(quotaBound.calls).toBe(1);
+    expect(redundantOpenAi.calls).toBe(0);
+    expect(anthropic.calls).toBe(1);
+    expect(provider.currentProvider()).toBe("anthropic");
+  });
+
   it("crosses provider families when catalog suppression passes through retry", async () => {
     let blockedCalls = 0;
     const blocked = {

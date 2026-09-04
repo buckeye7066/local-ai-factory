@@ -279,6 +279,7 @@ const NON_RENDERED_ELEMENTS = new Set([
   "style",
   "svg",
   "template",
+  "title",
 ]);
 
 const BLOCK_ELEMENTS = new Set([
@@ -343,32 +344,105 @@ function openingTagSuppressesText(tag: string, rawTag: string): boolean {
     return true;
   }
   const style = rawTag.match(/\sstyle\s*=\s*(?:(["'])([\s\S]*?)\1|([^\s>]+))/i);
-  return Boolean(
-    style &&
-      /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|content-visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(
-        style[2] ?? style[3] ?? "",
-      ),
+  if (!style) return false;
+  const rawStyle = style?.[2] ?? style?.[3] ?? "";
+  const normalizedStyle = rawStyle.replace(/\/\*[\s\S]*?\*\//g, "");
+  // An unterminated CSS comment makes the remainder of the declaration
+  // non-authoritative. Suppress rather than guessing that it renders.
+  if (normalizedStyle.includes("/*")) return true;
+  return /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|content-visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(
+    normalizedStyle,
   );
 }
 
+type HtmlMarkupToken = {
+  start: number;
+  end: number;
+  raw: string;
+  tag?: string;
+  closing?: boolean;
+  slashClosed?: boolean;
+};
+
+function quotedTagEnd(html: string, start: number): number {
+  let quote = "";
+  for (let index = start + 1; index < html.length; index += 1) {
+    const char = html[index]!;
+    if (quote) {
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === ">") {
+      return index + 1;
+    }
+  }
+  // Treat an unterminated tag as markup through EOF. Failing closed is safer
+  // than promoting malformed attributes or hidden payloads into evidence.
+  return html.length;
+}
+
+function nextHtmlMarkup(html: string, from: number): HtmlMarkupToken | null {
+  for (
+    let start = html.indexOf("<", from);
+    start >= 0;
+    start = html.indexOf("<", start + 1)
+  ) {
+    if (html.startsWith("<!--", start)) {
+      const commentEnd = html.indexOf("-->", start + 4);
+      const end = commentEnd < 0 ? html.length : commentEnd + 3;
+      return { start, end, raw: html.slice(start, end) };
+    }
+
+    // In text/html, processing-instruction-looking input is a bogus comment:
+    // it ends at the first `>` (or EOF), not only at an XML-style `?>`.
+    if (html.startsWith("<?", start)) {
+      const bogusEnd = html.indexOf(">", start + 2);
+      const end = bogusEnd < 0 ? html.length : bogusEnd + 1;
+      return { start, end, raw: html.slice(start, end) };
+    }
+
+    if (html.startsWith("<!", start)) {
+      const end = quotedTagEnd(html, start);
+      return { start, end, raw: html.slice(start, end) };
+    }
+
+    const prefix = html.slice(start).match(/^<\s*(\/?)\s*([a-z][\w:-]*)\b/i);
+    if (!prefix) continue;
+    const end = quotedTagEnd(html, start);
+    const raw = html.slice(start, end);
+    return {
+      start,
+      end,
+      raw,
+      tag: prefix[2]!.toLowerCase(),
+      closing: prefix[1] === "/",
+      slashClosed: /\/\s*>$/.test(raw),
+    };
+  }
+  return null;
+}
+
 /** Extract visible/readable HTML text without promoting hidden page payloads. */
-function toReadableText(html: string): string {
-  const token =
-    /<!--[\s\S]*?(?:-->|$)|<![^>]*>|<\?[\s\S]*?\?>|<\/?\s*([a-z][\w:-]*)\b[^>]*>/gi;
+function toReadableText(html: string, xmlSelfClosing = false): string {
   const stack: Array<{ tag: string; suppressed: boolean }> = [];
   let suppressedDepth = 0;
   let cursor = 0;
   let readable = "";
 
-  for (let match = token.exec(html); match; match = token.exec(html)) {
-    if (suppressedDepth === 0) readable += html.slice(cursor, match.index);
-    cursor = token.lastIndex;
-    const tag = match[1]?.toLowerCase();
+  for (
+    let markup = nextHtmlMarkup(html, cursor);
+    markup;
+    markup = nextHtmlMarkup(html, cursor)
+  ) {
+    if (suppressedDepth === 0) readable += html.slice(cursor, markup.start);
+    cursor = markup.end;
+    const tag = markup.tag;
     if (!tag) continue;
 
-    const rawTag = match[0];
-    const closing = /^<\s*\//.test(rawTag);
-    if (closing) {
+    const rawTag = markup.raw;
+    if (markup.closing) {
       const index = stack.map((entry) => entry.tag).lastIndexOf(tag);
       if (index >= 0) {
         for (const entry of stack.splice(index)) {
@@ -381,11 +455,11 @@ function toReadableText(html: string): string {
 
     const parentSuppressed = suppressedDepth > 0;
     const suppressed = parentSuppressed || openingTagSuppressesText(tag, rawTag);
-    // In text/html, a trailing slash does not self-close ordinary elements
-    // (`<template/>` still opens a template). Only HTML void elements close
-    // immediately; treating the slash as XML syntax would expose hidden tail
-    // text as evidence.
-    const selfClosing = VOID_ELEMENTS.has(tag);
+    // In text/html, a trailing slash does not self-close ordinary elements;
+    // XHTML served as XML does honor it. HTML void elements close in either
+    // mode.
+    const selfClosing =
+      VOID_ELEMENTS.has(tag) || (xmlSelfClosing && markup.slashClosed === true);
     if (!selfClosing) {
       stack.push({ tag, suppressed });
       if (suppressed) suppressedDepth += 1;
@@ -452,7 +526,10 @@ export async function webFetchTool(
       const contentType = res.headers.get("content-type") ?? "";
       const bounded = await readBoundedBody(res);
       const raw = new TextDecoder("utf-8", { fatal: false }).decode(bounded.bytes);
-      const text = contentType.includes("html") ? toReadableText(raw) : raw;
+      const normalizedContentType = contentType.toLowerCase();
+      const text = normalizedContentType.includes("html")
+        ? toReadableText(raw, normalizedContentType.includes("xhtml"))
+        : raw;
       return {
         ok: res.ok,
         status: res.status,

@@ -33,6 +33,20 @@ describe("provider model catalog ordering", () => {
     ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
   });
 
+  it("does not promote preview-named models into the pro quality tier", () => {
+    expect(
+      resolvePreferredModels(
+        "openai",
+        ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
+        [
+          { id: "gpt-5-preview", created: 500 },
+          { id: "gpt-5.6-terra", created: 100 },
+          { id: "gpt-5.6-sol", created: 200 },
+        ],
+      ),
+    ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5-preview"]);
+  });
+
   it("keeps an unlisted stronger model ahead of an exact later weak alias", async () => {
     const messages: string[] = [];
     const preferred = ["claude-fable-5-1", "claude-opus-5", "claude-haiku-4-5"];

@@ -14,6 +14,7 @@ export type { ProviderName } from "../../shared/schemas.js";
 import type { GenerateJsonInput } from "../../shared/types.js";
 import { ZodError } from "zod";
 import { safeErrorMessage } from "../errors.js";
+import { isQuotaRefusal } from "./modelExhaustion.js";
 
 /** Small helper: sleep used by retry/backoff (kept here so all providers share it). */
 export function sleep(ms: number): Promise<void> {
@@ -73,6 +74,7 @@ export class ProviderModelUnavailableError extends Error {
 }
 
 export type ProviderExhaustionStatus = 402 | 429 | 529;
+export type ProviderExhaustionScope = "account" | "route";
 
 /**
  * Sanitized paid-provider refusal that retains only the status needed by the
@@ -83,6 +85,7 @@ export class ProviderExhaustionError extends Error {
   constructor(
     message: string,
     readonly status: ProviderExhaustionStatus,
+    readonly scope: ProviderExhaustionScope = "route",
   ) {
     super(message);
     this.name = "ProviderExhaustionError";
@@ -168,6 +171,17 @@ export async function withRetry<T>(
           `${label} model unavailable (provider returned 404).`,
         );
       }
+      if (
+        isProviderExhaustionStatus(status) &&
+        (label.startsWith("anthropic.") || label.startsWith("openai.")) &&
+        (status === 402 || isQuotaRefusal(err))
+      ) {
+        throw new ProviderExhaustionError(
+          `${label} account exhausted (provider returned ${status}).`,
+          status,
+          "account",
+        );
+      }
       if (isNonRetryable(err)) break;
       if (i < attempts - 1) {
         const backoff = Math.min(8000, 400 * 2 ** i);
@@ -183,6 +197,7 @@ export async function withRetry<T>(
     throw new ProviderExhaustionError(
       `${label} route exhausted (provider returned ${status}).`,
       status,
+      "route",
     );
   }
   // Surface a sanitized error only — never include payloads.

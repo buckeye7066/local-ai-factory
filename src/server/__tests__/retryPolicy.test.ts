@@ -104,10 +104,31 @@ describe("withRetry", () => {
 
       expect(caught).toBeInstanceOf(ProviderExhaustionError);
       expect((caught as ProviderExhaustionError).status).toBe(status);
+      expect((caught as ProviderExhaustionError).scope).toBe(
+        status === 402 ? "account" : "route",
+      );
       expect(caught).not.toBe(sdkError);
       expect(isModelExhaustion(caught)).toBe(true);
     },
   );
+
+  it("preserves an account-wide 429 quota refusal without retrying it", async () => {
+    let calls = 0;
+    const sdkError = Object.assign(new Error("insufficient_quota"), { status: 429 });
+    let caught: unknown;
+    try {
+      await withRetry("openai.generateText", async () => {
+        calls += 1;
+        throw sdkError;
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(calls).toBe(1);
+    expect(caught).toBeInstanceOf(ProviderExhaustionError);
+    expect(caught).toMatchObject({ status: 429, scope: "account" });
+  });
 });
 
 describe("schema failures are not transport faults (2026-08-16)", () => {

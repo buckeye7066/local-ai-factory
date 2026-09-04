@@ -253,7 +253,7 @@ function modelQualityTier(
   }
 
   if (id.includes("astra")) return 700;
-  if (id.includes("pro")) return 650;
+  if (/(?:^|[-.])pro(?:[-.]|$)/.test(id)) return 650;
   if (id.includes("sol")) return 600;
   if (id.includes("terra")) return 500;
   if (id.includes("codex")) return 450;
