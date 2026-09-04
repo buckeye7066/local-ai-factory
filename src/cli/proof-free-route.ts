@@ -30,7 +30,10 @@ async function main() {
   console.log(`  baseUrl        : ${config.free.baseUrl}`);
   console.log(`  model          : ${config.free.model}`);
 
-  const liveness = await probeLiveness(config.free.baseUrl, config.free.ollamaUrl);
+  const liveness = await probeLiveness(
+    config.free.baseUrl,
+    config.free.ollamaUrl,
+  );
   console.log(`  liveness       : ${liveness.verdict} (${liveness.detail})`);
 
   const registry = createProviderRegistry(config, secrets, (kind, message) =>
