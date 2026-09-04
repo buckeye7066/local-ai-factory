@@ -7,6 +7,7 @@ on:
       - .github/workflows/export-chatgpt-pr181.yml
       - .github/chatgpt-pr181-patch/**
       - .github/chatgpt-pr181-integration/**
+      - .github/chatgpt-pr181-cache-fix/**
   workflow_dispatch:
 
 permissions:
@@ -69,9 +70,6 @@ jobs:
           import sys
 
           text = Path(sys.argv[1]).read_text(encoding="utf-8")
-          # The part boundary repeats the final flag fragment and handle-open
-          # line from the preceding segment. Remove exactly the first bounded
-          # duplicate; the authenticated final hash refuses any broader edit.
           duplicate = (
               " ? FS.O_NOFOLLOW : 0);\n"
               "   const handle = await open(path, flags, 0o600);\n"
@@ -85,11 +83,21 @@ jobs:
           git apply --check "$RUNNER_TEMP/integration.patch"
           git apply "$RUNNER_TEMP/integration.patch"
 
+      - name: Authenticate and apply the ticket-cache repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/chatgpt-pr181-cache-fix/patch.diff "$RUNNER_TEMP/cache-fix.patch"
+          echo "614fc05e19fe917e060e7d93cf6e6b1b7d6870ec7f446e5e49951f9666996569  $RUNNER_TEMP/cache-fix.patch" | sha256sum --check --strict -
+          git apply --check "$RUNNER_TEMP/cache-fix.patch"
+          git apply "$RUNNER_TEMP/cache-fix.patch"
+
       - name: Remove one-time transfer machinery
         shell: bash
         run: |
           rm -rf .github/chatgpt-pr181-patch
           rm -rf .github/chatgpt-pr181-integration
+          rm -rf .github/chatgpt-pr181-cache-fix
           rm -f .github/workflows/export-chatgpt-pr181.yml
           rm -f .github/workflows/hash-pr181-parts.yml
 
