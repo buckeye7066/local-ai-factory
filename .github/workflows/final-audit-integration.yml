@@ -105,6 +105,25 @@ jobs:
             printf 'Focused integration conflicts:\n - %s\n' "${conflicts[@]}" >&2
             exit 1
           fi
+      - name: Repair preserved malformed verification block
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/server/workspace/verificationCommands.ts')
+          text = path.read_text()
+          bad = '  return {\\n    bin: manager,\\n    args,\\n    isTest: true,\\n    ...(pinCandidateRoot ? { runner: "vitest" as const } : {}),\\n  };'
+          good = '''  return {
+            bin: manager,
+            args,
+            isTest: true,
+            ...(pinCandidateRoot ? { runner: "vitest" as const } : {}),
+          };'''
+          count = text.count(bad)
+          if count != 1:
+              raise SystemExit(f'expected exactly one malformed verification return, found {count}')
+          path.write_text(text.replace(bad, good, 1))
+          PY
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
       - name: Format merged TypeScript only
