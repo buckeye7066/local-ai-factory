@@ -1217,12 +1217,13 @@ async function executeRun(
     testResult: "passing" | "failing" | "skipped" | "unknown" | "not_run",
     auditSeq: number | null,
   ) => {
-    const attributionCheckpoint = await getRunCheckpoint(run.id).catch(() => null);
     const attr = buildAttribution(run, {
       allowUntrustedScripts: config.allowUntrustedScripts,
       testResult,
       auditSeq,
-      checkpoint: attributionCheckpoint,
+      // `checkpoint` is the canonical live value updated before every durable
+      // save. A transient/malformed disk read must not erase terminal receipts.
+      checkpoint,
     });
     const path = await writeAttribution(attr);
     run.attribution = attr;
@@ -1327,6 +1328,13 @@ async function executeRun(
           goalsForSpec = checkpoint.options.goals?.length
             ? checkpoint.options.goals
             : [checkpoint.idea];
+        }
+        if (run.demo && repoSource.inPlace === true) {
+          repoSource = { ...repoSource, inPlace: false };
+          log(
+            "warning",
+            "Demo mode forced repository ingestion into an isolated workspace.",
+          );
         }
         log(
           "info",
@@ -4207,15 +4215,34 @@ async function failBackgroundRun(run: RunRecord, error: unknown): Promise<void> 
   await saveRun(run).catch(() => {});
 }
 
-/** Fire-and-forget: returns the queued record immediately, runs in background. */
-export function startRun(args: StartRunArgs): RunRecord {
+function launchBackgroundRun(args: StartRunArgs): {
+  run: RunRecord;
+  persisted: Promise<void>;
+} {
   const run = createRecord(args);
   putRunInMemory(run);
-  void appendAuditEvent({ type: "run.queued", runId: run.id })
-    .then(() => saveRun(run))
+  const persisted = appendAuditEvent({ type: "run.queued", runId: run.id }).then(() =>
+    saveRun(run),
+  );
+  void persisted
     .then(() => executeRun(run, args))
     .catch((error: unknown) => failBackgroundRun(run, error));
-  return run;
+  return { run, persisted };
+}
+
+/** Fire-and-forget: returns the queued record immediately, runs in background. */
+export function startRun(args: StartRunArgs): RunRecord {
+  return launchBackgroundRun(args).run;
+}
+
+/**
+ * Start in the background only after the queued run is durably discoverable.
+ * HTTP idempotency commits its receipt after this boundary, never before it.
+ */
+export async function startRunPersisted(args: StartRunArgs): Promise<RunRecord> {
+  const launched = launchBackgroundRun(args);
+  await launched.persisted;
+  return launched.run;
 }
 
 /** Await the full run (used by the CLI). */

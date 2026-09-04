@@ -1084,6 +1084,10 @@ const PROSPECTIVE_EVIDENCE_MARKERS = new Set([
   "considers",
   "eventual",
   "eventually",
+  "expect",
+  "expected",
+  "expecting",
+  "expects",
   "explore",
   "explored",
   "explores",
@@ -1163,27 +1167,31 @@ const CURRENT_OPERATION_ACTIONS = new Set([
 ]);
 
 const DEFERRED_MODAL_OBJECTS = new Set([
+  "betaaccess",
+  "earlyaccess",
+  "inviteonly",
   "preregister",
   "preregistered",
   "preregistration",
   "prelaunch",
   "preorder",
   "preordered",
+  "prerelease",
   "preview",
   "waitlist",
   "waitlisted",
 ]);
 
-const DEFERRED_MODAL_PHRASES = [
-  ["early", "access"],
-  ["pre", "launch"],
-  ["pre", "order"],
-  ["pre", "register"],
-  ["pre", "registration"],
-  ["wait", "list"],
-] as const;
-
-const EXPECTATION_VERBS = new Set(["expect", "expected", "expecting", "expects"]);
+function hasDeferredModalObject(tokens: string[]): boolean {
+  for (let index = 0; index < tokens.length; index += 1) {
+    for (let width = 1; width <= 3 && index + width <= tokens.length; width += 1) {
+      if (DEFERRED_MODAL_OBJECTS.has(tokens.slice(index, index + width).join(""))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 const FUTURE_PERIODS = new Set([
   "day",
@@ -1216,13 +1224,6 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
   ) {
     return false;
   }
-  if (
-    tokens.some(
-      (token, index) => EXPECTATION_VERBS.has(token) && tokens[index + 1] === "to",
-    )
-  ) {
-    return false;
-  }
 
   // A bare "we will ..." remains an unfulfilled promise. Product manuals,
   // however, commonly describe current deterministic behavior as "When you
@@ -1230,35 +1231,38 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
   // while continuing to fail closed on unqualified marketing modals.
   for (let index = 0; index < tokens.length; index += 1) {
     if (tokens[index] !== "will" && tokens[index] !== "would") continue;
-    let triggerIndex = -1;
-    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-      if (!INSTRUCTIONAL_TRIGGERS.has(tokens[cursor]!)) continue;
-      triggerIndex = cursor;
-      break;
-    }
-    const subjectWindow = tokens.slice(Math.max(0, triggerIndex + 1), index);
-    const hasSecondPersonActor = subjectWindow.some(
+    const triggerIndexes = tokens
+      .slice(0, index)
+      .flatMap((token, tokenIndex) =>
+        INSTRUCTIONAL_TRIGGERS.has(token) ? [tokenIndex] : [],
+      );
+    // The current-operation exception is intentionally one simple clause:
+    // `When you save, the application will ...`. Multiple/nested conditions
+    // or a coordinated predicate make the modal's governing scope ambiguous.
+    if (triggerIndexes.length !== 1) return false;
+    const triggerIndex = triggerIndexes[0]!;
+    const subjectWindow = tokens.slice(triggerIndex + 1, index);
+    const actorIndex = subjectWindow.findIndex(
       (token) => token === "you" || token === "your",
     );
-    const hasCurrentOperation = subjectWindow.some((token) =>
-      CURRENT_OPERATION_ACTIONS.has(token),
+    const operationIndex = subjectWindow.findIndex(
+      (token, tokenIndex) =>
+        tokenIndex > actorIndex && CURRENT_OPERATION_ACTIONS.has(token),
     );
-    const hasDeferredObject =
-      subjectWindow.some((token) => DEFERRED_MODAL_OBJECTS.has(token)) ||
-      DEFERRED_MODAL_PHRASES.some(
-        (phrase) => tokenSubsequenceStart(subjectWindow, [...phrase]) >= 0,
-      );
-    const hasCurrentProductSubject = subjectWindow.some(
-      (token, subjectIndex) =>
-        CURRENT_MODAL_SUBJECTS.has(token) ||
-        (token === "it" && subjectIndex === subjectWindow.length - 1),
+    const productSubjectIndexes = subjectWindow.flatMap((token, tokenIndex) =>
+      CURRENT_MODAL_SUBJECTS.has(token) || token === "it" ? [tokenIndex] : [],
+    );
+    const hasDeferredObject = hasDeferredModalObject(subjectWindow);
+    const hasAmbiguousCoordinator = subjectWindow.some((token) =>
+      POLARITY_SCOPE_BOUNDARIES.has(token),
     );
     if (
-      triggerIndex < 0 ||
-      !hasSecondPersonActor ||
-      !hasCurrentOperation ||
+      actorIndex !== 0 ||
+      operationIndex < 0 ||
       hasDeferredObject ||
-      !hasCurrentProductSubject
+      hasAmbiguousCoordinator ||
+      productSubjectIndexes.length !== 1 ||
+      productSubjectIndexes[0] !== subjectWindow.length - 1
     ) {
       return false;
     }
@@ -1273,6 +1277,56 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
  * Fail closed when a competing subject governs the feature span, while still
  * accepting explicit contrasts such as "unlike competitors, our product...".
  */
+function hasCandidateSubjectBefore(tokens: string[], start: number): boolean {
+  for (let index = 0; index < start; index += 1) {
+    const token = tokens[index]!;
+    const next = tokens[index + 1];
+    if (token === "we" || token === "ours") return true;
+    if (
+      (token === "our" || token === "this") &&
+      next !== undefined &&
+      PRODUCT_SUBJECTS.has(next)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function startsIndependentCompetitorPredicate(
+  tokens: string[],
+  start: number,
+  end: number,
+  competingSubject: number,
+): boolean {
+  if (!hasCandidateSubjectBefore(tokens, start)) return false;
+  let coordinator = -1;
+  for (let index = end + 1; index < competingSubject; index += 1) {
+    if (tokens[index] === "and") coordinator = index;
+  }
+  if (coordinator < 0) return false;
+  const bridge = tokens.slice(coordinator + 1, competingSubject);
+  if (bridge.some((token) => !["competing", "other", "our", "the"].includes(token))) {
+    return false;
+  }
+  const tail = tokens.slice(competingSubject + 1);
+  const refersBackToFeature = tail.some((token) =>
+    [
+      "alone",
+      "capability",
+      "exclusively",
+      "feature",
+      "it",
+      "only",
+      "same",
+      "solely",
+      "that",
+      "this",
+    ].includes(token),
+  );
+  return !refersBackToFeature;
+}
+
 function featureSpanDescribesCandidate(
   tokens: string[],
   start: number,
@@ -1292,34 +1346,22 @@ function featureSpanDescribesCandidate(
     }
   }
   const attributionSubjects = competingSubjects.filter(
-    (index) => index < start || index > end,
+    (index) =>
+      (index < start || index > end) &&
+      !(index > end && startsIndependentCompetitorPredicate(tokens, start, end, index)),
   );
   if (attributionSubjects.length === 0) return true;
 
-  const candidateSubjectBeforeFeature = tokens
-    .slice(0, start)
-    .some(
-      (token, index, prefix) =>
-        token === "we" ||
-        token === "ours" ||
-        ((token === "our" || token === "this" || token === "the") &&
-          PRODUCT_SUBJECTS.has(prefix[index + 1] ?? "")),
-    );
-  const postfixSubjects = attributionSubjects.filter((index) => index > end);
-  if (postfixSubjects.length > 0) {
-    // An explicitly candidate-owned predicate can be followed by a separate
-    // additive competitor predicate. Keep the latter scoped to its own clause
-    // instead of retroactively donating ownership to the feature. Direct
-    // postfix attribution ("a feature of competitors") still fails closed.
-    const additivelySeparated = postfixSubjects.every((index) =>
-      tokens.slice(end + 1, index).includes("and"),
-    );
-    if (!candidateSubjectBeforeFeature || !additivelySeparated) return false;
+  // Attribution after the capability governs the predicate just as strongly
+  // as a prefix ("... is a feature of our competitors"). Without syntax-tree
+  // proof that it is only a contrast, production fallback must fail closed.
+  if (attributionSubjects.some((index) => index > end)) {
+    return false;
   }
 
-  const prefixSubjects = attributionSubjects.filter((index) => index < start);
-  if (prefixSubjects.length === 0) return true;
-  const competingSubject = Math.max(...prefixSubjects);
+  const competingSubject = Math.max(
+    ...attributionSubjects.filter((index) => index < start),
+  );
 
   for (let index = competingSubject + 1; index < start; index += 1) {
     const token = tokens[index]!;

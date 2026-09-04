@@ -37,6 +37,21 @@ import type { RunDestination } from "../../shared/schemas.js";
  */
 
 describe("owner run options — demo is explicit; ambiguous no-op flags fail", () => {
+  it("forces demo extensions into an isolated repository copy", () => {
+    const routeSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+    const orchestratorSource = readFileSync(
+      new URL("../orchestrator/runFactory.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(routeSource).toMatch(
+      /repoSource:\s*parsed\.data\.repoSource[\s\S]*?inPlace:\s*false/,
+    );
+    expect(orchestratorSource).toContain(
+      "repoSource = { ...repoSource, inPlace: false };",
+    );
+  });
+
   it("accepts an explicit demo option for the zero-credit owner preview", () => {
     expect(findRemovedRunOption({ demo: true })).toBeNull();
     expect(findRemovedRunOption({ demo: false })).toBeNull();

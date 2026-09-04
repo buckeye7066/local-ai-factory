@@ -490,17 +490,23 @@ function cssZero(value: string): boolean {
 }
 
 function transformCollapsesText(value: string): boolean {
-  const normalized = value.toLowerCase().replace(/\s+/g, "");
+  const normalized = value.toLowerCase().trim();
   if (!normalized || normalized === "none") return false;
   if (
     [...normalized.matchAll(/\bscale(?:x|y)\(([^)]+)\)/g)].some((match) =>
       cssZero(match[1] ?? ""),
     ) ||
     [...normalized.matchAll(/\bscale\(([^)]+)\)/g)].some((match) =>
-      (match[1] ?? "").split(",").slice(0, 2).some(cssZero),
+      (match[1] ?? "")
+        .split(/[\s,]+/)
+        .slice(0, 2)
+        .some(cssZero),
     ) ||
     [...normalized.matchAll(/\bscale3d\(([^)]+)\)/g)].some((match) =>
-      (match[1] ?? "").split(",").slice(0, 2).some(cssZero),
+      (match[1] ?? "")
+        .split(/[\s,]+/)
+        .slice(0, 2)
+        .some(cssZero),
     )
   ) {
     return true;
@@ -513,14 +519,29 @@ function transformCollapsesText(value: string): boolean {
       return true;
     }
   }
+  for (const match of normalized.matchAll(/\bmatrix3d\(([^)]+)\)/g)) {
+    const matrix = (match[1] ?? "").split(",").map(Number);
+    if (matrix.length !== 16 || !matrix.every(Number.isFinite)) continue;
+    const [m11, m12, m13, , m21, m22, m23] = matrix;
+    const cross = [
+      m12! * m23! - m13! * m22!,
+      m13! * m21! - m11! * m23!,
+      m11! * m22! - m12! * m21!,
+    ];
+    if (cross.every((component) => Math.abs(component) <= Number.EPSILON)) {
+      return true;
+    }
+  }
   return false;
 }
 
-function scalePropertyCollapsesText(value: string): boolean {
+function standaloneScaleCollapsesText(value: string): boolean {
   const normalized = value.trim().toLowerCase();
-  if (!normalized || normalized === "none") return false;
-  const axes = normalized.split(/\s+/).slice(0, 2);
-  return axes.some(cssZero);
+  return (
+    normalized !== "" &&
+    normalized !== "none" &&
+    normalized.split(/\s+/).slice(0, 2).some(cssZero)
+  );
 }
 
 function clipRemovesText(property: string, value: string): boolean {
@@ -533,32 +554,71 @@ function clipRemovesText(property: string, value: string): boolean {
       .filter(Boolean);
     return values?.length === 4 && values.every(cssZero);
   }
-  return (
-    /^inset\(\s*(?:50|100)%/.test(normalized) ||
-    /^(?:circle|ellipse)\(\s*0(?:[a-z]+|%)?\b/.test(normalized) ||
-    /^polygon\(\s*(?:0(?:[a-z]+|%)?\s+0(?:[a-z]+|%)?\s*,?\s*)+\)$/.test(normalized)
-  );
+  const inset = normalized.match(/^inset\(([^)]*)\)$/)?.[1];
+  if (inset !== undefined) {
+    const offsets = inset
+      .split(/\s+round\s+/i)[0]!
+      .trim()
+      .split(/\s+/);
+    if (offsets.length >= 1 && offsets.length <= 4) {
+      const a = offsets[0]!;
+      const b = offsets[1] ?? a;
+      const c = offsets[2] ?? a;
+      const d = offsets[3] ?? b;
+      const percent = (token: string): number | null => {
+        if (cssZero(token)) return 0;
+        const match = token.match(/^([-+]?(?:\d+(?:\.\d*)?|\.\d+))%$/);
+        return match ? Number(match[1]) : null;
+      };
+      const [top, right, bottom, left] = [a, b, c, d].map(percent);
+      if (
+        (top !== null && bottom !== null && top + bottom >= 100) ||
+        (left !== null && right !== null && left + right >= 100)
+      ) {
+        return true;
+      }
+    }
+  }
+  if (/^(?:circle|ellipse)\(\s*0(?:[a-z]+|%)?\b/.test(normalized)) return true;
+
+  const polygon = normalized.match(/^polygon\((.*)\)$/)?.[1];
+  if (polygon !== undefined) {
+    const body = polygon.replace(/^\s*(?:evenodd|nonzero)\s*,/i, "");
+    const points = body.split(",").map((point) => point.trim().split(/\s+/));
+    const coordinate = (token: string): number | null => {
+      if (cssZero(token)) return 0;
+      const match = token.match(/^([-+]?(?:\d+(?:\.\d*)?|\.\d+))%$/);
+      return match ? Number(match[1]) : null;
+    };
+    const parsed = points.map(([x = "", y = ""]) => [coordinate(x), coordinate(y)]);
+    if (parsed.length >= 3 && parsed.every(([x, y]) => x !== null && y !== null)) {
+      let twiceArea = 0;
+      for (let index = 0; index < parsed.length; index += 1) {
+        const [x1, y1] = parsed[index]! as [number, number];
+        const [x2, y2] = parsed[(index + 1) % parsed.length]! as [number, number];
+        twiceArea += x1 * y2 - x2 * y1;
+      }
+      if (Math.abs(twiceArea) <= Number.EPSILON) return true;
+    }
+  }
+  return false;
 }
 
-function transparentColorRemovesText(value: string): boolean {
+function transparentTextColor(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   if (normalized === "transparent") return true;
-
   const shortHex = normalized.match(/^#[0-9a-f]{4}$/)?.[0];
   if (shortHex?.endsWith("0")) return true;
   const longHex = normalized.match(/^#[0-9a-f]{8}$/)?.[0];
   if (longHex?.endsWith("00")) return true;
-
   const colorFunction = normalized.match(
     /^(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\((.*)\)$/,
   )?.[1];
   if (colorFunction === undefined) return false;
-
   const slashAlpha = colorFunction.includes("/")
     ? colorFunction.slice(colorFunction.lastIndexOf("/") + 1)
     : undefined;
   if (slashAlpha !== undefined) return cssZero(slashAlpha);
-
   const commaParts = colorFunction.split(",");
   return commaParts.length === 4 && cssZero(commaParts[3]!);
 }
@@ -586,11 +646,11 @@ function propertyValuesSuppressText(get: (property: string) => string): boolean 
     (opacity !== "" && Number.parseFloat(opacity) <= 0) ||
     /opacity\([-+]?(?:0+|0*\.0+)%?\)/.test(filter) ||
     transformCollapsesText(get("transform")) ||
-    scalePropertyCollapsesText(get("scale")) ||
+    standaloneScaleCollapsesText(get("scale")) ||
     clipRemovesText("clip", get("clip")) ||
     clipRemovesText("clip-path", get("clip-path")) ||
-    transparentColorRemovesText(color) ||
-    transparentColorRemovesText(textFill) ||
+    transparentTextColor(color) ||
+    transparentTextColor(textFill) ||
     cssZero(get("font-size")) ||
     zeroSizedAndClipped
   );
@@ -792,7 +852,11 @@ function scanHtmlStylesheets(html: string, xmlMode: boolean): HtmlStylesheetScan
 }
 
 function cssForConservativeRendering(css: string): string {
-  return decodeCssEscapes(css.replace(/\/\*[\s\S]*?\*\//g, ""));
+  const normalized = decodeCssEscapes(css.replace(/\/\*[\s\S]*?\*\//g, ""));
+  if (normalized.includes("/*")) {
+    throw new Error("Stylesheet contains an unterminated CSS comment.");
+  }
+  return normalized;
 }
 
 function hasUnresolvedStylesheetImport(css: string): boolean {

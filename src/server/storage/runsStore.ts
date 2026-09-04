@@ -281,6 +281,37 @@ export async function getRun(id: string): Promise<RunRecord | null> {
 }
 
 /**
+ * Inspect only the durable run receipt used to reconcile an interrupted
+ * idempotency reservation. Missing is distinct from unreadable/corrupt: the
+ * latter must fail closed instead of replaying a start with uncertain state.
+ */
+export async function inspectDurableRun(id: string): Promise<"present" | "missing"> {
+  if (!isValidRunId(id)) {
+    throw new Error("Refused: idempotency receipt contains an invalid run id.");
+  }
+  await ensureDirs();
+  const path = await safeStorePath(STORE_DIR, id);
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw error;
+  }
+  try {
+    const parsed = RunRecordSchema.parse(JSON.parse(raw));
+    if (parsed.id !== id) {
+      throw new Error("durable run id does not match its filename");
+    }
+  } catch (error) {
+    throw new Error(
+      `Refused: durable run receipt is corrupt: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return "present";
+}
+
+/**
  * Queue authoritative operator guidance for the next model checkpoint.
  * The instruction is persisted on the run itself, so a queued run and a
  * resumable interrupted run do not lose it when the backend is restarted.

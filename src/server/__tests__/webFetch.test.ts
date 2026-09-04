@@ -237,6 +237,31 @@ describe("webFetchTool readable HTML extraction", () => {
     expect(result.textExcerpt).toBe("Visible evidence.");
   });
 
+  it("fails closed on an unterminated embedded stylesheet comment", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          `<style>/* unterminated .claim { display: none }</style>
+           <div class="claim">Unverifiable feature claim.</div>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool(
+      "https://evidence.example/unterminated-embedded-css",
+      1_000,
+      {
+        fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.textExcerpt).toBe("");
+    expect(result.error).toMatch(/unterminated CSS comment/i);
+  });
+
   it("fetches and applies external stylesheet visibility before admitting evidence", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
       const requestUrl =
@@ -270,16 +295,52 @@ describe("webFetchTool readable HTML extraction", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("fails closed on an unterminated external stylesheet comment", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const requestUrl =
+        input instanceof URL
+          ? input
+          : new URL(typeof input === "string" ? input : input.url);
+      if (requestUrl.pathname === "/broken.css") {
+        return new Response("/* unterminated .claim { display: none }", {
+          headers: { "content-type": "text/css" },
+        });
+      }
+      return new Response(
+        `<link rel="stylesheet" href="/broken.css">
+         <div class="claim">Unverifiable feature claim.</div>`,
+        { headers: { "content-type": "text/html" } },
+      );
+    });
+
+    const result = await webFetchTool(
+      "https://evidence.example/unterminated-external-css",
+      1_000,
+      {
+        fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.textExcerpt).toBe("");
+    expect(result.error).toMatch(/unterminated CSS comment/i);
+  });
+
   it.each([
     "opacity: 0",
     "transform: scale(0)",
     "transform: scale(0, 1)",
-    "transform: translateX(1px) scale(1) scale(0, 1)",
+    "transform: rotate(1deg) scale(1) scale(0, 1)",
+    "transform: matrix3d(0,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)",
     "scale: 0",
     "scale: 0 1",
     "clip: rect(0, 0, 0, 0)",
     "clip-path: inset(50%)",
+    "clip-path: inset(0 50%)",
+    "clip-path: polygon(50% 50%, 50% 50%, 50% 50%)",
     "font-size: 0",
+    "color: transparent",
     "color: rgba(0, 0, 0, 0)",
     "color: rgb(0 0 0 / 0%)",
     "color: #0000",

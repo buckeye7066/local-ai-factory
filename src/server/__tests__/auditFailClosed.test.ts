@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, rm, utimes, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const dataRoot = resolve(process.cwd(), ".test-factory-data-audit-fail-closed");
@@ -61,6 +61,20 @@ describe("audit-chain corruption", () => {
 
     await expect(
       appendAuditEvent({ type: "run.queued", runId: "run-after-crash" }),
+    ).resolves.toMatchObject({ seq: 1 });
+    await expect(verifyAuditChain()).resolves.toEqual({ ok: true, badSeq: null });
+  });
+
+  it("recovers an old malformed lock left during a crashed write", async () => {
+    const auditDirectory = resolve(dataRoot, "audit");
+    const lockPath = resolve(auditDirectory, ".append.lock");
+    await mkdir(auditDirectory, { recursive: true });
+    await writeFile(lockPath, '{"pid":', "utf8");
+    const stale = new Date(Date.now() - 60_000);
+    await utimes(lockPath, stale, stale);
+
+    await expect(
+      appendAuditEvent({ type: "run.queued", runId: "run-after-partial-lock" }),
     ).resolves.toMatchObject({ seq: 1 });
     await expect(verifyAuditChain()).resolves.toEqual({ ok: true, badSeq: null });
   });

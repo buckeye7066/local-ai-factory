@@ -16,6 +16,7 @@ import {
 } from "../shared/schemas.js";
 import {
   startRun,
+  startRunPersisted,
   resumeRun,
   runFactoryTracked,
   resumeFactory as resumeFactoryFull,
@@ -37,6 +38,7 @@ import {
 import { epicPlannerAgent } from "./agents/epicPlannerAgent.js";
 import {
   getRun,
+  inspectDurableRun,
   listRuns,
   getRunFiles,
   pruneOldRuns,
@@ -433,6 +435,9 @@ app.post(
           demo: true,
           publish: false,
           pushToOrigin: false,
+          repoSource: parsed.data.repoSource
+            ? { ...parsed.data.repoSource, inPlace: false }
+            : undefined,
           newRepo: parsed.data.newRepo
             ? { ...parsed.data.newRepo, createRemote: false }
             : undefined,
@@ -445,20 +450,35 @@ app.post(
       // rotated/concurrent model stays on the same open issue (ALS propagates
       // into saveRun().then(executeRun) when started inside this wrapper).
       if (idempotencyKey) {
-        const outcome = await startIdempotently(idempotencyKey, idea, (reservedRunId) =>
-          underWorkTheme({ idea, stage: "build" }, () =>
-            startRun({
-              idea,
-              options,
-              config,
-              secrets,
-              runId: reservedRunId,
-            }),
-          ),
+        const outcome = await startIdempotently(
+          idempotencyKey,
+          idea,
+          (reservedRunId) =>
+            underWorkTheme({ idea, stage: "build" }, () =>
+              startRunPersisted({
+                idea,
+                options,
+                config,
+                secrets,
+                runId: reservedRunId,
+              }),
+            ),
+          inspectDurableRun,
         );
         if (outcome.status === "conflict") {
           res.status(409).json({
             error: "Idempotency-Key was already used with a different idea.",
+          });
+          return;
+        }
+        if (outcome.status === "pending") {
+          res.setHeader("Retry-After", "1");
+          res.status(503).json({
+            error:
+              "The original idempotent start is still pending or was interrupted; no completed run is available yet.",
+            runId: outcome.runId,
+            pending: true,
+            retryable: true,
           });
           return;
         }

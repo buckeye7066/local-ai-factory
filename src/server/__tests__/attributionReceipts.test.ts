@@ -1,10 +1,27 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { RunAttributionSchema, type RunRecord } from "../../shared/schemas.js";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
 import { buildAttribution } from "../storage/attribution.js";
 
 describe("durable run attribution receipts", () => {
+  it("keeps terminal attribution bound to the live checkpoint", async () => {
+    const source = await readFile(
+      new URL("../orchestrator/runFactory.ts", import.meta.url),
+      "utf8",
+    );
+    const persistAttribution = source.slice(
+      source.indexOf("const persistAttribution"),
+      source.indexOf("let inPlaceRestore"),
+    );
+
+    expect(persistAttribution).toContain("checkpoint,");
+    expect(persistAttribution).not.toMatch(
+      /getRunCheckpoint[\s\S]*?catch\(\(\) => null\)/,
+    );
+  });
+
   it("binds generated files, verification commands, approval, commit, and rollback", () => {
     const runId = randomUUID();
     const run = {

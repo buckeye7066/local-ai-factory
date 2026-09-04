@@ -16,6 +16,7 @@ const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".facto
 const AUDIT_DIR = join(DATA_ROOT, "audit");
 const AUDIT_FILE = join(AUDIT_DIR, "events.jsonl");
 const AUDIT_LOCK = join(AUDIT_DIR, ".append.lock");
+const MALFORMED_LOCK_GRACE_MS = 30_000;
 
 export type AuditEventType =
   | "run.queued"
@@ -192,25 +193,69 @@ function parseAuditLock(raw: string): AuditLockReceipt | null {
   }
 }
 
+type AuditLockSnapshot = {
+  raw: string;
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+};
+
+async function readAuditLockSnapshot(): Promise<AuditLockSnapshot | null> {
+  let handle;
+  try {
+    handle = await open(AUDIT_LOCK, "r");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) return null;
+    return {
+      raw: await handle.readFile("utf8"),
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function sameAuditLock(left: AuditLockSnapshot, right: AuditLockSnapshot): boolean {
+  return (
+    left.raw === right.raw &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs
+  );
+}
+
 async function removeStaleAuditLock(): Promise<boolean> {
-  let raw: string;
-  try {
-    raw = await readFile(AUDIT_LOCK, "utf8");
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
-  const receipt = parseAuditLock(raw);
-  if (!receipt || Date.now() - receipt.acquiredAt < 250) return false;
-  try {
-    process.kill(receipt.pid, 0);
+  const observed = await readAuditLockSnapshot();
+  if (!observed) return true;
+  const receipt = parseAuditLock(observed.raw);
+  if (receipt) {
+    if (Date.now() - receipt.acquiredAt < 250) return false;
+    try {
+      process.kill(receipt.pid, 0);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
+    }
+  } else if (Date.now() - observed.mtimeMs < MALFORMED_LOCK_GRACE_MS) {
+    // A holder can be between O_EXCL creation and its fsynced JSON write.
+    // Only an unchanged malformed inode beyond a generous grace is abandoned.
     return false;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
   }
-  // Confirm the name still carries the receipt we inspected. Cooperative
-  // holders use unique tokens, so a replacement lock is never deleted.
-  const current = await readFile(AUDIT_LOCK, "utf8").catch(() => "");
-  if (current !== raw) return false;
+  // Confirm both bytes and file identity still match the snapshot. Valid
+  // holders use unique tokens; malformed crash remnants are bound by inode,
+  // size, and mtime so a replacement lock is never intentionally removed.
+  const current = await readAuditLockSnapshot();
+  if (!current || !sameAuditLock(observed, current)) return false;
   await rm(AUDIT_LOCK, { force: true });
   return true;
 }

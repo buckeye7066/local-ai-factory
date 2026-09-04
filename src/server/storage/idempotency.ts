@@ -18,6 +18,8 @@ const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".facto
 const IDEM_DIR = join(DATA_ROOT, "idempotency");
 const HASH_PATTERN = /^[a-f0-9]{32}$/;
 const HAS_NOFOLLOW = typeof FS.O_NOFOLLOW === "number" && FS.O_NOFOLLOW !== 0;
+const PENDING_RECOVERY_GRACE_MS = 30_000;
+const MALFORMED_LOCK_GRACE_MS = 30_000;
 
 type IdempotencyRecord = {
   runId: string;
@@ -36,6 +38,10 @@ function safeKeyFilename(key: string): string {
 
 function recordPath(key: string): string {
   return join(IDEM_DIR, safeKeyFilename(key));
+}
+
+function lockPath(key: string): string {
+  return `${recordPath(key)}.lock`;
 }
 
 export function hashIdea(idea: string): string {
@@ -77,6 +83,28 @@ function parseRecord(raw: string): IdempotencyRecord {
   };
 }
 
+type IdempotencyLockReceipt = {
+  pid: number;
+  acquiredAt: number;
+  token: string;
+};
+
+function parseLockReceipt(raw: string): IdempotencyLockReceipt | null {
+  try {
+    const value = JSON.parse(raw) as Partial<IdempotencyLockReceipt>;
+    return Number.isSafeInteger(value.pid) &&
+      value.pid! > 0 &&
+      typeof value.acquiredAt === "number" &&
+      Number.isFinite(value.acquiredAt) &&
+      typeof value.token === "string" &&
+      value.token.length > 0
+      ? (value as IdempotencyLockReceipt)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function pathInside(parent: string, child: string): boolean {
   const rel = relative(resolve(parent), resolve(child));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -109,6 +137,117 @@ async function ensureIdempotencyDirectory(): Promise<void> {
   ]);
   if (!pathInside(rootReal, idemReal)) {
     throw new Error("Refused: idempotency store escapes the Factory data root.");
+  }
+}
+
+type LockSnapshot = {
+  raw: string;
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+};
+
+async function readLockSnapshot(path: string): Promise<LockSnapshot | null> {
+  const flags = FS.O_RDONLY | (HAS_NOFOLLOW ? FS.O_NOFOLLOW : 0);
+  let handle;
+  try {
+    handle = await open(path, flags);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("Refused: idempotency lock is not a regular file.");
+    }
+    return {
+      raw: await handle.readFile("utf8"),
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+function sameLockSnapshot(left: LockSnapshot, right: LockSnapshot): boolean {
+  return (
+    left.raw === right.raw &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs
+  );
+}
+
+async function removeStaleKeyLock(key: string): Promise<boolean> {
+  const path = lockPath(key);
+  const observed = await readLockSnapshot(path);
+  if (!observed) return true;
+  const receipt = parseLockReceipt(observed.raw);
+  if (receipt) {
+    if (Date.now() - receipt.acquiredAt < 250) return false;
+    try {
+      process.kill(receipt.pid, 0);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
+    }
+  } else if (Date.now() - observed.mtimeMs < MALFORMED_LOCK_GRACE_MS) {
+    return false;
+  }
+  const current = await readLockSnapshot(path);
+  if (!current || !sameLockSnapshot(observed, current)) return false;
+  await rm(path, { force: true });
+  await syncIdempotencyDirectory();
+  return true;
+}
+
+async function acquireKeyLock(key: string): Promise<string | null> {
+  await ensureIdempotencyDirectory();
+  const path = lockPath(key);
+  const token = randomUUID();
+  const flags =
+    FS.O_WRONLY | FS.O_CREAT | FS.O_EXCL | (HAS_NOFOLLOW ? FS.O_NOFOLLOW : 0);
+  for (let attempt = 0; attempt <= 2_000; attempt += 1) {
+    let handle;
+    let created = false;
+    try {
+      handle = await open(path, flags, 0o600);
+      created = true;
+      await handle.writeFile(
+        JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token }),
+        "utf8",
+      );
+      await handle.sync();
+      await handle.close();
+      await syncIdempotencyDirectory();
+      return token;
+    } catch (error) {
+      await handle?.close().catch(() => {});
+      if (created) {
+        await rm(path, { force: true }).catch(() => {});
+        await syncIdempotencyDirectory().catch(() => {});
+      }
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (await removeStaleKeyLock(key)) continue;
+      if (attempt === 2_000) return null;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 5));
+    }
+  }
+  return null;
+}
+
+async function releaseKeyLock(key: string, token: string): Promise<void> {
+  const path = lockPath(key);
+  const snapshot = await readLockSnapshot(path).catch(() => null);
+  if (snapshot && parseLockReceipt(snapshot.raw)?.token === token) {
+    await rm(path, { force: true });
+    await syncIdempotencyDirectory();
   }
 }
 
@@ -193,7 +332,10 @@ async function reserveRecord(
 export type IdempotentStartResult<T> =
   | { status: "created"; runId: string; value: T }
   | { status: "existing"; runId: string }
+  | { status: "pending"; runId: string }
   | { status: "conflict"; runId: string };
+
+export type DurableRunInspector = (runId: string) => Promise<"present" | "missing">;
 
 /**
  * Atomically reserve a run id and start exactly one run for a key/idea pair.
@@ -203,49 +345,96 @@ export async function startIdempotently<T extends { id: string }>(
   key: string,
   idea: string,
   create: (reservedRunId: string) => T | Promise<T>,
+  inspectDurableRun?: DurableRunInspector,
 ): Promise<IdempotentStartResult<T>> {
   return withKeyLock(key, async () => {
     const ideaHash = hashIdea(idea);
-    const known = await readRecord(key);
-    if (known) {
-      return known.ideaHash === ideaHash
-        ? { status: "existing", runId: known.runId }
-        : { status: "conflict", runId: known.runId };
+    const lockToken = await acquireKeyLock(key);
+    if (!lockToken) {
+      const occupied = await readRecord(key);
+      if (!occupied) {
+        throw new Error("Refused: idempotency ownership lock remained occupied.");
+      }
+      if (occupied.ideaHash !== ideaHash) {
+        return { status: "conflict", runId: occupied.runId };
+      }
+      return occupied.state === "committed"
+        ? { status: "existing", runId: occupied.runId }
+        : { status: "pending", runId: occupied.runId };
     }
-
-    const reservation = await reserveRecord(key, ideaHash);
-    if (!reservation.created) {
-      return reservation.record.ideaHash === ideaHash
-        ? { status: "existing", runId: reservation.record.runId }
-        : { status: "conflict", runId: reservation.record.runId };
-    }
-
-    const { record } = reservation;
-    let callbackReturned = false;
     try {
-      const value = await create(record.runId);
-      callbackReturned = true;
-      if (value.id !== record.runId) {
-        throw new Error(
-          "Refused: idempotent run starter did not use its reserved run id.",
-        );
+      const known = await readRecord(key);
+      if (known?.ideaHash !== undefined && known.ideaHash !== ideaHash) {
+        return { status: "conflict", runId: known.runId };
       }
-      const committed: IdempotencyRecord = { ...record, state: "committed" };
-      await writeFileContained(recordPath(key), JSON.stringify(committed));
-      return { status: "created", runId: committed.runId, value };
-    } catch (error) {
-      // Once the callback returned, a run exists. Preserve its pending receipt
-      // even if publishing the committed marker failed, so retries cannot
-      // create a duplicate. Before that point, conditional ownership lets a
-      // clean retry proceed.
-      if (!callbackReturned) {
-        const current = await readRecordPath(recordPath(key)).catch(() => null);
-        if (current?.claimToken === record.claimToken) {
-          await rm(recordPath(key), { force: true });
-          await syncIdempotencyDirectory();
+      if (known?.state === "committed") {
+        return { status: "existing", runId: known.runId };
+      }
+
+      let record: IdempotencyRecord;
+      if (known) {
+        if (!inspectDurableRun) {
+          return { status: "pending", runId: known.runId };
         }
+        const durableState = await inspectDurableRun(known.runId);
+        if (durableState === "present") {
+          const committed: IdempotencyRecord = { ...known, state: "committed" };
+          await writeFileContained(recordPath(key), JSON.stringify(committed));
+          return { status: "existing", runId: known.runId };
+        }
+        if (Date.now() - known.createdAt < PENDING_RECOVERY_GRACE_MS) {
+          return { status: "pending", runId: known.runId };
+        }
+        // The owner is gone (we hold its reclaimed lease), no durable run
+        // exists, and the reservation is past its compatibility grace. Replay
+        // with the SAME run id so the key's identity never changes.
+        record = {
+          ...known,
+          createdAt: Date.now(),
+          claimToken: randomUUID(),
+          state: "pending",
+        };
+        await writeFileContained(recordPath(key), JSON.stringify(record));
+      } else {
+        const reservation = await reserveRecord(key, ideaHash);
+        if (!reservation.created) {
+          if (reservation.record.ideaHash !== ideaHash) {
+            return { status: "conflict", runId: reservation.record.runId };
+          }
+          return reservation.record.state === "committed"
+            ? { status: "existing", runId: reservation.record.runId }
+            : { status: "pending", runId: reservation.record.runId };
+        }
+        record = reservation.record;
       }
-      throw error;
+
+      let callbackReturned = false;
+      try {
+        const value = await create(record.runId);
+        callbackReturned = true;
+        if (value.id !== record.runId) {
+          throw new Error(
+            "Refused: idempotent run starter did not use its reserved run id.",
+          );
+        }
+        const committed: IdempotencyRecord = { ...record, state: "committed" };
+        await writeFileContained(recordPath(key), JSON.stringify(committed));
+        return { status: "created", runId: committed.runId, value };
+      } catch (error) {
+        // Once the callback returned, a durable run exists. Preserve pending
+        // if publishing the committed marker failed; the next owner probes and
+        // promotes it without starting a duplicate.
+        if (!callbackReturned) {
+          const current = await readRecordPath(recordPath(key)).catch(() => null);
+          if (current?.claimToken === record.claimToken) {
+            await rm(recordPath(key), { force: true });
+            await syncIdempotencyDirectory();
+          }
+        }
+        throw error;
+      }
+    } finally {
+      await releaseKeyLock(key, lockToken);
     }
   });
 }
