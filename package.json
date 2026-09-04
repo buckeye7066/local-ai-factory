@@ -58,6 +58,7 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "happy-dom": "^20.11.2",
     "openai": "^4.83.0",
     "zod": "^3.24.1"
   },
@@ -72,7 +73,6 @@
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.2",
     "framer-motion": "^11.18.2",
-    "happy-dom": "^20.11.2",
     "lucide-react": "^0.474.0",
     "postcss": "^8.5.1",
     "prettier": "3.4.2",

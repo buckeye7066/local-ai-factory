@@ -185,6 +185,89 @@ describe("webFetchTool readable HTML extraction", () => {
     expect(result.textExcerpt).toBe("Visible.");
   });
 
+  it.each(["display&#58none", "display&#x3anone"])(
+    "decodes semicolon-less numeric references before testing inline CSS: %s",
+    async (style) => {
+      const fetch = vi.fn(async () =>
+        Promise.resolve(
+          new Response(
+            `<p>Visible.</p><div style="${style}">Hidden feature claim.</div>`,
+            { headers: { "content-type": "text/html" } },
+          ),
+        ),
+      );
+
+      const result = await webFetchTool(
+        "https://evidence.example/css-numeric-entity",
+        1_000,
+        {
+          fetch,
+          lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+        },
+      );
+
+      expect(result.textExcerpt).toBe("Visible.");
+    },
+  );
+
+  it("applies embedded stylesheet visibility before admitting evidence text", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          `<style>@media screen { .hidden { display: none } }</style>
+           <p>Visible evidence.</p>
+           <div class="hidden">Hidden feature claim.</div>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool(
+      "https://evidence.example/embedded-stylesheet",
+      1_000,
+      {
+        fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.textExcerpt).toBe("Visible evidence.");
+  });
+
+  it("fetches and applies external stylesheet visibility before admitting evidence", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const requestUrl =
+        input instanceof URL
+          ? input
+          : new URL(typeof input === "string" ? input : input.url);
+      if (requestUrl.pathname === "/evidence.css") {
+        return new Response(".hidden { visibility: hidden }", {
+          headers: { "content-type": "text/css" },
+        });
+      }
+      return new Response(
+        `<link rel="stylesheet" href="/evidence.css">
+         <p>Visible evidence.</p>
+         <div class="hidden">Hidden feature claim.</div>`,
+        { headers: { "content-type": "text/html" } },
+      );
+    });
+
+    const result = await webFetchTool(
+      "https://evidence.example/external-stylesheet",
+      1_000,
+      {
+        fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.textExcerpt).toBe("Visible evidence.");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores style-like text inside preceding quoted attributes", async () => {
     const fetch = vi.fn(async () =>
       Promise.resolve(
