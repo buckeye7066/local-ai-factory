@@ -105,13 +105,14 @@ jobs:
             printf 'Focused integration conflicts:\n - %s\n' "${conflicts[@]}" >&2
             exit 1
           fi
-      - name: Repair preserved malformed verification block
+      - name: Repair preserved integration artifacts
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path('src/server/workspace/verificationCommands.ts')
-          text = path.read_text()
+
+          source_path = Path('src/server/workspace/verificationCommands.ts')
+          source = source_path.read_text()
           bad = '  return {\\n    bin: manager,\\n    args,\\n    isTest: true,\\n    ...(pinCandidateRoot ? { runner: "vitest" as const } : {}),\\n  };'
           good = '''  return {
             bin: manager,
@@ -119,10 +120,28 @@ jobs:
             isTest: true,
             ...(pinCandidateRoot ? { runner: "vitest" as const } : {}),
           };'''
-          count = text.count(bad)
+          count = source.count(bad)
           if count != 1:
               raise SystemExit(f'expected exactly one malformed verification return, found {count}')
-          path.write_text(text.replace(bad, good, 1))
+          source_path.write_text(source.replace(bad, good, 1))
+
+          test_path = Path('src/server/__tests__/verificationCommands.test.ts')
+          test = test_path.read_text()
+          old = '''    expect(hostTest).toEqual({
+            bin: "yarn",
+            args: ["test", "--root=."],
+            isTest: true,
+          });'''
+          new = '''    expect(hostTest).toEqual({
+            bin: "yarn",
+            args: ["test", "--root=."],
+            isTest: true,
+            runner: "vitest",
+          });'''
+          count = test.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one Yarn host-test assertion, found {count}')
+          test_path.write_text(test.replace(old, new, 1))
           PY
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
