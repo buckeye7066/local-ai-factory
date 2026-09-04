@@ -429,10 +429,16 @@ describe("bounded production research", () => {
   it("rejects five competitor-attributed claims from the evidence gate", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();
-    for (const candidate of input.candidates) {
-      candidate.sourceEvidence[0]!.excerpt =
-        "Our competitors encrypt stored plaintext credentials using hardware keys; we do not.";
-    }
+    const externalClaims = [
+      "Our competitors encrypt stored plaintext credentials using hardware keys; we do not.",
+      "Other products encrypt stored plaintext credentials using hardware keys; we do not.",
+      "Other providers encrypt stored plaintext credentials using hardware keys; we do not.",
+      "Rivals encrypt stored plaintext credentials using hardware keys; we do not.",
+      "Others encrypt stored plaintext credentials using hardware keys; we do not.",
+    ];
+    input.candidates.forEach((candidate, index) => {
+      candidate.sourceEvidence[0]!.excerpt = externalClaims[index]!;
+    });
     const spy = vi
       .spyOn(intelligence, "buildCompetitiveDossier")
       .mockResolvedValue(input);
