@@ -178,9 +178,8 @@ describe("automatic cloud model-ladder contract", () => {
     expect(factory).toContain(
       "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
     );
-    expect(
-      factory.match(/pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g),
-    ).toHaveLength(2);
+    expect(factory).toContain("run-windows-platform-proof.ps1");
+    expect(factory).toContain("run-macos-platform-proof.sh");
     expect(factory).toContain("pnpm exec tsx src/cli/factory-resume.ts");
     expect(factory).toContain("continue-on-error: true");
     expect(factory).toContain("${{ steps.candidate.outcome }}");
@@ -209,9 +208,8 @@ describe("automatic cloud model-ladder contract", () => {
     expect(foundry).toContain(
       "pnpm exec tsx src/cli/factory-platform-proof.ts validate",
     );
-    expect(
-      foundry.match(/pnpm exec tsx src\/cli\/factory-platform-proof\.ts record/g),
-    ).toHaveLength(2);
+    expect(foundry).toContain("run-windows-platform-proof.ps1");
+    expect(foundry).toContain("run-macos-platform-proof.sh");
     expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: seed");
     expect(foundry).toContain("PURPOSE_FOUNDRY_SMOKE_PHASE: resume");
     expect(foundry).toContain("purpose-foundry-seed-${{ github.run_id }}");
