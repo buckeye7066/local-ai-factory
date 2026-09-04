@@ -37,8 +37,12 @@ jobs:
           import sys
 
           text = Path(sys.argv[1]).read_text(encoding="utf-8")
-          # One transport segment gained one leading '+' per line. Normalize
-          # only that exact bounded hunk, then authenticate the complete patch.
+          # Normalize four transported headers that gained a single leading
+          # space, then normalize the separately bounded extra-plus segment.
+          text = "\n".join(
+              line[1:] if line.startswith(" diff --git ") else line
+              for line in text.split("\n")
+          )
           marker = "+diff --git a/src/server/tools/webFetch.ts"
           start = text.index(marker)
           end = text.index("\n-  const zeroSizedAndClipped", start)
@@ -61,6 +65,7 @@ jobs:
         run: |
           rm -rf .github/chatgpt-pr181-patch
           rm -f .github/workflows/export-chatgpt-pr181.yml
+          rm -f .github/workflows/hash-pr181-parts.yml
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
