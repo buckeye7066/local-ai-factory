@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { RunAttributionSchema, type RunRecord } from "../../shared/schemas.js";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
-import { buildAttribution } from "../storage/attribution.js";
+import { buildAttribution, writeAttribution } from "../storage/attribution.js";
 
 describe("durable run attribution receipts", () => {
   it("keeps terminal attribution bound to the live checkpoint", async () => {
@@ -119,5 +119,26 @@ describe("durable run attribution receipts", () => {
     expect(parsed.verifiedCommitSha).toBeNull();
     expect(parsed.testReceipt).toBeNull();
     expect(parsed.rollback).toBeNull();
+  });
+
+  it("returns the exact durable manifest digest", async () => {
+    const runId = randomUUID();
+    const attr = buildAttribution({ id: runId, workspacePath: null } as RunRecord, {
+      allowUntrustedScripts: false,
+      testResult: "not_run",
+      auditSeq: null,
+      checkpoint: null,
+    });
+    const written = await writeAttribution(attr);
+    try {
+      const raw = await readFile(written.path, "utf8");
+      const { createHash } = await import("node:crypto");
+      expect(createHash("sha256").update(raw).digest("hex")).toBe(
+        written.manifestSha256,
+      );
+    } finally {
+      const { rm } = await import("node:fs/promises");
+      await rm(written.path, { force: true });
+    }
   });
 });

@@ -6,7 +6,7 @@ import {
 import { loadReadinessState } from "../server/storage/readinessStore.js";
 import { getRun } from "../server/storage/runsStore.js";
 import type { RunOptions } from "../shared/schemas.js";
-import { factoryIdeaFromInputs } from "./factoryInput.js";
+import { FactoryCliArgumentError, parseFactoryCliInputs } from "./factoryInput.js";
 
 /**
  * cli/factory.ts — run the assembly line from the terminal.
@@ -20,25 +20,6 @@ import { factoryIdeaFromInputs } from "./factoryInput.js";
  */
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Flags that were removed outright; naming one is a hard error, not a warning. */
-const REMOVED_FLAGS = ["--dry-run", "--simulate", "--report-only"];
-
-function parseArgs(argv: string[]): { idea: string; demo: boolean } {
-  const args = argv.slice(2);
-  const named = REMOVED_FLAGS.filter((f) => args.includes(f));
-  if (named.length) {
-    console.error(
-      `${COLORS.red}✘ ${named.join(", ")} ${named.length > 1 ? "were" : "was"} removed.${COLORS.reset}`,
-    );
-    console.error(
-      `${COLORS.dim}  Use --demo for an explicit zero-credit offline preview.\n` +
-        `  Omit it for real work through the automatic model ladder.${COLORS.reset}`,
-    );
-    process.exit(2);
-  }
-  return { idea: factoryIdeaFromInputs(argv), demo: args.includes("--demo") };
-}
 
 const COLORS: Record<string, string> = {
   reset: "\x1b[0m",
@@ -63,7 +44,17 @@ function paint(kind: string, msg: string): string {
 }
 
 async function main() {
-  const { idea, demo } = parseArgs(process.argv);
+  let parsed: { idea: string; demo: boolean };
+  try {
+    parsed = parseFactoryCliInputs(process.argv);
+  } catch (error) {
+    if (error instanceof FactoryCliArgumentError) {
+      console.error(`${COLORS.red}✘ ${error.message}${COLORS.reset}`);
+      process.exit(2);
+    }
+    throw error;
+  }
+  const { idea, demo } = parsed;
   const config = getConfig();
   const secrets = getSecrets();
 

@@ -115,7 +115,7 @@ import {
   getRunForExecution,
 } from "../storage/runsStore.js";
 import { appendCheckpointCommandOutput, type FactoryCheckpoint } from "./checkpoint.js";
-import { appendAuditEvent } from "../storage/auditLog.js";
+import { appendAuditEvent, verifyAuditChain } from "../storage/auditLog.js";
 import { buildAttribution, writeAttribution } from "../storage/attribution.js";
 import {
   makeLog,
@@ -1225,7 +1225,7 @@ async function executeRun(
       // save. A transient/malformed disk read must not erase terminal receipts.
       checkpoint,
     });
-    const path = await writeAttribution(attr);
+    const { path, manifestSha256 } = await writeAttribution(attr);
     run.attribution = attr;
     log("info", `Attribution written: ${path}`);
     // The error ledger is mirrored to disk and announced ONCE at run end, on
@@ -1245,8 +1245,16 @@ async function executeRun(
       type: "attribution.written",
       runId: run.id,
       detail: path,
-      meta: { testResult },
+      meta: { testResult, manifestSha256 },
     });
+    const audit = await verifyAuditChain();
+    if (!audit.ok) {
+      throw new Error(
+        `Refused: attribution manifest is not bound to an intact audit chain${
+          audit.badSeq === null ? "" : ` at sequence ${audit.badSeq}`
+        }.`,
+      );
+    }
   };
 
   /** inPlace runs restore the owner's branch on EVERY exit path (see finally). */

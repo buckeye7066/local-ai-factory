@@ -1117,6 +1117,57 @@ const PROSPECTIVE_EVIDENCE_MARKERS = new Set([
   "scheduled",
   "soon",
   "upcoming",
+  // Intent, experimentation, and development language is not proof that the
+  // feature is available in the product being inspected. This deliberately
+  // favors a false negative over turning an aspiration into production fact.
+  "attempt",
+  "attempted",
+  "attempting",
+  "attempts",
+  "beta",
+  "building",
+  "developing",
+  "endeavor",
+  "endeavored",
+  "endeavoring",
+  "endeavors",
+  "endeavour",
+  "endeavoured",
+  "endeavouring",
+  "endeavours",
+  "goal",
+  "goals",
+  "looking",
+  "objective",
+  "objectives",
+  "pilot",
+  "piloting",
+  "preparing",
+  "prototype",
+  "prototyping",
+  "seek",
+  "seeking",
+  "seeks",
+  "sought",
+  "strive",
+  "strived",
+  "strives",
+  "striving",
+  "target",
+  "targeted",
+  "targeting",
+  "targets",
+  "trialing",
+  "trying",
+  "want",
+  "wanted",
+  "wanting",
+  "wants",
+  "wish",
+  "wished",
+  "wishes",
+  "wishing",
+  "working",
 ]);
 
 const INSTRUCTIONAL_TRIGGERS = new Set([
@@ -1293,6 +1344,81 @@ function hasCandidateSubjectBefore(tokens: string[], start: number): boolean {
   return false;
 }
 
+const CANDIDATE_OWNERSHIP_SIGNALS = new Set([
+  "allow",
+  "allows",
+  "can",
+  "contain",
+  "contains",
+  "do",
+  "does",
+  "enable",
+  "enables",
+  "feature",
+  "features",
+  "has",
+  "have",
+  "implement",
+  "implements",
+  "include",
+  "includes",
+  "offer",
+  "offers",
+  "perform",
+  "performs",
+  "provide",
+  "provides",
+  "support",
+  "supports",
+  "use",
+  "uses",
+]);
+
+const GENERIC_COMPETITOR_BACK_REFERENCE_TERMS = new Set([
+  "aforementioned",
+  "capabilities",
+  "capability",
+  "corresponding",
+  "equivalent",
+  "feature",
+  "features",
+  "function",
+  "functionality",
+  "same",
+  "similar",
+  "such",
+]);
+
+const COMPETITOR_ACTION_TERMS = new Set([
+  "allow",
+  "allows",
+  "can",
+  "contain",
+  "contains",
+  "do",
+  "does",
+  "enable",
+  "enables",
+  "feature",
+  "features",
+  "has",
+  "have",
+  "implement",
+  "implements",
+  "include",
+  "includes",
+  "offer",
+  "offers",
+  "perform",
+  "performs",
+  "provide",
+  "provides",
+  "support",
+  "supports",
+  "use",
+  "uses",
+]);
+
 function startsIndependentCompetitorPredicate(
   tokens: string[],
   start: number,
@@ -1313,18 +1439,61 @@ function startsIndependentCompetitorPredicate(
   const refersBackToFeature = tail.some((token) =>
     [
       "alone",
-      "capability",
       "exclusively",
-      "feature",
       "it",
       "only",
-      "same",
+      "so",
       "solely",
       "that",
+      "these",
       "this",
+      "those",
     ].includes(token),
   );
-  return !refersBackToFeature;
+  if (refersBackToFeature) return false;
+
+  // A coordinated competitor sentence is independent only when the candidate
+  // affirmatively owns the matched predicate. Merely discussing or valuing the
+  // capability is not ownership, so bridge text must either be empty after the
+  // candidate noun or carry a concrete present-capability signal.
+  const candidatePrefix = tokens.slice(0, start);
+  const lastCandidate = candidatePrefix.reduce(
+    (found, token, index) =>
+      token === "we" ||
+      token === "ours" ||
+      ((token === "our" || token === "this") &&
+        PRODUCT_SUBJECTS.has(candidatePrefix[index + 1] ?? ""))
+        ? index
+        : found,
+    -1,
+  );
+  if (lastCandidate < 0) return false;
+  const ownershipBridge = tokens
+    .slice(lastCandidate + 1, start)
+    .filter(
+      (token) =>
+        !PRODUCT_SUBJECTS.has(token) &&
+        !["a", "an", "our", "the", "this"].includes(token),
+    );
+  if (
+    ownershipBridge.length > 0 &&
+    !ownershipBridge.some((token) => CANDIDATE_OWNERSHIP_SIGNALS.has(token))
+  ) {
+    return false;
+  }
+
+  // Do not decide independence from an ever-growing pronoun list. The second
+  // predicate must name at least one specific object of its own after generic
+  // action and back-reference words are removed. `provide such functionality`
+  // therefore stays attached to the matched feature, while `support password
+  // login` is a provably different coordinated predicate.
+  const specificTailTerms = meaningfulTerms(tail.join(" ")).filter(
+    (term) =>
+      !COMPETITOR_ACTION_TERMS.has(term) &&
+      !GENERIC_COMPETITOR_BACK_REFERENCE_TERMS.has(term) &&
+      !COMPETING_SUBJECTS.has(term),
+  );
+  return specificTailTerms.length > 0;
 }
 
 function featureSpanDescribesCandidate(

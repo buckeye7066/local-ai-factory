@@ -139,6 +139,38 @@ describe("atomic idempotent run starts", () => {
     expect(results.filter((result) => result.status === "existing")).toHaveLength(19);
   });
 
+  it("preserves the reservation when background failure persistence wins the initial-save race", async () => {
+    const key = "partial-persistence-key";
+    const idea = "Persist one failed run identity";
+    let firstRunId = "";
+
+    await expect(
+      startIdempotently(
+        key,
+        idea,
+        async (id) => {
+          firstRunId = id;
+          throw new Error("initial run save failed");
+        },
+        async () => "missing",
+      ),
+    ).rejects.toThrow("initial run save failed");
+
+    let restarts = 0;
+    const retried = await startIdempotently(
+      key,
+      idea,
+      (id) => {
+        restarts += 1;
+        return { id };
+      },
+      async () => "present",
+    );
+
+    expect(retried).toEqual({ status: "existing", runId: firstRunId });
+    expect(restarts).toBe(0);
+  });
+
   it("promotes a pending receipt backed by a durable run without restarting", async () => {
     const key = "persisted-pending-key";
     const idea = "Already persisted";

@@ -1,7 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, appendFile, open, readFile, rm } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { createHash } from "node:crypto";
+import { constants as FS } from "node:fs";
+import { mkdir, appendFile, open, readFile } from "node:fs/promises";
+import { isAbsolute, relative, resolve, join } from "node:path";
 import { redactSecrets } from "../security/redact.js";
+import { acquireProcessFileLock } from "./processFileLock.js";
 
 /**
  * auditLog.ts — append-only, tamper-evident audit events for Factory Deck jobs.
@@ -16,7 +18,8 @@ const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".facto
 const AUDIT_DIR = join(DATA_ROOT, "audit");
 const AUDIT_FILE = join(AUDIT_DIR, "events.jsonl");
 const AUDIT_LOCK = join(AUDIT_DIR, ".append.lock");
-const MALFORMED_LOCK_GRACE_MS = 30_000;
+const ATTRIBUTION_DIR = join(DATA_ROOT, "attribution");
+const HAS_NOFOLLOW = typeof FS.O_NOFOLLOW === "number" && FS.O_NOFOLLOW !== 0;
 
 export type AuditEventType =
   | "run.queued"
@@ -99,6 +102,42 @@ function invalidAudit(
   return { ok: false, badSeq, reason };
 }
 
+function pathInside(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+async function verifyAttributionBinding(
+  event: Partial<AuditEvent>,
+): Promise<string | null> {
+  if (event.type !== "attribution.written") return null;
+  const digest = event.meta?.manifestSha256;
+  // Older audit events predate byte binding. New writers always include the
+  // digest, and removing it later would itself break the audit hash chain.
+  if (digest === undefined) return null;
+  if (typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) {
+    return "attribution event contains an invalid manifest digest";
+  }
+  if (typeof event.detail !== "string" || !pathInside(ATTRIBUTION_DIR, event.detail)) {
+    return "attribution event points outside the attribution store";
+  }
+  const flags = FS.O_RDONLY | (HAS_NOFOLLOW ? FS.O_NOFOLLOW : 0);
+  let handle;
+  try {
+    handle = await open(event.detail, flags);
+    const stat = await handle.stat();
+    if (!stat.isFile()) return "attribution manifest is not a regular file";
+    const raw = await handle.readFile("utf8");
+    if (hashLine(raw) !== digest)
+      return "attribution manifest digest does not match audit";
+  } catch (error) {
+    return `attribution manifest could not be verified: ${String(error)}`;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+  return null;
+}
+
 /**
  * Parse and verify every byte already on disk before trusting its cursor.
  * A malformed/truncated JSON line is evidence loss, not an empty audit log.
@@ -117,6 +156,7 @@ async function inspectAuditFile(): Promise<AuditInspection> {
   const lines = raw.split("\n");
   if (lines.at(-1) === "") lines.pop();
   let prev = "genesis";
+  const attributionEvents: Array<{ event: Partial<AuditEvent>; seq: number }> = [];
   for (let index = 0; index < lines.length; index += 1) {
     const expectedSeq = index + 1;
     const line = lines[index]!;
@@ -153,7 +193,24 @@ async function inspectAuditFile(): Promise<AuditInspection> {
     if (ev.prevHash !== prev || hash !== expectedHash) {
       return invalidAudit(expectedSeq, "audit hash chain is invalid");
     }
+    if (ev.type === "attribution.written") {
+      attributionEvents.push({ event: ev, seq: expectedSeq });
+    }
     prev = hash;
+  }
+
+  // Manifests are independent external receipts. Verify them concurrently so
+  // append latency does not grow as the sum of every historical disk read,
+  // while still refusing to trust or extend a ledger with any altered receipt.
+  const attributionResults = await Promise.all(
+    attributionEvents.map(async ({ event, seq: eventSeq }) => ({
+      seq: eventSeq,
+      problem: await verifyAttributionBinding(event),
+    })),
+  );
+  const invalidAttribution = attributionResults.find(({ problem }) => problem);
+  if (invalidAttribution?.problem) {
+    return invalidAudit(invalidAttribution.seq, invalidAttribution.problem);
   }
   return { ok: true, seq: lines.length, lastHash: prev };
 }
@@ -171,133 +228,20 @@ async function ensureLoaded(): Promise<void> {
   lastHash = inspected.lastHash;
 }
 
-type AuditLockReceipt = {
-  pid: number;
-  acquiredAt: number;
-  token: string;
-};
-
-function parseAuditLock(raw: string): AuditLockReceipt | null {
-  try {
-    const value = JSON.parse(raw) as Partial<AuditLockReceipt>;
-    return Number.isSafeInteger(value.pid) &&
-      value.pid! > 0 &&
-      typeof value.acquiredAt === "number" &&
-      Number.isFinite(value.acquiredAt) &&
-      typeof value.token === "string" &&
-      value.token.length > 0
-      ? (value as AuditLockReceipt)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-type AuditLockSnapshot = {
-  raw: string;
-  dev: number;
-  ino: number;
-  size: number;
-  mtimeMs: number;
-};
-
-async function readAuditLockSnapshot(): Promise<AuditLockSnapshot | null> {
-  let handle;
-  try {
-    handle = await open(AUDIT_LOCK, "r");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) return null;
-    return {
-      raw: await handle.readFile("utf8"),
-      dev: stat.dev,
-      ino: stat.ino,
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-    };
-  } finally {
-    await handle.close();
-  }
-}
-
-function sameAuditLock(left: AuditLockSnapshot, right: AuditLockSnapshot): boolean {
-  return (
-    left.raw === right.raw &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs
-  );
-}
-
-async function removeStaleAuditLock(): Promise<boolean> {
-  const observed = await readAuditLockSnapshot();
-  if (!observed) return true;
-  const receipt = parseAuditLock(observed.raw);
-  if (receipt) {
-    if (Date.now() - receipt.acquiredAt < 250) return false;
-    try {
-      process.kill(receipt.pid, 0);
-      return false;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
-    }
-  } else if (Date.now() - observed.mtimeMs < MALFORMED_LOCK_GRACE_MS) {
-    // A holder can be between O_EXCL creation and its fsynced JSON write.
-    // Only an unchanged malformed inode beyond a generous grace is abandoned.
-    return false;
-  }
-  // Confirm both bytes and file identity still match the snapshot. Valid
-  // holders use unique tokens; malformed crash remnants are bound by inode,
-  // size, and mtime so a replacement lock is never intentionally removed.
-  const current = await readAuditLockSnapshot();
-  if (!current || !sameAuditLock(observed, current)) return false;
-  await rm(AUDIT_LOCK, { force: true });
-  return true;
-}
-
-async function releaseAuditLock(token: string): Promise<void> {
-  const raw = await readFile(AUDIT_LOCK, "utf8").catch(() => "");
-  if (parseAuditLock(raw)?.token === token) {
-    await rm(AUDIT_LOCK, { force: true });
-  }
-}
-
 async function withAuditLock<T>(operation: () => Promise<T>): Promise<T> {
   await mkdir(AUDIT_DIR, { recursive: true });
-  const token = randomUUID();
-  let handle;
-  for (let attempt = 0; ; attempt += 1) {
-    let created = false;
-    try {
-      handle = await open(AUDIT_LOCK, "wx", 0o600);
-      created = true;
-      await handle.writeFile(
-        JSON.stringify({ pid: process.pid, acquiredAt: Date.now(), token }),
-        "utf8",
-      );
-      await handle.sync();
-      await handle.close();
-      break;
-    } catch (error) {
-      await handle?.close().catch(() => {});
-      if (created) await releaseAuditLock(token);
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (await removeStaleAuditLock()) continue;
-      if (attempt >= 2_000) {
-        throw new Error("Refused: audit append lock remained occupied.");
-      }
-      await new Promise((resolveWait) => setTimeout(resolveWait, 5));
-    }
+  const lease = await acquireProcessFileLock(AUDIT_LOCK, {
+    timeoutMs: 10_000,
+    pollMs: 5,
+    staleGraceMs: 30_000,
+  });
+  if (!lease) {
+    throw new Error("Refused: audit append lock remained occupied.");
   }
   try {
     return await operation();
   } finally {
-    await releaseAuditLock(token);
+    await lease.release();
   }
 }
 

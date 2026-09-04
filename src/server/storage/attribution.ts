@@ -85,9 +85,13 @@ export function buildAttribution(
   };
 }
 
-export async function writeAttribution(attr: RunAttribution): Promise<string> {
+export async function writeAttribution(
+  attr: RunAttribution,
+): Promise<{ path: string; manifestSha256: string }> {
   await mkdir(ATTR_DIR, { recursive: true });
-  const target = attributionPathFor(attr.jobId);
-  await writeFileContained(target, JSON.stringify(attr, null, 2));
-  return target;
+  const path = attributionPathFor(attr.jobId);
+  const raw = JSON.stringify(attr, null, 2);
+  const manifestSha256 = createHash("sha256").update(raw).digest("hex");
+  await writeFileContained(path, raw);
+  return { path, manifestSha256 };
 }

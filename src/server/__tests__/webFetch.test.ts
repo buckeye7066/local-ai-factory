@@ -36,6 +36,39 @@ describe("webFetchTool readable HTML extraction", () => {
     );
   });
 
+  it.each([
+    ["inactive popover", "<div popover>Hidden feature claim.</div>"],
+    [
+      "closed details",
+      "<details><summary>More</summary>Hidden feature claim.</details>",
+    ],
+    [
+      "zero-height overflow",
+      '<div style="height:0;overflow:hidden">Hidden feature claim.</div>',
+    ],
+    [
+      "zero max-height overflow",
+      '<div style="max-height:0;overflow-y:hidden">Hidden feature claim.</div>',
+    ],
+  ])("excludes %s content from evidence text", async (_name, hiddenMarkup) => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(`<p>Visible evidence.</p>${hiddenMarkup}`, {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+      ),
+    );
+
+    const result = await webFetchTool("https://evidence.example/hidden-state", 1_000, {
+      fetch,
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.textExcerpt).toContain("Visible evidence.");
+    expect(result.textExcerpt).not.toContain("Hidden feature claim.");
+  });
+
   it("keeps nested hidden elements suppressed until their outer boundary closes", async () => {
     const fetch = vi.fn(async () =>
       Promise.resolve(

@@ -652,6 +652,7 @@ describe("bounded production research", () => {
   it.each([
     "Encrypt stored plaintext credentials using hardware keys, but only our competitors offer it.",
     "Our product says encrypt stored plaintext credentials using hardware keys is important, and only competitors provide it.",
+    "Our product says encrypt stored plaintext credentials using hardware keys is important, and competitors provide such functionality.",
   ])("keeps postfix competitor back-references attached: %s", async (excerpt) => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();
@@ -1003,6 +1004,7 @@ describe("bounded production research", () => {
     "We aspire to encrypt stored plaintext credentials using hardware keys.",
     "We expect to encrypt stored plaintext credentials using hardware keys.",
     "We expect our application to encrypt stored plaintext credentials using hardware keys.",
+    "We seek to encrypt stored plaintext credentials using hardware keys.",
   ])("rejects aspirational evidence: %s", async (excerpt) => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();

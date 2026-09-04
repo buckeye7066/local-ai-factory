@@ -463,7 +463,17 @@ function actualTagAttributes(rawTag: string): HtmlAttribute[] {
 function openingTagSuppressesText(tag: string, rawTag: string): boolean {
   if (NON_RENDERED_ELEMENTS.has(tag)) return true;
   const attributes = actualTagAttributes(rawTag);
-  if (attributes.some(({ name }) => name === "hidden" || name === "inert")) {
+  if (
+    attributes.some(
+      ({ name }) => name === "hidden" || name === "inert" || name === "popover",
+    )
+  ) {
+    return true;
+  }
+  // Popovers are closed until script/user activation and a closed <details>
+  // hides its disclosure body. Scripts are intentionally not executed here, so
+  // neither inactive subtree can establish visible production evidence.
+  if (tag === "details" && !attributes.some(({ name }) => name === "open")) {
     return true;
   }
   if (
@@ -631,13 +641,14 @@ function propertyValuesSuppressText(get: (property: string) => string): boolean 
   const filter = get("filter").toLowerCase().replace(/\s+/g, "");
   const color = get("color").trim().toLowerCase();
   const textFill = get("-webkit-text-fill-color").trim().toLowerCase();
-  const overflow = `${get("overflow")} ${get("overflow-x")} ${get("overflow-y")}`
-    .trim()
-    .toLowerCase();
-  const zeroSizedAndClipped =
-    cssZero(get("width")) &&
-    cssZero(get("height")) &&
-    /\b(?:clip|hidden)\b/.test(overflow);
+  const overflow = get("overflow").trim().toLowerCase();
+  const overflowX = get("overflow-x").trim().toLowerCase() || overflow;
+  const overflowY = get("overflow-y").trim().toLowerCase() || overflow;
+  const clips = (value: string) => /\b(?:clip|hidden)\b/.test(value);
+  const zeroWidthAndClipped =
+    (cssZero(get("width")) || cssZero(get("max-width"))) && clips(overflowX);
+  const zeroHeightAndClipped =
+    (cssZero(get("height")) || cssZero(get("max-height"))) && clips(overflowY);
   return (
     display === "none" ||
     visibility === "hidden" ||
@@ -652,7 +663,8 @@ function propertyValuesSuppressText(get: (property: string) => string): boolean 
     transparentTextColor(color) ||
     transparentTextColor(textFill) ||
     cssZero(get("font-size")) ||
-    zeroSizedAndClipped
+    zeroWidthAndClipped ||
+    zeroHeightAndClipped
   );
 }
 
