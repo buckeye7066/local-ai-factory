@@ -761,6 +761,7 @@ const POLARITY_OPERATORS = new Set([
   "lack",
   "lacking",
   "lacks",
+  "neither",
   "never",
   "no",
   "not",
@@ -857,7 +858,13 @@ function featureSpanPolarity(
         : index > end
           ? tokens.slice(end + 1, index)
           : [];
-    if (!inside && between.some((item) => POLARITY_SCOPE_BOUNDARIES.has(item))) {
+    const correlativeNeitherNor =
+      token === "neither" && index < start && between.includes("nor");
+    if (
+      !inside &&
+      !correlativeNeitherNor &&
+      between.some((item) => POLARITY_SCOPE_BOUNDARIES.has(item))
+    ) {
       if (POLARITY_OPERATORS.has(token) || DENIAL_PREDICATES.has(token)) {
         separatedPolaritySignal = true;
       }
@@ -983,7 +990,7 @@ function coherentEvidenceMatches(
     // visible. Replace unresolved references before splitting so their
     // semicolon cannot manufacture a new affirmative clause, and reject only
     // the affected clause from semantic matching.
-    .replace(/&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/gi, unresolvedEntityMarker)
+    .replace(/&(?:#[0-9]+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]+;)/gi, unresolvedEntityMarker)
     .split(/(?<=[.!?])\s+|[;:\r\n]+|\b(?:although|but|however|whereas)\b/i)
     .filter((raw) => !raw.includes(unresolvedEntityMarker))
     .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
@@ -1058,6 +1065,101 @@ function coherentEvidenceMatches(
         ]
       : [];
   });
+}
+
+const MAX_BOUNDED_REPOSITORY_RECOMMENDATIONS = 5;
+
+/**
+ * Preserve implementation research in the production-bounded path without
+ * spending another model call. Every recommendation is derived only from a
+ * repository file that the dossier actually fetched, remains license-scoped,
+ * and carries the exact inspected source URL into planning.
+ */
+function boundedRepositoryRecommendations(
+  spec: ProductSpec,
+  arch: Architecture,
+  dossier: CompetitiveDossier,
+): ResearchRecommendation[] {
+  const targetTerms = new Set(
+    meaningfulTerms(
+      [
+        spec.tagline,
+        spec.targetUser,
+        ...spec.coreFeatures,
+        ...spec.userFlows,
+        ...spec.acceptanceCriteria,
+        arch.overview,
+        arch.frontend,
+        arch.backend,
+        arch.dataModel,
+      ].join(" "),
+    ),
+  );
+
+  return dossier.candidates
+    .filter(
+      (candidate) =>
+        candidate.kind === "repository" &&
+        !candidate.archived &&
+        !candidate.inspectionError &&
+        candidate.sourceEvidence.length > 0,
+    )
+    .flatMap((candidate) => {
+      const strongest = candidate.sourceEvidence
+        .map((evidence) => ({
+          evidence,
+          matchedTerms: meaningfulTerms(
+            `${candidate.description} ${evidence.path} ${evidence.excerpt}`,
+          ).filter((term) => targetTerms.has(term)),
+        }))
+        .sort(
+          (left, right) =>
+            right.matchedTerms.length - left.matchedTerms.length ||
+            left.evidence.path.localeCompare(right.evidence.path),
+        )[0];
+      if (!strongest || strongest.matchedTerms.length < 2) return [];
+
+      const path = strongest.evidence.path.replace(/\s+/g, " ").trim().slice(0, 180);
+      const evidenceUrls = [...canonicalEvidenceUrlSet([strongest.evidence.url])];
+      if (!path || evidenceUrls.length === 0) return [];
+      const reuseMode =
+        candidate.license.policy === "reference-only"
+          ? ("reference-only" as const)
+          : ("clean-room-pattern" as const);
+      const matched = strongest.matchedTerms.slice(0, 6);
+      const reuseInstruction =
+        reuseMode === "reference-only"
+          ? "Treat the implementation as reference material only: do not copy source. Reproduce any selected public behavior independently behind a target-owned adapter."
+          : "Reproduce the inspected behavior as a clean-room pattern behind a target-owned adapter; do not import code until a separate dependency and license review authorizes it.";
+
+      return [
+        {
+          recommendation: RecommendationSchema.parse({
+            name: `${candidate.name}: ${path}`,
+            why: `The inspected file is tied to target-specific terms: ${matched.join(", ")}.`,
+            sourceUrl: evidenceUrls[0],
+            howToIntegrate: `${reuseInstruction} Add an acceptance test for ${matched.join(", ")} before enabling the adapter.`,
+            candidateId: candidate.id,
+            licenseSpdx: candidate.license.spdxId,
+            licensePolicy: candidate.license.policy,
+            reuseMode,
+            evidenceUrls,
+            score: Math.min(95, 45 + matched.length * 8),
+            origin: "tool-research",
+          }),
+          relevance: strongest.matchedTerms.length,
+          stars: candidate.stars,
+        },
+      ];
+    })
+    .sort(
+      (left, right) =>
+        right.relevance - left.relevance ||
+        right.stars - left.stars ||
+        left.recommendation.candidateId.localeCompare(right.recommendation.candidateId),
+    )
+    .slice(0, MAX_BOUNDED_REPOSITORY_RECOMMENDATIONS)
+    .map((entry) => entry.recommendation);
 }
 
 /**
@@ -1521,7 +1623,7 @@ export async function researchAgent(
   options: ResearchOptions = {},
 ): Promise<ResearchFindings> {
   const boundedProduction = options.executionMode === "bounded-production";
-  const base = boundedProduction
+  let base = boundedProduction
     ? ResearchFindingsSchema.parse({
         summary:
           "Production research used the bounded RepoRewards and verified-product evidence path.",
@@ -1544,6 +1646,20 @@ export async function researchAgent(
   }
 
   const dossier = await buildCompetitiveDossier(spec, arch, { productQueries });
+  if (boundedProduction) {
+    const repositoryRecommendations = boundedRepositoryRecommendations(
+      spec,
+      arch,
+      dossier,
+    );
+    base = ResearchFindingsSchema.parse({
+      ...base,
+      summary:
+        `${base.summary} Preserved ${repositoryRecommendations.length} bounded, inspected ` +
+        "repository implementation recommendation(s).",
+      recommendations: repositoryRecommendations,
+    });
+  }
   if (!dossier.candidates.length) {
     return ResearchFindingsSchema.parse({
       ...base,

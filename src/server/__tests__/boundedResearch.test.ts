@@ -150,6 +150,78 @@ describe("bounded production research", () => {
     }
   });
 
+  it("preserves bounded implementation guidance from inspected repositories", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    input.candidates.push({
+      id: "example/offline-engine",
+      kind: "repository",
+      name: "example/offline-engine",
+      url: "https://github.com/example/offline-engine",
+      description: "An offline synchronization and recovery engine.",
+      stars: 42,
+      archived: false,
+      updatedAt: input.generatedAt,
+      discoveryEvidence: ["RepoRewards: offline workflow"],
+      license: {
+        spdxId: "Apache-2.0",
+        name: "Apache License 2.0",
+        policy: "direct-use",
+        reason: "License text was inspected.",
+        evidenceUrl: "https://github.com/example/offline-engine/blob/main/LICENSE",
+      },
+      fileTree: ["src/offline-sync.ts"],
+      sourceEvidence: [
+        {
+          path: "src/offline-sync.ts",
+          url: "https://raw.githubusercontent.com/example/offline-engine/main/src/offline-sync.ts",
+          excerpt:
+            "The offline synchronization journal provides interrupted workflow recovery after restart.",
+        },
+      ],
+      inspectionError: "",
+    });
+    input.coverage.repositoryDiscoveredCount = 1;
+    input.coverage.repositoryInspectedCount = 1;
+    input.coverage.repositoryVerifiedCount = 1;
+    input.discoveredCount += 1;
+    input.inspectedCount += 1;
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent({ provider }, spec, arch, {
+        competitive: true,
+        executionMode: "bounded-production",
+      });
+
+      expect(provider.calls).toBe(1);
+      const repositoryRecommendation = findings.recommendations.find(
+        (recommendation) => recommendation.candidateId === "example/offline-engine",
+      );
+      expect(repositoryRecommendation).toMatchObject({
+        origin: "tool-research",
+        sourceUrl:
+          "https://raw.githubusercontent.com/example/offline-engine/main/src/offline-sync.ts",
+        licenseSpdx: "Apache-2.0",
+        licensePolicy: "direct-use",
+        reuseMode: "clean-room-pattern",
+      });
+      expect(repositoryRecommendation?.name).toContain("src/offline-sync.ts");
+      expect(repositoryRecommendation?.howToIntegrate).toContain(
+        "target-owned adapter",
+      );
+      expect(repositoryRecommendation?.howToIntegrate).toContain("acceptance test");
+      expect(findings.summary).toContain(
+        "Preserved 1 bounded, inspected repository implementation recommendation",
+      );
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("rejects target terms scattered across unrelated features and keeps the gate blocked", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const spy = vi
@@ -517,6 +589,38 @@ describe("bounded production research", () => {
     }
   });
 
+  it("recognizes neither-nor as a predicate-local denial", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "The product neither stores secrets nor encrypts plaintext credentials.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypts plaintext credentials"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("does not turn double-encoded visible text into new evidence", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();
@@ -555,6 +659,38 @@ describe("bounded production research", () => {
     for (const candidate of input.candidates) {
       candidate.sourceEvidence[0]!.excerpt =
         "This product doesn&#39;t support offline workflow synchronization.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["offline workflow synchronization"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects a semicolon-less unresolved numeric entity", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "This product doesn&#39t support offline workflow synchronization.";
     }
     const spy = vi
       .spyOn(intelligence, "buildCompetitiveDossier")
