@@ -961,6 +961,84 @@ function featureSpanPolarity(
   return flips % 2 === 1 ? "denied" : "affirmed";
 }
 
+const EXTERNAL_ATTRIBUTION_SUBJECTS = new Set([
+  "alternative",
+  "alternatives",
+  "competitor",
+  "competitors",
+  "others",
+  "rival",
+  "rivals",
+]);
+
+const EXTERNAL_ATTRIBUTION_NOUNS = new Set([
+  "alternatives",
+  "companies",
+  "platforms",
+  "products",
+  "providers",
+  "services",
+  "solutions",
+  "systems",
+  "tools",
+  "vendors",
+]);
+
+const CANDIDATE_SUBJECT_NOUNS = new Set([
+  "platform",
+  "product",
+  "provider",
+  "service",
+  "solution",
+  "system",
+  "tool",
+]);
+
+function featureAttributedToExternalSubject(
+  tokens: string[],
+  start: number,
+): boolean {
+  const externalIndexes: number[] = [];
+  const candidateIndexes: number[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const previous = tokens[index - 1];
+    const comparisonObject =
+      previous === "unlike" ||
+      previous === "than" ||
+      previous === "versus" ||
+      previous === "vs";
+    if (
+      !comparisonObject &&
+      (EXTERNAL_ATTRIBUTION_SUBJECTS.has(token) ||
+        (token === "other" &&
+          EXTERNAL_ATTRIBUTION_NOUNS.has(tokens[index + 1] ?? "")))
+    ) {
+      externalIndexes.push(index);
+    }
+
+    const candidateNoun = CANDIDATE_SUBJECT_NOUNS.has(tokens[index + 1] ?? "");
+    if (
+      token === "we" ||
+      ((token === "our" || token === "this" || token === "the") && candidateNoun)
+    ) {
+      candidateIndexes.push(index);
+    }
+  }
+  if (externalIndexes.length === 0) return false;
+
+  const latestExternalBefore = externalIndexes.filter((index) => index < start).at(-1);
+  const latestCandidateBefore = candidateIndexes.filter((index) => index < start).at(-1);
+  // A candidate subject introduced after a comparison subject owns the
+  // following predicate ("Unlike competitors, we encrypt ..."). Otherwise an
+  // external subject anywhere in the clause makes the attribution unsafe.
+  return !(
+    latestCandidateBefore !== undefined &&
+    (latestExternalBefore === undefined ||
+      latestCandidateBefore > latestExternalBefore)
+  );
+}
+
 function containsPhraseWithMatchingPolarity(segment: string, phrase: string): boolean {
   const tokens = segment.split(" ").filter(Boolean);
   const phraseTokens = phrase.split(" ").filter(Boolean);
@@ -973,7 +1051,8 @@ function containsPhraseWithMatchingPolarity(segment: string, phrase: string): bo
     }
     if (
       featureSpanPolarity(tokens, start, start + phraseTokens.length - 1) ===
-      targetPolarity
+        targetPolarity &&
+      !featureAttributedToExternalSubject(tokens, start)
     ) {
       return true;
     }
@@ -1093,20 +1172,27 @@ function coherentEvidenceMatches(
         const positions = terms
           .map((term) => segmentTokens.indexOf(term))
           .filter((position) => position >= 0);
+        const matchStart = positions.length > 0 ? Math.min(...positions) : -1;
         const polarity =
-          positions.length > 0 &&
+          matchStart >= 0 &&
           featureSpanPolarity(
             segmentTokens,
-            Math.min(...positions),
+            matchStart,
             Math.max(...positions),
           );
         return {
           statement: segment.statement,
           terms,
           polarity,
+          externalAttribution:
+            matchStart >= 0 &&
+            featureAttributedToExternalSubject(segmentTokens, matchStart),
         };
       })
-      .filter((segment) => segment.polarity === targetPolarity)
+      .filter(
+        (segment) =>
+          segment.polarity === targetPolarity && !segment.externalAttribution,
+      )
       .sort((left, right) => right.terms.length - left.terms.length)[0];
     return bestOverlap &&
       bestOverlap.terms.length >= required &&
