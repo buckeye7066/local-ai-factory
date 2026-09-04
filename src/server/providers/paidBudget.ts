@@ -341,6 +341,7 @@ export function recordPaidCall(
 /** Raised when a paid rescue is refused because a cap is exhausted. */
 export class PaidBudgetExhaustedError extends Error {
   readonly status = 402;
+  private attemptedProviderCall = false;
 
   constructor(reason: string) {
     super(
@@ -349,6 +350,15 @@ export class PaidBudgetExhaustedError extends Error {
         `raise FACTORY_PAID_RESCUES_PER_HOUR / _PER_DAY / FACTORY_PAID_MAX_USD_PER_DAY to allow more.`,
     );
     this.name = "PaidBudgetExhaustedError";
+  }
+
+  /** Preserve logical-call accounting when an earlier inner attempt was billable. */
+  markProviderAttemptOccurred(): void {
+    this.attemptedProviderCall = true;
+  }
+
+  get providerAttemptOccurred(): boolean {
+    return this.attemptedProviderCall;
   }
 }
 
@@ -517,6 +527,10 @@ export class BudgetGatedProvider implements LLMProvider {
     return this.inner.isConfigured();
   }
 
+  prepareCall(): Promise<void> {
+    return this.inner.prepareCall?.() ?? Promise.resolve();
+  }
+
   currentProvider(): ProviderName {
     return this.inner.currentProvider?.() ?? this.inner.name;
   }
@@ -533,6 +547,9 @@ export class BudgetGatedProvider implements LLMProvider {
       return result;
     } catch (error) {
       abandonPaidCall(reservation);
+      if (error instanceof PaidBudgetExhaustedError) {
+        error.markProviderAttemptOccurred();
+      }
       throw error;
     }
   }
@@ -545,6 +562,9 @@ export class BudgetGatedProvider implements LLMProvider {
       return result;
     } catch (error) {
       abandonPaidCall(reservation);
+      if (error instanceof PaidBudgetExhaustedError) {
+        error.markProviderAttemptOccurred();
+      }
       throw error;
     }
   }

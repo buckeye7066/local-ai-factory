@@ -14,6 +14,7 @@ export type { ProviderName } from "../../shared/schemas.js";
 import type { GenerateJsonInput } from "../../shared/types.js";
 import { ZodError } from "zod";
 import { safeErrorMessage } from "../errors.js";
+import { isQuotaRefusal } from "./modelExhaustion.js";
 
 /** Small helper: sleep used by retry/backoff (kept here so all providers share it). */
 export function sleep(ms: number): Promise<void> {
@@ -55,6 +56,46 @@ export class ProviderAbortError extends Error {
     super(message);
     this.name = "ProviderAbortError";
   }
+}
+
+/**
+ * A safe, local refusal produced when account catalog evidence proves that a
+ * configured model rung cannot be called. Keep this type intact through the
+ * retry wrapper so the outer ladder can advance without mistaking the refusal
+ * for a malformed request or retrying an unverified ID.
+ */
+export class ProviderModelUnavailableError extends Error {
+  readonly status = 404;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderModelUnavailableError";
+  }
+}
+
+export type ProviderExhaustionStatus = 402 | 429 | 529;
+export type ProviderExhaustionScope = "account" | "route";
+
+/**
+ * Sanitized paid-provider refusal that retains only the status needed by the
+ * outer model ladder. The original SDK error may contain response bodies or
+ * request metadata, so it must not escape the provider boundary.
+ */
+export class ProviderExhaustionError extends Error {
+  constructor(
+    message: string,
+    readonly status: ProviderExhaustionStatus,
+    readonly scope: ProviderExhaustionScope = "route",
+  ) {
+    super(message);
+    this.name = "ProviderExhaustionError";
+  }
+}
+
+function isProviderExhaustionStatus(
+  status: unknown,
+): status is ProviderExhaustionStatus {
+  return status === 402 || status === 429 || status === 529;
 }
 
 /**
@@ -115,12 +156,49 @@ export async function withRetry<T>(
       if ((err as { name?: unknown })?.name === "PaidBudgetExhaustedError") {
         throw err;
       }
+      if (err instanceof ProviderModelUnavailableError) throw err;
+      // These retry labels wrap only generation endpoints on the official
+      // paid providers. Their SDKs report an unavailable/inaccessible model
+      // as 404, sometimes with no useful words beyond `model: <id>`. Convert
+      // that response to the typed, sanitized exhaustion signal so the outer
+      // ladder can continue instead of losing status in the generic wrapper.
+      const status = (err as { status?: unknown })?.status;
+      if (
+        status === 404 &&
+        (label.startsWith("anthropic.") || label.startsWith("openai."))
+      ) {
+        throw new ProviderModelUnavailableError(
+          `${label} model unavailable (provider returned 404).`,
+        );
+      }
+      if (
+        isProviderExhaustionStatus(status) &&
+        (label.startsWith("anthropic.") || label.startsWith("openai.")) &&
+        (status === 402 || isQuotaRefusal(err))
+      ) {
+        throw new ProviderExhaustionError(
+          `${label} account exhausted (provider returned ${status}).`,
+          status,
+          "account",
+        );
+      }
       if (isNonRetryable(err)) break;
       if (i < attempts - 1) {
         const backoff = Math.min(8000, 400 * 2 ** i);
         await sleep(backoff);
       }
     }
+  }
+  const status = (lastErr as { status?: unknown })?.status;
+  if (
+    isProviderExhaustionStatus(status) &&
+    (label.startsWith("anthropic.") || label.startsWith("openai."))
+  ) {
+    throw new ProviderExhaustionError(
+      `${label} route exhausted (provider returned ${status}).`,
+      status,
+      "route",
+    );
   }
   // Surface a sanitized error only — never include payloads.
   throw new Error(

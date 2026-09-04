@@ -1,0 +1,4 @@
+# Repository control plane and security policy require owner review.
+* @buckeye7066
+/.github/** @buckeye7066
+/SECURITY.md @buckeye7066

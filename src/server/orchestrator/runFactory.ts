@@ -1668,6 +1668,7 @@ async function executeRun(
         try {
           research = await researchAgent({ provider: critical }, spec, arch, {
             competitive: true,
+            executionMode: "bounded-production",
           });
           await checkpointNow({ research });
           log(

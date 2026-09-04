@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { withRetry, isNonRetryable } from "../providers/types.js";
+import {
+  withRetry,
+  isNonRetryable,
+  ProviderModelUnavailableError,
+  ProviderExhaustionError,
+} from "../providers/types.js";
+import { isModelExhaustion } from "../providers/modelExhaustion.js";
 
 function httpError(status: number): Error & { status: number } {
   return Object.assign(new Error(`HTTP ${status}`), { status });
@@ -42,6 +48,86 @@ describe("withRetry", () => {
     });
     expect(result).toBe("ok");
     expect(calls).toBe(2);
+  });
+
+  it("preserves a local model-unavailable refusal for the outer ladder", async () => {
+    let calls = 0;
+    const refusal = new ProviderModelUnavailableError(
+      "openai model unavailable: suppressed unverified model probe",
+    );
+    await expect(
+      withRetry("test", async () => {
+        calls += 1;
+        throw refusal;
+      }),
+    ).rejects.toBe(refusal);
+    expect(calls).toBe(1);
+  });
+
+  it("converts a paid-provider SDK 404 into typed model exhaustion", async () => {
+    let calls = 0;
+    const sdkNotFound = Object.assign(new Error("model: claude-unknown"), {
+      name: "NotFoundError",
+      status: 404,
+    });
+    let caught: unknown;
+    try {
+      await withRetry("anthropic.generateText", async () => {
+        calls += 1;
+        throw sdkNotFound;
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ProviderModelUnavailableError);
+    expect(caught).not.toBe(sdkNotFound);
+    expect(calls).toBe(1);
+  });
+
+  it.each([402, 429, 529] as const)(
+    "retains a terse paid-provider %i refusal for the outer model ladder",
+    async (status) => {
+      const sdkError = Object.assign(new Error("request failed"), { status });
+      let caught: unknown;
+      try {
+        await withRetry(
+          "openai.generateText",
+          async () => {
+            throw sdkError;
+          },
+          1,
+        );
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(ProviderExhaustionError);
+      expect((caught as ProviderExhaustionError).status).toBe(status);
+      expect((caught as ProviderExhaustionError).scope).toBe(
+        status === 402 ? "account" : "route",
+      );
+      expect(caught).not.toBe(sdkError);
+      expect(isModelExhaustion(caught)).toBe(true);
+    },
+  );
+
+  it("preserves an account-wide 429 quota refusal without retrying it", async () => {
+    let calls = 0;
+    const sdkError = Object.assign(new Error("insufficient_quota"), { status: 429 });
+    let caught: unknown;
+    try {
+      await withRetry("openai.generateText", async () => {
+        calls += 1;
+        throw sdkError;
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(calls).toBe(1);
+    expect(caught).toBeInstanceOf(ProviderExhaustionError);
+    expect(caught).toMatchObject({ status: 429, scope: "account" });
   });
 });
 

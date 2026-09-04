@@ -507,6 +507,13 @@ async function planProductDiscovery(
 export interface ResearchOptions {
   /** Preserve the small legacy research loop for tests and constrained callers. */
   competitive?: boolean;
+  /**
+   * Production competitive discovery has a strict wall-clock and model-call
+   * budget: RepoRewards/web inspection plus one bulk judgment. It skips the
+   * separate conversational tool loop and query-planning call, and never
+   * fans a failed bulk response out into five more local-model calls.
+   */
+  executionMode?: "standard" | "bounded-production";
 }
 
 const MAX_STEPS = 5;
@@ -672,6 +679,704 @@ function compactProductCandidate(candidate: CompetitiveCandidate) {
         excerpt: evidence.excerpt.slice(0, MAX_REVIEW_EVIDENCE_CHARS),
       })),
   };
+}
+
+const EVIDENCE_STOPWORDS = new Set([
+  "about",
+  "after",
+  "also",
+  "application",
+  "because",
+  "before",
+  "between",
+  "build",
+  "data",
+  "desktop",
+  "durable",
+  "from",
+  "have",
+  "into",
+  "local",
+  "must",
+  "persistent",
+  "platform",
+  "product",
+  "records",
+  "service",
+  "software",
+  "system",
+  "task",
+  "team",
+  "teams",
+  "that",
+  "their",
+  "there",
+  "these",
+  "this",
+  "through",
+  "tool",
+  "tools",
+  "user",
+  "users",
+  "when",
+  "where",
+  "which",
+  "with",
+  "workflow",
+]);
+
+function meaningfulTerms(value: string): string[] {
+  return [
+    ...new Set(
+      value
+        .toLowerCase()
+        .match(/[a-z][a-z0-9-]{3,}/g)
+        ?.filter((term) => !EVIDENCE_STOPWORDS.has(term)) ?? [],
+    ),
+  ];
+}
+
+function normalizedPhrase(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(
+      /\b(?:ain|aren|can|couldn|didn|doesn|don|hadn|hasn|haven|isn|mustn|shouldn|wasn|weren|won|wouldn)['’]t\b/g,
+      " not ",
+    )
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+const PREDICATE_AUXILIARIES = new Set([
+  "am",
+  "are",
+  "be",
+  "been",
+  "being",
+  "can",
+  "could",
+  "did",
+  "do",
+  "does",
+  "had",
+  "has",
+  "have",
+  "is",
+  "may",
+  "might",
+  "must",
+  "should",
+  "was",
+  "were",
+  "will",
+  "would",
+]);
+
+function targetPredicateTerms(phrase: string): string[] {
+  const tokens = phrase.split(" ").filter(Boolean);
+  const meaningful = new Set(meaningfulTerms(phrase));
+  const predicates: string[] = [];
+  const firstMeaningfulIndex = tokens.findIndex((token) => meaningful.has(token));
+  if (firstMeaningfulIndex === 0) predicates.push(tokens[0]!);
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    if (!PREDICATE_AUXILIARIES.has(tokens[index]!)) continue;
+    const predicate = tokens.slice(index + 1).find((token) => meaningful.has(token));
+    if (predicate) predicates.push(predicate);
+  }
+  return [...new Set(predicates)];
+}
+
+const POLARITY_OPERATORS = new Set([
+  "avoid",
+  "avoided",
+  "avoids",
+  "avoiding",
+  "cannot",
+  "fail",
+  "fails",
+  "failed",
+  "failing",
+  "lack",
+  "lacking",
+  "lacks",
+  "neither",
+  "never",
+  "no",
+  "not",
+  "refuse",
+  "refused",
+  "refuses",
+  "refusing",
+  "unable",
+  "without",
+]);
+
+const DENIAL_PREDICATES = new Set([
+  "absent",
+  "absence",
+  "delete",
+  "deleted",
+  "deletes",
+  "deleting",
+  "deny",
+  "discontinued",
+  "discontinue",
+  "discontinues",
+  "discontinuing",
+  "denied",
+  "denies",
+  "denying",
+  "disable",
+  "disabled",
+  "disables",
+  "disabling",
+  "drop",
+  "dropped",
+  "drops",
+  "dropping",
+  "eliminate",
+  "eliminated",
+  "eliminates",
+  "eliminating",
+  "exclude",
+  "excluded",
+  "excludes",
+  "excluding",
+  "forbid",
+  "forbidden",
+  "forbids",
+  "forbidding",
+  "impossible",
+  "missing",
+  "omit",
+  "omitted",
+  "omits",
+  "omitting",
+  "remove",
+  "removed",
+  "removes",
+  "removing",
+  "prohibit",
+  "prohibited",
+  "prohibits",
+  "prohibiting",
+  "retire",
+  "retired",
+  "retires",
+  "retiring",
+  "unavailable",
+  "unsupported",
+  "withdrawn",
+]);
+
+const POLARITY_SCOPE_BOUNDARIES = new Set([
+  "and",
+  "although",
+  "but",
+  "however",
+  "nor",
+  "or",
+  "whereas",
+  "yet",
+]);
+
+type FeaturePolarity = "affirmed" | "denied" | "ambiguous";
+
+function featureSpanPolarity(
+  tokens: string[],
+  start: number,
+  end: number,
+): FeaturePolarity {
+  const operatorIndexes: number[] = [];
+  const denialIndexes: number[] = [];
+  let separatedPolaritySignal = false;
+  // `tokens` is already one bounded clause (see coherentEvidenceMatches).
+  // Scan the complete clause: a fixed lookaround silently loses valid
+  // long-range negation such as "does not under any circumstances ... encrypt".
+  const windowStart = 0;
+  const windowEnd = tokens.length - 1;
+  for (let index = windowStart; index <= windowEnd; index += 1) {
+    const token = tokens[index]!;
+    const inside = index >= start && index <= end;
+    const between =
+      index < start
+        ? tokens.slice(index + 1, start)
+        : index > end
+          ? tokens.slice(end + 1, index)
+          : [];
+    const correlativeNeitherNor =
+      token === "neither" && index < start && between.includes("nor");
+    if (
+      !inside &&
+      !correlativeNeitherNor &&
+      between.some((item) => POLARITY_SCOPE_BOUNDARIES.has(item))
+    ) {
+      if (POLARITY_OPERATORS.has(token) || DENIAL_PREDICATES.has(token)) {
+        separatedPolaritySignal = true;
+      }
+      continue;
+    }
+
+    if (POLARITY_OPERATORS.has(token)) {
+      // `no` is normally a determiner, so it governs the match only when it
+      // is inside/directly adjacent to it or forms the postfix `no longer`
+      // construction. This prevents an unrelated `No setup; ...` statement
+      // from lending negative polarity to a later security predicate.
+      if (
+        token === "no" &&
+        !inside &&
+        index !== start - 1 &&
+        index !== end + 1 &&
+        tokens[index + 1] !== "longer"
+      ) {
+        continue;
+      }
+      // `not only` is additive emphasis, not semantic negation.
+      if (token === "not" && tokens[index + 1] === "only") continue;
+      operatorIndexes.push(index);
+    }
+    if (DENIAL_PREDICATES.has(token)) denialIndexes.push(index);
+  }
+
+  // Multiple different denial predicates describe a compound requirement;
+  // a one-bit direction cannot safely establish their individual scopes.
+  // Fail closed instead of using parity to turn two denials into affirmation.
+  if (new Set(denialIndexes.map((index) => tokens[index])).size > 1) {
+    return "ambiguous";
+  }
+  // A coordinator can either begin a new predicate ("does not collect and
+  // does not encrypt") or extend the previous operator's scope ("does not
+  // collect or encrypt"). If the matched predicate has no local signal, the
+  // direction is not provable without syntax, so fail closed instead of
+  // silently treating it as affirmative.
+  if (
+    operatorIndexes.length === 0 &&
+    denialIndexes.length === 0 &&
+    separatedPolaritySignal
+  ) {
+    return "ambiguous";
+  }
+  const flips = operatorIndexes.length + (denialIndexes.length > 0 ? 1 : 0);
+  return flips % 2 === 1 ? "denied" : "affirmed";
+}
+
+function containsPhraseWithMatchingPolarity(segment: string, phrase: string): boolean {
+  const tokens = segment.split(" ").filter(Boolean);
+  const phraseTokens = phrase.split(" ").filter(Boolean);
+  if (phraseTokens.length === 0 || phraseTokens.length > tokens.length) return false;
+  const targetPolarity = featureSpanPolarity(phraseTokens, 0, phraseTokens.length - 1);
+  if (targetPolarity === "ambiguous") return false;
+  for (let start = 0; start <= tokens.length - phraseTokens.length; start += 1) {
+    if (!phraseTokens.every((token, offset) => tokens[start + offset] === token)) {
+      continue;
+    }
+    if (
+      featureSpanDescribesCandidate(tokens, start) &&
+      featureSpanPolarity(tokens, start, start + phraseTokens.length - 1) ===
+        targetPolarity
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const COMPETING_SUBJECTS = new Set([
+  "alternative",
+  "alternatives",
+  "competitor",
+  "competitors",
+  "others",
+  "rival",
+  "rivals",
+]);
+
+const PRODUCT_SUBJECTS = new Set([
+  "application",
+  "applications",
+  "companies",
+  "company",
+  "platform",
+  "platforms",
+  "product",
+  "products",
+  "provider",
+  "providers",
+  "service",
+  "services",
+  "software",
+  "solution",
+  "solutions",
+  "system",
+  "systems",
+  "tool",
+  "tools",
+  "vendor",
+  "vendors",
+]);
+
+/**
+ * Competitive pages often describe another product before denying that the
+ * page owner's product has the same capability. A lexical feature match is
+ * not evidence unless the matched predicate is attributed to the candidate.
+ * Fail closed when a competing subject governs the feature span, while still
+ * accepting explicit contrasts such as "unlike competitors, our product...".
+ */
+function featureSpanDescribesCandidate(tokens: string[], start: number): boolean {
+  let competingSubject = -1;
+  for (let index = 0; index < start; index += 1) {
+    const token = tokens[index]!;
+    const next = tokens[index + 1];
+    if (
+      COMPETING_SUBJECTS.has(token) ||
+      ((token === "other" || token === "competing") &&
+        next !== undefined &&
+        PRODUCT_SUBJECTS.has(next))
+    ) {
+      competingSubject = index;
+    }
+  }
+  if (competingSubject < 0) return true;
+
+  for (let index = competingSubject + 1; index < start; index += 1) {
+    const token = tokens[index]!;
+    const next = tokens[index + 1];
+    if (token === "we" || token === "ours") return true;
+    if (
+      (token === "our" || token === "this") &&
+      next !== undefined &&
+      PRODUCT_SUBJECTS.has(next)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function targetEvidencePhrases(spec: ProductSpec): string[] {
+  return [
+    ...new Set(
+      [
+        spec.tagline,
+        ...spec.coreFeatures,
+        ...spec.userFlows,
+        ...spec.acceptanceCriteria,
+      ]
+        .map(normalizedPhrase)
+        .filter(
+          (phrase) =>
+            phrase.length >= 12 && phrase.split(" ").filter(Boolean).length >= 2,
+        ),
+    ),
+  ];
+}
+
+type CoherentEvidenceMatch = {
+  phrase: string;
+  terms: string[];
+  exact: boolean;
+  statement: string;
+  evidenceUrl: string;
+};
+
+function compareCoherentEvidenceStrength(
+  left: CoherentEvidenceMatch,
+  right: CoherentEvidenceMatch,
+): number {
+  if (left.exact !== right.exact) return left.exact ? -1 : 1;
+  if (left.terms.length !== right.terms.length) {
+    return right.terms.length - left.terms.length;
+  }
+  if (left.phrase.length !== right.phrase.length) {
+    return right.phrase.length - left.phrase.length;
+  }
+  return (
+    left.evidenceUrl.localeCompare(right.evidenceUrl) ||
+    left.statement.localeCompare(right.statement)
+  );
+}
+
+function coherentEvidenceMatches(
+  spec: ProductSpec,
+  inspectedText: string,
+  evidenceUrl: string,
+): CoherentEvidenceMatch[] {
+  // Product-page HTML is decoded exactly once by webFetchTool. Re-decoding
+  // here would turn double-encoded, visibly literal text into new evidence.
+  const unresolvedEntityMarker = "\uE000";
+  const segments = inspectedText
+    // One-boundary decoding deliberately leaves a second encoded layer
+    // visible. Replace unresolved references before splitting so their
+    // semicolon cannot manufacture a new affirmative clause, and reject only
+    // the affected clause from semantic matching.
+    .replace(/&(?:#[0-9]+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]+;?)/gi, unresolvedEntityMarker)
+    .split(/(?<=[.!?])\s+|[;\r\n]+|\b(?:although|but|however|whereas)\b/i)
+    .filter((raw) => !raw.includes(unresolvedEntityMarker))
+    .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
+    .map((statement) => ({ statement, normalized: normalizedPhrase(statement) }))
+    .filter((segment) => segment.normalized.length > 0);
+
+  return targetEvidencePhrases(spec).flatMap((phrase): CoherentEvidenceMatch[] => {
+    const exact = segments.find((segment) =>
+      containsPhraseWithMatchingPolarity(segment.normalized, phrase),
+    );
+    if (exact) {
+      return [
+        {
+          phrase,
+          terms: meaningfulTerms(phrase),
+          exact: true,
+          statement: exact.statement,
+          evidenceUrl,
+        },
+      ];
+    }
+
+    const featureTerms = meaningfulTerms(phrase);
+    // Approximate evidence is only meaningful when at least three uncommon
+    // target terms can agree in one clause. Shorter targets must use the exact
+    // phrase path above; otherwise two generic words can manufacture support
+    // for a materially different capability.
+    if (featureTerms.length < 3) return [];
+    // Approximate evidence must retain the target predicate wherever grammar
+    // places it. Subject-first requirements otherwise let a different action
+    // inherit nearly all nouns and pass a high-overlap threshold.
+    const predicateTerms = targetPredicateTerms(phrase);
+    const phraseTokens = phrase.split(" ").filter(Boolean);
+    const targetPolarity = featureSpanPolarity(
+      phraseTokens,
+      0,
+      phraseTokens.length - 1,
+    );
+    // A failed model review must not turn approximate lexical similarity into
+    // a semantic rewrite of a denied/compound requirement. Negative targets
+    // remain eligible through the exact-phrase path above; overlap fallback is
+    // deliberately limited to unambiguous affirmative targets.
+    if (targetPolarity !== "affirmed") return [];
+    // This path runs only when semantic model review failed. Require every
+    // uncommon target term in one clause; partial lexical similarity is not
+    // strong enough to establish a production acceptance fact.
+    const required = featureTerms.length;
+    const bestOverlap = segments
+      .map((segment) => {
+        const segmentTokens = segment.normalized.split(" ").filter(Boolean);
+        const segmentTerms = new Set(meaningfulTerms(segment.normalized));
+        const terms = featureTerms.filter((term) => segmentTerms.has(term));
+        const positions = terms
+          .map((term) => segmentTokens.indexOf(term))
+          .filter((position) => position >= 0);
+        const polarity =
+          positions.length > 0 &&
+          featureSpanPolarity(
+            segmentTokens,
+            Math.min(...positions),
+            Math.max(...positions),
+          );
+        return {
+          statement: segment.statement,
+          terms,
+          polarity,
+          describesCandidate:
+            positions.length > 0 &&
+            featureSpanDescribesCandidate(segmentTokens, Math.min(...positions)),
+        };
+      })
+      .filter(
+        (segment) => segment.describesCandidate && segment.polarity === targetPolarity,
+      )
+      .sort((left, right) => right.terms.length - left.terms.length)[0];
+    return bestOverlap &&
+      bestOverlap.terms.length >= required &&
+      predicateTerms.length > 0 &&
+      predicateTerms.every((term) => bestOverlap.terms.includes(term))
+      ? [
+          {
+            phrase,
+            terms: bestOverlap.terms,
+            exact: false,
+            statement: bestOverlap.statement,
+            evidenceUrl,
+          },
+        ]
+      : [];
+  });
+}
+
+const MAX_BOUNDED_REPOSITORY_RECOMMENDATIONS = 5;
+
+/**
+ * Preserve implementation research in the production-bounded path without
+ * spending another model call. Every recommendation is derived only from a
+ * repository file that the dossier actually fetched, remains license-scoped,
+ * and carries the exact inspected source URL into planning.
+ */
+function boundedRepositoryRecommendations(
+  spec: ProductSpec,
+  _arch: Architecture,
+  dossier: CompetitiveDossier,
+): ResearchRecommendation[] {
+  return dossier.candidates
+    .filter(
+      (candidate) =>
+        candidate.kind === "repository" &&
+        !candidate.archived &&
+        !candidate.inspectionError &&
+        candidate.sourceEvidence.length > 0,
+    )
+    .flatMap((candidate) => {
+      const strongest = candidate.sourceEvidence
+        .flatMap((evidence) =>
+          [...canonicalEvidenceUrlSet([evidence.url])].flatMap((evidenceUrl) =>
+            coherentEvidenceMatches(spec, evidence.excerpt, evidenceUrl).map(
+              (match) => ({ evidence, match }),
+            ),
+          ),
+        )
+        .sort(
+          (left, right) =>
+            compareCoherentEvidenceStrength(left.match, right.match) ||
+            left.evidence.path.localeCompare(right.evidence.path),
+        )[0];
+      if (!strongest || strongest.match.terms.length < 2) return [];
+
+      const path = strongest.evidence.path.replace(/\s+/g, " ").trim().slice(0, 180);
+      const evidenceUrls = [strongest.match.evidenceUrl];
+      if (!path || evidenceUrls.length === 0) return [];
+      const reuseMode =
+        candidate.license.policy === "reference-only"
+          ? ("reference-only" as const)
+          : ("clean-room-pattern" as const);
+      const matched = strongest.match.terms.slice(0, 6);
+      const targetFeature = strongest.match.phrase;
+      const reuseInstruction =
+        reuseMode === "reference-only"
+          ? "Treat the implementation as reference material only: do not copy source. Reproduce any selected public behavior independently behind a target-owned adapter."
+          : "Reproduce the inspected behavior as a clean-room pattern behind a target-owned adapter; do not import code until a separate dependency and license review authorizes it.";
+
+      return [
+        {
+          recommendation: RecommendationSchema.parse({
+            name: `${candidate.name}: ${path}`,
+            why: `The inspected file supports the matching target requirement "${targetFeature}" with the same polarity.`,
+            sourceUrl: evidenceUrls[0],
+            howToIntegrate: `${reuseInstruction} Add an acceptance test for ${matched.join(", ")} before enabling the adapter.`,
+            candidateId: candidate.id,
+            licenseSpdx: candidate.license.spdxId,
+            licensePolicy: candidate.license.policy,
+            reuseMode,
+            evidenceUrls,
+            score: Math.min(95, 45 + matched.length * 8),
+            origin: "tool-research",
+          }),
+          relevance: strongest.match.terms.length + (strongest.match.exact ? 10 : 0),
+          stars: candidate.stars,
+        },
+      ];
+    })
+    .sort(
+      (left, right) =>
+        right.relevance - left.relevance ||
+        right.stars - left.stars ||
+        left.recommendation.candidateId.localeCompare(right.recommendation.candidateId),
+    )
+    .slice(0, MAX_BOUNDED_REPOSITORY_RECOMMENDATIONS)
+    .map((entry) => entry.recommendation);
+}
+
+/**
+ * A no-invention fallback for a failed bulk reviewer. It can only select a
+ * product only when inspected official-page text contains a target feature
+ * phrase or a high-coverage term match for one feature inside one sentence.
+ * Terms scattered across unrelated page sections can never be accumulated
+ * into an advantage. Authoritative output retains only the matched target
+ * feature identifier; fetched prose stays behind the evidence URL. If fewer
+ * than the required five qualify, the existing strict gate still blocks the
+ * run.
+ */
+export function evidenceGroundedCompetitiveSelection(
+  spec: ProductSpec,
+  _arch: Architecture,
+  dossier: CompetitiveDossier,
+): CompetitiveSelection {
+  const { candidates, requiredCount } = reviewableProductCandidates(dossier);
+  const qualified = candidates
+    .map((candidate) => {
+      const featureMatches = candidate.sourceEvidence
+        .flatMap((item) =>
+          [...canonicalEvidenceUrlSet([item.url])].flatMap((evidenceUrl) =>
+            coherentEvidenceMatches(spec, item.excerpt, evidenceUrl),
+          ),
+        )
+        .sort(compareCoherentEvidenceStrength);
+      const exactMatches = featureMatches.filter((match) => match.exact);
+      const overlap = [...new Set(featureMatches.flatMap((match) => match.terms))];
+      return { candidate, overlap, featureMatches, exactMatches };
+    })
+    .filter((item) => item.featureMatches.length > 0)
+    .sort(
+      (a, b) =>
+        b.exactMatches.length - a.exactMatches.length ||
+        b.featureMatches.length - a.featureMatches.length ||
+        b.overlap.length - a.overlap.length ||
+        a.candidate.name.localeCompare(b.candidate.name),
+    )
+    .slice(0, requiredCount);
+
+  const comparisons: CompetitiveSelection["comparisons"] = [];
+  const selected: CompetitiveSelection["selected"] = [];
+  for (const { candidate, overlap, featureMatches, exactMatches } of qualified) {
+    const strongestMatch = featureMatches[0]!;
+    const evidenceUrls = [strongestMatch.evidenceUrl];
+    const score = Math.min(90, 55 + overlap.length * 5 + exactMatches.length * 10);
+    comparisons.push({
+      candidateId: candidate.id,
+      name: candidate.name,
+      score,
+      matchedFeatures: [
+        strongestMatch.exact
+          ? `Inspected evidence contains target feature phrase: ${strongestMatch.phrase}`
+          : `One inspected statement supports target feature "${strongestMatch.phrase}" through coherent concepts: ${strongestMatch.terms.join(", ")}`,
+      ],
+      strengths: [
+        `Official product evidence supports target behavior "${strongestMatch.phrase}".`,
+      ],
+      gaps: [
+        "Evidence verifies public product behavior, not equivalent behavior or acceptance results in the target implementation.",
+      ],
+      evidenceUrls,
+      decision: "adapt",
+      rationale: `The inspected official page ${
+        strongestMatch.exact
+          ? `contains the target feature phrase "${strongestMatch.phrase}"`
+          : `contains a single statement with a high-coverage match for "${strongestMatch.phrase}" (${strongestMatch.terms.join(", ")})`
+      }; any adoption remains clean-room and test-gated.`,
+    });
+    selected.push({
+      candidateId: candidate.id,
+      // This field becomes an authoritative acceptance criterion downstream.
+      // Keep it derived solely from the target spec; fetched page prose and
+      // candidate-controlled display names remain evidence, never commands.
+      element: `Evidence-backed target behavior: ${strongestMatch.phrase}`,
+      why: "The behavior is present in inspected official evidence and relevant to explicit target terminology.",
+      howToIntegrate:
+        "Reproduce only the documented public behavior as a clean-room pattern, then require a direct acceptance test before treating it as an advantage.",
+      reuseMode: "clean-room-pattern",
+      evidenceUrls,
+      score,
+    });
+  }
+
+  const selection = {
+    comparisons,
+    selected,
+    summary:
+      `The bulk model review was unavailable. Deterministic evidence analysis produced ${selected.length}/${requiredCount} ` +
+      "target-term-aligned clean-room candidate(s); the unchanged production gate decides whether that is sufficient.",
+  };
+  return selected.length === requiredCount
+    ? competitiveSelectionSchema(candidates, requiredCount).parse(selection)
+    : CompetitiveSelectionShape.parse(selection);
 }
 
 function auditFrom(dossier: CompetitiveDossier) {
@@ -1044,7 +1749,14 @@ export async function researchAgent(
   arch: Architecture,
   options: ResearchOptions = {},
 ): Promise<ResearchFindings> {
-  const base = await runToolResearch(deps, spec, arch);
+  const boundedProduction = options.executionMode === "bounded-production";
+  let base = boundedProduction
+    ? ResearchFindingsSchema.parse({
+        summary:
+          "Production research used the bounded RepoRewards and verified-product evidence path.",
+        recommendations: [],
+      })
+    : await runToolResearch(deps, spec, arch);
   if (!options.competitive) return base;
 
   // The run-scoped orchestrator names plausible competitors; deterministic
@@ -1052,13 +1764,29 @@ export async function researchAgent(
   // decide whether any of them count. Planning failure falls back to the
   // deterministic generic queries and remains advisory.
   let productQueries: string[] = [];
-  try {
-    productQueries = await planProductDiscovery(deps, spec, arch);
-  } catch (err) {
-    if (err instanceof ProviderAbortError) throw err;
+  if (!boundedProduction) {
+    try {
+      productQueries = await planProductDiscovery(deps, spec, arch);
+    } catch (err) {
+      if (err instanceof ProviderAbortError) throw err;
+    }
   }
 
   const dossier = await buildCompetitiveDossier(spec, arch, { productQueries });
+  if (boundedProduction) {
+    const repositoryRecommendations = boundedRepositoryRecommendations(
+      spec,
+      arch,
+      dossier,
+    );
+    base = ResearchFindingsSchema.parse({
+      ...base,
+      summary:
+        `${base.summary} Preserved ${repositoryRecommendations.length} bounded, inspected ` +
+        "repository implementation recommendation(s).",
+      recommendations: repositoryRecommendations,
+    });
+  }
   if (!dossier.candidates.length) {
     return ResearchFindingsSchema.parse({
       ...base,
@@ -1092,16 +1820,19 @@ export async function researchAgent(
         competitiveAudit: auditFrom(dossier),
       });
     }
-    selection = CompetitiveSelectionShape.parse({
-      comparisons: [],
-      selected: [],
-      summary:
-        `Bulk competitive review failed validation (${msg.slice(0, 240)}). ` +
-        `Continuing with evidence-scoped single-product paid reviews.`,
-    });
+    selection = boundedProduction
+      ? evidenceGroundedCompetitiveSelection(spec, arch, dossier)
+      : CompetitiveSelectionShape.parse({
+          comparisons: [],
+          selected: [],
+          summary:
+            `Bulk competitive review failed validation (${msg.slice(0, 240)}). ` +
+            `Continuing with evidence-scoped single-product paid reviews.`,
+        });
   }
   let merged = mergeCompetitiveResults(base, dossier, selection);
   if (
+    !boundedProduction &&
     coverage.productCoverageMet &&
     qualifyingProductAdvantageCount(merged, dossier) < MIN_PRODUCT_COMPETITORS
   ) {

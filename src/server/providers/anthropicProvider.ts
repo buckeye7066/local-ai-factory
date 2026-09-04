@@ -8,10 +8,12 @@ import type {
 import { withRetry, extractJson, generateJsonWithRepair } from "./types.js";
 import {
   abandonPaidCall,
+  PaidBudgetExhaustedError,
   reservePaidCall,
   settlePaidCall,
   type PaidCallReservation,
 } from "./paidBudget.js";
+import type { ModelIdResolver } from "./modelCatalog.js";
 
 /**
  * anthropicProvider.ts — Claude via the official SDK.
@@ -19,8 +21,11 @@ import {
  * The API key is captured in this closure only and never logged or returned.
  * JSON mode asks for strict JSON and validates with the caller's Zod schema.
  */
-/** Reports token usage for the local estimated-USD ledger and telemetry. */
-export type UsageSink = (usage: { inTokens: number; outTokens: number }) => void;
+/** Reports token usage plus the exact model that served the billable call. */
+export type UsageSink = (
+  usage: { inTokens: number; outTokens: number },
+  model: string,
+) => void;
 
 export class AnthropicProvider implements LLMProvider {
   readonly name = "anthropic" as const;
@@ -35,6 +40,8 @@ export class AnthropicProvider implements LLMProvider {
    * timeout, not by FACTORY_RUN_TIMEOUT_MS or a cancel request.
    */
   private signal?: AbortSignal;
+  private readonly resolveModelId?: ModelIdResolver;
+  private resolvedModel: Promise<string> | null = null;
 
   constructor(
     apiKey: string,
@@ -42,18 +49,25 @@ export class AnthropicProvider implements LLMProvider {
     onUsage: UsageSink = () => {},
     signal?: AbortSignal,
     paidBudgetManaged = false,
+    resolveModelId?: ModelIdResolver,
   ) {
     // Explicit apiKey AND baseURL. This is the PAID tier, and the free route
     // sets ANTHROPIC_BASE_URL-shaped configuration elsewhere in this process;
     // passing both explicitly makes the SDK ignore every credential env var so
     // free-route settings can never leak into a billable call (and vice versa).
     this.client = apiKey
-      ? new Anthropic({ apiKey, baseURL: "https://api.anthropic.com" })
+      ? new Anthropic({
+          apiKey,
+          authToken: null,
+          baseURL: "https://api.anthropic.com",
+          maxRetries: 0,
+        })
       : null;
     this.model = model;
     this.onUsage = onUsage;
     this.signal = signal;
     this.paidBudgetManaged = paidBudgetManaged;
+    this.resolveModelId = resolveModelId;
   }
 
   isConfigured(): boolean {
@@ -82,10 +96,12 @@ export class AnthropicProvider implements LLMProvider {
   private recordUsage(
     reservation: PaidCallReservation | null,
     usage: { inTokens: number; outTokens: number },
+    servedModel?: string,
   ): void {
+    if (servedModel?.trim()) this.model = servedModel.trim();
     if (reservation) settlePaidCall(reservation, usage);
     try {
-      this.onUsage(usage);
+      this.onUsage(usage, this.model);
     } catch {
       // Telemetry/logging is non-billable bookkeeping. A sink failure after a
       // successful response must never make withRetry buy the same answer again.
@@ -104,54 +120,83 @@ export class AnthropicProvider implements LLMProvider {
     return this.model;
   }
 
+  private async modelId(): Promise<string> {
+    this.resolvedModel ??= this.resolveModelId
+      ? this.resolveModelId(this.model).then((model) => {
+          this.model = model;
+          return model;
+        })
+      : Promise.resolve(this.model);
+    return this.resolvedModel;
+  }
+
+  async prepareCall(): Promise<void> {
+    await this.modelId();
+  }
+
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
-    const text = await withRetry(
-      "anthropic.generateText",
-      async () => {
-        // NOTE: no `temperature` — sampling params are rejected (400) on
-        // Claude Opus 4.7+/Sonnet 5/Fable 5, so omitting keeps this provider
-        // model-agnostic. input.temperature still applies to other providers.
-        // Streamed then accumulated: the SDK REFUSES large non-streaming
-        // requests ("streaming is strongly recommended for operations that
-        // may take longer than 10 minutes") - the first real epic's 16k-token
-        // planning call died on exactly that. finalMessage() returns the same
-        // Message shape, so nothing downstream changes.
-        const maxTokens = input.maxTokens ?? 4096;
-        const reservation = this.reserve(input.system, input.prompt, maxTokens);
-        let res;
-        try {
-          res = await client.messages
-            .stream(
-              {
-                model: this.model,
-                max_tokens: maxTokens,
-                system: input.system,
-                messages: [{ role: "user", content: input.prompt }],
-              },
-              { signal: this.signal },
-            )
-            .finalMessage();
-        } catch (error) {
-          this.abandon(reservation);
-          throw error;
-        }
-        this.recordUsage(reservation, {
-          inTokens: res.usage?.input_tokens ?? 0,
-          outTokens: res.usage?.output_tokens ?? 0,
-        });
-        return res.content
-          .map((block) => (block.type === "text" ? block.text : ""))
-          .join("");
-      },
-      3,
-      this.signal,
-    );
-    return { text, provider: "anthropic" };
+    let providerAttemptOccurred = false;
+    try {
+      const text = await withRetry(
+        "anthropic.generateText",
+        async () => {
+          const model = await this.modelId();
+          // NOTE: no `temperature` — sampling params are rejected (400) on
+          // Claude Opus 4.7+/Sonnet 5/Fable 5, so omitting keeps this provider
+          // model-agnostic. input.temperature still applies to other providers.
+          // Streamed then accumulated: the SDK REFUSES large non-streaming
+          // requests ("streaming is strongly recommended for operations that
+          // may take longer than 10 minutes") - the first real epic's 16k-token
+          // planning call died on exactly that. finalMessage() returns the same
+          // Message shape, so nothing downstream changes.
+          const maxTokens = input.maxTokens ?? 4096;
+          const reservation = this.reserve(input.system, input.prompt, maxTokens);
+          providerAttemptOccurred = true;
+          let res;
+          try {
+            res = await client.messages
+              .stream(
+                {
+                  model,
+                  max_tokens: maxTokens,
+                  system: input.system,
+                  messages: [{ role: "user", content: input.prompt }],
+                },
+                { signal: this.signal },
+              )
+              .finalMessage();
+          } catch (error) {
+            this.abandon(reservation);
+            throw error;
+          }
+          this.recordUsage(
+            reservation,
+            {
+              inTokens: res.usage?.input_tokens ?? 0,
+              outTokens: res.usage?.output_tokens ?? 0,
+            },
+            res.model,
+          );
+          return res.content
+            .map((block) => (block.type === "text" ? block.text : ""))
+            .join("");
+        },
+        3,
+        this.signal,
+      );
+      return { text, provider: "anthropic" };
+    } catch (error) {
+      if (error instanceof PaidBudgetExhaustedError && providerAttemptOccurred) {
+        error.markProviderAttemptOccurred();
+      }
+      throw error;
+    }
   }
 
   async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
     const client = this.ensure();
+    let providerAttemptOccurred = false;
     const system = `${input.system}
 
 You MUST respond with a single valid JSON object matching the "${input.schemaName}" shape.
@@ -162,15 +207,17 @@ fenced code block outside the JSON object. Your entire response must be parseabl
 JSON.parse() as-is.`;
 
     const callOnce = async (prompt: string, maxTokens: number): Promise<unknown> => {
+      const model = await this.modelId();
       // Streamed for the same reason as generateText - large max_tokens
       // non-streaming calls are refused by the SDK outright.
       const reservation = this.reserve(system, prompt, maxTokens);
+      providerAttemptOccurred = true;
       let res;
       try {
         res = await client.messages
           .stream(
             {
-              model: this.model,
+              model,
               max_tokens: maxTokens,
               system,
               messages: [{ role: "user", content: prompt }],
@@ -182,10 +229,14 @@ JSON.parse() as-is.`;
         this.abandon(reservation);
         throw error;
       }
-      this.recordUsage(reservation, {
-        inTokens: res.usage?.input_tokens ?? 0,
-        outTokens: res.usage?.output_tokens ?? 0,
-      });
+      this.recordUsage(
+        reservation,
+        {
+          inTokens: res.usage?.input_tokens ?? 0,
+          outTokens: res.usage?.output_tokens ?? 0,
+        },
+        res.model,
+      );
       const text = res.content
         .map((block) => (block.type === "text" ? block.text : ""))
         .join("");
@@ -194,17 +245,24 @@ JSON.parse() as-is.`;
 
     // Two attempts: a frontier model rarely answers in prose, and every extra
     // attempt here is billed. `withRetry` still wraps this for transport faults.
-    return withRetry(
-      "anthropic.generateJson",
-      () =>
-        generateJsonWithRepair({
-          input,
-          attempts: 2,
-          baseMaxTokens: input.maxTokens ?? 8192,
-          call: callOnce,
-        }),
-      3,
-      this.signal,
-    );
+    try {
+      return await withRetry(
+        "anthropic.generateJson",
+        () =>
+          generateJsonWithRepair({
+            input,
+            attempts: 2,
+            baseMaxTokens: input.maxTokens ?? 8192,
+            call: callOnce,
+          }),
+        3,
+        this.signal,
+      );
+    } catch (error) {
+      if (error instanceof PaidBudgetExhaustedError && providerAttemptOccurred) {
+        error.markProviderAttemptOccurred();
+      }
+      throw error;
+    }
   }
 }

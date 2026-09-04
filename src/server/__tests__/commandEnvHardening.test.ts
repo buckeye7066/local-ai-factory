@@ -6,6 +6,9 @@ import {
   isAllowed,
 } from "../workspace/commandRunner.js";
 import { CountingProvider, ModelBudgetError } from "../orchestrator/stages.js";
+import { ModelLadderProvider } from "../providers/modelLadderProvider.js";
+import { ProviderModelUnavailableError } from "../providers/types.js";
+import { PaidBudgetExhaustedError } from "../providers/paidBudget.js";
 import type { LLMProvider, GenerateTextResult } from "../../shared/types.js";
 import type { RunRecord } from "../../shared/schemas.js";
 
@@ -126,5 +129,142 @@ describe("CountingProvider — model-call budget (#5)", () => {
     await expect(capped.generateText({ system: "s", prompt: "p" })).rejects.toThrow(
       ModelBudgetError,
     );
+  });
+
+  it("does not charge catalog-only refusals before reaching a real fallback call", async () => {
+    const run = fakeRun();
+    let refusedGenerateCalls = 0;
+    const catalogRefusal: LLMProvider = {
+      name: "anthropic",
+      isConfigured: () => true,
+      prepareCall: async () => {
+        throw new ProviderModelUnavailableError(
+          "anthropic model unavailable in the account catalog",
+        );
+      },
+      async generateText() {
+        refusedGenerateCalls += 1;
+        throw new Error("must not reach generation");
+      },
+      async generateJson<T>() {
+        throw new Error("must not reach generation") as T;
+      },
+    };
+    const openai: LLMProvider = {
+      name: "openai",
+      isConfigured: () => true,
+      async generateText() {
+        return { text: "ok", provider: "openai" };
+      },
+      async generateJson<T>() {
+        return {} as T;
+      },
+    };
+    const ladder = new ModelLadderProvider([
+      {
+        model: "claude-unavailable",
+        provider: new CountingProvider(catalogRefusal, run, 1),
+      },
+      { model: "gpt-live", provider: new CountingProvider(openai, run, 1) },
+    ]);
+
+    await expect(ladder.generateText({ system: "s", prompt: "p" })).resolves.toEqual({
+      text: "ok",
+      provider: "openai",
+    });
+    expect(refusedGenerateCalls).toBe(0);
+    expect(run.providerUsage).toMatchObject({
+      totalCalls: 1,
+      anthropic: { calls: 0 },
+      openai: { calls: 1 },
+    });
+  });
+
+  it("does not charge a global paid-budget refusal or probe another paid rung", async () => {
+    const run = fakeRun();
+    let redundantPaidCalls = 0;
+    const capped: LLMProvider = {
+      name: "anthropic",
+      isConfigured: () => true,
+      async generateText() {
+        throw new PaidBudgetExhaustedError("paid-rescue cap reached");
+      },
+      async generateJson<T>() {
+        throw new PaidBudgetExhaustedError("paid-rescue cap reached") as T;
+      },
+    };
+    const redundantPaid: LLMProvider = {
+      name: "openai",
+      isConfigured: () => true,
+      async generateText() {
+        redundantPaidCalls += 1;
+        return { text: "must not run", provider: "openai" };
+      },
+      async generateJson<T>() {
+        redundantPaidCalls += 1;
+        return {} as T;
+      },
+    };
+    const free: LLMProvider = {
+      name: "free",
+      isConfigured: () => true,
+      async generateText() {
+        return { text: "free", provider: "free" };
+      },
+      async generateJson<T>() {
+        return {} as T;
+      },
+    };
+    const ladder = new ModelLadderProvider([
+      { model: "claude-capped", provider: new CountingProvider(capped, run, 1) },
+      {
+        model: "gpt-redundant",
+        provider: new CountingProvider(redundantPaid, run, 1),
+      },
+      { model: "free-live", provider: new CountingProvider(free, run, 1) },
+    ]);
+
+    await expect(ladder.generateText({ system: "s", prompt: "p" })).resolves.toEqual({
+      text: "free",
+      provider: "free",
+    });
+    expect(redundantPaidCalls).toBe(0);
+    expect(run.providerUsage).toMatchObject({
+      totalCalls: 1,
+      anthropic: { calls: 0 },
+      openai: { calls: 0 },
+      free: { calls: 1 },
+    });
+  });
+
+  it("retains the logical count when paid exhaustion follows provider I/O", async () => {
+    const run = fakeRun();
+    let calls = 0;
+    const partial: LLMProvider = {
+      name: "openai",
+      isConfigured: () => true,
+      async generateText() {
+        calls += 1;
+        const refusal = new PaidBudgetExhaustedError("paid-rescue cap reached");
+        refusal.markProviderAttemptOccurred();
+        throw refusal;
+      },
+      async generateJson<T>() {
+        throw new Error("unused") as T;
+      },
+    };
+    const counted = new CountingProvider(partial, run, 1);
+
+    await expect(
+      counted.generateText({ system: "s", prompt: "p" }),
+    ).rejects.toBeInstanceOf(PaidBudgetExhaustedError);
+    await expect(
+      counted.generateText({ system: "s", prompt: "p" }),
+    ).rejects.toBeInstanceOf(ModelBudgetError);
+    expect(calls).toBe(1);
+    expect(run.providerUsage).toMatchObject({
+      totalCalls: 1,
+      openai: { calls: 1 },
+    });
   });
 });

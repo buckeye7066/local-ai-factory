@@ -118,8 +118,8 @@ FACTORY_FREE_MODEL=claude-sonnet-4-5
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 ANTHROPIC_MODEL=claude-fable-5-1
-OPENAI_MODEL=gpt-5.5
-FACTORY_OPENAI_MODEL_LADDER=gpt-5.5
+OPENAI_MODEL=gpt-6-astra
+FACTORY_OPENAI_MODEL_LADDER=gpt-6-astra,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna
 FIRECRAWL_API_KEY=optional_firecrawl_key
 DEFAULT_CODE_PROVIDER=free
 DEFAULT_REVIEW_PROVIDER=free
@@ -203,7 +203,7 @@ This is designed to be safe to run on your own machine:
 
 Edit `ANTHROPIC_MODEL` / `OPENAI_MODEL` in `.env`. Order models inside the
 Anthropic family with
-`FACTORY_ANTHROPIC_MODEL_LADDER=claude-fable-5-1,claude-opus-5,claude-sonnet-5,claude-haiku-4-5`,
+`FACTORY_ANTHROPIC_MODEL_LADDER=claude-fable-5-1,claude-opus-5,claude-sonnet-5,claude-haiku-4-5-20251001`,
 then order provider families with `FACTORY_MODEL_LADDER=anthropic,openai`.
 Missing rungs are skipped and the free/local rotator is always appended last.
 The mandatory lead and challenger reviews each start from the same strongest

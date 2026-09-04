@@ -1,4 +1,5 @@
 import { lookup as dnsLookup } from "node:dns/promises";
+import { decodeHtmlEntities } from "./htmlEntities.js";
 import { BlockList, isIP } from "node:net";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -265,14 +266,332 @@ function isHttpUrl(url: string): boolean {
   }
 }
 
-/** Strip HTML tags/scripts down to readable text for the excerpt. */
-function toReadableText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
+const NON_RENDERED_ELEMENTS = new Set([
+  "canvas",
+  "datalist",
+  "embed",
+  "head",
+  "iframe",
+  "map",
+  "noscript",
+  "object",
+  "script",
+  "style",
+  "svg",
+  "template",
+  "title",
+]);
+
+const BLOCK_ELEMENTS = new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "dd",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "li",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+]);
+
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+function decodeCssEscapes(value: string): string {
+  // A backslash followed by a CSS newline is a continuation and contributes
+  // no character. Remove it before decoding ordinary simple/hex escapes.
+  return value
+    .replace(/\\(?:\r\n|[\n\r\f])/g, "")
+    .replace(
+      /\\([0-9a-f]{1,6})(?:\r\n|[ \t\r\n\f])?|\\([^\r\n\f0-9a-f])/gi,
+      (_escape, hex: string | undefined, escaped: string | undefined) => {
+        if (escaped) return escaped;
+        const codePoint = Number.parseInt(hex ?? "", 16);
+        if (
+          !Number.isSafeInteger(codePoint) ||
+          codePoint <= 0 ||
+          codePoint > 0x10ffff ||
+          (codePoint >= 0xd800 && codePoint <= 0xdfff)
+        ) {
+          return "\uFFFD";
+        }
+        return String.fromCodePoint(codePoint);
+      },
+    );
+}
+
+type HtmlAttribute = {
+  name: string;
+  value: string;
+};
+
+function actualTagAttributes(rawTag: string): HtmlAttribute[] {
+  const opening = rawTag.match(/^<\s*[a-z][\w:-]*/i);
+  if (!opening) return [];
+
+  const attributes: HtmlAttribute[] = [];
+  let cursor = opening[0].length;
+  while (cursor < rawTag.length) {
+    while (/\s/.test(rawTag[cursor] ?? "")) cursor += 1;
+    const current = rawTag[cursor];
+    if (!current || current === ">" || /^\/\s*>/.test(rawTag.slice(cursor))) break;
+
+    const nameStart = cursor;
+    while (cursor < rawTag.length && !/[\s=\/>]/.test(rawTag[cursor] ?? "")) {
+      cursor += 1;
+    }
+    if (cursor === nameStart) {
+      cursor += 1;
+      continue;
+    }
+
+    const name = rawTag.slice(nameStart, cursor).toLowerCase();
+    while (/\s/.test(rawTag[cursor] ?? "")) cursor += 1;
+    let rawValue = "";
+    if (rawTag[cursor] === "=") {
+      cursor += 1;
+      while (/\s/.test(rawTag[cursor] ?? "")) cursor += 1;
+      const quote = rawTag[cursor];
+      if (quote === '"' || quote === "'") {
+        cursor += 1;
+        const valueStart = cursor;
+        while (cursor < rawTag.length && rawTag[cursor] !== quote) cursor += 1;
+        rawValue = rawTag.slice(valueStart, cursor);
+        if (rawTag[cursor] === quote) cursor += 1;
+      } else {
+        const valueStart = cursor;
+        while (cursor < rawTag.length && !/[\s>]/.test(rawTag[cursor] ?? "")) {
+          cursor += 1;
+        }
+        rawValue = rawTag.slice(valueStart, cursor);
+      }
+    }
+
+    // Browsers decode one character-reference layer in attribute values before
+    // CSS and ARIA semantics are evaluated. A second layer stays literal.
+    attributes.push({ name, value: decodeHtmlEntities(rawValue) });
+  }
+  return attributes;
+}
+
+function openingTagSuppressesText(tag: string, rawTag: string): boolean {
+  if (NON_RENDERED_ELEMENTS.has(tag)) return true;
+  const attributes = actualTagAttributes(rawTag);
+  if (attributes.some(({ name }) => name === "hidden" || name === "inert")) {
+    return true;
+  }
+  if (
+    attributes.some(
+      ({ name, value }) =>
+        name === "aria-hidden" && value.trim().toLowerCase() === "true",
+    )
+  ) {
+    return true;
+  }
+
+  const styles = attributes
+    .filter(({ name }) => name === "style")
+    .map(({ value }) => decodeCssEscapes(value.replace(/\/\*[\s\S]*?\*\//g, "")));
+  // An unterminated CSS comment makes the remainder of the declaration
+  // non-authoritative. Suppress rather than guessing that it renders.
+  if (styles.some((style) => style.includes("/*"))) return true;
+  return styles.some((style) =>
+    /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|content-visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(
+      style,
+    ),
+  );
+}
+
+type HtmlMarkupToken = {
+  start: number;
+  end: number;
+  raw: string;
+  tag?: string;
+  closing?: boolean;
+  slashClosed?: boolean;
+};
+
+const RAW_TEXT_ELEMENTS = new Set([
+  "iframe",
+  "noembed",
+  "noframes",
+  "script",
+  "style",
+  "title",
+  "textarea",
+  "xmp",
+]);
+
+function quotedTagEnd(html: string, start: number): number {
+  let quote = "";
+  for (let index = start + 1; index < html.length; index += 1) {
+    const char = html[index]!;
+    if (quote) {
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === ">") {
+      return index + 1;
+    }
+  }
+  // Treat an unterminated tag as markup through EOF. Failing closed is safer
+  // than promoting malformed attributes or hidden payloads into evidence.
+  return html.length;
+}
+
+function nextHtmlMarkup(
+  html: string,
+  from: number,
+  xmlMode = false,
+): HtmlMarkupToken | null {
+  for (
+    let start = html.indexOf("<", from);
+    start >= 0;
+    start = html.indexOf("<", start + 1)
+  ) {
+    if (html.startsWith("<!--", start)) {
+      const commentEnd = html.indexOf("-->", start + 4);
+      const end = commentEnd < 0 ? html.length : commentEnd + 3;
+      return { start, end, raw: html.slice(start, end) };
+    }
+
+    // HTML uses a bogus-comment terminator; XHTML honors the complete XML
+    // processing-instruction terminator so quoted angle brackets stay hidden.
+    if (html.startsWith("<?", start)) {
+      const terminator = xmlMode ? "?>" : ">";
+      const bogusEnd = html.indexOf(terminator, start + 2);
+      const end = bogusEnd < 0 ? html.length : bogusEnd + terminator.length;
+      return { start, end, raw: html.slice(start, end) };
+    }
+
+    if (html.startsWith("<!", start)) {
+      const end = quotedTagEnd(html, start);
+      return { start, end, raw: html.slice(start, end) };
+    }
+
+    const prefix = html.slice(start).match(/^<\s*(\/?)\s*([a-z][\w:-]*)\b/i);
+    if (!prefix) continue;
+    const end = quotedTagEnd(html, start);
+    const raw = html.slice(start, end);
+    return {
+      start,
+      end,
+      raw,
+      tag: prefix[2]!.toLowerCase(),
+      closing: prefix[1] === "/",
+      slashClosed: /\/\s*>$/.test(raw),
+    };
+  }
+  return null;
+}
+
+/** Extract visible/readable HTML text without promoting hidden page payloads. */
+function toReadableText(html: string, xmlSelfClosing = false): string {
+  const stack: Array<{ tag: string; suppressed: boolean; rawText: boolean }> = [];
+  let suppressedDepth = 0;
+  let cursor = 0;
+  let readable = "";
+
+  for (
+    let markup = nextHtmlMarkup(html, cursor, xmlSelfClosing);
+    markup;
+    markup = nextHtmlMarkup(html, cursor, xmlSelfClosing)
+  ) {
+    if (suppressedDepth === 0) readable += html.slice(cursor, markup.start);
+    cursor = markup.end;
+    const tag = markup.tag;
+    if (!tag) continue;
+
+    const rawTag = markup.raw;
+    const top = stack.at(-1);
+    // Markup-looking bytes inside raw-text elements cannot close an ancestor
+    // or create rendered evidence.
+    if (suppressedDepth > 0 && top?.rawText && !(markup.closing && top.tag === tag)) {
+      continue;
+    }
+    if (markup.closing) {
+      if (suppressedDepth > 0) {
+        // Fail closed on misnested closers inside a hidden subtree. Only the
+        // current hidden frame may close.
+        if (!top || top.tag !== tag) continue;
+        const entry = stack.pop()!;
+        if (entry.suppressed) suppressedDepth -= 1;
+        if (suppressedDepth === 0 && BLOCK_ELEMENTS.has(tag)) readable += "\n";
+        continue;
+      }
+      const index = stack.map((entry) => entry.tag).lastIndexOf(tag);
+      if (index >= 0) {
+        for (const entry of stack.splice(index)) {
+          if (entry.suppressed) suppressedDepth -= 1;
+        }
+      }
+      if (suppressedDepth === 0 && BLOCK_ELEMENTS.has(tag)) readable += "\n";
+      continue;
+    }
+
+    const parentSuppressed = suppressedDepth > 0;
+    const suppressed = parentSuppressed || openingTagSuppressesText(tag, rawTag);
+    // In text/html, a trailing slash does not self-close ordinary elements;
+    // XHTML served as XML does honor it. HTML void elements close in either
+    // mode.
+    const selfClosing =
+      VOID_ELEMENTS.has(tag) || (xmlSelfClosing && markup.slashClosed === true);
+    if (!selfClosing) {
+      stack.push({ tag, suppressed, rawText: RAW_TEXT_ELEMENTS.has(tag) });
+      if (suppressed) suppressedDepth += 1;
+    }
+    if (!suppressed && (BLOCK_ELEMENTS.has(tag) || tag === "br" || tag === "hr")) {
+      readable += "\n";
+    }
+  }
+  if (suppressedDepth === 0) readable += html.slice(cursor);
+
+  return decodeHtmlEntities(readable)
+    .replace(/[\t\f\v ]+/g, " ")
+    .replace(/ *\r?\n */g, "\n")
+    .replace(/\n{2,}/g, "\n")
     .trim();
 }
 
@@ -325,7 +644,10 @@ export async function webFetchTool(
       const contentType = res.headers.get("content-type") ?? "";
       const bounded = await readBoundedBody(res);
       const raw = new TextDecoder("utf-8", { fatal: false }).decode(bounded.bytes);
-      const text = contentType.includes("html") ? toReadableText(raw) : raw;
+      const normalizedContentType = contentType.toLowerCase();
+      const text = normalizedContentType.includes("html")
+        ? toReadableText(raw, normalizedContentType.includes("xhtml"))
+        : raw;
       return {
         ok: res.ok,
         status: res.status,

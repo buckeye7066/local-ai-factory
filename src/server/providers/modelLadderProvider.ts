@@ -4,7 +4,12 @@ import type {
   GenerateTextResult,
   LLMProvider,
 } from "../../shared/types.js";
-import { isModelExhaustion, modelFailureText } from "./modelExhaustion.js";
+import {
+  isModelExhaustion,
+  isPaidBudgetExhaustion,
+  isQuotaRefusal,
+  modelFailureText,
+} from "./modelExhaustion.js";
 import { ProviderAbortError } from "./types.js";
 
 export type ModelLadderRung = {
@@ -51,7 +56,8 @@ export class ModelLadderProvider implements LLMProvider {
   }
 
   currentModel(): string {
-    return this.rungs[this.cursor]!.model;
+    const rung = this.rungs[this.cursor]!;
+    return rung.provider.currentModel?.() ?? rung.model;
   }
 
   /** Actual provider family serving the current rung after any failover. */
@@ -59,9 +65,15 @@ export class ModelLadderProvider implements LLMProvider {
     return this.rungs[this.cursor]!.provider.name;
   }
 
-  private nextConfigured(after: number): number | null {
+  private nextConfigured(
+    after: number,
+    excludedProviders: ReadonlySet<LLMProvider["name"]> = new Set(),
+  ): number | null {
     for (let index = after + 1; index < this.rungs.length; index += 1) {
-      if (this.rungs[index]!.provider.isConfigured()) return index;
+      const candidate = this.rungs[index]!.provider;
+      if (candidate.isConfigured() && !excludedProviders.has(candidate.name)) {
+        return index;
+      }
     }
     return null;
   }
@@ -80,10 +92,25 @@ export class ModelLadderProvider implements LLMProvider {
           throw error;
         }
         lastExhaustion = error;
-        const nextIndex = this.nextConfigured(index);
+        // An account/credit refusal applies to the whole provider account, not
+        // one model ID. Probing every remaining same-family rung only repeats a
+        // billable refusal. Model-scoped availability and capacity failures do
+        // still walk the configured family ladder.
+        const providerAccountExhausted =
+          isQuotaRefusal(error) || (error as { status?: unknown })?.status === 402;
+        const excludedProviders = isPaidBudgetExhaustion(error)
+          ? new Set<LLMProvider["name"]>(["anthropic", "openai"])
+          : providerAccountExhausted
+            ? new Set<LLMProvider["name"]>([rung.provider.name])
+            : undefined;
+        const nextIndex = this.nextConfigured(index, excludedProviders);
         if (nextIndex === null) throw lastExhaustion;
         const next = this.rungs[nextIndex]!;
-        this.onFailover(rung.model, next.model, modelFailureText(error));
+        this.onFailover(
+          rung.provider.currentModel?.() ?? rung.model,
+          next.provider.currentModel?.() ?? next.model,
+          modelFailureText(error),
+        );
         this.cursor = nextIndex;
         index = nextIndex - 1;
       }

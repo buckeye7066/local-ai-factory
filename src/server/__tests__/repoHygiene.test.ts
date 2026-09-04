@@ -61,4 +61,35 @@ describe("repository hygiene", () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it("does not publish the retired OpenAI model as a runtime default", () => {
+    const publicRuntimeGuidance = [
+      ".env.example",
+      "README.md",
+      "PROJECT-BRIEF.md",
+      "scripts/phone/phone.env.example",
+      ".github/workflows/factory-deck-cloud.yml",
+      ".github/workflows/purpose-foundry-cloud.yml",
+    ];
+    const offenders = publicRuntimeGuidance.filter((path) =>
+      readFileSync(resolve(ROOT, path), "utf8").includes("gpt-5.5"),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("recursively assigns code owners to the entire GitHub control plane", () => {
+    const codeowners = readFileSync(resolve(ROOT, ".github/CODEOWNERS"), "utf8");
+    expect(codeowners).toMatch(/^\*\s+@buckeye7066$/m);
+    expect(codeowners).toContain("/.github/** @buckeye7066");
+    expect(codeowners).not.toMatch(/^\/\.github\/(?:workflows|ISSUE_TEMPLATE)\/$/m);
+  });
+
+  it("publishes the immutable Anthropic fallback snapshot consistently", () => {
+    const publicRuntimeGuidance = [".env.example", "README.md", "PROJECT-BRIEF.md"];
+    const flexibleHaiku = /claude-haiku-4-5(?!-\d{8})/;
+    const offenders = publicRuntimeGuidance.filter((path) =>
+      flexibleHaiku.test(readFileSync(resolve(ROOT, path), "utf8")),
+    );
+    expect(offenders).toEqual([]);
+  });
 });

@@ -15,10 +15,15 @@ describe("config", () => {
       "claude-fable-5-1",
       "claude-opus-5",
       "claude-sonnet-5",
-      "claude-haiku-4-5",
+      "claude-haiku-4-5-20251001",
     ]);
-    expect(cfg.openaiModel).toBe("gpt-5.5");
-    expect(cfg.openaiModels).toEqual(["gpt-5.5"]);
+    expect(cfg.openaiModel).toBe("gpt-6-astra");
+    expect(cfg.openaiModels).toEqual([
+      "gpt-6-astra",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+    ]);
     expect(cfg.maxRepairLoops).toBe(3);
     expect(cfg.maxModelCallsPerRun).toBe(30);
     // Untrusted project code is not executed on the host by default. Owners

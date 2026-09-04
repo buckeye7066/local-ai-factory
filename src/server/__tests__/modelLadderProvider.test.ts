@@ -5,17 +5,24 @@ import {
   productionReadinessAgent,
 } from "../agents/productionReadinessAgent.js";
 import { ModelLadderProvider } from "../providers/modelLadderProvider.js";
+import {
+  ProviderExhaustionError,
+  ProviderModelUnavailableError,
+  withRetry,
+} from "../providers/types.js";
 
 function fake(
   behavior: "ok" | "exhausted" | "badRequest",
   name: "anthropic" | "openai" = "anthropic",
   exhaustionMessage = "model does not exist or you do not have access",
+  actualModel?: string,
 ): LLMProvider & { calls: number } {
   const provider = {
     name,
     paidBudgetManaged: true,
     calls: 0,
     isConfigured: () => true,
+    currentModel: actualModel ? () => actualModel : undefined,
     async generateText() {
       provider.calls += 1;
       if (behavior === "exhausted") {
@@ -76,6 +83,122 @@ describe("ModelLadderProvider", () => {
     await expect(provider.generateText({} as never)).rejects.toThrow(
       /quota exceeded on OpenAI credits/,
     );
+  });
+
+  it("skips the rest of one paid family after an account-wide credit refusal", async () => {
+    const noCredits = fake(
+      "exhausted",
+      "anthropic",
+      "429 You have no credits remaining.",
+    );
+    const redundantAnthropic = fake("ok", "anthropic");
+    const openai = fake("ok", "openai");
+    const provider = new ModelLadderProvider([
+      { model: "claude-fable-5-1", provider: noCredits },
+      { model: "claude-opus-5", provider: redundantAnthropic },
+      { model: "gpt-5.6-sol", provider: openai },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(noCredits.calls).toBe(1);
+    expect(redundantAnthropic.calls).toBe(0);
+    expect(openai.calls).toBe(1);
+    expect(provider.currentProvider()).toBe("openai");
+  });
+
+  it("skips the provider family after a terse typed 402 refusal", async () => {
+    const paymentRequired = fake("ok", "anthropic");
+    paymentRequired.generateText = async () => {
+      paymentRequired.calls += 1;
+      throw new ProviderExhaustionError(
+        "anthropic.generateText route exhausted (provider returned 402).",
+        402,
+      );
+    };
+    const redundantAnthropic = fake("ok", "anthropic");
+    const openai = fake("ok", "openai");
+    const provider = new ModelLadderProvider([
+      { model: "claude-fable-5-1", provider: paymentRequired },
+      { model: "claude-opus-5", provider: redundantAnthropic },
+      { model: "gpt-5.6-sol", provider: openai },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(paymentRequired.calls).toBe(1);
+    expect(redundantAnthropic.calls).toBe(0);
+    expect(openai.calls).toBe(1);
+    expect(provider.currentProvider()).toBe("openai");
+  });
+
+  it("skips same-family rungs after retry sanitizes an account-quota 429", async () => {
+    let rawCalls = 0;
+    const quotaBound = fake("ok", "openai");
+    quotaBound.generateText = async () => {
+      quotaBound.calls += 1;
+      return withRetry("openai.generateText", async () => {
+        rawCalls += 1;
+        throw Object.assign(new Error("insufficient_quota"), { status: 429 });
+      });
+    };
+    const redundantOpenAi = fake("ok", "openai");
+    const anthropic = fake("ok", "anthropic");
+    const provider = new ModelLadderProvider([
+      { model: "gpt-6-astra", provider: quotaBound },
+      { model: "gpt-5.6-sol", provider: redundantOpenAi },
+      { model: "claude-fable-5-1", provider: anthropic },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(rawCalls).toBe(1);
+    expect(quotaBound.calls).toBe(1);
+    expect(redundantOpenAi.calls).toBe(0);
+    expect(anthropic.calls).toBe(1);
+    expect(provider.currentProvider()).toBe("anthropic");
+  });
+
+  it("crosses provider families when catalog suppression passes through retry", async () => {
+    let blockedCalls = 0;
+    const blocked = {
+      name: "anthropic" as const,
+      paidBudgetManaged: true,
+      isConfigured: () => true,
+      async generateText() {
+        blockedCalls += 1;
+        return withRetry("anthropic.generateText", async () => {
+          throw new ProviderModelUnavailableError(
+            "anthropic model unavailable: suppressed unverified model probe",
+          );
+        });
+      },
+      async generateJson<T>() {
+        throw new Error("unused") as T;
+      },
+    } satisfies LLMProvider;
+    const openai = fake("ok", "openai");
+    const provider = new ModelLadderProvider([
+      { model: "claude-opus-5", provider: blocked },
+      { model: "gpt-6-astra", provider: openai },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(blockedCalls).toBe(1);
+    expect(openai.calls).toBe(1);
+    expect(provider.currentProvider()).toBe("openai");
+  });
+
+  it("reports the catalog-resolved model from the active provider", async () => {
+    const resolved = fake("ok", "openai", undefined, "gpt-6-astra");
+    const provider = new ModelLadderProvider([
+      { model: "gpt-configured-alias", provider: resolved },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(provider.currentModel()).toBe("gpt-6-astra");
   });
 
   it("keeps real bad requests loud instead of hiding them with fallback", async () => {

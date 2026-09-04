@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible Factory Deck or Purpose Foundry defect.
+title: "[Bug]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities or include secrets here. Use the private process in SECURITY.md.
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Exact commit SHA where the problem occurs.
+      placeholder: 40-character SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: product
+    attributes:
+      label: Product
+      options:
+        - Factory Deck
+        - Purpose Foundry
+        - Shared runtime
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal steps, inputs with secrets removed, and observed result.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Verification evidence
+      description: Relevant logs, test output, OS, Node version, and provider route with credentials removed.

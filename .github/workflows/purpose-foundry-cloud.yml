@@ -57,8 +57,8 @@ jobs:
           PURPOSE_FOUNDRY_PROGRAM_SCOUT_URL: ${{ secrets.PROGRAM_SCOUT_URL || 'https://web-production-d7db7.up.railway.app' }}
           PURPOSE_FOUNDRY_PROGRAM_SCOUT_TOKEN: ${{ secrets.SCOUT_API_TOKEN }}
           ANTHROPIC_MODEL: claude-fable-5-1
-          OPENAI_MODEL: gpt-5.5
-          FACTORY_SOL_MODEL: gpt-5.5
+          OPENAI_MODEL: gpt-6-astra
+          FACTORY_SOL_MODEL: gpt-6-astra
           FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
           FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic
@@ -330,8 +330,8 @@ jobs:
           PURPOSE_FOUNDRY_PROGRAM_SCOUT_URL: ${{ secrets.PROGRAM_SCOUT_URL || 'https://web-production-d7db7.up.railway.app' }}
           PURPOSE_FOUNDRY_PROGRAM_SCOUT_TOKEN: ${{ secrets.SCOUT_API_TOKEN }}
           ANTHROPIC_MODEL: claude-fable-5-1
-          OPENAI_MODEL: gpt-5.5
-          FACTORY_SOL_MODEL: gpt-5.5
+          OPENAI_MODEL: gpt-6-astra
+          FACTORY_SOL_MODEL: gpt-6-astra
           FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
           FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic
