@@ -1135,6 +1135,33 @@ const CURRENT_MODAL_SUBJECTS = new Set([
   "tool",
 ]);
 
+// Modal descriptions establish present behavior only when the conditional is
+// an operation a user can perform in the current product. Enrollment,
+// waitlist, launch, and availability conditions are future promises even when
+// they happen to mention both "you" and an application noun.
+const CURRENT_OPERATION_ACTIONS = new Set([
+  "click",
+  "close",
+  "create",
+  "delete",
+  "download",
+  "edit",
+  "enter",
+  "export",
+  "import",
+  "open",
+  "press",
+  "save",
+  "select",
+  "send",
+  "sign",
+  "submit",
+  "sync",
+  "tap",
+  "type",
+  "upload",
+]);
+
 const FUTURE_PERIODS = new Set([
   "day",
   "days",
@@ -1183,12 +1210,20 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
     const hasSecondPersonActor = subjectWindow.some(
       (token) => token === "you" || token === "your",
     );
+    const hasCurrentOperation = subjectWindow.some((token) =>
+      CURRENT_OPERATION_ACTIONS.has(token),
+    );
     const hasCurrentProductSubject = subjectWindow.some(
       (token, subjectIndex) =>
         CURRENT_MODAL_SUBJECTS.has(token) ||
         (token === "it" && subjectIndex === subjectWindow.length - 1),
     );
-    if (triggerIndex < 0 || !hasSecondPersonActor || !hasCurrentProductSubject) {
+    if (
+      triggerIndex < 0 ||
+      !hasSecondPersonActor ||
+      !hasCurrentOperation ||
+      !hasCurrentProductSubject
+    ) {
       return false;
     }
   }
@@ -1312,7 +1347,14 @@ function coherentEvidenceMatches(
     // prevents an unrelated heading/list item from donating a future marker,
     // competitor name, or missing target terms to the evidence sentence.
     .split(/(?<=[.!?])\s+|[\r\n]+/)
-    .filter((raw) => !raw.includes(unresolvedEntityMarker))
+    .filter(
+      (raw) =>
+        !raw.includes(unresolvedEntityMarker) &&
+        // An interrogative repeats the capability being investigated; it is
+        // not affirmative evidence. A following explicit answer is evaluated
+        // as its own statement and must establish the capability itself.
+        !/\?\s*["')\]]*\s*$/.test(raw),
+    )
     .map((raw) => raw.replace(/\s+/g, " ").trim())
     .flatMap((completeStatement) => {
       // Match within one grammatical clause, but evaluate ownership/current
@@ -1336,6 +1378,23 @@ function coherentEvidenceMatches(
         });
     })
     .filter((segment) => segment.normalized.length > 0);
+
+  // Exact phrases remain eligible in coordinated prose, but approximate
+  // matching may not borrow unrelated terms from a neighboring predicate.
+  // Splitting coordinators only for the overlap path preserves literal target
+  // phrases while making semantic fallback deliberately conservative.
+  const approximateSegments = segments.flatMap((segment) =>
+    segment.statement
+      .split(/(?:,\s*)?\b(?:and|nor|or|yet)\b/i)
+      .map((clause) => clause.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .map((statement) => ({
+        statement: statement.slice(0, 260),
+        normalized: normalizedPhrase(statement.slice(0, 260)),
+        completeNormalized: segment.completeNormalized,
+      }))
+      .filter((candidate) => candidate.normalized.length > 0),
+  );
 
   return targetEvidencePhrases(spec).flatMap((phrase): CoherentEvidenceMatch[] => {
     const exact = segments.find((segment) =>
@@ -1382,7 +1441,7 @@ function coherentEvidenceMatches(
     // uncommon target term in one clause; partial lexical similarity is not
     // strong enough to establish a production acceptance fact.
     const required = featureTerms.length;
-    const bestOverlap = segments
+    const bestOverlap = approximateSegments
       .map((segment) => {
         const segmentTokens = segment.normalized.split(" ").filter(Boolean);
         const completeTokens = segment.completeNormalized.split(" ").filter(Boolean);

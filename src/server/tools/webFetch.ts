@@ -481,11 +481,104 @@ function openingTagSuppressesText(tag: string, rawTag: string): boolean {
   // An unterminated CSS comment makes the remainder of the declaration
   // non-authoritative. Suppress rather than guessing that it renders.
   if (styles.some((style) => style.includes("/*"))) return true;
-  return styles.some((style) =>
-    /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|content-visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(
-      style,
-    ),
+  return styles.some(declarationBlockSuppressesText);
+}
+
+function cssZero(value: string): boolean {
+  const normalized = value.trim();
+  return normalized.length > 0 && /^[-+]?(?:0+|0*\.0+)(?:[a-z]+|%)?$/i.test(normalized);
+}
+
+function transformCollapsesText(value: string): boolean {
+  const normalized = value.toLowerCase().replace(/\s+/g, "");
+  if (!normalized || normalized === "none") return false;
+  if (
+    /(?:^|\))scale(?:x|y)?\([-+]?0*(?:\.0+)?\)/.test(normalized) ||
+    (/(?:^|\))scale3d\([^,]+,[^,]+,[^)]+\)/.test(normalized) &&
+      normalized
+        .match(/scale3d\(([^)]+)\)/)?.[1]
+        ?.split(",")
+        .slice(0, 2)
+        .some(cssZero))
+  ) {
+    return true;
+  }
+  const matrix = normalized.match(/matrix\(([^)]+)\)/)?.[1]?.split(",");
+  if (matrix?.length === 6) {
+    const [a, b, c, d] = matrix.slice(0, 4).map(Number);
+    if ([a, b, c, d].every(Number.isFinite) && Math.abs(a! * d! - b! * c!) === 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function clipRemovesText(property: string, value: string): boolean {
+  const normalized = value.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized || normalized === "none" || normalized === "auto") return false;
+  if (property === "clip") {
+    const values = normalized
+      .match(/^rect\((.*)\)$/)?.[1]
+      ?.split(/[\s,]+/)
+      .filter(Boolean);
+    return values?.length === 4 && values.every(cssZero);
+  }
+  return (
+    /^inset\(\s*(?:50|100)%/.test(normalized) ||
+    /^(?:circle|ellipse)\(\s*0(?:[a-z]+|%)?\b/.test(normalized) ||
+    /^polygon\(\s*(?:0(?:[a-z]+|%)?\s+0(?:[a-z]+|%)?\s*,?\s*)+\)$/.test(normalized)
   );
+}
+
+function propertyValuesSuppressText(get: (property: string) => string): boolean {
+  const display = get("display").trim().toLowerCase();
+  const visibility = get("visibility").trim().toLowerCase();
+  const contentVisibility = get("content-visibility").trim().toLowerCase();
+  const opacity = get("opacity").trim();
+  const filter = get("filter").toLowerCase().replace(/\s+/g, "");
+  const color = get("color").trim().toLowerCase();
+  const textFill = get("-webkit-text-fill-color").trim().toLowerCase();
+  const overflow = `${get("overflow")} ${get("overflow-x")} ${get("overflow-y")}`
+    .trim()
+    .toLowerCase();
+  const zeroSizedAndClipped =
+    cssZero(get("width")) &&
+    cssZero(get("height")) &&
+    /\b(?:clip|hidden)\b/.test(overflow);
+  return (
+    display === "none" ||
+    visibility === "hidden" ||
+    visibility === "collapse" ||
+    contentVisibility === "hidden" ||
+    (opacity !== "" && Number.parseFloat(opacity) <= 0) ||
+    /opacity\([-+]?(?:0+|0*\.0+)%?\)/.test(filter) ||
+    transformCollapsesText(get("transform")) ||
+    clipRemovesText("clip", get("clip")) ||
+    clipRemovesText("clip-path", get("clip-path")) ||
+    color === "transparent" ||
+    textFill === "transparent" ||
+    cssZero(get("font-size")) ||
+    zeroSizedAndClipped
+  );
+}
+
+function declarationBlockSuppressesText(style: string): boolean {
+  const declarations = new Map<string, string>();
+  for (const declaration of style.split(";")) {
+    const separator = declaration.indexOf(":");
+    if (separator < 0) continue;
+    const property = declaration.slice(0, separator).trim().toLowerCase();
+    const value = declaration
+      .slice(separator + 1)
+      .replace(/\s*!important\s*$/i, "")
+      .trim();
+    if (property) declarations.set(property, value);
+  }
+  return propertyValuesSuppressText((property) => declarations.get(property) ?? "");
+}
+
+function styleDeclarationSuppressesText(style: CSSStyleDeclaration): boolean {
+  return propertyValuesSuppressText((property) => style.getPropertyValue(property));
 }
 
 type HtmlMarkupToken = {
@@ -674,14 +767,7 @@ function potentiallyHiddenSelectors(window: Window): string[] {
         selectorText: string;
         style: CSSStyleDeclaration;
       };
-      if (
-        styleRule.style.getPropertyValue("display").trim().toLowerCase() === "none" ||
-        ["hidden", "collapse"].includes(
-          styleRule.style.getPropertyValue("visibility").trim().toLowerCase(),
-        ) ||
-        styleRule.style.getPropertyValue("content-visibility").trim().toLowerCase() ===
-          "hidden"
-      ) {
+      if (styleDeclarationSuppressesText(styleRule.style)) {
         selectors.push(styleRule.selectorText);
       }
     }
@@ -758,12 +844,7 @@ function stylesheetSuppressedNodes(
       const marker = element.getAttribute(scan.markerAttribute);
       if (marker === null) continue;
       const computed = window.getComputedStyle(element);
-      if (
-        computed.display === "none" ||
-        computed.visibility === "hidden" ||
-        computed.visibility === "collapse" ||
-        computed.getPropertyValue("content-visibility") === "hidden"
-      ) {
+      if (styleDeclarationSuppressesText(computed)) {
         suppressed.add(marker);
       }
     }
@@ -961,6 +1042,20 @@ export async function webFetchTool(
     const normalizedContentType = contentType.toLowerCase();
     let text = raw;
     if (normalizedContentType.includes("html")) {
+      // Visibility and attribution are properties of the complete document.
+      // A stylesheet after the byte boundary can hide a claim that appears in
+      // the retained prefix, so partial HTML must never become evidence text.
+      if (bounded.truncated) {
+        return {
+          ok: false,
+          status: fetched.response.status,
+          contentType,
+          finalUrl: fetched.finalUrl.href,
+          textExcerpt: "",
+          truncated: true,
+          error: "HTML response exceeded the byte limit and cannot be verified safely.",
+        };
+      }
       const xmlMode = normalizedContentType.includes("xhtml");
       const scan = scanHtmlStylesheets(raw, xmlMode);
       if (scan.embeddedStyles.length > 0 || scan.stylesheetLinks.length > 0) {

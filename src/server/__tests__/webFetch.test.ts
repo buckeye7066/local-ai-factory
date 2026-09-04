@@ -268,6 +268,50 @@ describe("webFetchTool readable HTML extraction", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    "opacity: 0",
+    "transform: scale(0)",
+    "clip: rect(0, 0, 0, 0)",
+    "clip-path: inset(50%)",
+    "font-size: 0",
+  ])("rejects text hidden by a visual CSS technique: %s", async (declaration) => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          `<style>.claim { ${declaration} }</style><p>Visible.</p><div class="claim">Hidden feature claim.</div>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool("https://evidence.example/visual-hide", 1_000, {
+      fetch,
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.textExcerpt).toBe("Visible.");
+  });
+
+  it("rejects truncated HTML whose unseen suffix can govern visibility", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          `<div class="claim">Hidden feature claim.</div>${"x".repeat(210_000)}<style>.claim { display: none }</style>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool("https://evidence.example/truncated", 1_000, {
+      fetch,
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    expect(result).toMatchObject({ ok: false, truncated: true, textExcerpt: "" });
+    expect(result.error).toMatch(/cannot be verified safely/i);
+  });
+
   it("ignores style-like text inside preceding quoted attributes", async () => {
     const fetch = vi.fn(async () =>
       Promise.resolve(
