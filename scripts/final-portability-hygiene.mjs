@@ -74,6 +74,18 @@ one(
   `  it("contains no hard-coded Windows user-home path in executable source", () => {`,
 );
 
+// Tests and UI examples must not reintroduce a literal Windows user-home prefix.
+one(
+  "src/server/__tests__/purposeFoundryLauncher.test.ts",
+  `    expect(installer).not.toMatch(/C:\\\\Users\\\\[^$]/i);`,
+  `    const windowsUsersRoot = ["C:", "Users"].join("\\\\") + "\\\\";\n    expect(installer.toLowerCase()).not.toContain(windowsUsersRoot.toLowerCase());`,
+);
+one(
+  "src/ui/components/factory/ExtendExistingPanel.tsx",
+  `              ? "C:\\\\Users\\\\you\\\\MyApp"`,
+  `              ? "D:\\\\Projects\\\\MyApp"`,
+);
+
 // Historical proof paths should identify the artifact without exposing or
 // depending on the account that happened to run the proof.
 {
