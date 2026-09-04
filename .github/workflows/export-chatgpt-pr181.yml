@@ -8,6 +8,7 @@ on:
       - .github/chatgpt-pr181-patch/**
       - .github/chatgpt-pr181-integration/**
       - .github/chatgpt-pr181-cache-fix/**
+      - .github/chatgpt-pr181-suite-isolation/**
   workflow_dispatch:
 
 permissions:
@@ -92,12 +93,35 @@ jobs:
           git apply --check "$RUNNER_TEMP/cache-fix.patch"
           git apply "$RUNNER_TEMP/cache-fix.patch"
 
+      - name: Assemble and authenticate singleton-suite isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/chatgpt-pr181-suite-isolation/patch.diff "$RUNNER_TEMP/suite.raw"
+          python3 - "$RUNNER_TEMP/suite.raw" "$RUNNER_TEMP/suite.patch" <<'PY'
+          from pathlib import Path
+          import sys
+
+          text = Path(sys.argv[1]).read_text(encoding="utf-8")
+          marker = "+diff --git a/src/server/__tests__/processFileLock.test.ts"
+          start = text.index(marker)
+          segment = "\n".join(
+              line[1:] if line.startswith("+") else line
+              for line in text[start:].split("\n")
+          )
+          Path(sys.argv[2]).write_text(text[:start] + segment, encoding="utf-8")
+          PY
+          echo "f106e59593275366e6d1974fdd9c152a27a726e03e9645a3cdc6992270344125  $RUNNER_TEMP/suite.patch" | sha256sum --check --strict -
+          git apply --check "$RUNNER_TEMP/suite.patch"
+          git apply "$RUNNER_TEMP/suite.patch"
+
       - name: Remove one-time transfer machinery
         shell: bash
         run: |
           rm -rf .github/chatgpt-pr181-patch
           rm -rf .github/chatgpt-pr181-integration
           rm -rf .github/chatgpt-pr181-cache-fix
+          rm -rf .github/chatgpt-pr181-suite-isolation
           rm -f .github/workflows/export-chatgpt-pr181.yml
           rm -f .github/workflows/hash-pr181-parts.yml
 
