@@ -1,25 +1,105 @@
-name: Export PR 181 repair source
+name: Apply PR 181 production repairs
 
 on:
   push:
     branches: [fix/factory-purpose-evidence-truth-20260904]
     paths:
       - .github/workflows/export-chatgpt-pr181.yml
+      - .github/chatgpt-pr181-patch/**
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: apply-pr181-production-repairs
+  cancel-in-progress: false
 
 jobs:
-  export:
+  apply-repair:
+    name: apply, verify, and commit exact-head repairs
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
-      - name: Package exact branch source
-        run: tar --exclude=.git -czf "$RUNNER_TEMP/pr181-source.tar.gz" .
-      - uses: actions/upload-artifact@v4
+      - name: Checkout exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: local-ai-factory-pr181-source
-          path: ${{ runner.temp }}/pr181-source.tar.gz
-          retention-days: 1
-          if-no-files-found: error
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Assemble and authenticate the repair patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/chatgpt-pr181-patch/part-* > "$RUNNER_TEMP/repair.raw"
+          python3 - "$RUNNER_TEMP/repair.raw" "$RUNNER_TEMP/repair.patch" <<'PY'
+          from pathlib import Path
+          import sys
+
+          text = Path(sys.argv[1]).read_text(encoding="utf-8")
+          # One transport segment gained one leading '+' per line. Normalize
+          # only that exact bounded hunk, then authenticate the complete patch.
+          marker = "+diff --git a/src/server/tools/webFetch.ts"
+          start = text.index(marker)
+          end = text.index("\n-  const zeroSizedAndClipped", start)
+          segment = text[start:end]
+          segment = "\n".join(
+              line[1:] if line.startswith("+") else line
+              for line in segment.split("\n")
+          )
+          Path(sys.argv[2]).write_text(
+              text[:start] + segment + text[end:],
+              encoding="utf-8",
+          )
+          PY
+          echo "93851396a363b2f98d14cc75fea8f326becbd7ca4c33e845e26e34aaedb8c137  $RUNNER_TEMP/repair.patch" | sha256sum --check --strict -
+          git apply --check "$RUNNER_TEMP/repair.patch"
+          git apply "$RUNNER_TEMP/repair.patch"
+
+      - name: Remove one-time transfer machinery
+        shell: bash
+        run: |
+          rm -rf .github/chatgpt-pr181-patch
+          rm -f .github/workflows/export-chatgpt-pr181.yml
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: "10.17.0"
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format and stage the candidate revision
+        shell: bash
+        run: |
+          pnpm format
+          git diff --check
+          git add -A
+          git diff --cached --check
+
+      - name: Typecheck both TypeScript projects
+        run: pnpm typecheck
+
+      - name: Verify source formatting
+        run: pnpm lint
+
+      - name: Run the complete unit suite
+        run: pnpm test
+
+      - name: Run executable release controls against the staged revision
+        run: pnpm release:check
+
+      - name: Commit and push the verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: close PR 181 production evidence gaps"
+          git push origin HEAD:fix/factory-purpose-evidence-truth-20260904
