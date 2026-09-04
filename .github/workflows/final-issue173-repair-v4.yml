@@ -1,0 +1,61 @@
+name: final-issue173-repair-v4
+
+on:
+  push:
+    branches: [audit/final-zero-known-defects-20260903]
+    paths:
+      - scripts/final-issue173-repair.mjs
+      - .github/workflows/final-issue173-repair-v4.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.0
+          run_install: false
+      - name: Apply issue 173 repair script
+        run: node scripts/final-issue173-repair.mjs
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format complete TypeScript tree
+        run: pnpm exec prettier --write "src/**/*.{ts,tsx}"
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Dedicated issue 173 regressions
+        run: >-
+          pnpm vitest run
+          src/server/__tests__/issue173Correctness.test.ts
+          src/server/__tests__/verificationCommands.test.ts
+          src/server/__tests__/commandSandbox.test.ts
+          src/server/__tests__/checkpointEvidenceBounds.test.ts
+          src/server/__tests__/platformEvidenceRunner.test.ts
+          src/server/__tests__/productSpecCoercion.test.ts
+          src/server/__tests__/webResearch.test.ts
+      - name: Full unit suite
+        run: pnpm test
+      - name: Publish only fully verified repairs
+        shell: bash
+        run: |
+          rm -f scripts/final-issue173-repair.mjs
+          rm -f .github/workflows/final-audit-integration.yml
+          rm -f .github/workflows/final-issue173-repair.yml
+          rm -f .github/workflows/final-issue173-repair-v2.yml
+          rm -f .github/workflows/final-issue173-repair-v3.yml
+          rm -f .github/workflows/final-issue173-repair-v4.yml
+          git config user.name "Factory Deck Audit"
+          git config user.email "factory-deck-audit@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix issue 173 cross-platform correctness defects"
+          git push origin HEAD:audit/final-zero-known-defects-20260903
