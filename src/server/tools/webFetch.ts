@@ -720,6 +720,12 @@ function scanHtmlStylesheets(html: string, xmlMode: boolean): HtmlStylesheetScan
         if (href) stylesheetLinks.push(href);
       }
 
+      // Linked styles are fetched above through the address-pinned transport
+      // and applied as inert text. Never give happy-dom the original <link>:
+      // rel=preload/modulepreload and future link types can initiate their own
+      // network requests while the untrusted document is connected.
+      if (tag === "link") raw = "";
+
       const ending = raw.match(/\/?\s*>$/);
       if (ending?.index !== undefined) {
         const marker = String(markerCount);
@@ -807,10 +813,33 @@ function stylesheetSuppressedNodes(
       disableCSSFileLoading: true,
       disableIframePageLoading: true,
       handleDisabledFileLoadingAsSuccess: true,
+      // Computed-style evaluation does not need network access. Intercept all
+      // asynchronous and synchronous resource requests in case a current or
+      // future DOM element tries to load beyond the explicitly vetted CSS
+      // path above.
+      fetch: {
+        interceptor: {
+          beforeAsyncRequest: async ({ window: resourceWindow, request }) =>
+            new resourceWindow.Response("", {
+              status: 200,
+              statusText: `Blocked DOM resource: ${request.url}`,
+            }),
+          beforeSyncRequest: ({ window: resourceWindow, request }) => ({
+            status: 204,
+            statusText: "Blocked DOM resource",
+            ok: true,
+            url: request.url,
+            redirected: false,
+            headers: new resourceWindow.Headers(),
+            body: null,
+          }),
+        },
+      },
       navigation: {
         disableMainFrameNavigation: true,
         disableChildFrameNavigation: true,
         disableChildPageNavigation: true,
+        disableFallbackToSetURL: true,
       },
     },
   });

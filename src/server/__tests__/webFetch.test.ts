@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { webFetchTool } from "../tools/webFetch.js";
 
 describe("webFetchTool readable HTML extraction", () => {
@@ -310,6 +312,43 @@ describe("webFetchTool readable HTML extraction", () => {
 
     expect(result).toMatchObject({ ok: false, truncated: true, textExcerpt: "" });
     expect(result.error).toMatch(/cannot be verified safely/i);
+  });
+
+  it("does not let DOM style evaluation preload an unvetted network target", async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.end("unexpected");
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const fetch = vi.fn(async () =>
+        Promise.resolve(
+          new Response(
+            `<style>.visible { display: block }</style><link rel="preload" as="fetch" href="http://127.0.0.1:${port}/probe"><p class="visible">Visible evidence.</p>`,
+            { headers: { "content-type": "text/html" } },
+          ),
+        ),
+      );
+
+      const result = await webFetchTool("http://evidence.example/preload", 1_000, {
+        fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(result.ok).toBe(true);
+      expect(result.textExcerpt).toBe("Visible evidence.");
+      expect(requests).toBe(0);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 
   it("ignores style-like text inside preceding quoted attributes", async () => {
