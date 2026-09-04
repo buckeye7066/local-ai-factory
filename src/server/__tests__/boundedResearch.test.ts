@@ -179,7 +179,7 @@ describe("bounded production research", () => {
           path: "src/offline-sync.ts",
           url: "https://raw.githubusercontent.com/example/offline-engine/main/src/offline-sync.ts",
           excerpt:
-            "The offline synchronization journal provides interrupted workflow recovery after restart.",
+            "The offline workflow synchronization journal provides interrupted workflow recovery after restart.",
         },
       ],
       inspectionError: "",
@@ -310,6 +310,38 @@ describe("bounded production research", () => {
           ...spec,
           tagline: "",
           coreFeatures: ["secure storage"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not accept two generic overlap terms as feature evidence", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Offline editing and nightly synchronization are available.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["offline workflow synchronization"],
           userFlows: [],
           acceptanceCriteria: [],
         },

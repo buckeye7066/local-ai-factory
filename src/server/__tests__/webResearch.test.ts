@@ -388,6 +388,26 @@ describe("webFetchTool network boundary", () => {
     );
   });
 
+  it("decodes common official-page punctuation without discarding evidence text", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        "<main>Reliable offline workflow synchronization&mdash;available today&trade;&hellip;</main>",
+        {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        },
+      ),
+    );
+    const result = await webFetchTool("https://example.com/features", 1_000, {
+      fetch: fetchImpl,
+      lookup: publicLookup,
+    });
+
+    expect(result.textExcerpt).toBe(
+      "Reliable offline workflow synchronization\u2014available today\u2122\u2026",
+    );
+  });
+
   it("decodes exactly one HTML entity layer", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response("<main>Policy: do&amp;#32;not store plaintext credentials.</main>", {

@@ -1,13 +1,25 @@
 const NAMED_HTML_ENTITIES: Readonly<Record<string, string>> = {
   amp: "&",
   apos: "'",
+  bull: "\u2022",
+  copy: "\u00a9",
+  deg: "\u00b0",
+  hellip: "\u2026",
   gt: ">",
+  laquo: "\u00ab",
   ldquo: "\u201c",
+  lsquo: "\u2018",
   lt: "<",
+  mdash: "\u2014",
+  middot: "\u00b7",
   nbsp: " ",
+  ndash: "\u2013",
   quot: '"',
+  raquo: "\u00bb",
   rdquo: "\u201d",
+  reg: "\u00ae",
   rsquo: "'",
+  trade: "\u2122",
 };
 
 /**

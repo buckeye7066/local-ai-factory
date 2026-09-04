@@ -4,8 +4,10 @@ import { decodeHtmlEntities } from "../tools/htmlEntities.js";
 describe("bounded HTML entity decoding", () => {
   it("decodes named, decimal, and hexadecimal entities used by evidence text", () => {
     expect(
-      decodeHtmlEntities("doesn&#39;t &amp; won&#x27;t &mdash; but isn&apos;t"),
-    ).toBe("doesn't & won't &mdash; but isn't");
+      decodeHtmlEntities(
+        "doesn&#39;t &amp; won&#x27;t &mdash; but isn&apos;t &trade;&hellip;",
+      ),
+    ).toBe("doesn't & won't \u2014 but isn't \u2122\u2026");
   });
 
   it.each([

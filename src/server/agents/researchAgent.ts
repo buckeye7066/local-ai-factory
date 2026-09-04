@@ -1022,7 +1022,11 @@ function coherentEvidenceMatches(
     }
 
     const featureTerms = meaningfulTerms(phrase);
-    if (featureTerms.length < 2) return [];
+    // Approximate evidence is only meaningful when at least three uncommon
+    // target terms can agree in one clause. Shorter targets must use the exact
+    // phrase path above; otherwise two generic words can manufacture support
+    // for a materially different capability.
+    if (featureTerms.length < 3) return [];
     const phraseTokens = phrase.split(" ").filter(Boolean);
     const targetPolarity = featureSpanPolarity(
       phraseTokens,
