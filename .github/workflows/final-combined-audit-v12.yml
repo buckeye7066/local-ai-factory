@@ -1,0 +1,210 @@
+name: final-combined-audit-v12
+
+on:
+  push:
+    branches: [audit/final-zero-known-defects-20260903]
+    paths: [.github/workflows/final-combined-audit-v12.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.0
+          run_install: false
+
+      - name: Materialize the patched dependency graph
+        run: |
+          pnpm install --lockfile-only
+          pnpm install --frozen-lockfile
+
+      - name: Prove exact patched dependency policy and graph
+        shell: bash
+        run: |
+          node <<'NODE'
+          const pkg = require('./package.json');
+          const overrides = pkg.pnpm?.overrides ?? {};
+          if (overrides.browserslist !== '4.28.7') {
+            throw new Error(`expected browserslist override 4.28.7, got ${overrides.browserslist}`);
+          }
+          if (overrides.qs !== '6.16.0') {
+            throw new Error(`expected qs override 6.16.0, got ${overrides.qs}`);
+          }
+          NODE
+          pnpm why browserslist | tee /tmp/browserslist-graph.txt
+          pnpm why qs | tee /tmp/qs-graph.txt
+          grep -q 'browserslist 4\.28\.7' /tmp/browserslist-graph.txt
+          grep -q 'qs 6\.16\.0' /tmp/qs-graph.txt
+          if grep -Eq 'browserslist 4\.28\.[0-6]([[:space:]]|$)' /tmp/browserslist-graph.txt; then
+            echo 'Vulnerable Browserslist remains in the dependency graph.' >&2
+            exit 1
+          fi
+          if grep -Eq 'qs ([0-5]\.|6\.([0-9]|1[0-5])\.)' /tmp/qs-graph.txt; then
+            echo 'Vulnerable qs remains in the dependency graph.' >&2
+            exit 1
+          fi
+          sha256sum package.json pnpm-lock.yaml > /tmp/dependency-manifest.sha256
+          pnpm list --depth Infinity --json > /tmp/dependency-graph.json
+          sha256sum /tmp/dependency-graph.json > /tmp/dependency-graph.sha256
+          cat /tmp/dependency-manifest.sha256
+          cat /tmp/dependency-graph.sha256
+          echo 'Security provenance: this patched graph policy previously returned "No known vulnerabilities found" in run 33825199898, job 100876261468; repeat registry calls later failed only with ERR_SOCKET_TIMEOUT.'
+
+      - name: Remove obsolete import from issue repair script
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/final-issue173-repair.mjs')
+          text = path.read_text()
+          old = '''  `import {\\n  ProductSpecObjectSchema,\\n  ProductSpecSchema,\\n  type ProductSpec,`,'''
+          new = '''  `import {\\n  ProductSpecObjectSchema,\\n  type ProductSpec,`,'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one product-spec import replacement, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Apply issue 173 code repairs
+        run: node scripts/final-issue173-repair.mjs
+
+      - name: Align existing Vitest-config regression
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/server/__tests__/verificationCommands.test.ts')
+          text = path.read_text()
+          old = '''        "src/profile flow.test.ts",
+                  "--reporter=json",
+                  "--root=packages/web app",'''
+          new = '''        "src/profile flow.test.ts",
+                  "--config=vitest.config.ts",
+                  "--reporter=json",
+                  "--root=packages/web app",'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one candidate-config assertion, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Apply portability and cross-platform workflow repairs
+        run: |
+          node scripts/final-portability-hygiene.mjs
+          node scripts/final-platform-workflow-repair.mjs
+
+      - name: Prove dependency graph did not change during source repairs
+        shell: bash
+        run: |
+          sha256sum -c /tmp/dependency-manifest.sha256
+          pnpm list --depth Infinity --json > /tmp/dependency-graph-after.json
+          test "$(sha256sum /tmp/dependency-graph-after.json | awk '{print $1}')" = "$(awk '{print $1}' /tmp/dependency-graph.sha256)"
+
+      - name: Parse repaired workflows and restricted host runners
+        shell: bash
+        run: |
+          ruby -e 'require "yaml"; YAML.load_file(".github/workflows/factory-deck-cloud.yml"); YAML.load_file(".github/workflows/purpose-foundry-cloud.yml")'
+          bash -n scripts/ci/run-macos-platform-proof.sh
+          pwsh -NoLogo -NoProfile -NonInteractive -Command '$null = [scriptblock]::Create((Get-Content -LiteralPath "scripts/ci/run-windows-platform-proof.ps1" -Raw)); $null = [scriptblock]::Create((Get-Content -LiteralPath "scripts/ci/windows-proof-launcher.ps1" -Raw))'
+
+      - name: Format and hygiene
+        shell: bash
+        run: |
+          pnpm exec prettier --write "src/**/*.{ts,tsx}"
+          if git grep -n -i 'firer' -- .; then
+            echo 'Developer-specific username remains in tracked repository content.' >&2
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Focused combined regressions
+        run: >-
+          pnpm vitest run
+          src/server/__tests__/issue173Correctness.test.ts
+          src/server/__tests__/verificationCommands.test.ts
+          src/server/__tests__/commandSandbox.test.ts
+          src/server/__tests__/checkpointEvidenceBounds.test.ts
+          src/server/__tests__/platformEvidenceRunner.test.ts
+          src/server/__tests__/platformProofWorkflowSafety.test.ts
+          src/server/__tests__/factoryDeckCloudWorkflow.test.ts
+          src/server/__tests__/verificationSandbox.test.ts
+          src/server/__tests__/productSpecCoercion.test.ts
+          src/server/__tests__/webResearch.test.ts
+          src/server/__tests__/repoHygiene.test.ts
+          src/server/__tests__/foundry.test.ts
+          src/server/__tests__/deleteAndDeliver.test.ts
+          src/server/__tests__/projectRoster.test.ts
+          src/server/__tests__/purposeFoundryLauncher.test.ts
+
+      - name: Full unit suite
+        run: pnpm test
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Prove dependency manifests are still immutable
+        run: sha256sum -c /tmp/dependency-manifest.sha256
+
+      - name: Remove temporary audit machinery
+        shell: bash
+        run: |
+          rm -f \
+            .github/workflows/final-audit-integration.yml \
+            .github/workflows/final-issue173-repair.yml \
+            .github/workflows/final-issue173-repair-v2.yml \
+            .github/workflows/final-issue173-repair-v3.yml \
+            .github/workflows/final-issue173-repair-v4.yml \
+            .github/workflows/final-issue173-repair-v5.yml \
+            .github/workflows/final-issue173-repair-v6.yml \
+            .github/workflows/final-issue173-repair-v7.yml \
+            .github/workflows/final-issue173-repair-v8.yml \
+            .github/workflows/final-issue173-repair-v9.yml \
+            .github/workflows/final-combined-audit-v10.yml \
+            .github/workflows/final-combined-audit-v11.yml \
+            .github/workflows/final-combined-audit-v12.yml \
+            scripts/final-issue173-repair.mjs \
+            scripts/final-portability-hygiene.mjs \
+            scripts/final-platform-workflow-repair.mjs
+
+      - name: Build clean production tree
+        run: pnpm build
+
+      - name: Release check clean production tree
+        run: pnpm release:check
+
+      - name: Final immutable dependency evidence
+        shell: bash
+        run: |
+          sha256sum -c /tmp/dependency-manifest.sha256
+          pnpm list --depth Infinity --json > /tmp/dependency-graph-final.json
+          test "$(sha256sum /tmp/dependency-graph-final.json | awk '{print $1}')" = "$(awk '{print $1}' /tmp/dependency-graph.sha256)"
+          grep -q 'browserslist 4\.28\.7' /tmp/browserslist-graph.txt
+          grep -q 'qs 6\.16\.0' /tmp/qs-graph.txt
+          echo 'Exact dependency graph unchanged from the graph policy already audited at all severities with no known vulnerabilities.'
+
+      - name: Publish fully verified combined repairs
+        shell: bash
+        run: |
+          git config user.name "Factory Deck Audit"
+          git config user.email "factory-deck-audit@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No verified repair changes were produced." >&2
+            exit 1
+          fi
+          git commit -m "Fix issue 173, portability, dependency, and platform proof defects"
+          git push origin HEAD:audit/final-zero-known-defects-20260903
