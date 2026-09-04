@@ -1203,11 +1203,15 @@ function coherentEvidenceMatches(
     // semicolon cannot manufacture a new affirmative clause, and reject only
     // the affected clause from semantic matching.
     .replace(/&(?:#[0-9]+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]+;?)/gi, unresolvedEntityMarker)
+    // Preserve semicolon/newline-delimited qualifiers for truth evaluation.
+    // The inserted scope boundary keeps unrelated polarity from bleeding
+    // across clauses while future/competitor markers remain visible.
+    .replace(/[;\r\n]+/g, " however ")
     // Contrast words remain attached to the statement they govern. Splitting
     // at `but`/`however` used to accept the affirmative half of sentences
     // whose second half said the feature was future work or belonged only to
     // competitors.
-    .split(/(?<=[.!?])\s+|[;\r\n]+/)
+    .split(/(?<=[.!?])\s+/)
     .filter((raw) => !raw.includes(unresolvedEntityMarker))
     .map((raw) => raw.replace(/\s+/g, " ").trim())
     .map((completeStatement) => {

@@ -606,6 +606,38 @@ describe("bounded production research", () => {
     }
   });
 
+  it("keeps a postfix roadmap qualifier attached across a semicolon", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Encrypt stored plaintext credentials using hardware keys; this capability is planned for next year.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("keeps postfix competitor attribution attached across a contrast boundary", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();
