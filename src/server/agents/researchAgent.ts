@@ -835,7 +835,7 @@ export function evidenceGroundedCompetitiveSelection(
     .map((candidate) => {
       const inspectedText = [
         ...candidate.sourceEvidence.map((item) => item.excerpt),
-      ].join(" ");
+      ].join("\n");
       const featureMatches = coherentEvidenceMatches(spec, inspectedText);
       const exactMatches = featureMatches.filter((match) => match.exact);
       const overlap = [...new Set(featureMatches.flatMap((match) => match.terms))];
