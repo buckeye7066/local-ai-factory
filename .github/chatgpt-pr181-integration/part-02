@@ -1,0 +1,114 @@
+rn false;
+-  if (left.ticket !== right.ticket) return left.ticket < right.ticket;
+-  return left.token.localeCompare(right.token) < 0;
++  return owners;
+ }
+ 
+-/**
+- * Acquire a crash-recoverable cross-process lease, or return null on timeout.
+- */
++/** Acquire a crash-recoverable cross-process lease, or return null on timeout. */
+ export async function acquireProcessFileLock(
+   lockPath: string,
+   options: ProcessFileLockOptions = {},
+@@ -266,64 +311,31 @@ export async function acquireProcessFileLock(
+   await ensureQueue(queue);
+   const token = randomUUID();
+   const createdAt = Date.now();
+-  const choosingPath = resolve(queue, choosingName(process.pid, token));
+-  let ownerPath: string | null = null;
++  const ownerPath = resolve(queue, ownerName(process.pid, token));
+   let leaseReturned = false;
+ 
+   try {
+-    await writeExclusiveReceipt(choosingPath, {
++    await writeExclusiveOwner(ownerPath, {
+       version: 1,
+-      phase: "choosing",
+       pid: process.pid,
+       createdAt,
+       token,
+-      ticket: null,
+     });
+     await syncDirectory(queue);
++    await appendTicket(queue, token);
+ 
+-    const initial = await scanQueue(queue, staleGraceMs);
+-    const highestTicket = initial.owners.reduce(
+-      (highest, owner) => Math.max(highest, owner.ticket ?? 0),
+-      0,
+-    );
+-    if (highestTicket >= MAX_SAFE_TICKET) {
+-      throw new Error("Refused: process-lock ticket space is exhausted.");
+-    }
+-    const ticket = highestTicket + 1;
+-    ownerPath = resolve(queue, ownerName(ticket, process.pid, token));
+-    await writeExclusiveReceipt(ownerPath, {
+-      version: 1,
+-      phase: "owner",
+-      pid: process.pid,
+-      createdAt,
+-      token,
+-      ticket,
+-    });
+-    await syncDirectory(queue);
+-    await removeUniqueContender(choosingPath, queue);
+-
+-    const self: Contender = {
+-      path: ownerPath,
+-      phase: "owner",
+-      pid: process.pid,
+-      token,
+-      ticket,
+-      createdAt,
+-    };
+     const deadline = Date.now() + timeoutMs;
+     for (;;) {
+-      const state = await scanQueue(queue, staleGraceMs);
+-      const selfPresent = state.owners.some((owner) => owner.token === token);
+-      if (!selfPresent) {
++      const tickets = await readTicketOrder(queue);
++      const ownTicket = tickets.get(token);
++      if (ownTicket === undefined) {
++        throw new Error("Refused: process-lock ticket was not durably recorded.");
++      }
++      const owners = await scanActiveOwners(queue, staleGraceMs, tickets);
++      if (!owners.some((owner) => owner.token === token)) {
+         throw new Error("Refused: process-lock ownership receipt disappeared.");
+       }
+-      const anotherChoosing = state.choosing.some(
+-        (contender) => contender.token !== token,
+-      );
+-      const earlierOwner = state.owners.some(
+-        (owner) => owner.token !== token && precedes(owner, self),
+-      );
+-      if (!state.uncertain && !anotherChoosing && !earlierOwner) {
++      if (!owners.some((owner) => owner.token !== token && owner.ticket < ownTicket)) {
+         let released = false;
+         leaseReturned = true;
+         return {
+@@ -331,8 +343,7 @@ export async function acquireProcessFileLock(
+           release: async () => {
+             if (released) return;
+             released = true;
+-            if (ownerPath) await removeUniqueContender(ownerPath, queue);
+-            await rm(choosingPath, { force: true });
++            await removeUniqueOwner(ownerPath, queue);
+           },
+         };
+       }
+@@ -340,12 +351,9 @@ export async function acquireProcessFileLock(
+       await new Promise((resolveWait) => setTimeout(resolveWait, pollMs));
+     }
+   } finally {
+-    // On a successful acquisition, the returned release closure owns ownerPath.
+-    // On timeout or error, no queue entry from this contender may survive.
+-    if (!leaseReturned && ownerPath) {
+-      await removeUniqueContender(ownerPath, queue).catch(() => {});
++    if (!leaseReturned) {
++      await removeUniqueOwner(ownerPath, queue).catch(() => {});
+     }
+-    if (!leaseReturned) await rm(choosingPath, { force: true });
+   }
+ }
+ 
