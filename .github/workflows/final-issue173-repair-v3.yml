@@ -1,0 +1,562 @@
+name: final-issue173-repair-v3
+
+on:
+  push:
+    branches: [audit/final-zero-known-defects-20260903]
+    paths: [.github/workflows/final-issue173-repair-v3.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.0
+          run_install: false
+
+      - name: Apply issue 173 code repairs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def one(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one anchor, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          # 1. Preserve a validated candidate-owned Vitest --config in mandatory direct runs.
+          one(
+              "src/server/workspace/verificationCommands.ts",
+              '''interface VitestScript {
+            root: string;
+            ownsRoot: boolean;
+          }''',
+              '''interface VitestScript {
+            root: string;
+            ownsRoot: boolean;
+            config?: string;
+          }''',
+          )
+          one(
+              "src/server/workspace/verificationCommands.ts",
+              '''  let root: string | undefined;
+            const seenPathOptions = new Set<string>();''',
+              '''  let root: string | undefined;
+            let config: string | undefined;
+            const seenPathOptions = new Set<string>();''',
+          )
+          one(
+              "src/server/workspace/verificationCommands.ts",
+              '''    if (option === "--root") root = normalized;
+            }
+            return { root: root ?? ".", ownsRoot: root !== undefined };''',
+              '''    if (option === "--root") root = normalized;
+              if (option === "--config") config = normalized;
+            }
+            return { root: root ?? ".", ownsRoot: root !== undefined, config };''',
+          )
+          one(
+              "src/server/workspace/verificationCommands.ts",
+              '''          testPath,
+                    "--reporter=json",
+                    `--root=${root}`,''',
+              '''          testPath,
+                    ...(vitestScript?.config ? [`--config=${vitestScript.config}`] : []),
+                    "--reporter=json",
+                    `--root=${root}`,''',
+          )
+
+          p = Path("src/server/workspace/commandRunner.ts")
+          text = p.read_text()
+          helper = '''function isSafeVitestRoot(arg: string): boolean {
+            if (!arg.startsWith("--root=")) return false;
+            return normalizeSafeRelativePath(arg.slice("--root=".length)) !== null;
+          }
+          '''
+          if text.count(helper) != 1:
+              raise SystemExit("commandRunner Vitest root helper mismatch")
+          text = text.replace(
+              helper,
+              helper
+              + '''
+          function isSafeVitestConfig(arg: string): boolean {
+            if (!arg.startsWith("--config=")) return false;
+            return normalizeSafeRelativePath(arg.slice("--config=".length)) !== null;
+          }
+          ''',
+              1,
+          )
+          pattern = re.compile(
+              r'  if \(tool === "vitest"\) \{\n.*?\n  \}\n(?=  if \(tool === "jest"\) \{)',
+              re.S,
+          )
+          replacement = '''  if (tool === "vitest") {
+            if (args[4]?.startsWith("--config=")) {
+              return (
+                args.length === 7 &&
+                args[2] === "run" &&
+                isSafeDirectJsTest(args[3]!) &&
+                isSafeVitestConfig(args[4]!) &&
+                args[5] === "--reporter=json" &&
+                isSafeVitestRoot(args[6]!)
+              );
+            }
+            return (
+              (args.length === 6 || args.length === 7) &&
+              args[2] === "run" &&
+              isSafeDirectJsTest(args[3]!) &&
+              args[4] === "--reporter=json" &&
+              isSafeVitestRoot(args[5]!) &&
+              (args.length === 6 ||
+                args[6] === "--config=.factory-deck-platform-vitest.config.mjs")
+            );
+          }
+          '''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"commandRunner Vitest grammar replacements={count}")
+          p.write_text(text)
+
+          # A candidate-owned config is already an explicit containment choice. Never override it.
+          one(
+              "src/server/workspace/platformEvidenceRunner.ts",
+              '''  if (!isolatedVitest || command.runner !== "vitest") return command;
+            return { ...command, args: [...command.args, `--config=${PLATFORM_VITEST_CONFIG}`] };''',
+              '''  if (
+              !isolatedVitest ||
+              command.runner !== "vitest" ||
+              command.args.some((arg) => arg.startsWith("--config="))
+            ) {
+              return command;
+            }
+            return { ...command, args: [...command.args, `--config=${PLATFORM_VITEST_CONFIG}`] };''',
+          )
+
+          # 2. Bound the combined ProductSpec requirement universe to the 256-entry map.
+          p = Path("src/shared/schemas.ts")
+          text = p.read_text()
+          old = '''export const ProductSpecSchema = z.object({
+            appName: z.string(),
+            tagline: z.string().default(""),
+            targetUser: z.string(),
+            coreFeatures: NonEmptyStringListSchema,
+            dataModel: DataModelSchema,
+            userFlows: StringListSchema.default([]),
+            acceptanceCriteria: NonEmptyStringListSchema,
+            /** Present on extend runs so every downstream agent receives the constitution. */
+            purposeProfile: PurposeProfileSchema.optional(),
+            /** Present on every orchestrated run; stamped by code, never trusted from a model. */
+            goalContract: GoalContractSchema.optional(),
+          });'''
+          new = '''export const ProductSpecSchema = z
+            .object({
+              appName: z.string(),
+              tagline: z.string().default(""),
+              targetUser: z.string(),
+              coreFeatures: NonEmptyStringListSchema,
+              dataModel: DataModelSchema,
+              userFlows: StringListSchema.default([]),
+              acceptanceCriteria: NonEmptyStringListSchema,
+              /** Present on extend runs so every downstream agent receives the constitution. */
+              purposeProfile: PurposeProfileSchema.optional(),
+              /** Present on every orchestrated run; stamped by code, never trusted from a model. */
+              goalContract: GoalContractSchema.optional(),
+            })
+            .superRefine((spec, context) => {
+              if (spec.userFlows.length + spec.acceptanceCriteria.length > 256) {
+                context.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  path: ["acceptanceCriteria"],
+                  message:
+                    "userFlows plus acceptanceCriteria cannot exceed the 256-entry executable evidence map",
+                });
+              }
+            });'''
+          if text.count(old) != 1:
+              raise SystemExit("ProductSpec schema anchor mismatch")
+          p.write_text(text.replace(old, new, 1))
+
+          # 4. Targeted fallback can inspect all verified products; collective prompt remains bounded.
+          p = Path("src/server/agents/researchAgent.ts")
+          text = p.read_text()
+          pattern = re.compile(
+              r'function reviewableProductCandidates\(dossier: CompetitiveDossier\) \{(.*?)'
+              r'const candidates = dossier\.candidates\s*\.filter\((.*?)\)\s*'
+              r'\.slice\(0, productTarget \+ COMPETITIVE_REVIEW_HEADROOM\);',
+              re.S,
+          )
+          text, count = pattern.subn(
+              r'export function reviewableProductCandidates(dossier: CompetitiveDossier) {\1'
+              r'const candidates = dossier.candidates.filter(\2);',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f"research candidate replacements={count}")
+          marker = (
+              '  const { candidates, requiredCount } = reviewableProductCandidates(dossier);\n'
+              '  if (requiredCount === 0) {'
+          )
+          if text.count(marker) < 2:
+              raise SystemExit("research collective/targeted anchors missing")
+          text = text.replace(
+              marker,
+              '  const { candidates, requiredCount } = reviewableProductCandidates(dossier);\n'
+              '  const reviewCandidates = candidates.slice(\n'
+              '    0,\n'
+              '    requiredCount + COMPETITIVE_REVIEW_HEADROOM,\n'
+              '  );\n'
+              '  if (requiredCount === 0) {',
+              1,
+          )
+          old = '`VERIFIED PRODUCT DOSSIER:\\n${JSON.stringify(candidates.map(compactProductCandidate))}`'
+          if text.count(old) != 1:
+              raise SystemExit("research dossier prompt anchor missing")
+          text = text.replace(
+              old,
+              '`VERIFIED PRODUCT DOSSIER:\\n${JSON.stringify(reviewCandidates.map(compactProductCandidate))}`',
+              1,
+          )
+          old = (
+              '(raw) => hydrateCompetitiveCandidateIds(raw, candidates),\n'
+              '      competitiveSelectionSchema(candidates, requiredCount),'
+          )
+          if text.count(old) != 1:
+              raise SystemExit("research schema anchor missing")
+          text = text.replace(
+              old,
+              '(raw) => hydrateCompetitiveCandidateIds(raw, reviewCandidates),\n'
+              '      competitiveSelectionSchema(reviewCandidates, requiredCount),',
+              1,
+          )
+          p.write_text(text)
+
+          # 5. Every mapped acceptance title must pass independently on each host.
+          one(
+              "src/server/workspace/platformEvidenceRunner.ts",
+              'import { mappedTestNamesForPath } from "../orchestrator/acceptanceGate.js";',
+              '''import {
+            assessExecutedCoverage,
+            mappedTestNamesForPath,
+          } from "../orchestrator/acceptanceGate.js";''',
+          )
+          one(
+              "src/server/workspace/platformEvidenceRunner.ts",
+              '''export function missingDirectPlatformEvidencePaths(
+            requiredPaths: readonly string[],''',
+              '''export function mappedPlatformCoverageErrors(
+            testPlan: FactoryCheckpoint["testPlan"],
+            evidence: CheckpointExecutedCommand[],
+          ): string[] {
+            return testPlan ? assessExecutedCoverage(testPlan, evidence) : [];
+          }
+
+          export function missingDirectPlatformEvidencePaths(
+            requiredPaths: readonly string[],''',
+          )
+          p = Path("src/server/workspace/platformEvidenceRunner.ts")
+          text = p.read_text()
+          pattern = re.compile(
+              r'(    if \(missingDirectEvidence\.length > 0\) \{.*?^    \}\n)'
+              r'(\n    const after = await verifyFileDigests)',
+              re.S | re.M,
+          )
+          replacement = r'''\1    const mappedCoverageErrors = mappedPlatformCoverageErrors(
+              held.checkpoint.testPlan,
+              executed,
+            );
+            if (mappedCoverageErrors.length > 0) {
+              throw new Error(
+                `${hostPlatform} proof did not independently pass every mapped acceptance test: ${mappedCoverageErrors.join("; ")}.`,
+              );
+            }
+          \2'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"platform mapped-title insertion={count}")
+          p.write_text(text)
+
+          # 6. Preserve own prototype-named keys in fileDigests exactly as in artifact seals.
+          p = Path("src/server/orchestrator/checkpoint.ts")
+          text = p.read_text()
+          if text.count("const PlatformArtifactSnapshotSchema = z") != 1:
+              raise SystemExit("snapshot schema name mismatch")
+          text = text.replace(
+              "const PlatformArtifactSnapshotSchema = z",
+              "const OwnStringRecordSchema = z",
+              1,
+          )
+          text = text.replace(
+              '"expected an artifact snapshot object"',
+              '"expected a string-record object"',
+              1,
+          )
+          text = text.replace(
+              'message: "expected an artifact fingerprint string",',
+              'message: "expected a string value",',
+              1,
+          )
+          if text.count("fileDigests: z.record(z.string()).optional(),") != 1:
+              raise SystemExit("file digest schema mismatch")
+          text = text.replace(
+              "fileDigests: z.record(z.string()).optional(),",
+              "fileDigests: OwnStringRecordSchema.optional(),",
+              1,
+          )
+          if text.count(
+              "platformArtifactSnapshot: PlatformArtifactSnapshotSchema.optional(),"
+          ) != 1:
+              raise SystemExit("artifact schema use mismatch")
+          text = text.replace(
+              "platformArtifactSnapshot: PlatformArtifactSnapshotSchema.optional(),",
+              "platformArtifactSnapshot: OwnStringRecordSchema.optional(),",
+              1,
+          )
+          p.write_text(text)
+
+          # 7. Stream Windows child output to the Node-side bounded capture instead of ReadToEnd.
+          one(
+              "scripts/ci/windows-proof-launcher.ps1",
+              '''  $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true''',
+              '''  # Stream untrusted child output through inherited job handles; Node bounds the capture.
+            $psi.RedirectStandardOutput = $false
+            $psi.RedirectStandardError = $false''',
+          )
+          one(
+              "scripts/ci/windows-proof-launcher.ps1",
+              '''  $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+            $process.WaitForExit()
+            [Console]::Out.Write($stdout.GetAwaiter().GetResult())
+            [Console]::Error.Write($stderr.GetAwaiter().GetResult())
+            exit $process.ExitCode''',
+              '''  $process.WaitForExit()
+            exit $process.ExitCode''',
+          )
+          PY
+
+      - name: Add self-contained issue 173 regressions
+        shell: bash
+        run: |
+          cat > src/server/__tests__/issue173Correctness.test.ts <<'TS'
+          import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { afterEach, describe, expect, it } from "vitest";
+          import { ProductSpecSchema } from "../../shared/schemas.js";
+          import { reviewableProductCandidates } from "../agents/researchAgent.js";
+          import { FactoryCheckpointSchema } from "../orchestrator/checkpoint.js";
+          import {
+            commandForPlatformProof,
+            mappedPlatformCoverageErrors,
+          } from "../workspace/platformEvidenceRunner.js";
+          import { isAllowedNpxVerification } from "../workspace/commandRunner.js";
+          import { verificationPlanForWorkspace } from "../workspace/verificationCommands.js";
+
+          const roots: string[] = [];
+          afterEach(() => {
+            for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+          });
+
+          describe("issue 173 correctness", () => {
+            it("preserves a contained non-default Vitest config in the mandatory direct run", () => {
+              const root = mkdtempSync(join(tmpdir(), "factory-vite-config-"));
+              roots.push(root);
+              writeFileSync(
+                join(root, "package.json"),
+                JSON.stringify({
+                  scripts: { test: "vitest run --config custom.vitest.ts --root ." },
+                  devDependencies: { vitest: "3" },
+                }),
+              );
+              writeFileSync(join(root, "package-lock.json"), "{}\n");
+              writeFileSync(join(root, "custom.vitest.ts"), "export default {};\n");
+              const plan = verificationPlanForWorkspace(root, {
+                generatedTests: [
+                  {
+                    path: "src/App.test.ts",
+                    contents: "import { test } from 'vitest'; test('works', () => {});",
+                  },
+                ],
+              });
+              const direct = plan.commands.find((entry) => entry.directTestPath);
+              expect(direct?.args).toEqual([
+                "--no-install",
+                "vitest",
+                "run",
+                "src/App.test.ts",
+                "--config=custom.vitest.ts",
+                "--reporter=json",
+                "--root=.",
+              ]);
+              expect(isAllowedNpxVerification(direct!.args)).toBe(true);
+              expect(commandForPlatformProof(direct!, true).args).toEqual(direct!.args);
+              expect(
+                isAllowedNpxVerification([
+                  "--no-install",
+                  "vitest",
+                  "run",
+                  "src/App.test.ts",
+                  "--config=../outside.vitest.ts",
+                  "--reporter=json",
+                  "--root=.",
+                ]),
+              ).toBe(false);
+            });
+
+            it("bounds the combined ProductSpec requirement universe at 256", () => {
+              const base = {
+                appName: "bounded",
+                targetUser: "owner",
+                coreFeatures: ["feature"],
+                dataModel: [],
+              };
+              expect(
+                ProductSpecSchema.safeParse({
+                  ...base,
+                  userFlows: Array.from({ length: 200 }, (_, i) => `UF ${i}`),
+                  acceptanceCriteria: Array.from({ length: 56 }, (_, i) => `AC ${i}`),
+                }).success,
+              ).toBe(true);
+              expect(
+                ProductSpecSchema.safeParse({
+                  ...base,
+                  userFlows: Array.from({ length: 200 }, (_, i) => `UF ${i}`),
+                  acceptanceCriteria: Array.from({ length: 57 }, (_, i) => `AC ${i}`),
+                }).success,
+              ).toBe(false);
+            });
+
+            it("keeps all verified products available to the targeted fallback", () => {
+              const candidates = Array.from({ length: 10 }, (_, index) => ({
+                id: `product-${index}`,
+                kind: "product",
+                name: `Product ${index}`,
+                url: `https://product-${index}.example.com`,
+                description: "verified",
+                sourceEvidence: [
+                  {
+                    url: `https://product-${index}.example.com/features`,
+                    excerpt: "feature evidence",
+                  },
+                ],
+                license: { spdxId: "NOASSERTION", policy: "reference-only" },
+                inspectionError: null,
+              }));
+              const result = reviewableProductCandidates({
+                candidates,
+                coverage: {
+                  productTarget: 5,
+                  productDiscoveredCount: 10,
+                  productInspectedCount: 10,
+                  productVerifiedCount: 10,
+                  productCoverageMet: true,
+                  repositoryDiscoveredCount: 0,
+                  repositoryInspectedCount: 0,
+                  repositoryVerifiedCount: 0,
+                },
+              } as never);
+              expect(result.requiredCount).toBe(5);
+              expect(result.candidates).toHaveLength(10);
+            });
+
+            it("requires each mapped acceptance title on the current host", () => {
+              const errors = mappedPlatformCoverageErrors(
+                {
+                  testPlan: "mapped",
+                  coverage: [
+                    {
+                      requirementId: "AC-1",
+                      testPath: "tests/flow.test.ts",
+                      testName: "saves the task",
+                      kind: "integration",
+                    },
+                  ],
+                  files: [],
+                } as never,
+                [
+                  {
+                    command: "vitest",
+                    exitCode: 0,
+                    directTestPath: "tests/flow.test.ts",
+                    directEvidenceValid: true,
+                    passedTestNames: ["different title"],
+                    outputTail: "",
+                    hostPlatform: "win32",
+                  },
+                ] as never,
+              );
+              expect(errors.join("\n")).toMatch(/was not reported passed/i);
+            });
+
+            it("preserves an own __proto__ key in exact file digest receipts", () => {
+              const checkpoint = FactoryCheckpointSchema.parse({
+                schemaVersion: 3,
+                runId: crypto.randomUUID(),
+                idea: "prototype digest",
+                options: {},
+                verification: {
+                  fileDigests: JSON.parse('{"__proto__":"sha256:exact"}'),
+                },
+                updatedAt: Date.now(),
+              });
+              const digests = checkpoint.verification!.fileDigests!;
+              expect(Object.getPrototypeOf(digests)).toBeNull();
+              expect(Object.hasOwn(digests, "__proto__")).toBe(true);
+              expect(digests["__proto__"]).toBe("sha256:exact");
+            });
+
+            it("streams Windows proof output instead of buffering it in PowerShell", () => {
+              const launcher = readFileSync("scripts/ci/windows-proof-launcher.ps1", "utf8");
+              expect(launcher).not.toContain("ReadToEndAsync");
+              expect(launcher).toContain("RedirectStandardOutput = $false");
+              expect(launcher).toContain("RedirectStandardError = $false");
+            });
+          });
+          TS
+
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format TypeScript
+        run: pnpm exec prettier --write "src/**/*.{ts,tsx}"
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Focused issue 173 regressions
+        run: >-
+          pnpm vitest run
+          src/server/__tests__/issue173Correctness.test.ts
+          src/server/__tests__/verificationCommands.test.ts
+          src/server/__tests__/commandSandbox.test.ts
+          src/server/__tests__/checkpointEvidenceBounds.test.ts
+          src/server/__tests__/platformEvidenceRunner.test.ts
+          src/server/__tests__/webResearch.test.ts
+      - name: Full unit suite
+        run: pnpm test
+      - name: Publish verified issue 173 repairs
+        shell: bash
+        run: |
+          rm -f .github/workflows/final-audit-integration.yml
+          rm -f .github/workflows/final-issue173-repair.yml
+          rm -f .github/workflows/final-issue173-repair-v2.yml
+          rm -f .github/workflows/final-issue173-repair-v3.yml
+          git config user.name "Factory Deck Audit"
+          git config user.email "factory-deck-audit@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix issue 173 cross-platform correctness defects"
+          git push origin HEAD:audit/final-zero-known-defects-20260903
