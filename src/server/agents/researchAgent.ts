@@ -967,7 +967,7 @@ function containsPhraseWithMatchingPolarity(
   completeSegment = segment,
 ): boolean {
   const matchableTokens = segment.split(" ").filter(Boolean);
-  const tokens = completeSegment.split(" ").filter(Boolean);
+  const completeTokens = completeSegment.split(" ").filter(Boolean);
   const phraseTokens = phrase.split(" ").filter(Boolean);
   if (phraseTokens.length === 0 || phraseTokens.length > matchableTokens.length) {
     return false;
@@ -984,16 +984,47 @@ function containsPhraseWithMatchingPolarity(
     ) {
       continue;
     }
+    const completeMatches = phraseMatchStarts(completeTokens, phraseTokens);
     if (
-      featureSpanDescribesCandidate(tokens, start, start + phraseTokens.length - 1) &&
-      featureSpanIsCurrent(tokens) &&
-      featureSpanPolarity(tokens, start, start + phraseTokens.length - 1) ===
-        targetPolarity
+      featureSpanDescribesCandidate(
+        matchableTokens,
+        start,
+        start + phraseTokens.length - 1,
+      ) &&
+      featureSpanIsCurrent(completeTokens) &&
+      featureSpanPolarity(matchableTokens, start, start + phraseTokens.length - 1) ===
+        targetPolarity &&
+      completeMatches.some((completeStart) =>
+        featureSpanDescribesCandidate(
+          completeTokens,
+          completeStart,
+          completeStart + phraseTokens.length - 1,
+        ),
+      )
     ) {
       return true;
     }
   }
   return false;
+}
+
+function phraseMatchStarts(tokens: string[], phraseTokens: string[]): number[] {
+  const starts: number[] = [];
+  for (let start = 0; start <= tokens.length - phraseTokens.length; start += 1) {
+    if (phraseTokens.every((token, offset) => tokens[start + offset] === token)) {
+      starts.push(start);
+    }
+  }
+  return starts;
+}
+
+function tokenSubsequenceStart(tokens: string[], subsequence: string[]): number {
+  for (let start = 0; start <= tokens.length - subsequence.length; start += 1) {
+    if (subsequence.every((token, offset) => tokens[start + offset] === token)) {
+      return start;
+    }
+  }
+  return -1;
 }
 
 const COMPETING_SUBJECTS = new Set([
@@ -1035,9 +1066,27 @@ const PROSPECTIVE_EVIDENCE_MARKERS = new Set([
   "aimed",
   "aiming",
   "aims",
+  "aspiration",
+  "aspirational",
+  "aspire",
+  "aspired",
+  "aspires",
+  "aspiring",
+  "consider",
+  "considered",
+  "considering",
+  "considers",
   "eventual",
   "eventually",
+  "explore",
+  "explored",
+  "explores",
+  "exploring",
   "future",
+  "hope",
+  "hoped",
+  "hopes",
+  "hoping",
   "intend",
   "intended",
   "intending",
@@ -1058,8 +1107,26 @@ const PROSPECTIVE_EVIDENCE_MARKERS = new Set([
   "scheduled",
   "soon",
   "upcoming",
-  "will",
-  "would",
+]);
+
+const INSTRUCTIONAL_TRIGGERS = new Set([
+  "after",
+  "before",
+  "once",
+  "upon",
+  "when",
+  "whenever",
+]);
+
+const CURRENT_MODAL_SUBJECTS = new Set([
+  "app",
+  "application",
+  "platform",
+  "product",
+  "service",
+  "software",
+  "system",
+  "tool",
 ]);
 
 const FUTURE_PERIODS = new Set([
@@ -1086,9 +1153,35 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
   if (tokens.some((token) => PROSPECTIVE_EVIDENCE_MARKERS.has(token))) {
     return false;
   }
-  return !tokens.some(
-    (token, index) => token === "next" && FUTURE_PERIODS.has(tokens[index + 1] ?? ""),
-  );
+  if (
+    tokens.some(
+      (token, index) => token === "next" && FUTURE_PERIODS.has(tokens[index + 1] ?? ""),
+    )
+  ) {
+    return false;
+  }
+
+  // A bare "we will ..." remains an unfulfilled promise. Product manuals,
+  // however, commonly describe current deterministic behavior as "When you
+  // save, the application will ...". Accept that narrow instruction shape
+  // while continuing to fail closed on unqualified marketing modals.
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index] !== "will" && tokens[index] !== "would") continue;
+    let triggerIndex = -1;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (!INSTRUCTIONAL_TRIGGERS.has(tokens[cursor]!)) continue;
+      triggerIndex = cursor;
+      break;
+    }
+    const subjectWindow = tokens.slice(Math.max(0, triggerIndex + 1), index);
+    const hasCurrentProductSubject = subjectWindow.some(
+      (token, subjectIndex) =>
+        CURRENT_MODAL_SUBJECTS.has(token) ||
+        (token === "it" && subjectIndex === subjectWindow.length - 1),
+    );
+    if (triggerIndex < 0 || !hasCurrentProductSubject) return false;
+  }
+  return true;
 }
 
 /**
@@ -1116,19 +1209,20 @@ function featureSpanDescribesCandidate(
       competingSubjects.push(index);
     }
   }
-  if (competingSubjects.length === 0) return true;
+  const attributionSubjects = competingSubjects.filter(
+    (index) => index < start || index > end,
+  );
+  if (attributionSubjects.length === 0) return true;
 
   // Attribution after the capability governs the predicate just as strongly
   // as a prefix ("... is a feature of our competitors"). Without syntax-tree
   // proof that it is only a contrast, production fallback must fail closed.
-  if (
-    competingSubjects.some((index) => (index >= start && index <= end) || index > end)
-  ) {
+  if (attributionSubjects.some((index) => index > end)) {
     return false;
   }
 
   const competingSubject = Math.max(
-    ...competingSubjects.filter((index) => index < start),
+    ...attributionSubjects.filter((index) => index < start),
   );
 
   for (let index = competingSubject + 1; index < start; index += 1) {
@@ -1203,27 +1297,32 @@ function coherentEvidenceMatches(
     // semicolon cannot manufacture a new affirmative clause, and reject only
     // the affected clause from semantic matching.
     .replace(/&(?:#[0-9]+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]+;?)/gi, unresolvedEntityMarker)
-    // Preserve semicolon/newline-delimited qualifiers for truth evaluation.
-    // The inserted scope boundary keeps unrelated polarity from bleeding
-    // across clauses while future/competitor markers remain visible.
-    .replace(/[;\r\n]+/g, " however ")
-    // Contrast words remain attached to the statement they govern. Splitting
-    // at `but`/`however` used to accept the affirmative half of sentences
-    // whose second half said the feature was future work or belonged only to
-    // competitors.
-    .split(/(?<=[.!?])\s+/)
+    // HTML block boundaries are independent statements. Keeping them apart
+    // prevents an unrelated heading/list item from donating a future marker,
+    // competitor name, or missing target terms to the evidence sentence.
+    .split(/(?<=[.!?])\s+|[\r\n]+/)
     .filter((raw) => !raw.includes(unresolvedEntityMarker))
     .map((raw) => raw.replace(/\s+/g, " ").trim())
-    .map((completeStatement) => {
-      // Persist and match only the same bounded statement carried into the
-      // downstream evidence record, but retain the complete rendered clause
-      // for qualifier, attribution, and polarity evaluation.
-      const statement = completeStatement.slice(0, 260);
-      return {
-        statement,
-        normalized: normalizedPhrase(statement),
-        completeNormalized: normalizedPhrase(completeStatement),
-      };
+    .flatMap((completeStatement) => {
+      // Match within one grammatical clause, but evaluate ownership/current
+      // state against its complete sentence. This retains governing postfix
+      // qualifiers while forbidding approximate terms from accumulating
+      // across semicolons or contrast clauses.
+      const completeNormalized = normalizedPhrase(
+        completeStatement.replace(/;/g, " however "),
+      );
+      return completeStatement
+        .split(/;+|\b(?:although|but|however|whereas)\b/i)
+        .map((clause) => clause.replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .map((clause) => {
+          const statement = clause.slice(0, 260);
+          return {
+            statement,
+            normalized: normalizedPhrase(statement),
+            completeNormalized,
+          };
+        });
     })
     .filter((segment) => segment.normalized.length > 0);
 
@@ -1274,7 +1373,9 @@ function coherentEvidenceMatches(
     const required = featureTerms.length;
     const bestOverlap = segments
       .map((segment) => {
-        const segmentTokens = segment.completeNormalized.split(" ").filter(Boolean);
+        const segmentTokens = segment.normalized.split(" ").filter(Boolean);
+        const completeTokens = segment.completeNormalized.split(" ").filter(Boolean);
+        const segmentOffset = tokenSubsequenceStart(completeTokens, segmentTokens);
         const segmentTerms = new Set(meaningfulTerms(segment.normalized));
         const terms = featureTerms.filter((term) => segmentTerms.has(term));
         const positions = terms
@@ -1297,8 +1398,14 @@ function coherentEvidenceMatches(
               segmentTokens,
               Math.min(...positions),
               Math.max(...positions),
+            ) &&
+            segmentOffset >= 0 &&
+            featureSpanDescribesCandidate(
+              completeTokens,
+              segmentOffset + Math.min(...positions),
+              segmentOffset + Math.max(...positions),
             ),
-          isCurrent: positions.length > 0 && featureSpanIsCurrent(segmentTokens),
+          isCurrent: positions.length > 0 && featureSpanIsCurrent(completeTokens),
         };
       })
       .filter(
@@ -1531,12 +1638,21 @@ function truthGatedCompetitiveSelection(
     if (!candidate || !selectedItem) continue;
 
     const featureMatches = candidate.sourceEvidence
-      .flatMap((evidence) => {
+      .flatMap((evidence, evidenceIndex) => {
+        // A product fetch may canonically redirect (HTTP->HTTPS, www, or a
+        // canonical path). The selection contract permits the discovered
+        // candidate URL as a citation, so bind that alias to the primary
+        // inspected response while always emitting the response's final URL.
+        const evidenceAliases = canonicalEvidenceUrlSet([
+          evidence.url,
+          ...(evidenceIndex === 0 ? [candidate.url] : []),
+        ]);
         const citedEvidenceUrls = matchingEvidenceUrls(
           comparison.evidenceUrls,
-          canonicalEvidenceUrlSet([evidence.url]),
+          evidenceAliases,
         );
-        return citedEvidenceUrls.flatMap((evidenceUrl) =>
+        if (citedEvidenceUrls.length === 0) return [];
+        return [...canonicalEvidenceUrlSet([evidence.url])].flatMap((evidenceUrl) =>
           coherentEvidenceMatches(spec, evidence.excerpt, evidenceUrl),
         );
       })
