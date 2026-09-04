@@ -31,7 +31,11 @@ function repoSource(location: string): RepoSource {
 }
 
 async function main() {
-  const target = process.argv.slice(2).find((arg) => !arg.startsWith("--"))?.trim() ||
+  const target =
+    process.argv
+      .slice(2)
+      .find((arg) => !arg.startsWith("--"))
+      ?.trim() ||
     process.env.FACTORY_PROOF_REPO?.trim() ||
     "";
   if (!target) {
