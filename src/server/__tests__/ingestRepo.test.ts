@@ -254,7 +254,7 @@ describe("normalizeRepoSource", () => {
   it("leaves a real local path alone", () => {
     const { source, note } = normalizeRepoSource({
       type: "path",
-      location: "C:/Users/firer/genemap-discovery",
+      location: "C:/Users/user/genemap-discovery",
     });
     expect(source.type).toBe("path");
     expect(note).toBeNull();

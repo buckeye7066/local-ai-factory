@@ -636,23 +636,21 @@ const MAX_REVIEW_DESCRIPTION_CHARS = 600;
 const MAX_REVIEW_EVIDENCE_ITEMS = 2;
 const MAX_REVIEW_EVIDENCE_CHARS = 1_000;
 
-function reviewableProductCandidates(dossier: CompetitiveDossier) {
+export function reviewableProductCandidates(dossier: CompetitiveDossier) {
   const productTarget = Math.max(
     MIN_PRODUCT_COMPETITORS,
     dossier.coverage?.productTarget ?? MIN_PRODUCT_COMPETITORS,
   );
-  const candidates = dossier.candidates
-    .filter(
-      (candidate) =>
-        candidate.kind === "product" &&
-        !candidate.inspectionError &&
-        candidate.sourceEvidence.length > 0 &&
-        canonicalEvidenceUrlSet([
-          candidate.url,
-          ...candidate.sourceEvidence.map((item) => item.url),
-        ]).size > 0,
-    )
-    .slice(0, productTarget + COMPETITIVE_REVIEW_HEADROOM);
+  const candidates = dossier.candidates.filter(
+    (candidate) =>
+      candidate.kind === "product" &&
+      !candidate.inspectionError &&
+      candidate.sourceEvidence.length > 0 &&
+      canonicalEvidenceUrlSet([
+        candidate.url,
+        ...candidate.sourceEvidence.map((item) => item.url),
+      ]).size > 0,
+  );
   return {
     candidates,
     requiredCount: Math.min(productTarget, candidates.length),
@@ -759,6 +757,10 @@ async function evaluateCompetitiveDossier(
   // Review only verified market products here, with two spares so the judge
   // can reject weak candidates while still satisfying the five-product gate.
   const { candidates, requiredCount } = reviewableProductCandidates(dossier);
+  const reviewCandidates = candidates.slice(
+    0,
+    requiredCount + COMPETITIVE_REVIEW_HEADROOM,
+  );
   if (requiredCount === 0) {
     return {
       comparisons: [],
@@ -779,7 +781,7 @@ async function evaluateCompetitiveDossier(
       `TARGET SPEC:\n${JSON.stringify(spec)}`,
       `TARGET ARCHITECTURE:\n${JSON.stringify(arch)}`,
       `REQUIRED PRODUCT COUNT: ${requiredCount}`,
-      `VERIFIED PRODUCT DOSSIER:\n${JSON.stringify(candidates.map(compactProductCandidate))}`,
+      `VERIFIED PRODUCT DOSSIER:\n${JSON.stringify(reviewCandidates.map(compactProductCandidate))}`,
       `Return comparisons and selected FIRST, followed by a short summary. Keep every string concise. Return exactly ` +
         `${requiredCount} distinct evidence-linked comparisons and exactly ${requiredCount} matching selected advantages. ` +
         `When more candidates are supplied, omit the weaker candidates rather than returning surplus entries. ` +
@@ -791,8 +793,8 @@ async function evaluateCompetitiveDossier(
         `Reject stale, irrelevant, unverifiable, or legally unusable candidates. Do not select something merely because it is popular.`,
     ].join("\n\n"),
     schema: z.preprocess(
-      (raw) => hydrateCompetitiveCandidateIds(raw, candidates),
-      competitiveSelectionSchema(candidates, requiredCount),
+      (raw) => hydrateCompetitiveCandidateIds(raw, reviewCandidates),
+      competitiveSelectionSchema(reviewCandidates, requiredCount),
     ),
     schemaName: "CompetitiveSelection",
     intent: { role: "judge", needs: ["structured_json"] },

@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -547,7 +547,7 @@ describe("Purpose Foundry", () => {
       .descriptors()
       .find((descriptor) => descriptor.stationId === "flexfactor");
     expect(flexfactor?.destination).toBe(
-      "C:\\Users\\firer\\flexfactor\\flexfactor_run.py",
+      join(homedir(), "flexfactor", "flexfactor_run.py"),
     );
     await expect(adapters.execute(project, "flexfactor")).resolves.toMatchObject({
       status: "completed",
@@ -753,9 +753,9 @@ describe("Purpose Foundry", () => {
       type: "git",
       location: "https://github.com/buckeye7066/GrantFlow.git",
     });
-    expect(repoSourceFromTarget("C:\\Users\\firer\\GrantFlow")).toEqual({
+    expect(repoSourceFromTarget("D:\\Projects\\GrantFlow")).toEqual({
       type: "path",
-      location: "C:\\Users\\firer\\GrantFlow",
+      location: "D:\\Projects\\GrantFlow",
     });
     expect(repoSourceFromTarget("the grant program on my desktop")).toBeNull();
   });

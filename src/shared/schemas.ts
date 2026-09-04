@@ -373,7 +373,7 @@ function coerceToReadableString(val: unknown): string {
 
 const ReadableStringSchema = z.preprocess(coerceToReadableString, z.string());
 
-export const ProductSpecSchema = z.object({
+export const ProductSpecObjectSchema = z.object({
   appName: z.string(),
   tagline: z.string().default(""),
   targetUser: z.string(),
@@ -386,6 +386,19 @@ export const ProductSpecSchema = z.object({
   /** Present on every orchestrated run; stamped by code, never trusted from a model. */
   goalContract: GoalContractSchema.optional(),
 });
+
+export const ProductSpecSchema = ProductSpecObjectSchema.superRefine(
+  (spec, context) => {
+    if (spec.userFlows.length + spec.acceptanceCriteria.length > 256) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["acceptanceCriteria"],
+        message:
+          "userFlows plus acceptanceCriteria cannot exceed the 256-entry executable evidence map",
+      });
+    }
+  },
+);
 export type ProductSpec = z.infer<typeof ProductSpecSchema>;
 
 export const ArchitectureSchema = z.object({

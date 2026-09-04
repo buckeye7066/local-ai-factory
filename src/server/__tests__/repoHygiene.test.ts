@@ -21,9 +21,7 @@ describe("repository hygiene", () => {
   });
 
   it("uses one authoritative pnpm lockfile", () => {
-    const pkg = JSON.parse(
-      readFileSync(resolve(ROOT, "package.json"), "utf8"),
-    ) as {
+    const pkg = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8")) as {
       packageManager?: string;
     };
     expect(pkg.packageManager).toMatch(/^pnpm@/);
@@ -46,7 +44,7 @@ describe("repository hygiene", () => {
     expect(failed).toEqual([]);
   });
 
-  it("contains no developer-specific Windows user path in executable source", () => {
+  it("contains no hard-coded Windows user-home path in executable source", () => {
     const offenders: string[] = [];
     const executable = trackedFiles().filter(
       (path) =>
@@ -55,7 +53,11 @@ describe("repository hygiene", () => {
     );
     for (const path of executable) {
       const text = readFileSync(resolve(ROOT, path), "utf8");
-      if (/C:\\\\Users\\\\firer(?:\\\\|\b)/i.test(text)) offenders.push(path);
+      const normalized = text.replaceAll("\\\\", "\\");
+      const windowsUsersRoot = ["C:", "Users"].join("\\") + "\\";
+      if (normalized.toLowerCase().includes(windowsUsersRoot.toLowerCase())) {
+        offenders.push(path);
+      }
     }
     expect(offenders).toEqual([]);
   });

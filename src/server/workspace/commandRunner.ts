@@ -136,6 +136,11 @@ function isSafeVitestRoot(arg: string): boolean {
   return normalizeSafeRelativePath(arg.slice("--root=".length)) !== null;
 }
 
+function isSafeVitestConfig(arg: string): boolean {
+  if (!arg.startsWith("--config=")) return false;
+  return normalizeSafeRelativePath(arg.slice("--config=".length)) !== null;
+}
+
 /** Engine-authored local-runner forms only; npx may never download a package. */
 export function isAllowedNpxVerification(args: string[]): boolean {
   if (args[0] !== "--no-install") return false;
@@ -147,6 +152,16 @@ export function isAllowedNpxVerification(args: string[]): boolean {
     return args.length === 3 && args[2] === "--noEmit";
   }
   if (tool === "vitest") {
+    if (args[4]?.startsWith("--config=")) {
+      return (
+        args.length === 7 &&
+        args[2] === "run" &&
+        isSafeDirectJsTest(args[3]!) &&
+        isSafeVitestConfig(args[4]!) &&
+        args[5] === "--reporter=json" &&
+        isSafeVitestRoot(args[6]!)
+      );
+    }
     return (
       (args.length === 6 || args.length === 7) &&
       args[2] === "run" &&

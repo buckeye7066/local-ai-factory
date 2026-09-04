@@ -72,7 +72,7 @@ export function ExtendExistingPanel({
           onChange={(e) => setLocation(e.target.value)}
           placeholder={
             sourceType === "path"
-              ? "C:\\Users\\you\\MyApp"
+              ? "D:\\Projects\\MyApp"
               : "https://github.com/you/my-app"
           }
           aria-label="Existing program path or URL"

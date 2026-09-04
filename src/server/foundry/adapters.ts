@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { lstat, readdir, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { Readable } from "node:stream";
 import {
   basename,
@@ -86,7 +87,7 @@ function flexfactorDirectedScript(): string {
   // has no install one-liner (shared rule across Factory Deck / FlexFactor).
   return (
     process.env.PURPOSE_FOUNDRY_FLEXFACTOR_SCRIPT?.trim() ||
-    "C:\\Users\\firer\\flexfactor\\flexfactor_run.py"
+    join(homedir(), "flexfactor", "flexfactor_run.py")
   );
 }
 

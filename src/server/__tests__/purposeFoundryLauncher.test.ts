@@ -13,7 +13,8 @@ describe("Purpose Foundry desktop launcher", () => {
     expect(installer).toContain('"scripts\\start-purpose-foundry.cmd"');
     expect(installer).toContain('"assets\\purpose-foundry.ico"');
     expect(installer).toContain("start-purpose-foundry.cmd*");
-    expect(installer).not.toMatch(/C:\\Users\\[^$]/i);
+    const windowsUsersRoot = ["C:", "Users"].join("\\") + "\\";
+    expect(installer.toLowerCase()).not.toContain(windowsUsersRoot.toLowerCase());
   });
 
   it("repairs the Foundry shortcut whenever Factory Deck starts", async () => {

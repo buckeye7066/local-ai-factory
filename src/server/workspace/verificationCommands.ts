@@ -174,6 +174,7 @@ function plainScriptWords(source: string): string[] | null {
 interface VitestScript {
   root: string;
   ownsRoot: boolean;
+  config?: string;
 }
 
 const SAFE_VITEST_FLAGS = new Set(["--coverage=false", "--passWithNoTests", "--run"]);
@@ -205,6 +206,7 @@ function inspectVitestScript(script: unknown): VitestScript | null {
   const words = runnerScriptWords(script, "vitest");
   if (!words) return null;
   let root: string | undefined;
+  let config: string | undefined;
   const seenPathOptions = new Set<string>();
   for (let index = 1; index < words.length; index += 1) {
     const word = words[index]!;
@@ -228,8 +230,9 @@ function inspectVitestScript(script: unknown): VitestScript | null {
     const normalized = normalizeSafeVitestRoot(candidate);
     if (!normalized) return null;
     if (option === "--root") root = normalized;
+    if (option === "--config") config = normalized;
   }
-  return { root: root ?? ".", ownsRoot: root !== undefined };
+  return { root: root ?? ".", ownsRoot: root !== undefined, config };
 }
 
 function directVitestPath(path: string, root: string): string | null {
@@ -676,6 +679,7 @@ export function verificationPlanForWorkspace(
           "vitest",
           "run",
           testPath,
+          ...(vitestScript?.config ? [`--config=${vitestScript.config}`] : []),
           "--reporter=json",
           `--root=${root}`,
         ],

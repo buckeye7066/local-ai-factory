@@ -240,7 +240,7 @@ describe("push safety", () => {
   });
 
   it("returns null for a non-GitHub remote instead of guessing a URL", () => {
-    expect(compareUrlFor("C:\\Users\\firer\\Iplay", "factory-deck/ab")).toBeNull();
+    expect(compareUrlFor("D:\\Projects\\Iplay", "factory-deck/ab")).toBeNull();
     expect(compareUrlFor("https://gitlab.com/x/y.git", "factory-deck/ab")).toBeNull();
   });
 });

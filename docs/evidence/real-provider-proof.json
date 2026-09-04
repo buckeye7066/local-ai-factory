@@ -7,7 +7,7 @@
   "codeProvider": "anthropic",
   "reviewProvider": "anthropic",
   "appName": "TapTally",
-  "workspacePath": "C:\\Users\\firer\\local-ai-factory\\workspaces\\taptally-8a3c2c72",
+  "workspacePath": "<redacted-local-workspace>/taptally-8a3c2c72",
   "repairLoops": 0,
   "providerUsage": {
     "free": {

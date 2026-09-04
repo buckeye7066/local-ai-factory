@@ -14,7 +14,10 @@ import {
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FactoryCheckpoint } from "../orchestrator/checkpoint.js";
-import { mappedTestNamesForPath } from "../orchestrator/acceptanceGate.js";
+import {
+  assessExecutedCoverage,
+  mappedTestNamesForPath,
+} from "../orchestrator/acceptanceGate.js";
 import { parseDirectTestEvidence } from "../orchestrator/directTestEvidence.js";
 import { platformEvidenceBlockersFromRunError } from "../orchestrator/platformEvidenceHold.js";
 import {
@@ -67,7 +70,13 @@ export function commandForPlatformProof(
   command: VerificationCommand,
   isolatedVitest: boolean,
 ): VerificationCommand {
-  if (!isolatedVitest || command.runner !== "vitest") return command;
+  if (
+    !isolatedVitest ||
+    command.runner !== "vitest" ||
+    command.args.some((arg) => arg.startsWith("--config="))
+  ) {
+    return command;
+  }
   return { ...command, args: [...command.args, `--config=${PLATFORM_VITEST_CONFIG}`] };
 }
 
@@ -390,6 +399,13 @@ export function replaceHostPlatformEvidence<T extends CheckpointExecutedCommand>
   ];
 }
 
+export function mappedPlatformCoverageErrors(
+  testPlan: FactoryCheckpoint["testPlan"],
+  evidence: CheckpointExecutedCommand[],
+): string[] {
+  return testPlan ? assessExecutedCoverage(testPlan, evidence) : [];
+}
+
 export function missingDirectPlatformEvidencePaths(
   requiredPaths: readonly string[],
   evidence: readonly Pick<
@@ -679,6 +695,15 @@ export async function recordCurrentPlatformEvidence(
         `${hostPlatform} proof did not produce current structured evidence for every generated test: ${missingDirectEvidence.join(
           ", ",
         )}.`,
+      );
+    }
+    const mappedCoverageErrors = mappedPlatformCoverageErrors(
+      held.checkpoint.testPlan,
+      executed,
+    );
+    if (mappedCoverageErrors.length > 0) {
+      throw new Error(
+        `${hostPlatform} proof did not independently pass every mapped acceptance test: ${mappedCoverageErrors.join("; ")}.`,
       );
     }
 

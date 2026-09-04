@@ -4,8 +4,8 @@
 **Agent:** production-agent-iplay  
 **Branch:** `production-ready/iplay`  
 **Repo:** buckeye7066/Iplay (default `main`)  
-**Local source:** `C:\Users\firer\Iplay` (not `avatar-video`)  
-**Launcher:** `C:\Users\firer\Iplay\iplay.pyw` / `Launch-IPlay.cmd`  
+**Local source:** `D:\Projects\Iplay` (not `avatar-video`)  
+**Launcher:** `D:\Projects\Iplay\iplay.pyw` / `Launch-IPlay.cmd`  
 **PR:** https://github.com/buckeye7066/Iplay/pull/6  
 **Branch SHA:** `eaa538c80098d60e6ac77ea825b81b5e6b0fbbae`  
 **Main SHA (at branch point):** `62a20522c14e02e5869055417cdb6a9911489c7c`  
@@ -28,7 +28,7 @@ IPlay owns musical motion (fingering, bow/strum/pick, beat continuity, director)
 ## Phase A — Source of truth
 
 - GitHub: `https://github.com/buckeye7066/Iplay` · `main` @ `62a2052`
-- Local: `C:\Users\firer\Iplay` on `production-ready/iplay`
+- Local: `D:\Projects\Iplay` on `production-ready/iplay`
 - Prior board path `avatar-video\iplay` is incorrect for this program
 
 ## Phase B — Audit gaps closed

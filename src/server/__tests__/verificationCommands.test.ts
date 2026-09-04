@@ -347,6 +347,7 @@ describe("verificationCommandsForWorkspace", () => {
         "vitest",
         "run",
         "src/profile flow.test.ts",
+        "--config=vitest.config.ts",
         "--reporter=json",
         "--root=packages/web app",
       ],

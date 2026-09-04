@@ -1,5 +1,5 @@
 import {
-  ProductSpecSchema,
+  ProductSpecObjectSchema,
   type ProductSpec,
   type PurposeProfile,
 } from "../../shared/schemas.js";
@@ -7,7 +7,7 @@ import { withProductionAcceptanceCriteria } from "../workspace/completionEvidenc
 import { SYSTEM_PREAMBLE, type AgentDeps } from "./types.js";
 import type { ProjectContinuity } from "../orchestrator/projectMemory.js";
 
-const ProductSpecDraftSchema = ProductSpecSchema.omit({
+const ProductSpecDraftSchema = ProductSpecObjectSchema.omit({
   purposeProfile: true,
   goalContract: true,
 });

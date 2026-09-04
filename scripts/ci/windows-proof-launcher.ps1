@@ -65,8 +65,9 @@ try {
   $psi.WorkingDirectory = [string]$requestData.workingDirectory
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
-  $psi.RedirectStandardOutput = $true
-  $psi.RedirectStandardError = $true
+  # Stream untrusted child output through inherited job handles; Node bounds the capture.
+  $psi.RedirectStandardOutput = $false
+  $psi.RedirectStandardError = $false
   $psi.LoadUserProfile = $false
   $psi.UserName = [string]$requestData.user
   $psi.Domain = $env:COMPUTERNAME
@@ -82,11 +83,7 @@ try {
   $process = [Diagnostics.Process]::new()
   $process.StartInfo = $psi
   if (-not $process.Start()) { throw "Restricted proof process did not start." }
-  $stdout = $process.StandardOutput.ReadToEndAsync()
-  $stderr = $process.StandardError.ReadToEndAsync()
   $process.WaitForExit()
-  [Console]::Out.Write($stdout.GetAwaiter().GetResult())
-  [Console]::Error.Write($stderr.GetAwaiter().GetResult())
   exit $process.ExitCode
 } catch {
   [Console]::Error.WriteLine($_.Exception.Message)

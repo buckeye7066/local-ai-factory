@@ -22,8 +22,8 @@ const SAMPLE_CLAUDE_MD = `# CLAUDE.md
 | Repo | Canonical local path | Stack | Notes |
 |---|---|---|---|
 | GrantFlow | \`~/GrantFlow\` | React+Express+PostgreSQL | Grant-mgmt SaaS |
-| FutureU | \`C:\\Users\\firer\\FutureU\` | React+Express | K-12 homeschool platform |
-| ForgePress | \`C:\\Users\\firer\\ForgePress\` | Electron+React19 | canonical |
+| FutureU | \`D:\\Projects\\FutureU\` | React+Express | K-12 homeschool platform |
+| ForgePress | \`D:\\Projects\\ForgePress\` | Electron+React19 | canonical |
 `;
 
 describe("readProjectRoster", () => {
@@ -38,7 +38,7 @@ describe("readProjectRoster", () => {
       expect.arrayContaining(["GrantFlow", "FutureU", "ForgePress"]),
     );
     const futureU = roster.find((r) => r.name === "FutureU");
-    expect(futureU?.path).toBe("C:\\Users\\firer\\FutureU");
+    expect(futureU?.path).toBe("D:\\Projects\\FutureU");
   });
 
   it("returns an empty array when the file doesn't exist", async () => {

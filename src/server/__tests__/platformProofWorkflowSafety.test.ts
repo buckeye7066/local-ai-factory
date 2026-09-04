@@ -3,10 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const factory = readFileSync(".github/workflows/factory-deck-cloud.yml", "utf8");
 const foundry = readFileSync(".github/workflows/purpose-foundry-cloud.yml", "utf8");
-const windowsRunner = readFileSync(
-  "scripts/ci/run-windows-platform-proof.ps1",
-  "utf8",
-);
+const windowsRunner = readFileSync("scripts/ci/run-windows-platform-proof.ps1", "utf8");
 const macRunner = readFileSync("scripts/ci/run-macos-platform-proof.sh", "utf8");
 
 describe("cross-platform proof workflow safety", () => {
@@ -64,12 +61,7 @@ describe("cross-platform proof workflow safety", () => {
       foundry.indexOf("Preserve macOS evidence"),
       foundry.indexOf("  verify:"),
     );
-    for (const section of [
-      factoryWindows,
-      factoryMac,
-      foundryWindows,
-      foundryMac,
-    ]) {
+    for (const section of [factoryWindows, factoryMac, foundryWindows, foundryMac]) {
       expect(section).toContain("platform-evidence/**");
       expect(section).not.toContain("workspaces/**");
     }

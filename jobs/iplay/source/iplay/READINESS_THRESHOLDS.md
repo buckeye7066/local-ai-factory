@@ -32,7 +32,7 @@ run against reference performances.
 
 | Step | Requirement |
 |------|-------------|
-| Launcher | `C:\Users\firer\Iplay\iplay.pyw` or `Launch-IPlay.cmd` |
+| Launcher | `D:\Projects\Iplay\iplay.pyw` or `Launch-IPlay.cmd` |
 | Runtime | Python 3.11/3.12, FFmpeg/FFprobe 6+, `requirements.txt` |
 | Exact mode extras | `IPLAY_WAN_HOME`, `IPLAY_WAN_ANIMATE_CKPT`, CUDA WanAnimatePipeline |
 | Consent | UI checkbox / `--rights-acknowledged`; sidecar `consent.json` |

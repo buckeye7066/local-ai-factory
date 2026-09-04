@@ -26,10 +26,10 @@ const MAX_COMMAND_LABEL_CHARS = 1024;
  * cloning. Artifact paths are untrusted, legal filesystem names, so validate
  * the input without that clone and rebuild it into a null-prototype map.
  */
-const PlatformArtifactSnapshotSchema = z
+const OwnStringRecordSchema = z
   .custom<Record<string, unknown>>(
     (value) => typeof value === "object" && value !== null && !Array.isArray(value),
-    "expected an artifact snapshot object",
+    "expected a string-record object",
   )
   .transform((value, context): Record<string, string> => {
     const snapshot = Object.create(null) as Record<string, string>;
@@ -38,7 +38,7 @@ const PlatformArtifactSnapshotSchema = z
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: [path],
-          message: "expected an artifact fingerprint string",
+          message: "expected a string value",
         });
         continue;
       }
@@ -204,13 +204,13 @@ export const FactoryCheckpointSchema = z.object({
         )
         .optional(),
       /** SHA-256 receipt for every deliverable path after the last verification pass. */
-      fileDigests: z.record(z.string()).optional(),
+      fileDigests: OwnStringRecordSchema.optional(),
       /**
        * Complete candidate manifest sealed before cross-runner artifact transfer.
        * Values bind directory presence, file bytes plus executable intent, or
        * symlink identity.
        */
-      platformArtifactSnapshot: PlatformArtifactSnapshotSchema.optional(),
+      platformArtifactSnapshot: OwnStringRecordSchema.optional(),
     })
     .optional(),
   testsExecuted: z.boolean().default(false),
