@@ -33,6 +33,21 @@ describe("provider model catalog ordering", () => {
     ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
   });
 
+  it("excludes specialized GPT variants from automatic text substitutions", () => {
+    expect(
+      resolvePreferredModels(
+        "openai",
+        ["gpt-6-astra"],
+        [
+          { id: "gpt-5-image", created: 500 },
+          { id: "gpt-5.2-realtime", created: 400 },
+          { id: "gpt-5-audio", created: 300 },
+          { id: "gpt-5", created: 100 },
+        ],
+      ),
+    ).toEqual(["gpt-5"]);
+  });
+
   it("does not promote preview-named models into the pro quality tier", () => {
     expect(
       resolvePreferredModels(

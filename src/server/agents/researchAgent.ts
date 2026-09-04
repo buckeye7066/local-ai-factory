@@ -972,7 +972,8 @@ function containsPhraseWithMatchingPolarity(segment: string, phrase: string): bo
       continue;
     }
     if (
-      featureSpanDescribesCandidate(tokens, start) &&
+      featureSpanDescribesCandidate(tokens, start, start + phraseTokens.length - 1) &&
+      featureSpanIsCurrent(tokens, start, start + phraseTokens.length - 1) &&
       featureSpanPolarity(tokens, start, start + phraseTokens.length - 1) ===
         targetPolarity
     ) {
@@ -1016,6 +1017,63 @@ const PRODUCT_SUBJECTS = new Set([
   "vendors",
 ]);
 
+const PROSPECTIVE_EVIDENCE_MARKERS = new Set([
+  "aim",
+  "aimed",
+  "aiming",
+  "aims",
+  "eventual",
+  "eventually",
+  "future",
+  "intend",
+  "intended",
+  "intending",
+  "intends",
+  "plan",
+  "planned",
+  "planning",
+  "plans",
+  "promise",
+  "promised",
+  "promises",
+  "proposal",
+  "propose",
+  "proposed",
+  "proposes",
+  "roadmap",
+  "roadmaps",
+  "scheduled",
+  "soon",
+  "upcoming",
+  "will",
+  "would",
+]);
+
+const FUTURE_PERIODS = new Set([
+  "day",
+  "days",
+  "month",
+  "months",
+  "quarter",
+  "quarters",
+  "release",
+  "releases",
+  "week",
+  "weeks",
+  "year",
+  "years",
+]);
+
+function featureSpanIsCurrent(tokens: string[], start: number, end: number): boolean {
+  const context = tokens.filter((_token, index) => index < start || index > end);
+  if (context.some((token) => PROSPECTIVE_EVIDENCE_MARKERS.has(token))) {
+    return false;
+  }
+  return !context.some(
+    (token, index) => token === "next" && FUTURE_PERIODS.has(context[index + 1] ?? ""),
+  );
+}
+
 /**
  * Competitive pages often describe another product before denying that the
  * page owner's product has the same capability. A lexical feature match is
@@ -1023,9 +1081,13 @@ const PRODUCT_SUBJECTS = new Set([
  * Fail closed when a competing subject governs the feature span, while still
  * accepting explicit contrasts such as "unlike competitors, our product...".
  */
-function featureSpanDescribesCandidate(tokens: string[], start: number): boolean {
-  let competingSubject = -1;
-  for (let index = 0; index < start; index += 1) {
+function featureSpanDescribesCandidate(
+  tokens: string[],
+  start: number,
+  end: number,
+): boolean {
+  const competingSubjects: number[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!;
     const next = tokens[index + 1];
     if (
@@ -1034,10 +1096,23 @@ function featureSpanDescribesCandidate(tokens: string[], start: number): boolean
         next !== undefined &&
         PRODUCT_SUBJECTS.has(next))
     ) {
-      competingSubject = index;
+      competingSubjects.push(index);
     }
   }
-  if (competingSubject < 0) return true;
+  if (competingSubjects.length === 0) return true;
+
+  // Attribution after the capability governs the predicate just as strongly
+  // as a prefix ("... is a feature of our competitors"). Without syntax-tree
+  // proof that it is only a contrast, production fallback must fail closed.
+  if (
+    competingSubjects.some((index) => (index >= start && index <= end) || index > end)
+  ) {
+    return false;
+  }
+
+  const competingSubject = Math.max(
+    ...competingSubjects.filter((index) => index < start),
+  );
 
   for (let index = competingSubject + 1; index < start; index += 1) {
     const token = tokens[index]!;
@@ -1179,11 +1254,25 @@ function coherentEvidenceMatches(
           polarity,
           describesCandidate:
             positions.length > 0 &&
-            featureSpanDescribesCandidate(segmentTokens, Math.min(...positions)),
+            featureSpanDescribesCandidate(
+              segmentTokens,
+              Math.min(...positions),
+              Math.max(...positions),
+            ),
+          isCurrent:
+            positions.length > 0 &&
+            featureSpanIsCurrent(
+              segmentTokens,
+              Math.min(...positions),
+              Math.max(...positions),
+            ),
         };
       })
       .filter(
-        (segment) => segment.describesCandidate && segment.polarity === targetPolarity,
+        (segment) =>
+          segment.describesCandidate &&
+          segment.isCurrent &&
+          segment.polarity === targetPolarity,
       )
       .sort((left, right) => right.terms.length - left.terms.length)[0];
     return bestOverlap &&

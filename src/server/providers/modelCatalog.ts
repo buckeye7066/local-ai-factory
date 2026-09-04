@@ -108,7 +108,10 @@ export function resolvePreferredModels(
   preferred: readonly string[],
   available: readonly CatalogModel[],
 ): string[] {
-  return resolvePreferredAssignments(provider, preferred, available)
+  const usable = available.filter((model) =>
+    isGenerativeModel(provider, model.id, preferred),
+  );
+  return resolvePreferredAssignments(provider, preferred, usable)
     .filter((model): model is CatalogModel => model !== undefined)
     .map(({ id }) => id);
 }
@@ -277,7 +280,15 @@ function isGenerativeModel(
   // The factory uses the Responses API for text/code generation. Exclude the
   // image/audio/embedding/moderation catalogs that the OpenAI Models endpoint
   // also returns; retain current GPT families and reasoning o-series models.
-  return /^(?:gpt-(?:5|6)(?:[.\-]|$)|o\d+(?:[.\-]|$))/i.test(model);
+  const normalized = model.toLowerCase();
+  if (
+    /(?:^|[-.])(?:audio|embedding|image|moderation|realtime|search|transcribe|tts|vision)(?:[-.]|$)/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return /^(?:gpt-(?:5|6)(?:[.\-]|$)|o\d+(?:[.\-]|$))/i.test(normalized);
 }
 
 export function createAnthropicModelResolver(args: {
