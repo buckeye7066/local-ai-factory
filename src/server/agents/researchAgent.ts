@@ -961,84 +961,6 @@ function featureSpanPolarity(
   return flips % 2 === 1 ? "denied" : "affirmed";
 }
 
-const EXTERNAL_ATTRIBUTION_SUBJECTS = new Set([
-  "alternative",
-  "alternatives",
-  "competitor",
-  "competitors",
-  "others",
-  "rival",
-  "rivals",
-]);
-
-const EXTERNAL_ATTRIBUTION_NOUNS = new Set([
-  "alternatives",
-  "companies",
-  "platforms",
-  "products",
-  "providers",
-  "services",
-  "solutions",
-  "systems",
-  "tools",
-  "vendors",
-]);
-
-const CANDIDATE_SUBJECT_NOUNS = new Set([
-  "platform",
-  "product",
-  "provider",
-  "service",
-  "solution",
-  "system",
-  "tool",
-]);
-
-function featureAttributedToExternalSubject(
-  tokens: string[],
-  start: number,
-): boolean {
-  const externalIndexes: number[] = [];
-  const candidateIndexes: number[] = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index]!;
-    const previous = tokens[index - 1];
-    const comparisonObject =
-      previous === "unlike" ||
-      previous === "than" ||
-      previous === "versus" ||
-      previous === "vs";
-    if (
-      !comparisonObject &&
-      (EXTERNAL_ATTRIBUTION_SUBJECTS.has(token) ||
-        (token === "other" &&
-          EXTERNAL_ATTRIBUTION_NOUNS.has(tokens[index + 1] ?? "")))
-    ) {
-      externalIndexes.push(index);
-    }
-
-    const candidateNoun = CANDIDATE_SUBJECT_NOUNS.has(tokens[index + 1] ?? "");
-    if (
-      token === "we" ||
-      ((token === "our" || token === "this" || token === "the") && candidateNoun)
-    ) {
-      candidateIndexes.push(index);
-    }
-  }
-  if (externalIndexes.length === 0) return false;
-
-  const latestExternalBefore = externalIndexes.filter((index) => index < start).at(-1);
-  const latestCandidateBefore = candidateIndexes.filter((index) => index < start).at(-1);
-  // A candidate subject introduced after a comparison subject owns the
-  // following predicate ("Unlike competitors, we encrypt ..."). Otherwise an
-  // external subject anywhere in the clause makes the attribution unsafe.
-  return !(
-    latestCandidateBefore !== undefined &&
-    (latestExternalBefore === undefined ||
-      latestCandidateBefore > latestExternalBefore)
-  );
-}
-
 function containsPhraseWithMatchingPolarity(segment: string, phrase: string): boolean {
   const tokens = segment.split(" ").filter(Boolean);
   const phraseTokens = phrase.split(" ").filter(Boolean);
@@ -1050,9 +972,66 @@ function containsPhraseWithMatchingPolarity(segment: string, phrase: string): bo
       continue;
     }
     if (
+      featureSpanDescribesCandidate(tokens, start) &&
       featureSpanPolarity(tokens, start, start + phraseTokens.length - 1) ===
-        targetPolarity &&
-      !featureAttributedToExternalSubject(tokens, start)
+        targetPolarity
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const COMPETING_SUBJECTS = new Set([
+  "alternative",
+  "alternatives",
+  "competitor",
+  "competitors",
+  "rival",
+  "rivals",
+]);
+
+const PRODUCT_SUBJECTS = new Set([
+  "application",
+  "platform",
+  "product",
+  "service",
+  "software",
+  "system",
+  "tool",
+]);
+
+/**
+ * Competitive pages often describe another product before denying that the
+ * page owner's product has the same capability. A lexical feature match is
+ * not evidence unless the matched predicate is attributed to the candidate.
+ * Fail closed when a competing subject governs the feature span, while still
+ * accepting explicit contrasts such as "unlike competitors, our product...".
+ */
+function featureSpanDescribesCandidate(tokens: string[], start: number): boolean {
+  let competingSubject = -1;
+  for (let index = 0; index < start; index += 1) {
+    const token = tokens[index]!;
+    const next = tokens[index + 1];
+    if (
+      COMPETING_SUBJECTS.has(token) ||
+      ((token === "other" || token === "competing") &&
+        next !== undefined &&
+        PRODUCT_SUBJECTS.has(next))
+    ) {
+      competingSubject = index;
+    }
+  }
+  if (competingSubject < 0) return true;
+
+  for (let index = competingSubject + 1; index < start; index += 1) {
+    const token = tokens[index]!;
+    const next = tokens[index + 1];
+    if (token === "we" || token === "ours") return true;
+    if (
+      (token === "our" || token === "this") &&
+      next !== undefined &&
+      PRODUCT_SUBJECTS.has(next)
     ) {
       return true;
     }
@@ -1172,26 +1151,24 @@ function coherentEvidenceMatches(
         const positions = terms
           .map((term) => segmentTokens.indexOf(term))
           .filter((position) => position >= 0);
-        const matchStart = positions.length > 0 ? Math.min(...positions) : -1;
         const polarity =
-          matchStart >= 0 &&
+          positions.length > 0 &&
           featureSpanPolarity(
             segmentTokens,
-            matchStart,
+            Math.min(...positions),
             Math.max(...positions),
           );
         return {
           statement: segment.statement,
           terms,
           polarity,
-          externalAttribution:
-            matchStart >= 0 &&
-            featureAttributedToExternalSubject(segmentTokens, matchStart),
+          describesCandidate:
+            positions.length > 0 &&
+            featureSpanDescribesCandidate(segmentTokens, Math.min(...positions)),
         };
       })
       .filter(
-        (segment) =>
-          segment.polarity === targetPolarity && !segment.externalAttribution,
+        (segment) => segment.describesCandidate && segment.polarity === targetPolarity,
       )
       .sort((left, right) => right.terms.length - left.terms.length)[0];
     return bestOverlap &&

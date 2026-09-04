@@ -1102,6 +1102,38 @@ describe("bounded production research", () => {
     }
   });
 
+  it("accepts an explicitly candidate-owned feature after a competitor contrast", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Unlike our competitors, our product encrypts stored plaintext credentials using hardware keys.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypts stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toHaveLength(5);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("does not qualify a feature outside the persisted evidence statement", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();
