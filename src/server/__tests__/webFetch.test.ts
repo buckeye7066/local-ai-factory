@@ -149,6 +149,82 @@ describe("webFetchTool readable HTML extraction", () => {
     expect(result.textExcerpt).toBe("Visible.");
   });
 
+  it("decodes CSS escapes before testing whether inline content is hidden", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          "<p>Visible.</p><div style='display:n\\6f ne'>Hidden feature claim.</div>",
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool("https://evidence.example/css-escape", 1_000, {
+      fetch,
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    expect(result.textExcerpt).toBe("Visible.");
+  });
+
+  it("removes CSS newline continuations before testing hidden declarations", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          "<p>Visible.</p><div style='dis\\\nplay:n\\6f ne'>Hidden feature claim.</div>",
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool(
+      "https://evidence.example/css-continuation",
+      1_000,
+      {
+        fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      },
+    );
+
+    expect(result.textExcerpt).toBe("Visible.");
+  });
+
+  it("does not let markup-looking script text close a hidden ancestor", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          '<div hidden><script>const payload = "</div>"; Hidden feature claim.</script></div><p>Visible.</p>',
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool("https://evidence.example/raw-text", 1_000, {
+      fetch,
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    expect(result.textExcerpt).toBe("Visible.");
+  });
+
+  it("honors the complete XHTML processing-instruction terminator", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          '<?audit note=">Hidden feature claim."?><p>Visible XHTML evidence.</p>',
+          { headers: { "content-type": "application/xhtml+xml" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool("https://evidence.example/xhtml-pi", 1_000, {
+      fetch,
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    expect(result.textExcerpt).toBe("Visible XHTML evidence.");
+  });
+
   it("suppresses a bare title while honoring ordinary XHTML self-closing tags", async () => {
     const fetch = vi.fn(async () =>
       Promise.resolve(

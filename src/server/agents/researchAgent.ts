@@ -748,6 +748,45 @@ function normalizedPhrase(value: string): string {
     .replace(/\s+/g, " ");
 }
 
+const PREDICATE_AUXILIARIES = new Set([
+  "am",
+  "are",
+  "be",
+  "been",
+  "being",
+  "can",
+  "could",
+  "did",
+  "do",
+  "does",
+  "had",
+  "has",
+  "have",
+  "is",
+  "may",
+  "might",
+  "must",
+  "should",
+  "was",
+  "were",
+  "will",
+  "would",
+]);
+
+function targetPredicateTerms(phrase: string): string[] {
+  const tokens = phrase.split(" ").filter(Boolean);
+  const meaningful = new Set(meaningfulTerms(phrase));
+  const predicates: string[] = [];
+  const firstMeaningfulIndex = tokens.findIndex((token) => meaningful.has(token));
+  if (firstMeaningfulIndex === 0) predicates.push(tokens[0]!);
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    if (!PREDICATE_AUXILIARIES.has(tokens[index]!)) continue;
+    const predicate = tokens.slice(index + 1).find((token) => meaningful.has(token));
+    if (predicate) predicates.push(predicate);
+  }
+  return [...new Set(predicates)];
+}
+
 const POLARITY_OPERATORS = new Set([
   "avoid",
   "avoided",
@@ -999,7 +1038,7 @@ function coherentEvidenceMatches(
     // semicolon cannot manufacture a new affirmative clause, and reject only
     // the affected clause from semantic matching.
     .replace(/&(?:#[0-9]+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]+;?)/gi, unresolvedEntityMarker)
-    .split(/(?<=[.!?])\s+|[;:\r\n]+|\b(?:although|but|however|whereas)\b/i)
+    .split(/(?<=[.!?])\s+|[;\r\n]+|\b(?:although|but|however|whereas)\b/i)
     .filter((raw) => !raw.includes(unresolvedEntityMarker))
     .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
     .map((statement) => ({ statement, normalized: normalizedPhrase(statement) }))
@@ -1027,10 +1066,10 @@ function coherentEvidenceMatches(
     // phrase path above; otherwise two generic words can manufacture support
     // for a materially different capability.
     if (featureTerms.length < 3) return [];
-    // Approximate evidence must retain the target's leading defining terms,
-    // not merely most of its nouns. This keeps a different action such as
-    // "export" from standing in for "encrypt" through high lexical overlap.
-    const definingTerms = featureTerms.slice(0, Math.min(2, featureTerms.length));
+    // Approximate evidence must retain the target predicate wherever grammar
+    // places it. Subject-first requirements otherwise let a different action
+    // inherit nearly all nouns and pass a high-overlap threshold.
+    const predicateTerms = targetPredicateTerms(phrase);
     const phraseTokens = phrase.split(" ").filter(Boolean);
     const targetPolarity = featureSpanPolarity(
       phraseTokens,
@@ -1042,10 +1081,10 @@ function coherentEvidenceMatches(
     // remain eligible through the exact-phrase path above; overlap fallback is
     // deliberately limited to unambiguous affirmative targets.
     if (targetPolarity !== "affirmed") return [];
-    const required =
-      featureTerms.length <= 3
-        ? featureTerms.length
-        : Math.max(3, Math.ceil(featureTerms.length * 0.75));
+    // This path runs only when semantic model review failed. Require every
+    // uncommon target term in one clause; partial lexical similarity is not
+    // strong enough to establish a production acceptance fact.
+    const required = featureTerms.length;
     const bestOverlap = segments
       .map((segment) => {
         const segmentTokens = segment.normalized.split(" ").filter(Boolean);
@@ -1071,7 +1110,8 @@ function coherentEvidenceMatches(
       .sort((left, right) => right.terms.length - left.terms.length)[0];
     return bestOverlap &&
       bestOverlap.terms.length >= required &&
-      definingTerms.every((term) => bestOverlap.terms.includes(term))
+      predicateTerms.length > 0 &&
+      predicateTerms.every((term) => bestOverlap.terms.includes(term))
       ? [
           {
             phrase,

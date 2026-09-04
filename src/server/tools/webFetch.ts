@@ -337,6 +337,29 @@ const VOID_ELEMENTS = new Set([
   "wbr",
 ]);
 
+function decodeCssEscapes(value: string): string {
+  // A backslash followed by a CSS newline is a continuation and contributes
+  // no character. Remove it before decoding ordinary simple/hex escapes.
+  return value
+    .replace(/\\(?:\r\n|[\n\r\f])/g, "")
+    .replace(
+      /\\([0-9a-f]{1,6})(?:\r\n|[ \t\r\n\f])?|\\([^\r\n\f0-9a-f])/gi,
+      (_escape, hex: string | undefined, escaped: string | undefined) => {
+        if (escaped) return escaped;
+        const codePoint = Number.parseInt(hex ?? "", 16);
+        if (
+          !Number.isSafeInteger(codePoint) ||
+          codePoint <= 0 ||
+          codePoint > 0x10ffff ||
+          (codePoint >= 0xd800 && codePoint <= 0xdfff)
+        ) {
+          return "\uFFFD";
+        }
+        return String.fromCodePoint(codePoint);
+      },
+    );
+}
+
 function openingTagSuppressesText(tag: string, rawTag: string): boolean {
   if (NON_RENDERED_ELEMENTS.has(tag)) return true;
   if (/\s(?:hidden|inert)(?=\s|=|\/?\>)/i.test(rawTag)) return true;
@@ -346,7 +369,7 @@ function openingTagSuppressesText(tag: string, rawTag: string): boolean {
   const style = rawTag.match(/\sstyle\s*=\s*(?:(["'])([\s\S]*?)\1|([^\s>]+))/i);
   if (!style) return false;
   const rawStyle = style?.[2] ?? style?.[3] ?? "";
-  const normalizedStyle = rawStyle.replace(/\/\*[\s\S]*?\*\//g, "");
+  const normalizedStyle = decodeCssEscapes(rawStyle.replace(/\/\*[\s\S]*?\*\//g, ""));
   // An unterminated CSS comment makes the remainder of the declaration
   // non-authoritative. Suppress rather than guessing that it renders.
   if (normalizedStyle.includes("/*")) return true;
@@ -363,6 +386,17 @@ type HtmlMarkupToken = {
   closing?: boolean;
   slashClosed?: boolean;
 };
+
+const RAW_TEXT_ELEMENTS = new Set([
+  "iframe",
+  "noembed",
+  "noframes",
+  "script",
+  "style",
+  "title",
+  "textarea",
+  "xmp",
+]);
 
 function quotedTagEnd(html: string, start: number): number {
   let quote = "";
@@ -383,7 +417,11 @@ function quotedTagEnd(html: string, start: number): number {
   return html.length;
 }
 
-function nextHtmlMarkup(html: string, from: number): HtmlMarkupToken | null {
+function nextHtmlMarkup(
+  html: string,
+  from: number,
+  xmlMode = false,
+): HtmlMarkupToken | null {
   for (
     let start = html.indexOf("<", from);
     start >= 0;
@@ -395,11 +433,12 @@ function nextHtmlMarkup(html: string, from: number): HtmlMarkupToken | null {
       return { start, end, raw: html.slice(start, end) };
     }
 
-    // In text/html, processing-instruction-looking input is a bogus comment:
-    // it ends at the first `>` (or EOF), not only at an XML-style `?>`.
+    // HTML uses a bogus-comment terminator; XHTML honors the complete XML
+    // processing-instruction terminator so quoted angle brackets stay hidden.
     if (html.startsWith("<?", start)) {
-      const bogusEnd = html.indexOf(">", start + 2);
-      const end = bogusEnd < 0 ? html.length : bogusEnd + 1;
+      const terminator = xmlMode ? "?>" : ">";
+      const bogusEnd = html.indexOf(terminator, start + 2);
+      const end = bogusEnd < 0 ? html.length : bogusEnd + terminator.length;
       return { start, end, raw: html.slice(start, end) };
     }
 
@@ -426,15 +465,15 @@ function nextHtmlMarkup(html: string, from: number): HtmlMarkupToken | null {
 
 /** Extract visible/readable HTML text without promoting hidden page payloads. */
 function toReadableText(html: string, xmlSelfClosing = false): string {
-  const stack: Array<{ tag: string; suppressed: boolean }> = [];
+  const stack: Array<{ tag: string; suppressed: boolean; rawText: boolean }> = [];
   let suppressedDepth = 0;
   let cursor = 0;
   let readable = "";
 
   for (
-    let markup = nextHtmlMarkup(html, cursor);
+    let markup = nextHtmlMarkup(html, cursor, xmlSelfClosing);
     markup;
-    markup = nextHtmlMarkup(html, cursor)
+    markup = nextHtmlMarkup(html, cursor, xmlSelfClosing)
   ) {
     if (suppressedDepth === 0) readable += html.slice(cursor, markup.start);
     cursor = markup.end;
@@ -442,7 +481,22 @@ function toReadableText(html: string, xmlSelfClosing = false): string {
     if (!tag) continue;
 
     const rawTag = markup.raw;
+    const top = stack.at(-1);
+    // Markup-looking bytes inside raw-text elements cannot close an ancestor
+    // or create rendered evidence.
+    if (suppressedDepth > 0 && top?.rawText && !(markup.closing && top.tag === tag)) {
+      continue;
+    }
     if (markup.closing) {
+      if (suppressedDepth > 0) {
+        // Fail closed on misnested closers inside a hidden subtree. Only the
+        // current hidden frame may close.
+        if (!top || top.tag !== tag) continue;
+        const entry = stack.pop()!;
+        if (entry.suppressed) suppressedDepth -= 1;
+        if (suppressedDepth === 0 && BLOCK_ELEMENTS.has(tag)) readable += "\n";
+        continue;
+      }
       const index = stack.map((entry) => entry.tag).lastIndexOf(tag);
       if (index >= 0) {
         for (const entry of stack.splice(index)) {
@@ -461,7 +515,7 @@ function toReadableText(html: string, xmlSelfClosing = false): string {
     const selfClosing =
       VOID_ELEMENTS.has(tag) || (xmlSelfClosing && markup.slashClosed === true);
     if (!selfClosing) {
-      stack.push({ tag, suppressed });
+      stack.push({ tag, suppressed, rawText: RAW_TEXT_ELEMENTS.has(tag) });
       if (suppressed) suppressedDepth += 1;
     }
     if (!suppressed && (BLOCK_ELEMENTS.has(tag) || tag === "br" || tag === "hr")) {
