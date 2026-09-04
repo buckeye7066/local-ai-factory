@@ -426,6 +426,40 @@ describe("bounded production research", () => {
     }
   });
 
+  it("rejects five competitor-attributed claims from the evidence gate", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Our competitors encrypt stored plaintext credentials using hardware keys; we do not.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(provider.calls).toBe(1);
+      expect(findings.comparisons).toEqual([]);
+      expect(findings.recommendations).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("rejects postfix denials of an otherwise exact feature phrase", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();
