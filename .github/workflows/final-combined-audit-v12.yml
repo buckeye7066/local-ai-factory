@@ -36,11 +36,11 @@ jobs:
           node <<'NODE'
           const pkg = require('./package.json');
           const overrides = pkg.pnpm?.overrides ?? {};
-          if (overrides.browserslist !== '4.28.7') {
-            throw new Error(`expected browserslist override 4.28.7, got ${overrides.browserslist}`);
+          if (overrides['browserslist@<=4.28.6'] !== '4.28.7') {
+            throw new Error(`expected scoped browserslist override 4.28.7, got ${overrides['browserslist@<=4.28.6']}`);
           }
-          if (overrides.qs !== '6.16.0') {
-            throw new Error(`expected qs override 6.16.0, got ${overrides.qs}`);
+          if (overrides['qs@<6.16.0'] !== '6.16.0') {
+            throw new Error(`expected scoped qs override 6.16.0, got ${overrides['qs@<6.16.0']}`);
           }
           NODE
           pnpm why browserslist | tee /tmp/browserslist-graph.txt
