@@ -158,7 +158,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Restore exact candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: purpose-foundry-seed-${{ github.run_id }}
           path: .
@@ -217,13 +217,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Restore immutable seed candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: purpose-foundry-seed-${{ github.run_id }}
           path: .
 
       - name: Restore Windows checkpoint evidence
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: purpose-foundry-windows-${{ github.run_id }}
           path: platform-evidence
@@ -292,13 +292,13 @@ jobs:
         run: bash scripts/ci/provision-aitime-free-fallback.sh
 
       - name: Restore immutable seed candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: purpose-foundry-seed-${{ github.run_id }}
           path: .
 
       - name: Restore macOS checkpoint evidence
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: purpose-foundry-macos-${{ github.run_id }}
           path: platform-evidence
