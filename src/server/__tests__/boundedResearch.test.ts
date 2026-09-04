@@ -52,7 +52,7 @@ function dossier(unrelatedLast = false): CompetitiveDossier {
           url,
           excerpt:
             unrelatedLast && number === 5
-              ? "This local desktop workflow stores persistent data records for teams and provides a software platform service."
+              ? "Offline ticket sales are available. Synchronization connects cloud invoices. Recovery experts restore damaged disks."
               : `The official product page documents offline workflow synchronization and durable workflow recovery for team ${number}.`,
         },
       ],
@@ -142,7 +142,7 @@ describe("bounded production research", () => {
     }
   });
 
-  it("rejects generic-overlap evidence and keeps the five-product gate blocked", async () => {
+  it("rejects target terms scattered across unrelated features and keeps the gate blocked", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const spy = vi
       .spyOn(intelligence, "buildCompetitiveDossier")

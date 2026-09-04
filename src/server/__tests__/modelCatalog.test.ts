@@ -71,6 +71,29 @@ describe("provider model catalog ordering", () => {
     ).toEqual(["claude-opus-5", "claude-haiku-4-5-20251001"]);
   });
 
+  it("preserves explicitly configured account-visible gpt-4.1 and o-series models", async () => {
+    const preferred = ["gpt-4.1", "o3"];
+    const available = [
+      { id: "gpt-6-astra", created: 400 },
+      { id: "o3", created: 300 },
+      { id: "gpt-4.1", created: 200 },
+      { id: "text-embedding-3-large", created: 100 },
+    ];
+    const resolver = createCachedModelResolver({
+      provider: "openai",
+      preferred,
+      load: async () => available,
+      log: () => {},
+    });
+
+    expect(resolvePreferredModels("openai", preferred, available)).toEqual([
+      "gpt-4.1",
+      "o3",
+    ]);
+    await expect(resolver("gpt-4.1")).resolves.toBe("gpt-4.1");
+    await expect(resolver("o3")).resolves.toBe("o3");
+  });
+
   it("allows only one configured probe when the account catalog is unreachable", async () => {
     let loads = 0;
     const resolver = createCachedModelResolver({

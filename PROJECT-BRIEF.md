@@ -20,7 +20,7 @@ the deck is what actually happened.
 | Rung       | Credential/setting                  | Default model sequence |
 | ---------- | ----------------------------------- | ---------------------- |
 | Anthropic  | `ANTHROPIC_API_KEY`                 | `claude-fable-5-1 → claude-opus-5 → claude-sonnet-5 → claude-haiku-4-5` |
-| OpenAI     | `OPENAI_API_KEY`                    | `gpt-5.5` (extend with `FACTORY_OPENAI_MODEL_LADDER`) |
+| OpenAI     | `OPENAI_API_KEY`                    | `gpt-6-astra → gpt-5.6-sol → gpt-5.6-terra → gpt-5.6-luna` |
 | Free/local | `FACTORY_FREE_ENABLED` + AI Time   | strongest available frontier route |
 
 Every live run uses one orchestrated route. `FACTORY_MODEL_LADDER` orders

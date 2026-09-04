@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { withRetry, isNonRetryable } from "../providers/types.js";
+import {
+  withRetry,
+  isNonRetryable,
+  ProviderModelUnavailableError,
+} from "../providers/types.js";
 
 function httpError(status: number): Error & { status: number } {
   return Object.assign(new Error(`HTTP ${status}`), { status });
@@ -42,6 +46,20 @@ describe("withRetry", () => {
     });
     expect(result).toBe("ok");
     expect(calls).toBe(2);
+  });
+
+  it("preserves a local model-unavailable refusal for the outer ladder", async () => {
+    let calls = 0;
+    const refusal = new ProviderModelUnavailableError(
+      "openai model unavailable: suppressed unverified model probe",
+    );
+    await expect(
+      withRetry("test", async () => {
+        calls += 1;
+        throw refusal;
+      }),
+    ).rejects.toBe(refusal);
+    expect(calls).toBe(1);
   });
 });
 

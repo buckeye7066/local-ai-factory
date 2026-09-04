@@ -61,4 +61,19 @@ describe("repository hygiene", () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it("does not publish the retired OpenAI model as a runtime default", () => {
+    const publicRuntimeGuidance = [
+      ".env.example",
+      "README.md",
+      "PROJECT-BRIEF.md",
+      "scripts/phone/phone.env.example",
+      ".github/workflows/factory-deck-cloud.yml",
+      ".github/workflows/purpose-foundry-cloud.yml",
+    ];
+    const offenders = publicRuntimeGuidance.filter((path) =>
+      readFileSync(resolve(ROOT, path), "utf8").includes("gpt-5.5"),
+    );
+    expect(offenders).toEqual([]);
+  });
 });

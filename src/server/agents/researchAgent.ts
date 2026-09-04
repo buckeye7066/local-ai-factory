@@ -778,12 +778,52 @@ function targetEvidencePhrases(spec: ProductSpec): string[] {
   ];
 }
 
+type CoherentEvidenceMatch = {
+  phrase: string;
+  terms: string[];
+  exact: boolean;
+};
+
+function coherentEvidenceMatches(
+  spec: ProductSpec,
+  inspectedText: string,
+): CoherentEvidenceMatch[] {
+  const segments = inspectedText
+    .split(/(?<=[.!?])\s+|[\r\n]+/)
+    .map(normalizedPhrase)
+    .filter(Boolean);
+
+  return targetEvidencePhrases(spec).flatMap((phrase): CoherentEvidenceMatch[] => {
+    if (segments.some((segment) => segment.includes(phrase))) {
+      return [{ phrase, terms: meaningfulTerms(phrase), exact: true }];
+    }
+
+    const featureTerms = meaningfulTerms(phrase);
+    if (featureTerms.length < 2) return [];
+    const required =
+      featureTerms.length <= 3
+        ? featureTerms.length
+        : Math.max(3, Math.ceil(featureTerms.length * 0.75));
+    const bestOverlap = segments
+      .map((segment) => {
+        const segmentTerms = new Set(meaningfulTerms(segment));
+        return featureTerms.filter((term) => segmentTerms.has(term));
+      })
+      .sort((left, right) => right.length - left.length)[0];
+    return bestOverlap && bestOverlap.length >= required
+      ? [{ phrase, terms: bestOverlap, exact: false }]
+      : [];
+  });
+}
+
 /**
  * A no-invention fallback for a failed bulk reviewer. It can only select a
  * product only when inspected official-page text contains a target feature
- * phrase or at least three non-generic target terms. The emitted strength is
- * the inspected statement itself; the limitation is explicit. If fewer than
- * the required five qualify, the existing strict gate still blocks the run.
+ * phrase or a high-coverage term match for one feature inside one sentence.
+ * Terms scattered across unrelated page sections can never be accumulated
+ * into an advantage. The emitted strength is the inspected statement itself;
+ * the limitation is explicit. If fewer than the required five qualify, the
+ * existing strict gate still blocks the run.
  */
 export function evidenceGroundedCompetitiveSelection(
   spec: ProductSpec,
@@ -791,44 +831,27 @@ export function evidenceGroundedCompetitiveSelection(
   dossier: CompetitiveDossier,
 ): CompetitiveSelection {
   const { candidates, requiredCount } = reviewableProductCandidates(dossier);
-  const targetTerms = meaningfulTerms(
-    JSON.stringify({
-      appName: spec.appName,
-      tagline: spec.tagline,
-      targetUser: spec.targetUser,
-      coreFeatures: spec.coreFeatures,
-      userFlows: spec.userFlows,
-      acceptanceCriteria: spec.acceptanceCriteria,
-    }),
-  );
-  const targetPhrases = targetEvidencePhrases(spec);
   const qualified = candidates
     .map((candidate) => {
       const inspectedText = [
         ...candidate.sourceEvidence.map((item) => item.excerpt),
       ].join(" ");
-      const inspectedTerms = new Set(meaningfulTerms(inspectedText));
-      const overlap = targetTerms.filter((term) => inspectedTerms.has(term));
-      const normalizedEvidence = normalizedPhrase(inspectedText);
-      const matchedPhrases = targetPhrases.filter((phrase) =>
-        normalizedEvidence.includes(phrase),
-      );
+      const featureMatches = coherentEvidenceMatches(spec, inspectedText);
+      const exactMatches = featureMatches.filter((match) => match.exact);
+      const overlap = [...new Set(featureMatches.flatMap((match) => match.terms))];
       const evidenceUrls = [
         ...canonicalEvidenceUrlSet([
           candidate.url,
           ...candidate.sourceEvidence.map((item) => item.url),
         ]),
       ];
-      return { candidate, overlap, matchedPhrases, evidenceUrls };
+      return { candidate, overlap, featureMatches, exactMatches, evidenceUrls };
     })
-    .filter(
-      (item) =>
-        (item.matchedPhrases.length > 0 || item.overlap.length >= 3) &&
-        item.evidenceUrls.length > 0,
-    )
+    .filter((item) => item.featureMatches.length > 0 && item.evidenceUrls.length > 0)
     .sort(
       (a, b) =>
-        b.matchedPhrases.length - a.matchedPhrases.length ||
+        b.exactMatches.length - a.exactMatches.length ||
+        b.featureMatches.length - a.featureMatches.length ||
         b.overlap.length - a.overlap.length ||
         a.candidate.name.localeCompare(b.candidate.name),
     )
@@ -836,18 +859,24 @@ export function evidenceGroundedCompetitiveSelection(
 
   const comparisons: CompetitiveSelection["comparisons"] = [];
   const selected: CompetitiveSelection["selected"] = [];
-  for (const { candidate, overlap, matchedPhrases, evidenceUrls } of qualified) {
-    const phraseTerms = matchedPhrases.flatMap(meaningfulTerms);
-    const statement = evidenceStatement(candidate, [...overlap, ...phraseTerms]);
-    const score = Math.min(90, 55 + overlap.length * 5 + matchedPhrases.length * 10);
+  for (const {
+    candidate,
+    overlap,
+    featureMatches,
+    exactMatches,
+    evidenceUrls,
+  } of qualified) {
+    const statement = evidenceStatement(candidate, overlap);
+    const strongestMatch = exactMatches[0] ?? featureMatches[0]!;
+    const score = Math.min(90, 55 + overlap.length * 5 + exactMatches.length * 10);
     comparisons.push({
       candidateId: candidate.id,
       name: candidate.name,
       score,
       matchedFeatures: [
-        matchedPhrases[0]
-          ? `Inspected evidence contains target feature phrase: ${matchedPhrases[0]}`
-          : `Inspected evidence shares distinctive target concepts: ${overlap.slice(0, 5).join(", ")}`,
+        strongestMatch.exact
+          ? `Inspected evidence contains target feature phrase: ${strongestMatch.phrase}`
+          : `One inspected statement supports target feature "${strongestMatch.phrase}" through coherent concepts: ${strongestMatch.terms.join(", ")}`,
       ],
       strengths: [`Official product evidence documents: ${statement}`],
       gaps: [
@@ -856,11 +885,9 @@ export function evidenceGroundedCompetitiveSelection(
       evidenceUrls,
       decision: "adapt",
       rationale: `The inspected official page ${
-        matchedPhrases[0]
-          ? `contains the target feature phrase "${matchedPhrases[0]}"`
-          : `shares at least three distinctive target concepts (${overlap
-              .slice(0, 5)
-              .join(", ")})`
+        strongestMatch.exact
+          ? `contains the target feature phrase "${strongestMatch.phrase}"`
+          : `contains a single statement with a high-coverage match for "${strongestMatch.phrase}" (${strongestMatch.terms.join(", ")})`
       }; any adoption remains clean-room and test-gated.`,
     });
     selected.push({

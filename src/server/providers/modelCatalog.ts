@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { ProviderName } from "../../shared/schemas.js";
-import { ProviderAbortError } from "./types.js";
+import { ProviderAbortError, ProviderModelUnavailableError } from "./types.js";
 
 export type ModelIdResolver = (requestedModel: string) => Promise<string>;
 
@@ -59,16 +59,13 @@ export function createCachedModelResolver(args: {
         configuredFallbackAttempted = true;
         return requestedModel;
       }
-      throw Object.assign(
-        new Error(
-          `${args.provider} model catalog unavailable; suppressed unverified model probe for ${requestedModel}`,
-        ),
-        { status: 404 },
+      throw new ProviderModelUnavailableError(
+        `${args.provider} model unavailable: suppressed unverified model probe for ${requestedModel} because catalog lookup failed`,
       );
     }
 
     const available = catalog.filter((model) =>
-      isGenerativeModel(args.provider, model.id),
+      isGenerativeModel(args.provider, model.id, args.preferred),
     );
     const ordered = resolvePreferredModels(args.provider, args.preferred, available);
     const requestedIndex = args.preferred.indexOf(requestedModel);
@@ -88,11 +85,8 @@ export function createCachedModelResolver(args: {
       return resolved;
     }
 
-    throw Object.assign(
-      new Error(
-        `${args.provider} model not found in the account catalog: ${requestedModel}`,
-      ),
-      { status: 404 },
+    throw new ProviderModelUnavailableError(
+      `${args.provider} model unavailable in the account catalog: ${requestedModel}`,
     );
   };
 }
@@ -113,7 +107,33 @@ export function resolvePreferredModels(
   const unique = [
     ...new Map(available.map((model) => [model.id.toLowerCase(), model])).values(),
   ];
-  return unique
+  const selected: CatalogModel[] = [];
+  const selectedIds = new Set<string>();
+
+  // Account-visible explicit IDs are commitments, not disposable hints. Keep
+  // one exact/snapshot match for every configured rung before filling missing
+  // slots with newly discovered models. This preserves intentional gpt-4.1
+  // and o-series routes even when the same account also exposes newer IDs.
+  for (const configured of preferred) {
+    const match = unique
+      .filter(
+        (candidate) =>
+          !selectedIds.has(candidate.id.toLowerCase()) &&
+          modelMatches(configured, candidate.id),
+      )
+      .sort((left, right) => right.created - left.created)[0];
+    if (!match) continue;
+    selected.push(match);
+    selectedIds.add(match.id.toLowerCase());
+  }
+
+  const remaining = unique
+    .filter((candidate) => !selectedIds.has(candidate.id.toLowerCase()))
+    .sort((left, right) => compareModelStrength(provider, preferred, left, right))
+    .slice(0, Math.max(0, preferred.length - selected.length));
+  selected.push(...remaining);
+
+  return selected
     .sort((left, right) => compareModelStrength(provider, preferred, left, right))
     .map(({ id }) => id);
 }
@@ -185,12 +205,18 @@ function modelQualityTier(
 function isGenerativeModel(
   provider: Extract<ProviderName, "anthropic" | "openai">,
   model: string,
+  preferred: readonly string[],
 ): boolean {
   if (provider === "anthropic") return /^claude-/i.test(model);
+  // An explicitly configured account-visible model is authoritative even
+  // when its family predates or differs from the current defaults (for
+  // example gpt-4.1 or o3). This also avoids guessing that every model in the
+  // broad OpenAI catalog can serve Responses text.
+  if (preferred.some((configured) => modelMatches(configured, model))) return true;
   // The factory uses the Responses API for text/code generation. Exclude the
   // image/audio/embedding/moderation catalogs that the OpenAI Models endpoint
-  // also returns; the current flagship families all begin with gpt-5/gpt-6.
-  return /^gpt-(?:5|6)(?:[.\-]|$)/i.test(model);
+  // also returns; retain current GPT families and reasoning o-series models.
+  return /^(?:gpt-(?:5|6)(?:[.\-]|$)|o\d+(?:[.\-]|$))/i.test(model);
 }
 
 export function createAnthropicModelResolver(args: {

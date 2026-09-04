@@ -58,6 +58,21 @@ export class ProviderAbortError extends Error {
 }
 
 /**
+ * A safe, local refusal produced when account catalog evidence proves that a
+ * configured model rung cannot be called. Keep this type intact through the
+ * retry wrapper so the outer ladder can advance without mistaking the refusal
+ * for a malformed request or retrying an unverified ID.
+ */
+export class ProviderModelUnavailableError extends Error {
+  readonly status = 404;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderModelUnavailableError";
+  }
+}
+
+/**
  * Reject with {@link ProviderAbortError} the moment `signal` fires, whichever
  * settles first. This is the backstop that bounds a call even if the inner
  * SDK request never itself reacts to `signal` — belt-and-suspenders on top of
@@ -115,6 +130,7 @@ export async function withRetry<T>(
       if ((err as { name?: unknown })?.name === "PaidBudgetExhaustedError") {
         throw err;
       }
+      if (err instanceof ProviderModelUnavailableError) throw err;
       if (isNonRetryable(err)) break;
       if (i < attempts - 1) {
         const backoff = Math.min(8000, 400 * 2 ** i);

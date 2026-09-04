@@ -5,6 +5,7 @@ import {
   productionReadinessAgent,
 } from "../agents/productionReadinessAgent.js";
 import { ModelLadderProvider } from "../providers/modelLadderProvider.js";
+import { ProviderModelUnavailableError, withRetry } from "../providers/types.js";
 
 function fake(
   behavior: "ok" | "exhausted" | "badRequest",
@@ -98,6 +99,37 @@ describe("ModelLadderProvider", () => {
 
     expect(noCredits.calls).toBe(1);
     expect(redundantAnthropic.calls).toBe(0);
+    expect(openai.calls).toBe(1);
+    expect(provider.currentProvider()).toBe("openai");
+  });
+
+  it("crosses provider families when catalog suppression passes through retry", async () => {
+    let blockedCalls = 0;
+    const blocked = {
+      name: "anthropic" as const,
+      paidBudgetManaged: true,
+      isConfigured: () => true,
+      async generateText() {
+        blockedCalls += 1;
+        return withRetry("anthropic.generateText", async () => {
+          throw new ProviderModelUnavailableError(
+            "anthropic model unavailable: suppressed unverified model probe",
+          );
+        });
+      },
+      async generateJson<T>() {
+        throw new Error("unused") as T;
+      },
+    } satisfies LLMProvider;
+    const openai = fake("ok", "openai");
+    const provider = new ModelLadderProvider([
+      { model: "claude-opus-5", provider: blocked },
+      { model: "gpt-6-astra", provider: openai },
+    ]);
+
+    await provider.generateText({} as never);
+
+    expect(blockedCalls).toBe(1);
     expect(openai.calls).toBe(1);
     expect(provider.currentProvider()).toBe("openai");
   });
