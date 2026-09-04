@@ -41,6 +41,7 @@ describe("provider model catalog ordering", () => {
         [
           { id: "gpt-5-image", created: 500 },
           { id: "gpt-5.2-realtime", created: 400 },
+          { id: "o3-deep-research", created: 350 },
           { id: "gpt-5-audio", created: 300 },
           { id: "gpt-5", created: 100 },
         ],

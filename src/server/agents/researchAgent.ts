@@ -961,19 +961,32 @@ function featureSpanPolarity(
   return flips % 2 === 1 ? "denied" : "affirmed";
 }
 
-function containsPhraseWithMatchingPolarity(segment: string, phrase: string): boolean {
-  const tokens = segment.split(" ").filter(Boolean);
+function containsPhraseWithMatchingPolarity(
+  segment: string,
+  phrase: string,
+  completeSegment = segment,
+): boolean {
+  const matchableTokens = segment.split(" ").filter(Boolean);
+  const tokens = completeSegment.split(" ").filter(Boolean);
   const phraseTokens = phrase.split(" ").filter(Boolean);
-  if (phraseTokens.length === 0 || phraseTokens.length > tokens.length) return false;
+  if (phraseTokens.length === 0 || phraseTokens.length > matchableTokens.length) {
+    return false;
+  }
   const targetPolarity = featureSpanPolarity(phraseTokens, 0, phraseTokens.length - 1);
   if (targetPolarity === "ambiguous") return false;
-  for (let start = 0; start <= tokens.length - phraseTokens.length; start += 1) {
-    if (!phraseTokens.every((token, offset) => tokens[start + offset] === token)) {
+  for (
+    let start = 0;
+    start <= matchableTokens.length - phraseTokens.length;
+    start += 1
+  ) {
+    if (
+      !phraseTokens.every((token, offset) => matchableTokens[start + offset] === token)
+    ) {
       continue;
     }
     if (
       featureSpanDescribesCandidate(tokens, start, start + phraseTokens.length - 1) &&
-      featureSpanIsCurrent(tokens, start, start + phraseTokens.length - 1) &&
+      featureSpanIsCurrent(tokens) &&
       featureSpanPolarity(tokens, start, start + phraseTokens.length - 1) ===
         targetPolarity
     ) {
@@ -1064,16 +1077,17 @@ const FUTURE_PERIODS = new Set([
   "years",
 ]);
 
-function featureSpanIsCurrent(tokens: string[], start: number, end: number): boolean {
-  // Inspect the entire clause for prospective/future markers.
-  // For exact contiguous matches, future language cannot sit inside the phrase;
-  // for approximate overlap, intervening tokens between matched terms must be visible.
-  const context = tokens;
-  if (context.some((token) => PROSPECTIVE_EVIDENCE_MARKERS.has(token))) {
+function featureSpanIsCurrent(tokens: string[]): boolean {
+  // Approximate matches span the first through last matched term. A roadmap
+  // marker can therefore sit *inside* that range without itself being one of
+  // the matched terms ("credentials that we plan to protect using keys").
+  // Presence evidence is fail-closed: inspect the complete statement rather
+  // than dropping the nominal feature span.
+  if (tokens.some((token) => PROSPECTIVE_EVIDENCE_MARKERS.has(token))) {
     return false;
   }
-  return !context.some(
-    (token, index) => token === "next" && FUTURE_PERIODS.has(context[index + 1] ?? ""),
+  return !tokens.some(
+    (token, index) => token === "next" && FUTURE_PERIODS.has(tokens[index + 1] ?? ""),
   );
 }
 
@@ -1189,15 +1203,33 @@ function coherentEvidenceMatches(
     // semicolon cannot manufacture a new affirmative clause, and reject only
     // the affected clause from semantic matching.
     .replace(/&(?:#[0-9]+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]+;?)/gi, unresolvedEntityMarker)
-    .split(/(?<=[.!?])\s+|[;\r\n]+|\b(?:although|but|however|whereas)\b/i)
+    // Contrast words remain attached to the statement they govern. Splitting
+    // at `but`/`however` used to accept the affirmative half of sentences
+    // whose second half said the feature was future work or belonged only to
+    // competitors.
+    .split(/(?<=[.!?])\s+|[;\r\n]+/)
     .filter((raw) => !raw.includes(unresolvedEntityMarker))
-    .map((raw) => raw.replace(/\s+/g, " ").trim().slice(0, 260))
-    .map((statement) => ({ statement, normalized: normalizedPhrase(statement) }))
+    .map((raw) => raw.replace(/\s+/g, " ").trim())
+    .map((completeStatement) => {
+      // Persist and match only the same bounded statement carried into the
+      // downstream evidence record, but retain the complete rendered clause
+      // for qualifier, attribution, and polarity evaluation.
+      const statement = completeStatement.slice(0, 260);
+      return {
+        statement,
+        normalized: normalizedPhrase(statement),
+        completeNormalized: normalizedPhrase(completeStatement),
+      };
+    })
     .filter((segment) => segment.normalized.length > 0);
 
   return targetEvidencePhrases(spec).flatMap((phrase): CoherentEvidenceMatch[] => {
     const exact = segments.find((segment) =>
-      containsPhraseWithMatchingPolarity(segment.normalized, phrase),
+      containsPhraseWithMatchingPolarity(
+        segment.normalized,
+        phrase,
+        segment.completeNormalized,
+      ),
     );
     if (exact) {
       return [
@@ -1238,7 +1270,7 @@ function coherentEvidenceMatches(
     const required = featureTerms.length;
     const bestOverlap = segments
       .map((segment) => {
-        const segmentTokens = segment.normalized.split(" ").filter(Boolean);
+        const segmentTokens = segment.completeNormalized.split(" ").filter(Boolean);
         const segmentTerms = new Set(meaningfulTerms(segment.normalized));
         const terms = featureTerms.filter((term) => segmentTerms.has(term));
         const positions = terms
@@ -1262,13 +1294,7 @@ function coherentEvidenceMatches(
               Math.min(...positions),
               Math.max(...positions),
             ),
-          isCurrent:
-            positions.length > 0 &&
-            featureSpanIsCurrent(
-              segmentTokens,
-              Math.min(...positions),
-              Math.max(...positions),
-            ),
+          isCurrent: positions.length > 0 && featureSpanIsCurrent(segmentTokens),
         };
       })
       .filter(
@@ -1469,6 +1495,91 @@ export function evidenceGroundedCompetitiveSelection(
   return selected.length === requiredCount
     ? competitiveSelectionSchema(candidates, requiredCount).parse(selection)
     : CompetitiveSelectionShape.parse(selection);
+}
+
+/**
+ * A paid reviewer may rank candidates, but model prose is not proof that the
+ * cited page currently attributes a capability to that product. Re-evaluate
+ * every chosen candidate against the same deterministic statement predicates
+ * used by the outage fallback, then replace model-authored factual claims with
+ * target-owned, evidence-derived wording. Rows without a current,
+ * candidate-attributed match disappear and the unchanged five-product gate
+ * fails closed.
+ */
+function truthGatedCompetitiveSelection(
+  spec: ProductSpec,
+  dossier: CompetitiveDossier,
+  selection: CompetitiveSelection,
+): CompetitiveSelection {
+  const candidates = new Map(
+    dossier.candidates.map((candidate) => [candidate.id, candidate]),
+  );
+  const selectedByCandidate = new Map(
+    selection.selected.map((selected) => [selected.candidateId, selected]),
+  );
+  const comparisons: CompetitiveSelection["comparisons"] = [];
+  const selected: CompetitiveSelection["selected"] = [];
+
+  for (const comparison of selection.comparisons) {
+    if (comparison.decision === "reject") continue;
+    const candidate = candidates.get(comparison.candidateId);
+    const selectedItem = selectedByCandidate.get(comparison.candidateId);
+    if (!candidate || !selectedItem) continue;
+
+    const featureMatches = candidate.sourceEvidence
+      .flatMap((evidence) => {
+        const citedEvidenceUrls = matchingEvidenceUrls(
+          comparison.evidenceUrls,
+          canonicalEvidenceUrlSet([evidence.url]),
+        );
+        return citedEvidenceUrls.flatMap((evidenceUrl) =>
+          coherentEvidenceMatches(spec, evidence.excerpt, evidenceUrl),
+        );
+      })
+      .sort(compareCoherentEvidenceStrength);
+    const strongestMatch = featureMatches[0];
+    if (!strongestMatch) continue;
+
+    const evidenceUrls = [strongestMatch.evidenceUrl];
+    const support = strongestMatch.exact
+      ? `Inspected evidence contains target feature phrase: ${strongestMatch.phrase}`
+      : `One inspected statement supports target feature "${strongestMatch.phrase}" through coherent concepts: ${strongestMatch.terms.join(", ")}`;
+    comparisons.push({
+      candidateId: candidate.id,
+      name: candidate.name,
+      score: comparison.score,
+      matchedFeatures: [support],
+      strengths: [
+        `Official product evidence supports target behavior "${strongestMatch.phrase}".`,
+      ],
+      gaps: [
+        "Evidence verifies public product behavior, not equivalent behavior or acceptance results in the target implementation.",
+      ],
+      evidenceUrls,
+      decision: comparison.decision,
+      rationale:
+        `The cited inspected statement passes current-state, candidate-attribution, and polarity gates for ` +
+        `target behavior "${strongestMatch.phrase}"; adoption remains clean-room and test-gated.`,
+    });
+    selected.push({
+      candidateId: candidate.id,
+      element: `Evidence-backed target behavior: ${strongestMatch.phrase}`,
+      why: "The behavior is present in inspected official evidence and relevant to explicit target terminology.",
+      howToIntegrate:
+        "Reproduce only the documented public behavior as a clean-room pattern, then require a direct acceptance test before treating it as an advantage.",
+      reuseMode: selectedItem.reuseMode,
+      evidenceUrls,
+      score: selectedItem.score,
+    });
+  }
+
+  return CompetitiveSelectionShape.parse({
+    comparisons,
+    selected,
+    summary:
+      `${selection.summary}\n\nDeterministic evidence truth gates retained ${selected.length}/` +
+      `${selection.selected.length} model-selected advantage(s).`,
+  });
 }
 
 function auditFrom(dossier: CompetitiveDossier) {
@@ -1921,6 +2032,9 @@ export async function researchAgent(
             `Bulk competitive review failed validation (${msg.slice(0, 240)}). ` +
             `Continuing with evidence-scoped single-product paid reviews.`,
         });
+  }
+  if (boundedProduction) {
+    selection = truthGatedCompetitiveSelection(spec, dossier, selection);
   }
   let merged = mergeCompetitiveResults(base, dossier, selection);
   if (

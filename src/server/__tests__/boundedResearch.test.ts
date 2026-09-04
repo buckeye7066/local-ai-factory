@@ -122,6 +122,48 @@ class FailingBulkProvider implements LLMProvider {
   }
 }
 
+class SuccessfulSelectionProvider implements LLMProvider {
+  readonly name = "mock" as const;
+  calls = 0;
+
+  constructor(private readonly input: CompetitiveDossier) {}
+
+  isConfigured(): boolean {
+    return true;
+  }
+
+  async generateText() {
+    return { text: "", provider: this.name };
+  }
+
+  async generateJson<T>(_input: GenerateJsonInput<T>): Promise<T> {
+    this.calls += 1;
+    return {
+      comparisons: this.input.candidates.map((candidate) => ({
+        candidateId: candidate.id,
+        name: candidate.name,
+        score: 90,
+        matchedFeatures: ["hardware-backed credential encryption"],
+        strengths: ["The product already provides the capability."],
+        gaps: ["The target should adopt it."],
+        evidenceUrls: [candidate.sourceEvidence[0]!.url],
+        decision: "adapt",
+        rationale: "The cited product page supports the selection.",
+      })),
+      selected: this.input.candidates.map((candidate) => ({
+        candidateId: candidate.id,
+        element: "hardware-backed credential encryption",
+        why: "The model selected this as a present advantage.",
+        howToIntegrate: "Adopt the behavior behind an adapter.",
+        reuseMode: "clean-room-pattern",
+        evidenceUrls: [candidate.sourceEvidence[0]!.url],
+        score: 90,
+      })),
+      summary: "The model selected five evidence-linked advantages.",
+    } as T;
+  }
+}
+
 describe("bounded production research", () => {
   it("uses one bulk model call then preserves five truth-gated evidence comparisons", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
@@ -526,6 +568,171 @@ describe("bounded production research", () => {
 
       expect(findings.comparisons).toEqual([]);
       expect(findings.recommendations).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps a postfix roadmap qualifier attached across a contrast boundary", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Encrypt stored plaintext credentials using hardware keys, but it is planned for next year.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps postfix competitor attribution attached across a contrast boundary", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Encrypt stored plaintext credentials using hardware keys, but only our competitors offer it.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("rejects a prospective marker interleaved inside an approximate match", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Encrypt stored plaintext credentials that we plan to protect using hardware keys.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("evaluates a future qualifier beyond the old statement truncation limit", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Encrypt stored plaintext credentials using hardware keys, " +
+        "with explanatory product copy that contains no additional claim ".repeat(6) +
+        "but this capability is planned for next year.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("revalidates successful model selections with deterministic truth gates", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt =
+        "Encrypt stored plaintext credentials using hardware keys, but only our competitors plan to offer it next year.";
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new SuccessfulSelectionProvider(input);
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(provider.calls).toBe(1);
+      expect(findings.comparisons).toEqual([]);
+      expect(findings.recommendations).toEqual([]);
+      expect(findings.summary).toContain("truth gates retained 0/5");
       expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
     } finally {
       spy.mockRestore();

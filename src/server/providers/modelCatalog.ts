@@ -272,6 +272,11 @@ function isGenerativeModel(
   preferred: readonly string[],
 ): boolean {
   if (provider === "anthropic") return /^claude-/i.test(model);
+  const normalized = model.toLowerCase();
+  // Deep-research IDs are agentic research products, not Responses text/code
+  // models usable by this transport. They remain incompatible even if an ID
+  // was explicitly configured and must never become an automatic fallback.
+  if (/(?:^|[-.])deep-research(?:[-.]|$)/.test(normalized)) return false;
   // An explicitly configured account-visible model is authoritative even
   // when its family predates or differs from the current defaults (for
   // example gpt-4.1 or o3). This also avoids guessing that every model in the
@@ -280,7 +285,6 @@ function isGenerativeModel(
   // The factory uses the Responses API for text/code generation. Exclude the
   // image/audio/embedding/moderation catalogs that the OpenAI Models endpoint
   // also returns; retain current GPT families and reasoning o-series models.
-  const normalized = model.toLowerCase();
   if (
     /(?:^|[-.])(?:audio|embedding|image|moderation|realtime|search|transcribe|tts|vision)(?:[-.]|$)/.test(
       normalized,
