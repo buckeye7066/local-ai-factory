@@ -203,7 +203,7 @@ This is designed to be safe to run on your own machine:
 
 Edit `ANTHROPIC_MODEL` / `OPENAI_MODEL` in `.env`. Order models inside the
 Anthropic family with
-`FACTORY_ANTHROPIC_MODEL_LADDER=claude-fable-5-1,claude-opus-5,claude-sonnet-5,claude-haiku-4-5`,
+`FACTORY_ANTHROPIC_MODEL_LADDER=claude-fable-5-1,claude-opus-5,claude-sonnet-5,claude-haiku-4-5-20251001`,
 then order provider families with `FACTORY_MODEL_LADDER=anthropic,openai`.
 Missing rungs are skipped and the free/local rotator is always appended last.
 The mandatory lead and challenger reviews each start from the same strongest

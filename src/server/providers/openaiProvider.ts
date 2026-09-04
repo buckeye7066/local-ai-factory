@@ -12,7 +12,12 @@ import {
   JsonExtractionError,
 } from "./types.js";
 import type { UsageSink } from "./anthropicProvider.js";
-import { abandonPaidCall, reservePaidCall, settlePaidCall } from "./paidBudget.js";
+import {
+  abandonPaidCall,
+  PaidBudgetExhaustedError,
+  reservePaidCall,
+  settlePaidCall,
+} from "./paidBudget.js";
 import type { ModelIdResolver } from "./modelCatalog.js";
 
 /**
@@ -76,12 +81,14 @@ export class OpenAIProvider implements LLMProvider {
     maxTokens: number,
     call: () => Promise<T>,
     usageOf: (response: T) => { inTokens: number; outTokens: number },
+    onProviderAttempt: () => void,
   ): Promise<T> {
     const reservation = this.paidBudgetManaged
       ? reservePaidCall(this.name, { system, prompt, maxTokens })
       : null;
     let response: T;
     try {
+      onProviderAttempt();
       response = await call();
     } catch (error) {
       if (reservation) abandonPaidCall(reservation);
@@ -122,42 +129,54 @@ export class OpenAIProvider implements LLMProvider {
 
   async generateText(input: GenerateTextInput): Promise<GenerateTextResult> {
     const client = this.ensure();
-    const text = await withRetry(
-      "openai.generateText",
-      async () => {
-        const model = await this.modelId();
-        const maxTokens = input.maxTokens ?? 4096;
-        // NOTE: no `temperature` — gpt-5.x reasoning models reject it (400),
-        // same as current Claude models. Model defaults are used instead.
-        const res = await this.bill(
-          input.system,
-          input.prompt,
-          maxTokens,
-          () =>
-            client.responses.create(
-              {
-                model,
-                instructions: input.system,
-                input: input.prompt,
-                max_output_tokens: maxTokens,
-              },
-              { signal: this.signal },
-            ),
-          (response) => ({
-            inTokens: response.usage?.input_tokens ?? 0,
-            outTokens: response.usage?.output_tokens ?? 0,
-          }),
-        );
-        return res.output_text ?? "";
-      },
-      3,
-      this.signal,
-    );
-    return { text, provider: "openai" };
+    let providerAttemptOccurred = false;
+    try {
+      const text = await withRetry(
+        "openai.generateText",
+        async () => {
+          const model = await this.modelId();
+          const maxTokens = input.maxTokens ?? 4096;
+          // NOTE: no `temperature` — gpt-5.x reasoning models reject it (400),
+          // same as current Claude models. Model defaults are used instead.
+          const res = await this.bill(
+            input.system,
+            input.prompt,
+            maxTokens,
+            () =>
+              client.responses.create(
+                {
+                  model,
+                  instructions: input.system,
+                  input: input.prompt,
+                  max_output_tokens: maxTokens,
+                },
+                { signal: this.signal },
+              ),
+            (response) => ({
+              inTokens: response.usage?.input_tokens ?? 0,
+              outTokens: response.usage?.output_tokens ?? 0,
+            }),
+            () => {
+              providerAttemptOccurred = true;
+            },
+          );
+          return res.output_text ?? "";
+        },
+        3,
+        this.signal,
+      );
+      return { text, provider: "openai" };
+    } catch (error) {
+      if (error instanceof PaidBudgetExhaustedError && providerAttemptOccurred) {
+        error.markProviderAttemptOccurred();
+      }
+      throw error;
+    }
   }
 
   async generateJson<T>(input: GenerateJsonInput<T>): Promise<T> {
     const client = this.ensure();
+    let providerAttemptOccurred = false;
     const instructions = `${input.system}
 
 You MUST respond with a single valid JSON object matching the "${input.schemaName}" shape.
@@ -186,6 +205,9 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
             inTokens: response.usage?.input_tokens ?? 0,
             outTokens: response.usage?.output_tokens ?? 0,
           }),
+          () => {
+            providerAttemptOccurred = true;
+          },
         );
         return extractJson(res.output_text ?? "");
       } catch (err) {
@@ -217,6 +239,9 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
               inTokens: response.usage?.input_tokens ?? 0,
               outTokens: response.usage?.output_tokens ?? 0,
             }),
+            () => {
+              providerAttemptOccurred = true;
+            },
           );
           return extractJson(res.output_text ?? "");
         }
@@ -225,17 +250,24 @@ Do not include markdown fences, comments, or any prose outside the JSON.`;
     };
 
     // Two attempts (see anthropicProvider): every extra attempt is billed.
-    return withRetry(
-      "openai.generateJson",
-      () =>
-        generateJsonWithRepair({
-          input,
-          attempts: 2,
-          baseMaxTokens: input.maxTokens ?? 8192,
-          call: callOnce,
-        }),
-      3,
-      this.signal,
-    );
+    try {
+      return await withRetry(
+        "openai.generateJson",
+        () =>
+          generateJsonWithRepair({
+            input,
+            attempts: 2,
+            baseMaxTokens: input.maxTokens ?? 8192,
+            call: callOnce,
+          }),
+        3,
+        this.signal,
+      );
+    } catch (error) {
+      if (error instanceof PaidBudgetExhaustedError && providerAttemptOccurred) {
+        error.markProviderAttemptOccurred();
+      }
+      throw error;
+    }
   }
 }

@@ -249,6 +249,44 @@ describe("bounded production research", () => {
     }
   });
 
+  it("rejects explicit negations of an otherwise exact feature phrase", async () => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    const denials = [
+      "The product does not support offline workflow synchronization.",
+      "The product never offers offline workflow synchronization.",
+      "The product lacks offline workflow synchronization.",
+      "Offline workflow synchronization is not supported.",
+      "The product doesn't provide offline workflow synchronization.",
+    ];
+    input.candidates.forEach((candidate, index) => {
+      candidate.sourceEvidence[0]!.excerpt = denials[index]!;
+    });
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["offline workflow synchronization"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("does not qualify a feature outside the persisted evidence statement", async () => {
     const intelligence = await import("../tools/competitiveIntelligence.js");
     const input = dossier();

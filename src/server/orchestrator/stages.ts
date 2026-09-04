@@ -169,7 +169,7 @@ export class CountingProvider implements LLMProvider {
     } catch (error) {
       // Paid-budget admission fails before provider I/O. It is not a model
       // call and must leave room for the ladder's terminal free rung.
-      if (error instanceof PaidBudgetExhaustedError) {
+      if (error instanceof PaidBudgetExhaustedError && !error.providerAttemptOccurred) {
         this.undoTick();
         counted = false;
       }
@@ -186,7 +186,7 @@ export class CountingProvider implements LLMProvider {
     try {
       return await this.inner.generateJson(input);
     } catch (error) {
-      if (error instanceof PaidBudgetExhaustedError) {
+      if (error instanceof PaidBudgetExhaustedError && !error.providerAttemptOccurred) {
         this.undoTick();
         counted = false;
       }

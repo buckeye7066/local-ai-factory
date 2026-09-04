@@ -739,13 +739,91 @@ function meaningfulTerms(value: string): string[] {
 function normalizedPhrase(value: string): string {
   return value
     .toLowerCase()
+    .replace(
+      /\b(?:ain|aren|can|couldn|didn|doesn|don|hadn|hasn|haven|isn|mustn|shouldn|wasn|weren|won|wouldn)['’]t\b/g,
+      " not ",
+    )
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
     .replace(/\s+/g, " ");
 }
 
-function containsNormalizedPhrase(segment: string, phrase: string): boolean {
-  return ` ${segment} `.includes(` ${phrase} `);
+const PRE_FEATURE_NEGATIONS = new Set([
+  "absent",
+  "absence",
+  "avoid",
+  "avoids",
+  "cannot",
+  "discontinued",
+  "denied",
+  "denies",
+  "deny",
+  "disabled",
+  "drops",
+  "dropped",
+  "excluding",
+  "excludes",
+  "fails",
+  "failed",
+  "failing",
+  "lack",
+  "lacking",
+  "lacks",
+  "missing",
+  "never",
+  "no",
+  "not",
+  "omission",
+  "omitted",
+  "omits",
+  "removed",
+  "removes",
+  "refuses",
+  "refuse",
+  "unable",
+  "unavailable",
+  "unsupported",
+  "without",
+]);
+
+const POST_FEATURE_NEGATIONS = new Set([
+  "absent",
+  "discontinued",
+  "denied",
+  "disabled",
+  "excluded",
+  "impossible",
+  "lacking",
+  "missing",
+  "never",
+  "not",
+  "omitted",
+  "unavailable",
+  "unsupported",
+]);
+
+function isNegatedFeatureSpan(tokens: string[], start: number, end: number): boolean {
+  const before = tokens.slice(Math.max(0, start - 6), start);
+  const after = tokens.slice(end + 1, Math.min(tokens.length, end + 7));
+  return (
+    before.some((token) => PRE_FEATURE_NEGATIONS.has(token)) ||
+    after.some((token) => POST_FEATURE_NEGATIONS.has(token))
+  );
+}
+
+function containsAffirmativePhrase(segment: string, phrase: string): boolean {
+  const tokens = segment.split(" ").filter(Boolean);
+  const phraseTokens = phrase.split(" ").filter(Boolean);
+  if (phraseTokens.length === 0 || phraseTokens.length > tokens.length) return false;
+  for (let start = 0; start <= tokens.length - phraseTokens.length; start += 1) {
+    if (!phraseTokens.every((token, offset) => tokens[start + offset] === token)) {
+      continue;
+    }
+    if (!isNegatedFeatureSpan(tokens, start, start + phraseTokens.length - 1)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function targetEvidencePhrases(spec: ProductSpec): string[] {
@@ -804,7 +882,7 @@ function coherentEvidenceMatches(
 
   return targetEvidencePhrases(spec).flatMap((phrase): CoherentEvidenceMatch[] => {
     const exact = segments.find((segment) =>
-      containsNormalizedPhrase(segment.normalized, phrase),
+      containsAffirmativePhrase(segment.normalized, phrase),
     );
     if (exact) {
       return [
@@ -826,12 +904,26 @@ function coherentEvidenceMatches(
         : Math.max(3, Math.ceil(featureTerms.length * 0.75));
     const bestOverlap = segments
       .map((segment) => {
+        const segmentTokens = segment.normalized.split(" ").filter(Boolean);
         const segmentTerms = new Set(meaningfulTerms(segment.normalized));
+        const terms = featureTerms.filter((term) => segmentTerms.has(term));
+        const positions = terms
+          .map((term) => segmentTokens.indexOf(term))
+          .filter((position) => position >= 0);
+        const negated =
+          positions.length > 0 &&
+          isNegatedFeatureSpan(
+            segmentTokens,
+            Math.min(...positions),
+            Math.max(...positions),
+          );
         return {
           statement: segment.statement,
-          terms: featureTerms.filter((term) => segmentTerms.has(term)),
+          terms,
+          negated,
         };
       })
+      .filter((segment) => !segment.negated)
       .sort((left, right) => right.terms.length - left.terms.length)[0];
     return bestOverlap && bestOverlap.terms.length >= required
       ? [

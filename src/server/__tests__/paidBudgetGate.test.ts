@@ -190,9 +190,11 @@ describe("BudgetGatedProvider", () => {
         },
       };
 
-      await expect(
-        provider.generateText({ system: "system", prompt: "prompt" }),
-      ).rejects.toThrow(/Paid provider call refused/i);
+      const refusal = await provider
+        .generateText({ system: "system", prompt: "prompt" })
+        .catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(PaidBudgetExhaustedError);
+      expect((refusal as PaidBudgetExhaustedError).providerAttemptOccurred).toBe(true);
       expect(sdkCalls).toBe(1);
       expect(paidBudgetStatus().lastHour).toBe(1);
     } finally {
@@ -238,14 +240,16 @@ describe("BudgetGatedProvider", () => {
         },
       };
 
-      await expect(
-        provider.generateJson({
+      const refusal = await provider
+        .generateJson({
           system: "system",
           prompt: "prompt",
           schema: z.object({ ok: z.boolean() }),
           schemaName: "Result",
-        }),
-      ).rejects.toThrow(/Paid provider call refused/i);
+        })
+        .catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(PaidBudgetExhaustedError);
+      expect((refusal as PaidBudgetExhaustedError).providerAttemptOccurred).toBe(true);
       expect(sdkCalls).toBe(1);
       expect(paidBudgetStatus().lastHour).toBe(1);
     } finally {

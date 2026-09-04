@@ -236,4 +236,35 @@ describe("CountingProvider — model-call budget (#5)", () => {
       free: { calls: 1 },
     });
   });
+
+  it("retains the logical count when paid exhaustion follows provider I/O", async () => {
+    const run = fakeRun();
+    let calls = 0;
+    const partial: LLMProvider = {
+      name: "openai",
+      isConfigured: () => true,
+      async generateText() {
+        calls += 1;
+        const refusal = new PaidBudgetExhaustedError("paid-rescue cap reached");
+        refusal.markProviderAttemptOccurred();
+        throw refusal;
+      },
+      async generateJson<T>() {
+        throw new Error("unused") as T;
+      },
+    };
+    const counted = new CountingProvider(partial, run, 1);
+
+    await expect(
+      counted.generateText({ system: "s", prompt: "p" }),
+    ).rejects.toBeInstanceOf(PaidBudgetExhaustedError);
+    await expect(
+      counted.generateText({ system: "s", prompt: "p" }),
+    ).rejects.toBeInstanceOf(ModelBudgetError);
+    expect(calls).toBe(1);
+    expect(run.providerUsage).toMatchObject({
+      totalCalls: 1,
+      openai: { calls: 1 },
+    });
+  });
 });
