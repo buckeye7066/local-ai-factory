@@ -887,6 +887,74 @@ describe("bounded production research", () => {
   });
 
   it.each([
+    "When possible, the application will encrypt stored plaintext credentials using hardware keys.",
+    "After launch, the product will encrypt stored plaintext credentials using hardware keys.",
+  ])("rejects an unfulfilled modal promise: %s", async (excerpt) => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt = excerpt;
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([
+    "Encrypt stored plaintext credentials using hardware keys, but this product does not offer it.",
+    "Encrypt stored plaintext credentials using hardware keys; this product no longer supports it.",
+  ])("rejects a postfix denial in a later clause: %s", async (excerpt) => {
+    const intelligence = await import("../tools/competitiveIntelligence.js");
+    const input = dossier();
+    for (const candidate of input.candidates) {
+      candidate.sourceEvidence[0]!.excerpt = excerpt;
+    }
+    const spy = vi
+      .spyOn(intelligence, "buildCompetitiveDossier")
+      .mockResolvedValue(input);
+    const provider = new FailingBulkProvider();
+    try {
+      const findings = await researchAgent(
+        { provider },
+        {
+          ...spec,
+          tagline: "",
+          coreFeatures: ["encrypt stored plaintext credentials using hardware keys"],
+          userFlows: [],
+          acceptanceCriteria: [],
+        },
+        arch,
+        { competitive: true, executionMode: "bounded-production" },
+      );
+
+      expect(findings.comparisons).toEqual([]);
+      expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([
     "We hope to encrypt stored plaintext credentials using hardware keys.",
     "We are considering how to encrypt stored plaintext credentials using hardware keys.",
     "We aspire to encrypt stored plaintext credentials using hardware keys.",

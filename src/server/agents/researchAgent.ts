@@ -994,12 +994,18 @@ function containsPhraseWithMatchingPolarity(
       featureSpanIsCurrent(completeTokens) &&
       featureSpanPolarity(matchableTokens, start, start + phraseTokens.length - 1) ===
         targetPolarity &&
-      completeMatches.some((completeStart) =>
-        featureSpanDescribesCandidate(
-          completeTokens,
-          completeStart,
-          completeStart + phraseTokens.length - 1,
-        ),
+      completeMatches.some(
+        (completeStart) =>
+          featureSpanDescribesCandidate(
+            completeTokens,
+            completeStart,
+            completeStart + phraseTokens.length - 1,
+          ) &&
+          featureSpanPolarity(
+            completeTokens,
+            completeStart,
+            completeStart + phraseTokens.length - 1,
+          ) === targetPolarity,
       )
     ) {
       return true;
@@ -1174,12 +1180,17 @@ function featureSpanIsCurrent(tokens: string[]): boolean {
       break;
     }
     const subjectWindow = tokens.slice(Math.max(0, triggerIndex + 1), index);
+    const hasSecondPersonActor = subjectWindow.some(
+      (token) => token === "you" || token === "your",
+    );
     const hasCurrentProductSubject = subjectWindow.some(
       (token, subjectIndex) =>
         CURRENT_MODAL_SUBJECTS.has(token) ||
         (token === "it" && subjectIndex === subjectWindow.length - 1),
     );
-    if (triggerIndex < 0 || !hasCurrentProductSubject) return false;
+    if (triggerIndex < 0 || !hasSecondPersonActor || !hasCurrentProductSubject) {
+      return false;
+    }
   }
   return true;
 }
@@ -1392,6 +1403,14 @@ function coherentEvidenceMatches(
           statement: segment.statement,
           terms,
           polarity,
+          completePolarity:
+            positions.length > 0 && segmentOffset >= 0
+              ? featureSpanPolarity(
+                  completeTokens,
+                  segmentOffset + Math.min(...positions),
+                  segmentOffset + Math.max(...positions),
+                )
+              : ("ambiguous" as const),
           describesCandidate:
             positions.length > 0 &&
             featureSpanDescribesCandidate(
@@ -1412,7 +1431,8 @@ function coherentEvidenceMatches(
         (segment) =>
           segment.describesCandidate &&
           segment.isCurrent &&
-          segment.polarity === targetPolarity,
+          segment.polarity === targetPolarity &&
+          segment.completePolarity === targetPolarity,
       )
       .sort((left, right) => right.terms.length - left.terms.length)[0];
     return bestOverlap &&
