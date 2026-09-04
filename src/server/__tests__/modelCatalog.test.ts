@@ -8,6 +8,7 @@ describe("provider model catalog ordering", () => {
   it("preserves configured strength while resolving dated model snapshots", () => {
     expect(
       resolvePreferredModels(
+        "anthropic",
         ["claude-fable-5-1", "claude-opus-5", "claude-haiku-4-5"],
         [
           { id: "claude-opus-5", created: 20 },
@@ -21,6 +22,7 @@ describe("provider model catalog ordering", () => {
   it("uses the strongest remaining account-visible model when a configured ID is absent", () => {
     expect(
       resolvePreferredModels(
+        "openai",
         ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra"],
         [
           { id: "gpt-5.6-sol", created: 30 },
@@ -29,6 +31,44 @@ describe("provider model catalog ordering", () => {
         ],
       ),
     ).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+  });
+
+  it("keeps an unlisted stronger model ahead of an exact later weak alias", async () => {
+    const messages: string[] = [];
+    const preferred = ["claude-fable-5-1", "claude-opus-5", "claude-haiku-4-5"];
+    const available = [
+      { id: "claude-haiku-4-5-20251001", created: 200 },
+      { id: "claude-fable-5-2", created: 100 },
+    ];
+
+    expect(resolvePreferredModels("anthropic", preferred, available)).toEqual([
+      "claude-fable-5-2",
+      "claude-haiku-4-5-20251001",
+    ]);
+
+    const resolver = createCachedModelResolver({
+      provider: "anthropic",
+      preferred,
+      load: async () => available,
+      log: (_level, message) => messages.push(message),
+    });
+    await expect(resolver("claude-fable-5-1")).resolves.toBe("claude-fable-5-2");
+    expect(messages).toContain(
+      "[route] anthropic Models API confirmed account-visible model claude-fable-5-2 for configured rung claude-fable-5-1.",
+    );
+  });
+
+  it("does not mistake a newer weak snapshot for the strongest model", () => {
+    expect(
+      resolvePreferredModels(
+        "anthropic",
+        ["claude-opus-5", "claude-haiku-4-5"],
+        [
+          { id: "claude-haiku-4-5-20251001", created: 300 },
+          { id: "claude-opus-5", created: 100 },
+        ],
+      ),
+    ).toEqual(["claude-opus-5", "claude-haiku-4-5-20251001"]);
   });
 
   it("allows only one configured probe when the account catalog is unreachable", async () => {

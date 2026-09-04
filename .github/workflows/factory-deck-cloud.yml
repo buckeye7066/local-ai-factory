@@ -67,8 +67,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: claude-fable-5-1
-          OPENAI_MODEL: gpt-5.5
-          FACTORY_SOL_MODEL: gpt-5.5
+          OPENAI_MODEL: gpt-6-astra
+          FACTORY_SOL_MODEL: gpt-6-astra
           FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
           FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic
@@ -324,8 +324,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.PAID_PRODUCTION_ANTHROPIC_KEY || secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: claude-fable-5-1
-          OPENAI_MODEL: gpt-5.5
-          FACTORY_SOL_MODEL: gpt-5.5
+          OPENAI_MODEL: gpt-6-astra
+          FACTORY_SOL_MODEL: gpt-6-astra
           FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
           FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic

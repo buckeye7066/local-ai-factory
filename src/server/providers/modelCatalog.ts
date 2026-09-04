@@ -30,6 +30,7 @@ export function createCachedModelResolver(args: {
   let snapshot: Promise<CatalogModel[] | null> | null = null;
   let warned = false;
   let configuredFallbackAttempted = false;
+  const loggedResolutions = new Set<string>();
 
   const loadOnce = (): Promise<CatalogModel[] | null> => {
     snapshot ??= args.load().catch(() => {
@@ -66,13 +67,26 @@ export function createCachedModelResolver(args: {
       );
     }
 
-    const available = catalog
-      .filter((model) => isGenerativeModel(args.provider, model.id))
-      .sort((a, b) => b.created - a.created || a.id.localeCompare(b.id));
-    const ordered = resolvePreferredModels(args.preferred, available);
+    const available = catalog.filter((model) =>
+      isGenerativeModel(args.provider, model.id),
+    );
+    const ordered = resolvePreferredModels(args.provider, args.preferred, available);
     const requestedIndex = args.preferred.indexOf(requestedModel);
     const resolved = requestedIndex >= 0 ? ordered[requestedIndex] : undefined;
-    if (resolved) return resolved;
+    if (resolved) {
+      const resolution = `${requestedModel}\u0000${resolved}`;
+      if (!loggedResolutions.has(resolution)) {
+        loggedResolutions.add(resolution);
+        args.log(
+          "info",
+          `[route] ${args.provider} Models API confirmed account-visible model ${resolved}` +
+            (resolved === requestedModel
+              ? "."
+              : ` for configured rung ${requestedModel}.`),
+        );
+      }
+      return resolved;
+    }
 
     throw Object.assign(
       new Error(
@@ -84,35 +98,88 @@ export function createCachedModelResolver(args: {
 }
 
 /**
- * Resolve the owner-configured strength order against actual account-visible
- * IDs. Exact IDs win. A dated provider snapshot (for example
- * `claude-haiku-4-5-20251001`) can satisfy its undated alias. Remaining
- * account-visible generative models are appended newest-first, so an account
- * that has the current flagship but not a stale configured alias still starts
- * with paid capacity instead of falling through to local inference.
+ * Resolve owner preferences against actual account-visible IDs. Provider
+ * quality tiers determine the execution order; exact configured aliases win
+ * only within the same tier. A dated provider snapshot (for example
+ * `claude-haiku-4-5-20251001`) can satisfy its undated alias. This means an
+ * unlisted account-visible flagship remains ahead of a newer weak snapshot
+ * instead of being displaced by a positional match.
  */
 export function resolvePreferredModels(
+  provider: Extract<ProviderName, "anthropic" | "openai">,
   preferred: readonly string[],
   available: readonly CatalogModel[],
 ): string[] {
-  const remaining = [...available];
-  const resolved: string[] = [];
-  for (const requested of preferred) {
-    const normalized = requested.toLowerCase();
-    const index = remaining.findIndex(({ id }) => {
-      const candidate = id.toLowerCase();
-      return (
-        candidate === normalized ||
-        candidate.startsWith(`${normalized}-`) ||
-        normalized.startsWith(`${candidate}-`)
-      );
-    });
-    if (index < 0) continue;
-    const [match] = remaining.splice(index, 1);
-    if (match) resolved.push(match.id);
+  const unique = [
+    ...new Map(available.map((model) => [model.id.toLowerCase(), model])).values(),
+  ];
+  return unique
+    .sort((left, right) => compareModelStrength(provider, preferred, left, right))
+    .map(({ id }) => id);
+}
+
+/**
+ * Models APIs report availability and creation time, not model quality. Rank
+ * explicit product tiers first; creation time is only a tie-breaker within a
+ * tier. This prevents a newer Haiku/Luna snapshot from outranking an older
+ * Opus/Sol model. Exact configured aliases remain preferred within their
+ * quality tier, but cannot pull a weaker tier ahead of a stronger unlisted
+ * account-visible model.
+ */
+function compareModelStrength(
+  provider: Extract<ProviderName, "anthropic" | "openai">,
+  preferred: readonly string[],
+  left: CatalogModel,
+  right: CatalogModel,
+): number {
+  const leftTier = modelQualityTier(provider, left.id);
+  const rightTier = modelQualityTier(provider, right.id);
+  if (leftTier !== rightTier) return rightTier - leftTier;
+
+  const leftPreference = preferred.findIndex((model) => modelMatches(model, left.id));
+  const rightPreference = preferred.findIndex((model) => modelMatches(model, right.id));
+  if (leftPreference >= 0 || rightPreference >= 0) {
+    if (leftPreference < 0) return 1;
+    if (rightPreference < 0) return -1;
+    if (leftPreference !== rightPreference) return leftPreference - rightPreference;
   }
-  resolved.push(...remaining.map(({ id }) => id));
-  return [...new Set(resolved)];
+
+  if (left.created !== right.created) return right.created - left.created;
+  return left.id.localeCompare(right.id);
+}
+
+function modelMatches(configured: string, available: string): boolean {
+  const requested = configured.toLowerCase();
+  const candidate = available.toLowerCase();
+  return (
+    candidate === requested ||
+    candidate.startsWith(`${requested}-`) ||
+    requested.startsWith(`${candidate}-`)
+  );
+}
+
+function modelQualityTier(
+  provider: Extract<ProviderName, "anthropic" | "openai">,
+  model: string,
+): number {
+  const id = model.toLowerCase();
+  if (provider === "anthropic") {
+    if (id.includes("fable")) return 500;
+    if (id.includes("opus")) return 400;
+    if (id.includes("sonnet")) return 300;
+    if (id.includes("haiku")) return 200;
+    return 100;
+  }
+
+  if (id.includes("astra")) return 700;
+  if (id.includes("pro")) return 650;
+  if (id.includes("sol")) return 600;
+  if (id.includes("terra")) return 500;
+  if (id.includes("codex")) return 450;
+  if (id.includes("mini")) return 350;
+  if (id.includes("luna")) return 300;
+  if (id.includes("nano")) return 200;
+  return 400;
 }
 
 function isGenerativeModel(

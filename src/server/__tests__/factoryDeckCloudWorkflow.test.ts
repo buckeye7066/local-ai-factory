@@ -36,6 +36,14 @@ describe("automatic cloud model-ladder contract", () => {
     }
   });
 
+  it("does not override catalog resolution with the retired OpenAI model", () => {
+    for (const workflow of [factory, foundry]) {
+      expect(workflow).toContain("OPENAI_MODEL: gpt-6-astra");
+      expect(workflow).toContain("FACTORY_SOL_MODEL: gpt-6-astra");
+      expect(workflow).not.toContain("gpt-5.5");
+    }
+  });
+
   it.each([
     ["Factory Deck", factory],
     ["Purpose Foundry", foundry],
