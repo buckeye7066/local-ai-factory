@@ -21,8 +21,11 @@ import type { ModelIdResolver } from "./modelCatalog.js";
  * The API key is captured in this closure only and never logged or returned.
  * JSON mode asks for strict JSON and validates with the caller's Zod schema.
  */
-/** Reports token usage for the local estimated-USD ledger and telemetry. */
-export type UsageSink = (usage: { inTokens: number; outTokens: number }) => void;
+/** Reports token usage plus the exact model that served the billable call. */
+export type UsageSink = (
+  usage: { inTokens: number; outTokens: number },
+  model: string,
+) => void;
 
 export class AnthropicProvider implements LLMProvider {
   readonly name = "anthropic" as const;
@@ -91,7 +94,7 @@ export class AnthropicProvider implements LLMProvider {
   ): void {
     if (reservation) settlePaidCall(reservation, usage);
     try {
-      this.onUsage(usage);
+      this.onUsage(usage, this.model);
     } catch {
       // Telemetry/logging is non-billable bookkeeping. A sink failure after a
       // successful response must never make withRetry buy the same answer again.

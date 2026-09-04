@@ -128,11 +128,11 @@ export function createProviderRegistry(
     provider: new AnthropicProvider(
       secrets.anthropicApiKey,
       model,
-      (u) => {
+      (u, servedModel) => {
         const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
         log(
           "warn",
-          `[route] paid Anthropic ${model} call billed: ${u.inTokens} in / ` +
+          `[route] paid Anthropic ${servedModel} call billed: ${u.inTokens} in / ` +
             `${u.outTokens} out tokens (est. $${usd.toFixed(4)}).`,
         );
       },
@@ -160,11 +160,11 @@ export function createProviderRegistry(
     provider: new OpenAIProvider(
       secrets.openaiApiKey,
       model,
-      (u) => {
+      (u, servedModel) => {
         const usd = estimateUsd(u.inTokens, u.outTokens, loadLimits());
         log(
           "warn",
-          `[route] paid OpenAI ${model} call billed: ${u.inTokens} in / ${u.outTokens} out ` +
+          `[route] paid OpenAI ${servedModel} call billed: ${u.inTokens} in / ${u.outTokens} out ` +
             `tokens (est. $${usd.toFixed(4)}).`,
         );
       },

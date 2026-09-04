@@ -97,7 +97,7 @@ export class OpenAIProvider implements LLMProvider {
     const usage = usageOf(response);
     if (reservation) settlePaidCall(reservation, usage);
     try {
-      this.onUsage(usage);
+      this.onUsage(usage, this.model);
     } catch {
       // A telemetry/logging failure occurs after the provider billed and
       // answered. It must not escape into withRetry and duplicate that call.
