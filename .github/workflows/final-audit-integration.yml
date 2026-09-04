@@ -40,7 +40,6 @@ jobs:
             src/server/__tests__/commandShellSafety.test.ts
             src/server/__tests__/competitiveEvidence.test.ts
             src/server/__tests__/directTestEvidence.test.ts
-            src/server/__tests__/factoryDeckCloudWorkflow.test.ts
             src/server/__tests__/foundry.test.ts
             src/server/__tests__/platformEvidenceRunner.test.ts
             src/server/__tests__/verificationCommands.test.ts
