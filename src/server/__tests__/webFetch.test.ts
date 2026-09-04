@@ -53,4 +53,41 @@ describe("webFetchTool readable HTML extraction", () => {
     expect(result.textExcerpt).toContain("Visible after.");
     expect(result.textExcerpt).not.toMatch(/outer|inner|hidden tail/);
   });
+
+  it("does not treat an HTML slash as closing a non-void hidden element", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          `<p>Visible before.</p><template/>slash-hidden payload</template><p>Visible after.</p>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool("https://evidence.example/slash", 1_000, {
+      fetch,
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    expect(result.textExcerpt).toContain("Visible before.");
+    expect(result.textExcerpt).toContain("Visible after.");
+    expect(result.textExcerpt).not.toContain("slash-hidden payload");
+  });
+
+  it("drops an unterminated HTML comment instead of treating it as evidence", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(`<p>Visible.</p><!-- hidden false claim`, {
+          headers: { "content-type": "text/html" },
+        }),
+      ),
+    );
+
+    const result = await webFetchTool("https://evidence.example/comment", 1_000, {
+      fetch,
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+    });
+
+    expect(result.textExcerpt).toBe("Visible.");
+  });
 });

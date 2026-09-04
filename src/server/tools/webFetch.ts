@@ -354,7 +354,7 @@ function openingTagSuppressesText(tag: string, rawTag: string): boolean {
 /** Extract visible/readable HTML text without promoting hidden page payloads. */
 function toReadableText(html: string): string {
   const token =
-    /<!--[\s\S]*?-->|<![^>]*>|<\?[\s\S]*?\?>|<\/?\s*([a-z][\w:-]*)\b[^>]*>/gi;
+    /<!--[\s\S]*?(?:-->|$)|<![^>]*>|<\?[\s\S]*?\?>|<\/?\s*([a-z][\w:-]*)\b[^>]*>/gi;
   const stack: Array<{ tag: string; suppressed: boolean }> = [];
   let suppressedDepth = 0;
   let cursor = 0;
@@ -381,7 +381,11 @@ function toReadableText(html: string): string {
 
     const parentSuppressed = suppressedDepth > 0;
     const suppressed = parentSuppressed || openingTagSuppressesText(tag, rawTag);
-    const selfClosing = /\/\s*>$/.test(rawTag) || VOID_ELEMENTS.has(tag);
+    // In text/html, a trailing slash does not self-close ordinary elements
+    // (`<template/>` still opens a template). Only HTML void elements close
+    // immediately; treating the slash as XML syntax would expose hidden tail
+    // text as evidence.
+    const selfClosing = VOID_ELEMENTS.has(tag);
     if (!selfClosing) {
       stack.push({ tag, suppressed });
       if (suppressed) suppressedDepth += 1;
