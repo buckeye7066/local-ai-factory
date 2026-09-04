@@ -167,6 +167,50 @@ describe("webFetchTool readable HTML extraction", () => {
     expect(result.textExcerpt).toBe("Visible.");
   });
 
+  it("decodes HTML entities in real style attributes before visibility checks", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          `<p>Visible.</p><div style="display&#58;none">Entity-hidden feature claim.</div>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool(
+      "https://evidence.example/css-html-entity",
+      1_000,
+      {
+        fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      },
+    );
+
+    expect(result.textExcerpt).toBe("Visible.");
+  });
+
+  it("ignores style-like text inside preceding quoted attributes", async () => {
+    const fetch = vi.fn(async () =>
+      Promise.resolve(
+        new Response(
+          `<p>Visible.</p><div data-note='x style="color:red"' style="display:none">Decoy-hidden feature claim.</div>`,
+          { headers: { "content-type": "text/html" } },
+        ),
+      ),
+    );
+
+    const result = await webFetchTool(
+      "https://evidence.example/css-quoted-decoy",
+      1_000,
+      {
+        fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      },
+    );
+
+    expect(result.textExcerpt).toBe("Visible.");
+  });
+
   it("removes CSS newline continuations before testing hidden declarations", async () => {
     const fetch = vi.fn(async () =>
       Promise.resolve(
