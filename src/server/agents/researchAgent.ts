@@ -804,6 +804,10 @@ const DENIAL_PREDICATES = new Set([
   "excluded",
   "excludes",
   "excluding",
+  "forbid",
+  "forbidden",
+  "forbids",
+  "forbidding",
   "impossible",
   "missing",
   "omit",
@@ -814,6 +818,10 @@ const DENIAL_PREDICATES = new Set([
   "removed",
   "removes",
   "removing",
+  "prohibit",
+  "prohibited",
+  "prohibits",
+  "prohibiting",
   "retire",
   "retired",
   "retires",
@@ -1077,25 +1085,9 @@ const MAX_BOUNDED_REPOSITORY_RECOMMENDATIONS = 5;
  */
 function boundedRepositoryRecommendations(
   spec: ProductSpec,
-  arch: Architecture,
+  _arch: Architecture,
   dossier: CompetitiveDossier,
 ): ResearchRecommendation[] {
-  const targetTerms = new Set(
-    meaningfulTerms(
-      [
-        spec.tagline,
-        spec.targetUser,
-        ...spec.coreFeatures,
-        ...spec.userFlows,
-        ...spec.acceptanceCriteria,
-        arch.overview,
-        arch.frontend,
-        arch.backend,
-        arch.dataModel,
-      ].join(" "),
-    ),
-  );
-
   return dossier.candidates
     .filter(
       (candidate) =>
@@ -1106,27 +1098,29 @@ function boundedRepositoryRecommendations(
     )
     .flatMap((candidate) => {
       const strongest = candidate.sourceEvidence
-        .map((evidence) => ({
-          evidence,
-          matchedTerms: meaningfulTerms(
-            `${candidate.description} ${evidence.path} ${evidence.excerpt}`,
-          ).filter((term) => targetTerms.has(term)),
-        }))
+        .flatMap((evidence) =>
+          [...canonicalEvidenceUrlSet([evidence.url])].flatMap((evidenceUrl) =>
+            coherentEvidenceMatches(spec, evidence.excerpt, evidenceUrl).map(
+              (match) => ({ evidence, match }),
+            ),
+          ),
+        )
         .sort(
           (left, right) =>
-            right.matchedTerms.length - left.matchedTerms.length ||
+            compareCoherentEvidenceStrength(left.match, right.match) ||
             left.evidence.path.localeCompare(right.evidence.path),
         )[0];
-      if (!strongest || strongest.matchedTerms.length < 2) return [];
+      if (!strongest || strongest.match.terms.length < 2) return [];
 
       const path = strongest.evidence.path.replace(/\s+/g, " ").trim().slice(0, 180);
-      const evidenceUrls = [...canonicalEvidenceUrlSet([strongest.evidence.url])];
+      const evidenceUrls = [strongest.match.evidenceUrl];
       if (!path || evidenceUrls.length === 0) return [];
       const reuseMode =
         candidate.license.policy === "reference-only"
           ? ("reference-only" as const)
           : ("clean-room-pattern" as const);
-      const matched = strongest.matchedTerms.slice(0, 6);
+      const matched = strongest.match.terms.slice(0, 6);
+      const targetFeature = strongest.match.phrase;
       const reuseInstruction =
         reuseMode === "reference-only"
           ? "Treat the implementation as reference material only: do not copy source. Reproduce any selected public behavior independently behind a target-owned adapter."
@@ -1136,7 +1130,7 @@ function boundedRepositoryRecommendations(
         {
           recommendation: RecommendationSchema.parse({
             name: `${candidate.name}: ${path}`,
-            why: `The inspected file is tied to target-specific terms: ${matched.join(", ")}.`,
+            why: `The inspected file supports the matching target requirement "${targetFeature}" with the same polarity.`,
             sourceUrl: evidenceUrls[0],
             howToIntegrate: `${reuseInstruction} Add an acceptance test for ${matched.join(", ")} before enabling the adapter.`,
             candidateId: candidate.id,
@@ -1147,7 +1141,7 @@ function boundedRepositoryRecommendations(
             score: Math.min(95, 45 + matched.length * 8),
             origin: "tool-research",
           }),
-          relevance: strongest.matchedTerms.length,
+          relevance: strongest.match.terms.length + (strongest.match.exact ? 10 : 0),
           stars: candidate.stars,
         },
       ];
@@ -1167,9 +1161,10 @@ function boundedRepositoryRecommendations(
  * product only when inspected official-page text contains a target feature
  * phrase or a high-coverage term match for one feature inside one sentence.
  * Terms scattered across unrelated page sections can never be accumulated
- * into an advantage. The emitted strength is the inspected statement itself;
- * the limitation is explicit. If fewer than the required five qualify, the
- * existing strict gate still blocks the run.
+ * into an advantage. Authoritative output retains only the matched target
+ * feature identifier; fetched prose stays behind the evidence URL. If fewer
+ * than the required five qualify, the existing strict gate still blocks the
+ * run.
  */
 export function evidenceGroundedCompetitiveSelection(
   spec: ProductSpec,
@@ -1204,7 +1199,6 @@ export function evidenceGroundedCompetitiveSelection(
   const selected: CompetitiveSelection["selected"] = [];
   for (const { candidate, overlap, featureMatches, exactMatches } of qualified) {
     const strongestMatch = featureMatches[0]!;
-    const statement = strongestMatch.statement;
     const evidenceUrls = [strongestMatch.evidenceUrl];
     const score = Math.min(90, 55 + overlap.length * 5 + exactMatches.length * 10);
     comparisons.push({
@@ -1216,7 +1210,9 @@ export function evidenceGroundedCompetitiveSelection(
           ? `Inspected evidence contains target feature phrase: ${strongestMatch.phrase}`
           : `One inspected statement supports target feature "${strongestMatch.phrase}" through coherent concepts: ${strongestMatch.terms.join(", ")}`,
       ],
-      strengths: [`Official product evidence documents: ${statement}`],
+      strengths: [
+        `Official product evidence supports target behavior "${strongestMatch.phrase}".`,
+      ],
       gaps: [
         "Evidence verifies public product behavior, not equivalent behavior or acceptance results in the target implementation.",
       ],
@@ -1230,7 +1226,10 @@ export function evidenceGroundedCompetitiveSelection(
     });
     selected.push({
       candidateId: candidate.id,
-      element: `Evidence-backed ${candidate.name} behavior: ${statement}`,
+      // This field becomes an authoritative acceptance criterion downstream.
+      // Keep it derived solely from the target spec; fetched page prose and
+      // candidate-controlled display names remain evidence, never commands.
+      element: `Evidence-backed target behavior: ${strongestMatch.phrase}`,
       why: "The behavior is present in inspected official evidence and relevant to explicit target terminology.",
       howToIntegrate:
         "Reproduce only the documented public behavior as a clean-room pattern, then require a direct acceptance test before treating it as an advantage.",

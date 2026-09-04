@@ -266,19 +266,133 @@ function isHttpUrl(url: string): boolean {
   }
 }
 
-/** Strip HTML tags/scripts down to readable text for the excerpt. */
+const NON_RENDERED_ELEMENTS = new Set([
+  "canvas",
+  "datalist",
+  "embed",
+  "head",
+  "iframe",
+  "map",
+  "noscript",
+  "object",
+  "script",
+  "style",
+  "svg",
+  "template",
+]);
+
+const BLOCK_ELEMENTS = new Set([
+  "address",
+  "article",
+  "aside",
+  "blockquote",
+  "dd",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "footer",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "li",
+  "main",
+  "nav",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+]);
+
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+function openingTagSuppressesText(tag: string, rawTag: string): boolean {
+  if (NON_RENDERED_ELEMENTS.has(tag)) return true;
+  if (/\s(?:hidden|inert)(?=\s|=|\/?\>)/i.test(rawTag)) return true;
+  if (/\saria-hidden\s*=\s*(?:["']true["']|true)(?=\s|\/?\>)/i.test(rawTag)) {
+    return true;
+  }
+  const style = rawTag.match(/\sstyle\s*=\s*(?:(["'])([\s\S]*?)\1|([^\s>]+))/i);
+  return Boolean(
+    style &&
+      /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|content-visibility\s*:\s*hidden)(?:\s*!important)?\s*(?:;|$)/i.test(
+        style[2] ?? style[3] ?? "",
+      ),
+  );
+}
+
+/** Extract visible/readable HTML text without promoting hidden page payloads. */
 function toReadableText(html: string): string {
-  return decodeHtmlEntities(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<(?:br|hr)\b[^>]*\/?>/gi, "\n")
-      .replace(
-        /<\/?(?:address|article|aside|blockquote|dd|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|header|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)\b[^>]*>/gi,
-        "\n",
-      )
-      .replace(/<[^>]+>/g, " "),
-  )
+  const token =
+    /<!--[\s\S]*?-->|<![^>]*>|<\?[\s\S]*?\?>|<\/?\s*([a-z][\w:-]*)\b[^>]*>/gi;
+  const stack: Array<{ tag: string; suppressed: boolean }> = [];
+  let suppressedDepth = 0;
+  let cursor = 0;
+  let readable = "";
+
+  for (let match = token.exec(html); match; match = token.exec(html)) {
+    if (suppressedDepth === 0) readable += html.slice(cursor, match.index);
+    cursor = token.lastIndex;
+    const tag = match[1]?.toLowerCase();
+    if (!tag) continue;
+
+    const rawTag = match[0];
+    const closing = /^<\s*\//.test(rawTag);
+    if (closing) {
+      const index = stack.map((entry) => entry.tag).lastIndexOf(tag);
+      if (index >= 0) {
+        for (const entry of stack.splice(index)) {
+          if (entry.suppressed) suppressedDepth -= 1;
+        }
+      }
+      if (suppressedDepth === 0 && BLOCK_ELEMENTS.has(tag)) readable += "\n";
+      continue;
+    }
+
+    const parentSuppressed = suppressedDepth > 0;
+    const suppressed = parentSuppressed || openingTagSuppressesText(tag, rawTag);
+    const selfClosing = /\/\s*>$/.test(rawTag) || VOID_ELEMENTS.has(tag);
+    if (!selfClosing) {
+      stack.push({ tag, suppressed });
+      if (suppressed) suppressedDepth += 1;
+    }
+    if (!suppressed && (BLOCK_ELEMENTS.has(tag) || tag === "br" || tag === "hr")) {
+      readable += "\n";
+    }
+  }
+  if (suppressedDepth === 0) readable += html.slice(cursor);
+
+  return decodeHtmlEntities(readable)
     .replace(/[\t\f\v ]+/g, " ")
     .replace(/ *\r?\n */g, "\n")
     .replace(/\n{2,}/g, "\n")
