@@ -1,0 +1,88 @@
+name: Repair Factory Deck product planning
+
+on:
+  push:
+    branches:
+      - fix/factory-cloud-evidence-hydration-20260905
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.0
+          run_install: false
+      - name: Restore named-product planning in bounded production
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('src/server/agents/researchAgent.ts')
+          text = source.read_text(encoding='utf-8')
+          old = '''  // The run-scoped orchestrator names plausible competitors; deterministic
+          // search, URL classification, page inspection, and the five-product gate
+          // decide whether any of them count. Planning failure falls back to the
+          // deterministic generic queries and remains advisory.
+          let productQueries: string[] = [];
+          if (!boundedProduction) {
+            try {
+              productQueries = await planProductDiscovery(deps, spec, arch);
+            } catch (err) {
+              if (err instanceof ProviderAbortError) throw err;
+            }
+          }
+          '''
+          new = '''  // The run-scoped orchestrator names plausible competitors before deterministic
+          // search and inspection. Production also needs this bounded planning call:
+          // generic category searches frequently return articles, forums, and roundups
+          // that cannot satisfy the five distinct verified-product gate. Planning
+          // failure still falls back to deterministic generic queries and remains advisory.
+          let productQueries: string[] = [];
+          try {
+            productQueries = await planProductDiscovery(deps, spec, arch);
+          } catch (err) {
+            if (err instanceof ProviderAbortError) throw err;
+          }
+          '''
+          if old not in text:
+              raise SystemExit('bounded product planning anchor not found')
+          source.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test = Path('src/server/__tests__/boundedResearch.test.ts')
+          t = test.read_text(encoding='utf-8')
+          old_count = t.count('expect(provider.calls).toBe(1);')
+          if old_count == 0:
+              raise SystemExit('bounded provider call-count anchors not found')
+          t = t.replace('expect(provider.calls).toBe(1);', 'expect(provider.calls).toBe(2);')
+          test.write_text(t, encoding='utf-8')
+          print(f'updated {old_count} bounded provider call-count assertions')
+          PY
+      - name: Install exact dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format changed TypeScript
+        run: pnpm exec prettier --write src/server/agents/researchAgent.ts src/server/__tests__/boundedResearch.test.ts
+      - name: Bounded-production regression suite
+        run: pnpm exec vitest run src/server/__tests__/boundedResearch.test.ts src/server/__tests__/webResearch.test.ts
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Full unit suite
+        run: pnpm test
+      - name: Production release gate
+        run: pnpm release:check
+      - name: Commit verified planning repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/server/agents/researchAgent.ts src/server/__tests__/boundedResearch.test.ts
+          git commit -m "fix: plan named products in bounded production [product-planning-done]"
+          git push origin HEAD:fix/factory-cloud-evidence-hydration-20260905
