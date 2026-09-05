@@ -2,12 +2,15 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FATAL_EXIT_CODE } from "../exitCodes.js";
 
 const ROOT = resolve(process.cwd());
+const TSX_LOADER = pathToFileURL(createRequire(resolve(ROOT, "package.json")).resolve("tsx")).href;
 
 // Exercise the actual entry process, not a source-text or payload-only check.
 describe("existing Factory Deck instance health", () => {
@@ -36,7 +39,7 @@ describe("existing Factory Deck instance health", () => {
       await once(listener, "listening");
       const address = listener.address();
       if (!address || typeof address === "string") throw new Error("Missing listener port.");
-      child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), resolve(ROOT, "src/server/index.ts")], {
+      child = spawn(process.execPath, ["--import", TSX_LOADER, resolve(ROOT, "src/server/index.ts")], {
         // No owner's .env or durable run data may enter this process test.
         cwd: root,
         env: {
