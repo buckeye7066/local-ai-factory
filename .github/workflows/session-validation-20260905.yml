@@ -1,37 +1,65 @@
-name: Session production validation
+name: Repair and verify startup health
 on:
   push:
     branches: [repair/production-session-20260905]
-  workflow_dispatch:
+    paths: [.github/workflows/session-validation-20260905.yml]
 permissions:
-  contents: read
+  contents: write
 concurrency:
-  group: session-production-validation-${{ github.ref }}
+  group: session-startup-health-repair
   cancel-in-progress: false
 jobs:
-  validate:
+  repair:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          persist-credentials: false
+          persist-credentials: true
           fetch-depth: 0
-      - name: Preserve exact tracked source
-        shell: bash
-        run: |
-          mkdir -p session-evidence
-          git rev-parse HEAD > session-evidence/source-sha.txt
-          git archive --format=tar.gz HEAD > session-evidence/source.tar.gz
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '20'
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
         with:
           version: '10.17.0'
-      - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Execute real release commands and preserve failures
+      - run: pnpm install --frozen-lockfile
+      - name: Prove both existing startup defects with real child processes
+        shell: bash
+        run: |
+          mkdir -p session-evidence
+          set +e
+          pnpm exec vitest run src/server/__tests__/existingInstanceHealth.test.ts --reporter=json --outputFile=session-evidence/before.json > session-evidence/before.log 2>&1
+          result=$?
+          set -e
+          test "$result" -ne 0
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          const report = JSON.parse(readFileSync('session-evidence/before.json', 'utf8'));
+          const failed = report.testResults.flatMap(suite => suite.assertionResults).filter(test => test.status === 'failed');
+          if (report.numPassedTests !== 2 || report.numFailedTests !== 2 || failed.length !== 2 || !failed.some(test => test.fullName.includes('unhealthy HTTP status')) || !failed.some(test => test.fullName.includes('redirected health'))) {
+            console.error(JSON.stringify(report, null, 2));
+            throw new Error('The baseline failed for something other than the two intended startup defects.');
+          }
+          console.log('Confirmed: healthy and foreign instances behave correctly; HTTP failure and redirect cases expose false success.');
+          JS
+      - name: Apply only the demonstrated startup correction
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const path = 'src/server/index.ts';
+          const original = readFileSync(path, 'utf8');
+          const old = 'const res = await fetch(`http://127.0.0.1:${config.port}/api/health`, {\n          signal: AbortSignal.timeout(2000),\n        });\n        isFactory = isFactoryHealthPayload(await res.json());';
+          const replacement = 'const res = await fetch(`http://127.0.0.1:${config.port}/api/health`, {\n          redirect: "error",\n          signal: AbortSignal.timeout(2000),\n        });\n        isFactory = res.ok && isFactoryHealthPayload(await res.json());';
+          if (original.split(old).length !== 2) throw new Error('Exact startup implementation changed; refusing to patch a different revision.');
+          writeFileSync(path, original.replace(old, replacement));
+          JS
+          pnpm exec prettier --write src/server/index.ts src/server/__tests__/existingInstanceHealth.test.ts
+          rm .github/workflows/session-validation-20260905.yml
+          git add src/server/index.ts src/server/__tests__/existingInstanceHealth.test.ts .github/workflows/session-validation-20260905.yml
+          git diff --cached --check
+      - name: Verify corrected source with every repository release command
         shell: bash
         run: |
           set +e
@@ -41,15 +69,25 @@ jobs:
             pnpm run "$script" > "session-evidence/$log.log" 2>&1
             code=$?
             printf '%s exit=%s\n' "$script" "$code" | tee -a session-evidence/results.txt
-            tail -n 100 "session-evidence/$log.log"
+            tail -n 80 "session-evidence/$log.log"
             if [ "$code" -ne 0 ]; then result=1; fi
           done
           exit "$result"
-      - name: Retain exact source and full test evidence
+      - name: Publish the verified correction without temporary workflow machinery
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git diff --cached --check
+          git commit -m 'fix: reject unhealthy and redirected existing-instance probes'
+          git push origin HEAD:repair/production-session-20260905
+          git rev-parse HEAD > session-evidence/source-sha.txt
+          git archive --format=tar.gz HEAD > session-evidence/source.tar.gz
+      - name: Preserve full regression and release evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: factory-session-source-and-checks
+          name: factory-session-fixed-evidence
           path: session-evidence/
-          if-no-files-found: error
           retention-days: 1
+          if-no-files-found: error
