@@ -26,38 +26,40 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           source = Path('src/server/agents/researchAgent.ts')
           text = source.read_text(encoding='utf-8')
-          old = '  evidenceUrls: z.array(HttpUrlSchema).min(1),\n});'
+          old = '  evidenceUrls: z.array(HttpUrlSchema).min(1),'
           new = '''  // A provider may omit this redundant citation list. The candidate-specific
-          // schema below can hydrate only already-inspected dossier URLs; supplied
-          // non-empty URLs are never replaced and still must pass the evidence gate.
-          evidenceUrls: z.array(HttpUrlSchema).default([]),
-          });'''
+            // schema below can hydrate only already-inspected dossier URLs; supplied
+            // non-empty URLs are never replaced and still must pass the evidence gate.
+            evidenceUrls: z.array(HttpUrlSchema).default([]),'''
           if old not in text:
               raise SystemExit('comparison evidence schema anchor not found')
           text = text.replace(old, new, 1)
 
-          old = '''  const schema = CompetitiveSelectionShape.extend({
-            comparisons: z.array(CompetitiveComparisonInputSchema).length(requiredCount),
-            selected: z.array(CompetitiveSelectedInputSchema).length(requiredCount),
-          });'''
-          new = '''  const hydratedComparisonSchema = CompetitiveComparisonInputSchema.transform(
-            (comparison) => {
-              if (comparison.evidenceUrls.length > 0) return comparison;
-              const inspectedEvidence = evidenceByCandidate.get(comparison.candidateId);
-              if (!inspectedEvidence || inspectedEvidence.size === 0) return comparison;
-              return { ...comparison, evidenceUrls: [...inspectedEvidence] };
-            },
-          );
-          const schema = CompetitiveSelectionShape.extend({
-            comparisons: z.array(hydratedComparisonSchema).length(requiredCount),
-            selected: z.array(CompetitiveSelectedInputSchema).length(requiredCount),
-          });'''
-          if old not in text:
-              raise SystemExit('competitive selection schema anchor not found')
-          text = text.replace(old, new, 1)
+          pattern = re.compile(
+              r'  const schema = CompetitiveSelectionShape\.extend\(\{\n'
+              r'\s+comparisons: z\.array\(CompetitiveComparisonInputSchema\)\.length\(requiredCount\),\n'
+              r'\s+selected: z\.array\(CompetitiveSelectedInputSchema\)\.length\(requiredCount\),\n'
+              r'\s+\}\);'
+          )
+          replacement = '''  const hydratedComparisonSchema = CompetitiveComparisonInputSchema.transform(
+              (comparison) => {
+                if (comparison.evidenceUrls.length > 0) return comparison;
+                const inspectedEvidence = evidenceByCandidate.get(comparison.candidateId);
+                if (!inspectedEvidence || inspectedEvidence.size === 0) return comparison;
+                return { ...comparison, evidenceUrls: [...inspectedEvidence] };
+              },
+            );
+            const schema = CompetitiveSelectionShape.extend({
+              comparisons: z.array(hydratedComparisonSchema).length(requiredCount),
+              selected: z.array(CompetitiveSelectedInputSchema).length(requiredCount),
+            });'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'competitive selection schema anchor count={count}')
           source.write_text(text, encoding='utf-8')
 
           test = Path('src/server/__tests__/webResearch.test.ts')
@@ -75,6 +77,8 @@ jobs:
           PY
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
+      - name: Format changed TypeScript
+        run: pnpm exec prettier --write src/server/agents/researchAgent.ts src/server/__tests__/webResearch.test.ts
       - name: Focused regression
         run: pnpm exec vitest run src/server/__tests__/webResearch.test.ts
       - name: Typecheck
