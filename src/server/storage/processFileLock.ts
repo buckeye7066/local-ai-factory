@@ -241,7 +241,7 @@ async function scanActiveOwners(
   queue: string,
   staleGraceMs: number,
   tickets: ReadonlyMap<string, number>,
-): Promise<ActiveOwner[]> {
+): Promise<ActiveOwner[] | null> {
   const owners: ActiveOwner[] = [];
   for (const name of await readdir(queue)) {
     if (name === TICKET_LOG) continue;
@@ -252,7 +252,17 @@ async function scanActiveOwners(
     try {
       read = await readOwner(path);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue;
+      if (
+        process.platform === "win32" &&
+        (code === "EPERM" || code === "EACCES" || code === "EBUSY")
+      ) {
+        // Windows can temporarily deny opening a receipt being released.
+        // An unreadable receipt is NOT an absent owner: discard this scan
+        // and let the bounded acquisition loop retry without granting a lease.
+        return null;
+      }
       throw error;
     }
 
@@ -343,6 +353,11 @@ export async function acquireProcessFileLock(
         throw new Error("Refused: process-lock ticket was not durably recorded.");
       }
       const owners = await scanActiveOwners(queue, staleGraceMs, tickets);
+      if (owners === null) {
+        if (Date.now() >= deadline) return null;
+        await new Promise((resolveWait) => setTimeout(resolveWait, pollMs));
+        continue;
+      }
       if (!owners.some((owner) => owner.token === token)) {
         throw new Error("Refused: process-lock ownership receipt disappeared.");
       }
