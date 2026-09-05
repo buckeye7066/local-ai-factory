@@ -2438,12 +2438,10 @@ export async function researchAgent(
   // decide whether any of them count. Planning failure falls back to the
   // deterministic generic queries and remains advisory.
   let productQueries: string[] = [];
-  if (!boundedProduction) {
-    try {
-      productQueries = await planProductDiscovery(deps, spec, arch);
-    } catch (err) {
-      if (err instanceof ProviderAbortError) throw err;
-    }
+  try {
+    productQueries = await planProductDiscovery(deps, spec, arch);
+  } catch (err) {
+    if (err instanceof ProviderAbortError) throw err;
   }
 
   const dossier = await buildCompetitiveDossier(spec, arch, { productQueries });

@@ -188,7 +188,7 @@ describe("bounded production research", () => {
         executionMode: "bounded-production",
       });
 
-      expect(provider.calls).toBe(1);
+      expect(provider.calls).toBe(2);
       expect(findings.comparisons).toHaveLength(5);
       expect(findings.recommendations).toHaveLength(5);
       expect(findings.summary).toContain("Deterministic evidence analysis");
@@ -252,7 +252,7 @@ describe("bounded production research", () => {
         executionMode: "bounded-production",
       });
 
-      expect(provider.calls).toBe(1);
+      expect(provider.calls).toBe(2);
       const repositoryRecommendation = findings.recommendations.find(
         (recommendation) => recommendation.candidateId === "example/offline-engine",
       );
@@ -291,7 +291,7 @@ describe("bounded production research", () => {
       });
       const gate = assessRequiredCompetitiveEvidence(findings);
 
-      expect(provider.calls).toBe(1);
+      expect(provider.calls).toBe(2);
       expect(findings.recommendations).toHaveLength(4);
       expect(gate.ok).toBe(false);
       expect(gate.reasons).toContain(
@@ -510,7 +510,7 @@ describe("bounded production research", () => {
         { competitive: true, executionMode: "bounded-production" },
       );
 
-      expect(provider.calls).toBe(1);
+      expect(provider.calls).toBe(2);
       expect(findings.comparisons).toEqual([]);
       expect(findings.recommendations).toEqual([]);
       expect(assessRequiredCompetitiveEvidence(findings).ok).toBe(false);
@@ -807,7 +807,7 @@ describe("bounded production research", () => {
         { competitive: true, executionMode: "bounded-production" },
       );
 
-      expect(provider.calls).toBe(1);
+      expect(provider.calls).toBe(2);
       expect(findings.comparisons).toEqual([]);
       expect(findings.recommendations).toEqual([]);
       expect(findings.summary).toContain("truth gates retained 0/5");
