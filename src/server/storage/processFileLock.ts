@@ -259,12 +259,16 @@ async function scanActiveOwners(
     const receipt = parseOwnerReceipt(read.raw, filename);
     const createdAt = receipt?.createdAt ?? read.mtimeMs;
     const ageMs = Date.now() - createdAt;
-    if (ageMs >= staleGraceMs && !processIsAlive(filename.pid)) {
+    const ticket = tickets.get(filename.token);
+    // A complete receipt with a durable ticket is uniquely owned. Once its
+    // process is confirmed dead, no grace period can make that owner resume.
+    // Reclaim it before bounded callers time out, while retaining the grace
+    // for incomplete receipts and never preempting a live or unknown process.
+    const publishedOwner = receipt !== null && ticket !== undefined;
+    if ((publishedOwner || ageMs >= staleGraceMs) && !processIsAlive(filename.pid)) {
       await removeUniqueOwner(path, queue);
       continue;
     }
-
-    const ticket = tickets.get(filename.token);
     if (ticket === undefined) {
       // The owner receipt is created before its ticket append. Until the append
       // happens it cannot own the lock, and when it does it necessarily receives

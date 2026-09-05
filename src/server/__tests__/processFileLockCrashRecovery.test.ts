@@ -27,13 +27,21 @@ describe("process-lock crash recovery", () => {
         process.stdout.write('OWNER_LOCKED');
         setInterval(() => {}, 1000);
       `;
-      child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", source], {
-        cwd: resolve(process.cwd()),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      child = spawn(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "--eval", source],
+        {
+          cwd: resolve(process.cwd()),
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
       let errors = "";
-      child.stderr?.on("data", (chunk) => { errors += String(chunk); });
-      const [message] = await once(child.stdout!, "data", { signal: AbortSignal.timeout(20_000) });
+      child.stderr?.on("data", (chunk) => {
+        errors += String(chunk);
+      });
+      const [message] = await once(child.stdout!, "data", {
+        signal: AbortSignal.timeout(20_000),
+      });
       expect(String(message), errors).toBe("OWNER_LOCKED");
       await killAndWait(child);
 
