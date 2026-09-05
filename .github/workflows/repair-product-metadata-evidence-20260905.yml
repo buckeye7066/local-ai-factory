@@ -1,0 +1,110 @@
+name: Repair oversized product evidence safely
+on:
+  push:
+    branches: [fix/factory-product-metadata-evidence-20260905]
+    paths: [.github/workflows/repair-product-metadata-evidence-20260905.yml]
+permissions:
+  contents: write
+concurrency:
+  group: repair-product-metadata-evidence-20260905
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: '10.17.0'
+      - run: pnpm install --frozen-lockfile
+      - name: Apply bounded metadata evidence channel and regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          function replaceOnce(path, oldText, newText) {
+            const source = readFileSync(path, 'utf8');
+            const count = source.split(oldText).length - 1;
+            if (count !== 1) throw new Error(`${path}: expected one patch anchor, found ${count}`);
+            writeFileSync(path, source.replace(oldText, newText));
+          }
+
+          replaceOnce(
+            'src/server/tools/webFetch.ts',
+            '  textExcerpt: string;\n  /** True when the response body exceeded the network byte budget. */',
+            '  textExcerpt: string;\n  /** Completed document metadata parsed from the bounded HTML prefix. Body visibility rules never consume this field. */\n  metadataExcerpt?: string;\n  /** True when the response body exceeded the network byte budget. */',
+          );
+
+          const metadataHelper = `\n/**\n * Extract only completed document metadata tags from the bounded prefix.\n * CSS cannot hide metadata, and an incomplete tag at the byte boundary is\n * ignored. This deliberately does not turn truncated body text into evidence.\n */\nfunction boundedDocumentMetadata(html: string): string {\n  const accepted = new Set([\n    "description",\n    "og:description",\n    "og:title",\n    "twitter:description",\n    "twitter:title",\n    "application-name",\n  ]);\n  const values: string[] = [];\n  let cursor = 0;\n  for (\n    let markup = nextHtmlMarkup(html, cursor, false);\n    markup;\n    markup = nextHtmlMarkup(html, cursor, false)\n  ) {\n    cursor = markup.end;\n    if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">")) {\n      continue;\n    }\n    const attributes = actualTagAttributes(markup.raw);\n    const key = attributes\n      .find(({ name }) => name === "name" || name === "property")\n      ?.value.trim()\n      .toLowerCase();\n    if (!key || !accepted.has(key)) continue;\n    const content = attributes.find(({ name }) => name === "content")?.value;\n    const normalized = decodeHtmlEntities(content ?? "").replace(/\\s+/g, " ").trim();\n    if (normalized) values.push(normalized);\n  }\n  return [...new Set(values)].join("\\n").slice(0, MAX_EXCERPT);\n}\n`;
+          replaceOnce(
+            'src/server/tools/webFetch.ts',
+            '\nexport async function webFetchTool(',
+            `${metadataHelper}\nexport async function webFetchTool(`,
+          );
+
+          replaceOnce(
+            'src/server/tools/webFetch.ts',
+            '          textExcerpt: "",\n          truncated: true,\n          error: "HTML response exceeded the byte limit and cannot be verified safely.",',
+            '          textExcerpt: "",\n          metadataExcerpt: boundedDocumentMetadata(raw),\n          truncated: true,\n          error: "HTML response exceeded the byte limit and cannot be verified safely.",',
+          );
+
+          const intelligence = readFileSync('src/server/tools/competitiveIntelligence.ts', 'utf8');
+          const anchor = '      const fetched = await webFetchTool(candidate.url);\n      const meaningful = isMeaningfulProductEvidence(fetched, {';
+          if (!intelligence.includes(anchor)) throw new Error('competitive evidence anchor changed');
+          const replacement = `      const fetched = await webFetchTool(candidate.url);\n      // Full visible HTML remains mandatory when it is available. For a\n      // safely bounded/truncated document, only completed document metadata\n      // may stand in for body text; the original error/truncation state is\n      // retained for audit.\n      const evidenceText = fetched.textExcerpt || fetched.metadataExcerpt || "";\n      const evidenceFetch =\n        !fetched.ok &&\n        fetched.truncated === true &&\n        fetched.status >= 200 &&\n        fetched.status < 300 &&\n        evidenceText.length > 0\n          ? { ...fetched, ok: true, textExcerpt: evidenceText }\n          : fetched;\n      const meaningful = isMeaningfulProductEvidence(evidenceFetch, {`;
+          writeFileSync(
+            'src/server/tools/competitiveIntelligence.ts',
+            intelligence.replace(anchor, replacement),
+          );
+
+          // Within the product-inspection callback, source evidence and error\n          // reporting must use the exact text admitted above rather than the\n          // intentionally-empty truncated body field.
+          let updated = readFileSync('src/server/tools/competitiveIntelligence.ts', 'utf8');
+          const callbackStart = updated.indexOf('const evidenceText = fetched.textExcerpt || fetched.metadataExcerpt || "";');
+          const callbackEnd = updated.indexOf('\n    },\n  );', callbackStart);
+          if (callbackStart < 0 || callbackEnd < callbackStart) throw new Error('product callback bounds changed');
+          const before = updated.slice(0, callbackStart);
+          let block = updated.slice(callbackStart, callbackEnd);
+          block = block.replaceAll('fetched.textExcerpt', 'evidenceText');
+          // Restore the definition after the scoped replacement.
+          block = block.replace('const evidenceText = evidenceText || fetched.metadataExcerpt || "";', 'const evidenceText = fetched.textExcerpt || fetched.metadataExcerpt || "";');
+          updated = before + block + updated.slice(callbackEnd);
+          writeFileSync('src/server/tools/competitiveIntelligence.ts', updated);
+
+          writeFileSync('src/server/__tests__/oversizedProductMetadataEvidence.test.ts', `import { describe, expect, it } from "vitest";\nimport { webFetchTool } from "../tools/webFetch.js";\nimport { isMeaningfulProductEvidence } from "../tools/competitiveIntelligence.js";\n\nconst publicLookup = async () => [{ address: "93.184.216.34", family: 4 }] as const;\n\ndescribe("oversized product metadata evidence", () => {\n  it("keeps truncated body text fail-closed while exposing only completed metadata", async () => {\n    const description = "Todoist is a task manager and to-do list for organizing projects, recurring work, priorities, deadlines, and completed tasks across devices.";\n    const html = '<html><head><meta property="og:title" content="Todoist"><meta name="description" content="' + description + '"></head><body>' + "x".repeat(220_000) + '<div style="display:none">untrusted suffix</div></body></html>';\n    const result = await webFetchTool("https://www.todoist.com/", 15_000, {\n      lookup: publicLookup,\n      fetch: async () => new Response(html, { status: 200, headers: { "content-type": "text/html" } }),\n    });\n    expect(result).toMatchObject({ ok: false, status: 200, truncated: true, textExcerpt: "" });\n    expect(result.metadataExcerpt).toContain("Todoist");\n    expect(result.metadataExcerpt).toContain("task manager");\n    expect(result.metadataExcerpt).not.toContain("untrusted suffix");\n    expect(\n      isMeaningfulProductEvidence(\n        { ...result, ok: true, textExcerpt: result.metadataExcerpt ?? "" },\n        { candidateKey: "todoist.com", title: "Todoist", url: "https://www.todoist.com/" },\n      ),\n    ).toBe(true);\n  });\n\n  it("does not promote an incomplete metadata tag at the byte boundary", async () => {\n    const prefix = '<html><head><meta property="og:title" content="Todoist"><meta name="description" content="';\n    const html = prefix + "claim".repeat(60_000);\n    const result = await webFetchTool("https://www.todoist.com/", 15_000, {\n      lookup: publicLookup,\n      fetch: async () => new Response(html, { status: 200, headers: { "content-type": "text/html" } }),\n    });\n    expect(result.truncated).toBe(true);\n    expect(result.textExcerpt).toBe("");\n    expect(result.metadataExcerpt).toBe("Todoist");\n    expect(\n      isMeaningfulProductEvidence(\n        { ...result, ok: true, textExcerpt: result.metadataExcerpt ?? "" },\n        { candidateKey: "todoist.com", title: "Todoist", url: "https://www.todoist.com/" },\n      ),\n    ).toBe(false);\n  });\n});\n`);
+          JS
+          pnpm exec prettier --write src/server/tools/webFetch.ts src/server/tools/competitiveIntelligence.ts src/server/__tests__/oversizedProductMetadataEvidence.test.ts
+          git diff --check
+      - name: Verify focused security and competitive evidence regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run src/server/__tests__/oversizedProductMetadataEvidence.test.ts src/server/__tests__/competitiveIntelligence.test.ts src/server/__tests__/webResearch.test.ts 2>&1 | tee /tmp/focused.log
+          pnpm typecheck
+      - name: Verify complete release contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm lint
+          pnpm test
+          pnpm build
+          pnpm release:check
+      - name: Publish only product source and regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-product-metadata-evidence-20260905.yml
+          git add src/server/tools/webFetch.ts src/server/tools/competitiveIntelligence.ts src/server/__tests__/oversizedProductMetadataEvidence.test.ts .github/workflows/repair-product-metadata-evidence-20260905.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: verify oversized product pages from bounded metadata'
+          git push origin HEAD:fix/factory-product-metadata-evidence-20260905
