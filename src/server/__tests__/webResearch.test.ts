@@ -863,7 +863,6 @@ describe("researchAgent competitive selection failure is a named skip", () => {
               matchedFeatures: ["fast add"],
               strengths: ["fast capture"],
               gaps: ["no local JSON export"],
-              evidenceUrls: [productUrl],
               decision: "adapt",
               rationale: "Useful behavior",
             },
