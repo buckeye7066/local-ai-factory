@@ -191,7 +191,10 @@ const CompetitiveComparisonInputSchema = CandidateComparisonSchema.omit({
   candidateId: z.string().trim().min(1),
   strengths: z.array(z.string().trim().min(1)).min(1),
   gaps: z.array(z.string().trim().min(1)).min(1),
-  evidenceUrls: z.array(HttpUrlSchema).min(1),
+  // A provider may omit this redundant citation list. The candidate-specific
+  // schema below can hydrate only already-inspected dossier URLs; supplied
+  // non-empty URLs are never replaced and still must pass the evidence gate.
+  evidenceUrls: z.array(HttpUrlSchema).default([]),
 });
 
 const CompetitiveSelectedInputSchema = z.object({
@@ -246,8 +249,16 @@ function competitiveSelectionSchema(
       ]),
     ]),
   );
+  const hydratedComparisonSchema = CompetitiveComparisonInputSchema.transform(
+    (comparison) => {
+      if (comparison.evidenceUrls.length > 0) return comparison;
+      const inspectedEvidence = evidenceByCandidate.get(comparison.candidateId);
+      if (!inspectedEvidence || inspectedEvidence.size === 0) return comparison;
+      return { ...comparison, evidenceUrls: [...inspectedEvidence] };
+    },
+  );
   const schema = CompetitiveSelectionShape.extend({
-    comparisons: z.array(CompetitiveComparisonInputSchema).length(requiredCount),
+    comparisons: z.array(hydratedComparisonSchema).length(requiredCount),
     selected: z.array(CompetitiveSelectedInputSchema).length(requiredCount),
   });
 
