@@ -10,20 +10,12 @@ import {
 describe("config", () => {
   it("loads defaults when env is empty", () => {
     const cfg = loadConfig({});
-    expect(cfg.anthropicModel).toBe("claude-fable-5-1");
-    expect(cfg.anthropicModels).toEqual([
-      "claude-fable-5-1",
-      "claude-opus-5",
-      "claude-sonnet-5",
-      "claude-haiku-4-5-20251001",
-    ]);
-    expect(cfg.openaiModel).toBe("gpt-6-astra");
-    expect(cfg.openaiModels).toEqual([
-      "gpt-6-astra",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-    ]);
+    expect(cfg.anthropicModel).toBe("claude-opus-5");
+    expect(cfg.anthropicModels).toEqual(["claude-opus-5"]);
+    expect(cfg.openaiModel).toBe("gpt-5.6-sol");
+    expect(cfg.openaiModels).toEqual(["gpt-5.6-sol"]);
+    expect(cfg.fableOrOpusModel).toBe("claude-opus-5");
+    expect(cfg.solModel).toBe("gpt-5.6-sol");
     expect(cfg.maxRepairLoops).toBe(3);
     expect(cfg.maxModelCallsPerRun).toBe(30);
     // Untrusted project code is not executed on the host by default. Owners

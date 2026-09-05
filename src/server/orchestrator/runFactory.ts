@@ -435,9 +435,11 @@ export function selectRunRouting(
  * Build the single run-scoped provider ladder.
  *
  * Every concrete paid rung is budget-gated before it is attempted. The
- * ModelLadderProvider owns the production model-by-model sticky cursor, so
- * quota/capacity exhaustion demotes the entire run exactly once. The family
- * failover wrapper remains only for compatibility with embedded registries.
+ * ModelLadderProvider owns the production model-by-model sticky cursor. The
+ * owner-directed default keeps Opus selected through ordinary transient or
+ * route-rate-limit failures and opens Sol only for verified credit/quota loss
+ * or permanent Opus unavailability. The family failover wrapper remains only
+ * for compatibility with embedded registries.
  */
 export function createTierProvider(
   routing: ResolvedRunRouting,
@@ -467,9 +469,10 @@ export function createTierProvider(
   ];
 
   // The production registry exposes each MODEL as its own rung. This is the
-  // critical distinction from provider-family failover: one strongest model
-  // stays selected until its credits/quota/capacity are exhausted, then the
-  // cursor advances exactly once to the next configured model. AI Time's
+  // critical distinction from provider-family failover: the strongest model
+  // stays selected under its rung policy. The default Opus rung advances only
+  // after verified credits/quota are exhausted or Opus is permanently unavailable;
+  // the cursor then advances exactly once to Sol. AI Time's
   // frontier free rotation is the one terminal rung.
   const exactRungs = registry.automaticRungs?.(candidates) ?? [];
   if (exactRungs.length > 0) {

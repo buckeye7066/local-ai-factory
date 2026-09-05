@@ -85,6 +85,56 @@ describe("ModelLadderProvider", () => {
     );
   });
 
+  it("keeps Opus selected on a plain transient 429 instead of silently switching to Sol", async () => {
+    const transient = fake("ok", "anthropic");
+    transient.generateText = async () => {
+      transient.calls += 1;
+      throw new ProviderExhaustionError(
+        "anthropic.generateText route exhausted (provider returned 429).",
+        429,
+        "route",
+      );
+    };
+    const sol = fake("ok", "openai");
+    const provider = new ModelLadderProvider([
+      {
+        model: "claude-opus-5",
+        provider: transient,
+        advanceOn: "credit-or-unavailable",
+      },
+      { model: "gpt-5.6-sol", provider: sol },
+    ]);
+
+    await expect(provider.generateText({} as never)).rejects.toThrow(/429/);
+    expect(transient.calls).toBe(1);
+    expect(sol.calls).toBe(0);
+    expect(provider.currentModel()).toBe("claude-opus-5");
+  });
+
+  it("switches the sticky Opus primary to Sol after verified credit exhaustion", async () => {
+    const opus = fake(
+      "exhausted",
+      "anthropic",
+      "429 You have no credits remaining.",
+    );
+    const sol = fake("ok", "openai");
+    const provider = new ModelLadderProvider([
+      {
+        model: "claude-opus-5",
+        provider: opus,
+        advanceOn: "credit-or-unavailable",
+      },
+      { model: "gpt-5.6-sol", provider: sol },
+    ]);
+
+    await provider.generateText({} as never);
+    await provider.generateText({} as never);
+
+    expect(opus.calls).toBe(1);
+    expect(sol.calls).toBe(2);
+    expect(provider.currentModel()).toBe("gpt-5.6-sol");
+  });
+
   it("skips the rest of one paid family after an account-wide credit refusal", async () => {
     const noCredits = fake(
       "exhausted",

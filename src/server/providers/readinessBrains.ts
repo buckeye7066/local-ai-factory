@@ -74,8 +74,9 @@ class ObservedReadinessProvider implements LLMProvider {
 /**
  * Construct two independently stateful reviewers from the same automatic route
  * factory used by every build stage. Each starts at the strongest configured
- * paid model and descends through paid exhaustion to AI Time's strongest
- * available free/local model. Mock and stub providers are never accepted.
+ * paid model. Under the owner-directed default, Opus remains primary until
+ * verified credit/quota exhaustion or permanent unavailability, then Sol
+ * serves the judgment before AI Time's strongest available free/local model. Mock and stub providers are never accepted.
  */
 export function createReadinessBrainProviders(
   makeProvider: () => LLMProvider,

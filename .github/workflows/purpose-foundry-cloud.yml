@@ -56,10 +56,12 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
           PURPOSE_FOUNDRY_PROGRAM_SCOUT_URL: ${{ secrets.PROGRAM_SCOUT_URL || 'https://web-production-d7db7.up.railway.app' }}
           PURPOSE_FOUNDRY_PROGRAM_SCOUT_TOKEN: ${{ secrets.SCOUT_API_TOKEN }}
-          ANTHROPIC_MODEL: claude-fable-5-1
-          OPENAI_MODEL: gpt-6-astra
-          FACTORY_SOL_MODEL: gpt-6-astra
-          FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
+          ANTHROPIC_MODEL: claude-opus-5
+          OPENAI_MODEL: gpt-5.6-sol
+          FACTORY_SOL_MODEL: gpt-5.6-sol
+          FACTORY_FABLE_OR_OPUS_MODEL: claude-opus-5
+          FACTORY_ANTHROPIC_MODEL_LADDER: claude-opus-5
+          FACTORY_OPENAI_MODEL_LADDER: gpt-5.6-sol
           FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai
@@ -329,10 +331,12 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.PAID_PRODUCTION_OPENAI_KEY || secrets.OPENAI_API_KEY }}
           PURPOSE_FOUNDRY_PROGRAM_SCOUT_URL: ${{ secrets.PROGRAM_SCOUT_URL || 'https://web-production-d7db7.up.railway.app' }}
           PURPOSE_FOUNDRY_PROGRAM_SCOUT_TOKEN: ${{ secrets.SCOUT_API_TOKEN }}
-          ANTHROPIC_MODEL: claude-fable-5-1
-          OPENAI_MODEL: gpt-6-astra
-          FACTORY_SOL_MODEL: gpt-6-astra
-          FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1
+          ANTHROPIC_MODEL: claude-opus-5
+          OPENAI_MODEL: gpt-5.6-sol
+          FACTORY_SOL_MODEL: gpt-5.6-sol
+          FACTORY_FABLE_OR_OPUS_MODEL: claude-opus-5
+          FACTORY_ANTHROPIC_MODEL_LADDER: claude-opus-5
+          FACTORY_OPENAI_MODEL_LADDER: gpt-5.6-sol
           FACTORY_FREE_ENABLED: "1"
           DEFAULT_CODE_PROVIDER: anthropic
           DEFAULT_REVIEW_PROVIDER: openai

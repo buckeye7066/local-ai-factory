@@ -5,6 +5,7 @@ import type {
   LLMProvider,
 } from "../../shared/types.js";
 import {
+  isCreditOrPermanentModelUnavailability,
   isModelExhaustion,
   isPaidBudgetExhaustion,
   isQuotaRefusal,
@@ -15,6 +16,12 @@ import { ProviderAbortError } from "./types.js";
 export type ModelLadderRung = {
   model: string;
   provider: LLMProvider;
+  /**
+   * The default route policy advances on any proven model exhaustion. The
+   * owner-directed Opus primary advances only for real credit/quota loss or
+   * permanent model unavailability, never for an ordinary transient.
+   */
+  advanceOn?: "model-exhaustion" | "credit-or-unavailable";
 };
 
 /**
@@ -89,6 +96,12 @@ export class ModelLadderProvider implements LLMProvider {
         return result;
       } catch (error) {
         if (error instanceof ProviderAbortError || !isModelExhaustion(error)) {
+          throw error;
+        }
+        if (
+          rung.advanceOn === "credit-or-unavailable" &&
+          !isCreditOrPermanentModelUnavailability(error)
+        ) {
           throw error;
         }
         lastExhaustion = error;

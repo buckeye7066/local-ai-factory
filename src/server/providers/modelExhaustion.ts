@@ -44,6 +44,32 @@ export function isPaidBudgetExhaustion(error: unknown): boolean {
   return (error as { name?: unknown })?.name === "PaidBudgetExhaustedError";
 }
 
+const PERMANENT_MODEL_UNAVAILABILITY_SIGNS = [
+  /model (?:is )?(?:unavailable|disabled)/i,
+  /model_not_found/i,
+  /model not found/i,
+  /does not exist or you do not have access/i,
+  /not supported.*model/i,
+];
+
+/**
+ * The owner-directed Opus -> Sol boundary. A plain 429, overload, timeout, or
+ * temporary capacity event must not silently demote a live run to Sol. The
+ * boundary opens only when the paid account is actually out of quota/credits,
+ * the local paid budget is exhausted, or Opus is permanently unavailable to
+ * the configured account.
+ */
+export function isCreditOrPermanentModelUnavailability(error: unknown): boolean {
+  if (isPaidBudgetExhaustion(error)) return true;
+  if ((error as { name?: unknown })?.name === "ProviderModelUnavailableError") {
+    return true;
+  }
+  if ((error as { status?: unknown })?.status === 402) return true;
+  if (isQuotaRefusal(error)) return true;
+  const text = modelFailureText(error);
+  return PERMANENT_MODEL_UNAVAILABILITY_SIGNS.some((pattern) => pattern.test(text));
+}
+
 /**
  * True only for a route-scoped exhaustion condition where another model can
  * reasonably serve the same request. Authentication failures, malformed

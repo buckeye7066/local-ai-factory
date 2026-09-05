@@ -125,6 +125,11 @@ export function createProviderRegistry(
   });
   const anthropicRungs: ModelLadderRung[] = anthropicModels.map((model) => ({
     model,
+    // Opus remains sticky across ordinary 429/capacity/transient failures.
+    // Only real credit/quota loss or permanent unavailability opens Sol.
+    advanceOn: /(?:^|[-_.])opus(?:[-_.]|$)/i.test(model)
+      ? "credit-or-unavailable"
+      : "model-exhaustion",
     provider: new AnthropicProvider(
       secrets.anthropicApiKey,
       model,

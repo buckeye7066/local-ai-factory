@@ -30,16 +30,18 @@ const freeFallback = readFileSync(
 describe("automatic cloud model-ladder contract", () => {
   it("attempts the current strongest Anthropic model first", () => {
     for (const workflow of [factory, foundry]) {
-      expect(workflow).toContain("ANTHROPIC_MODEL: claude-fable-5-1");
-      expect(workflow).toContain("FACTORY_FABLE_OR_OPUS_MODEL: claude-fable-5-1");
+      expect(workflow).toContain("ANTHROPIC_MODEL: claude-opus-5");
+      expect(workflow).toContain("FACTORY_FABLE_OR_OPUS_MODEL: claude-opus-5");
+      expect(workflow).toContain("FACTORY_ANTHROPIC_MODEL_LADDER: claude-opus-5");
+      expect(workflow).toContain("FACTORY_OPENAI_MODEL_LADDER: gpt-5.6-sol");
       expect(workflow).not.toContain("claude-opus-4-8");
     }
   });
 
   it("does not override catalog resolution with the retired OpenAI model", () => {
     for (const workflow of [factory, foundry]) {
-      expect(workflow).toContain("OPENAI_MODEL: gpt-6-astra");
-      expect(workflow).toContain("FACTORY_SOL_MODEL: gpt-6-astra");
+      expect(workflow).toContain("OPENAI_MODEL: gpt-5.6-sol");
+      expect(workflow).toContain("FACTORY_SOL_MODEL: gpt-5.6-sol");
       expect(workflow).not.toContain("gpt-5.5");
     }
   });

@@ -42,19 +42,9 @@ function provider(value: string | undefined, fallback: ProviderName): ProviderNa
 
 export type ModelLadderProvider = "anthropic" | "openai" | "free";
 
-export const DEFAULT_ANTHROPIC_MODEL_LADDER = [
-  "claude-fable-5-1",
-  "claude-opus-5",
-  "claude-sonnet-5",
-  "claude-haiku-4-5-20251001",
-] as const;
+export const DEFAULT_ANTHROPIC_MODEL_LADDER = ["claude-opus-5"] as const;
 
-export const DEFAULT_OPENAI_MODEL_LADDER = [
-  "gpt-6-astra",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-] as const;
+export const DEFAULT_OPENAI_MODEL_LADDER = ["gpt-5.6-sol"] as const;
 
 function modelIds(value: string | undefined): string[] {
   return (value ?? "")
@@ -177,12 +167,12 @@ export interface AppSecrets {
 
 /** Build the typed config from process.env (pure — easy to test). */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const anthropicModel = env.ANTHROPIC_MODEL || "claude-fable-5-1";
+  const anthropicModel = env.ANTHROPIC_MODEL || "claude-opus-5";
   const requestedAnthropicModels = modelIds(env.FACTORY_ANTHROPIC_MODEL_LADDER);
   const anthropicModels = requestedAnthropicModels.length
     ? [...new Set(requestedAnthropicModels)]
     : [...new Set([anthropicModel, ...DEFAULT_ANTHROPIC_MODEL_LADDER])];
-  const openaiModel = env.OPENAI_MODEL || "gpt-6-astra";
+  const openaiModel = env.OPENAI_MODEL || "gpt-5.6-sol";
   const requestedOpenAiModels = modelIds(env.FACTORY_OPENAI_MODEL_LADDER);
   const openaiModels = requestedOpenAiModels.length
     ? [...new Set(requestedOpenAiModels)]
@@ -209,8 +199,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     openaiModels,
     // Readiness models are separate from ordinary build routing. Helper models
     // may build, but they can never impersonate the required production brains.
-    solModel: env.FACTORY_SOL_MODEL || openaiModel,
-    fableOrOpusModel: env.FACTORY_FABLE_OR_OPUS_MODEL || anthropicModel,
+    solModel: env.FACTORY_SOL_MODEL || "gpt-5.6-sol",
+    fableOrOpusModel: env.FACTORY_FABLE_OR_OPUS_MODEL || "claude-opus-5",
     // One route: paid models in explicit strength order, then the strongest
     // available free/local rotation rung. The env var changes order only; it
     // cannot create a paid-only or free-only execution path.
