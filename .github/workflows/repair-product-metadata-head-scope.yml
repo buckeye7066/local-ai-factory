@@ -1,0 +1,119 @@
+name: Harden product metadata evidence to head scope
+on:
+  push:
+    branches: [fix/factory-product-metadata-evidence-20260905]
+    paths: [.github/workflows/repair-product-metadata-head-scope.yml]
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: '10.17.0'
+      - run: pnpm install --frozen-lockfile
+      - name: Constrain bounded metadata to document head
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          const webPath = 'src/server/tools/webFetch.ts';
+          let web = readFileSync(webPath, 'utf8');
+          const oldLoop = `  const values: string[] = [];
+  let cursor = 0;
+  for (
+    let markup = nextHtmlMarkup(html, cursor, false);
+    markup;
+    markup = nextHtmlMarkup(html, cursor, false)
+  ) {
+    cursor = markup.end;
+    if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">"))
+      continue;`;
+          const newLoop = `  const values: string[] = [];
+  let cursor = 0;
+  let inHead = false;
+  let headClosed = false;
+  for (
+    let markup = nextHtmlMarkup(html, cursor, false);
+    markup;
+    markup = nextHtmlMarkup(html, cursor, false)
+  ) {
+    cursor = markup.end;
+    if (markup.tag === "head") {
+      if (markup.closing) {
+        inHead = false;
+        headClosed = true;
+      } else if (!headClosed) {
+        inHead = true;
+      }
+      continue;
+    }
+    if (!inHead || headClosed) continue;
+    if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">"))
+      continue;`;
+          if ((web.split(oldLoop).length - 1) !== 1) throw new Error('webFetch metadata loop anchor changed');
+          web = web.replace(oldLoop, newLoop);
+          writeFileSync(webPath, web);
+
+          const testPath = 'src/server/__tests__/oversizedProductMetadataEvidence.test.ts';
+          let test = readFileSync(testPath, 'utf8');
+          const anchor = `  it("does not promote an incomplete metadata tag at the byte boundary", async () => {`;
+          if ((test.split(anchor).length - 1) !== 1) throw new Error('test anchor changed');
+          const injected = `  it("ignores product-looking metadata injected outside document head", async () => {
+    const html =
+      '<html><head><meta property="og:title" content="Todoist"></head><body>' +
+      '<meta name="description" content="Todoist helps teams organize tasks projects priorities deadlines recurring work and collaboration across devices">' +
+      "x".repeat(220_000) +
+      '</body></html>';
+    const result = await webFetchTool("https://www.todoist.com/", 15_000, {
+      lookup: publicLookup,
+      fetch: async () =>
+        new Response(html, { status: 200, headers: { "content-type": "text/html" } }),
+    });
+    expect(result).toMatchObject({ truncated: true, textExcerpt: "", metadataExcerpt: "Todoist" });
+    expect(
+      isMeaningfulProductEvidence(metadataView(result), {
+        candidateKey: "todoist.com",
+        title: "Todoist",
+      }),
+    ).toBe(false);
+  });
+
+`;
+          test = test.replace(anchor, injected + anchor);
+          writeFileSync(testPath, test);
+          JS
+          pnpm exec prettier --write src/server/tools/webFetch.ts src/server/__tests__/oversizedProductMetadataEvidence.test.ts
+          git diff --check
+      - name: Verify focused and full release contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run src/server/__tests__/oversizedProductMetadataEvidence.test.ts src/server/__tests__/competitiveIntelligence.test.ts src/server/__tests__/webResearch.test.ts
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm build
+          pnpm release:check
+      - name: Publish hardened source only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-product-metadata-head-scope.yml
+          git add src/server/tools/webFetch.ts src/server/__tests__/oversizedProductMetadataEvidence.test.ts .github/workflows/repair-product-metadata-head-scope.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: restrict bounded product metadata to document head'
+          git push origin HEAD:fix/factory-product-metadata-evidence-20260905
