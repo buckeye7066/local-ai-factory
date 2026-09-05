@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   repair:
-    if: ${{ !contains(github.event.head_commit.message, '[evidence-repair-done]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,34 +23,38 @@ jobs:
           version: 10.17.0
           run_install: false
       - name: Apply provenance-safe evidence hydration and regression
-        shell: python {0}
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           source = Path('src/server/agents/researchAgent.ts')
           text = source.read_text(encoding='utf-8')
           old = '  evidenceUrls: z.array(HttpUrlSchema).min(1),\n});'
-          new = '  // A provider may omit this redundant citation list. The candidate-specific\\n  // schema below can hydrate only already-inspected dossier URLs; supplied\\n  // non-empty URLs are never replaced and still must pass the evidence gate.\\n  evidenceUrls: z.array(HttpUrlSchema).default([]),\n});'.replace('\\n', '\n')
+          new = '''  // A provider may omit this redundant citation list. The candidate-specific
+          // schema below can hydrate only already-inspected dossier URLs; supplied
+          // non-empty URLs are never replaced and still must pass the evidence gate.
+          evidenceUrls: z.array(HttpUrlSchema).default([]),
+          });'''
           if old not in text:
               raise SystemExit('comparison evidence schema anchor not found')
           text = text.replace(old, new, 1)
 
           old = '''  const schema = CompetitiveSelectionShape.extend({
-    comparisons: z.array(CompetitiveComparisonInputSchema).length(requiredCount),
-    selected: z.array(CompetitiveSelectedInputSchema).length(requiredCount),
-  });'''
+            comparisons: z.array(CompetitiveComparisonInputSchema).length(requiredCount),
+            selected: z.array(CompetitiveSelectedInputSchema).length(requiredCount),
+          });'''
           new = '''  const hydratedComparisonSchema = CompetitiveComparisonInputSchema.transform(
-    (comparison) => {
-      if (comparison.evidenceUrls.length > 0) return comparison;
-      const inspectedEvidence = evidenceByCandidate.get(comparison.candidateId);
-      if (!inspectedEvidence || inspectedEvidence.size === 0) return comparison;
-      return { ...comparison, evidenceUrls: [...inspectedEvidence] };
-    },
-  );
-  const schema = CompetitiveSelectionShape.extend({
-    comparisons: z.array(hydratedComparisonSchema).length(requiredCount),
-    selected: z.array(CompetitiveSelectedInputSchema).length(requiredCount),
-  });'''
+            (comparison) => {
+              if (comparison.evidenceUrls.length > 0) return comparison;
+              const inspectedEvidence = evidenceByCandidate.get(comparison.candidateId);
+              if (!inspectedEvidence || inspectedEvidence.size === 0) return comparison;
+              return { ...comparison, evidenceUrls: [...inspectedEvidence] };
+            },
+          );
+          const schema = CompetitiveSelectionShape.extend({
+            comparisons: z.array(hydratedComparisonSchema).length(requiredCount),
+            selected: z.array(CompetitiveSelectedInputSchema).length(requiredCount),
+          });'''
           if old not in text:
               raise SystemExit('competitive selection schema anchor not found')
           text = text.replace(old, new, 1)
@@ -68,8 +71,8 @@ jobs:
           if evidence_line not in tail:
               raise SystemExit('comparison evidence line not found in target regression')
           tail = tail.replace(evidence_line, '', 1)
-          t = t[:pos] + tail
-          test.write_text(t, encoding='utf-8')
+          test.write_text(t[:pos] + tail, encoding='utf-8')
+          PY
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
       - name: Focused regression
@@ -80,12 +83,10 @@ jobs:
         run: pnpm test
       - name: Production release gate
         run: pnpm release:check
-      - name: Commit verified repair and remove temporary workflow
-        shell: bash
+      - name: Commit verified repair
         run: |
-          rm .github/workflows/repair-factory-cloud-evidence.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/server/agents/researchAgent.ts src/server/__tests__/webResearch.test.ts .github/workflows/repair-factory-cloud-evidence.yml
+          git add src/server/agents/researchAgent.ts src/server/__tests__/webResearch.test.ts
           git commit -m "fix: hydrate omitted verified competitor evidence [evidence-repair-done]"
           git push origin HEAD:fix/factory-cloud-evidence-hydration-20260905
