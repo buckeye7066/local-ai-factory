@@ -1,16 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { webFetchTool } from "../tools/webFetch.js";
-import { isMeaningfulProductEvidence } from "../tools/competitiveIntelligence.js";
+import {
+  isMeaningfulProductEvidence,
+  isMeaningfulProductMetadataEvidence,
+} from "../tools/competitiveIntelligence.js";
 
 const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }] as const;
-const metadataView = (result: Awaited<ReturnType<typeof webFetchTool>>) => ({
-  ...result,
-  ok: true,
-  textExcerpt: result.metadataExcerpt ?? "",
-  truncated: false,
-  error: undefined,
-});
-
 describe("oversized product metadata evidence", () => {
   it("keeps truncated body fail-closed while completed metadata can prove product identity", async () => {
     const description =
@@ -41,10 +36,11 @@ describe("oversized product metadata evidence", () => {
     expect(result.metadataExcerpt).toContain("Todoist");
     expect(result.metadataExcerpt).not.toContain("untrusted suffix");
     expect(
-      isMeaningfulProductEvidence(metadataView(result), {
-        candidateKey: "todoist.com",
-        title: "Todoist task manager",
-      }),
+      isMeaningfulProductMetadataEvidence(
+        result,
+        { candidateKey: "todoist.com", title: "Todoist task manager" },
+        "Todoist task manager for organizing projects and collaborative work",
+      ),
     ).toBe(true);
   });
 
@@ -65,10 +61,53 @@ describe("oversized product metadata evidence", () => {
       metadataExcerpt: "Todoist",
     });
     expect(
-      isMeaningfulProductEvidence(metadataView(result), {
-        candidateKey: "todoist.com",
-        title: "Todoist",
-      }),
+      isMeaningfulProductMetadataEvidence(
+        result,
+        { candidateKey: "todoist.com", title: "Todoist" },
+        "Todoist task manager",
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores product-looking meta markup embedded inside head scripts", async () => {
+    const html =
+      '<html><head><meta property="og:title" content="Todoist"><script>' +
+      '<meta name="description" content="Todoist organizes tasks projects deadlines priorities and collaboration across devices">' +
+      "</script></head><body>" +
+      "x".repeat(220_000) +
+      "</body></html>";
+    const result = await webFetchTool("https://www.todoist.com/", 15_000, {
+      lookup: publicLookup,
+      fetch: async () =>
+        new Response(html, { status: 200, headers: { "content-type": "text/html" } }),
+    });
+    expect(result).toMatchObject({ truncated: true, metadataExcerpt: "Todoist" });
+    expect(
+      isMeaningfulProductMetadataEvidence(
+        result,
+        { candidateKey: "todoist.com", title: "Todoist" },
+        "Todoist task manager",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects challenge metadata even when independent discovery names the product", () => {
+    expect(
+      isMeaningfulProductMetadataEvidence(
+        {
+          ok: false,
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          finalUrl: "https://www.todoist.com/",
+          textExcerpt: "",
+          metadataExcerpt:
+            "Todoist task manager\nVerify you are human to continue. Checking your browser before accessing Todoist.",
+          truncated: true,
+          error: "HTML response exceeded the byte limit and cannot be verified safely.",
+        },
+        { candidateKey: "todoist.com", title: "Todoist task manager" },
+        "Todoist task manager for organizing projects",
+      ),
     ).toBe(false);
   });
 
@@ -87,10 +126,11 @@ describe("oversized product metadata evidence", () => {
       metadataExcerpt: "Todoist",
     });
     expect(
-      isMeaningfulProductEvidence(metadataView(result), {
-        candidateKey: "todoist.com",
-        title: "Todoist",
-      }),
+      isMeaningfulProductMetadataEvidence(
+        result,
+        { candidateKey: "todoist.com", title: "Todoist" },
+        "Todoist task manager",
+      ),
     ).toBe(false);
   });
 });

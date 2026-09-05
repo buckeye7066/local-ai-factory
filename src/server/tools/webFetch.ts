@@ -1164,12 +1164,17 @@ function boundedDocumentMetadata(html: string): string {
   let cursor = 0;
   let inHead = false;
   let headClosed = false;
+  let rawTextTag: string | undefined;
   for (
     let markup = nextHtmlMarkup(html, cursor, false);
     markup;
     markup = nextHtmlMarkup(html, cursor, false)
   ) {
     cursor = markup.end;
+    if (rawTextTag) {
+      if (markup.closing && markup.tag === rawTextTag) rawTextTag = undefined;
+      continue;
+    }
     if (markup.tag === "head") {
       if (markup.closing) {
         inHead = false;
@@ -1180,6 +1185,10 @@ function boundedDocumentMetadata(html: string): string {
       continue;
     }
     if (!inHead || headClosed) continue;
+    if (markup.tag && !markup.closing && RAW_TEXT_ELEMENTS.has(markup.tag)) {
+      rawTextTag = markup.tag;
+      continue;
+    }
     if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">"))
       continue;
     const attributes = actualTagAttributes(markup.raw);
