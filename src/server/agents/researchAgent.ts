@@ -252,7 +252,10 @@ function competitiveSelectionSchema(
   const hydratedComparisonSchema = CompetitiveComparisonInputSchema.transform(
     (comparison) => {
       if (comparison.evidenceUrls.length > 0) return comparison;
-      const inspectedEvidence = evidenceByCandidate.get(comparison.candidateId);
+      const candidate = candidates.find((item) => item.id === comparison.candidateId);
+      const inspectedEvidence = canonicalEvidenceUrlSet(
+        candidate?.sourceEvidence.map((item) => item.url) ?? [],
+      );
       if (!inspectedEvidence || inspectedEvidence.size === 0) return comparison;
       return { ...comparison, evidenceUrls: [...inspectedEvidence] };
     },
@@ -425,7 +428,9 @@ function hydrateCompetitiveCandidateIds(
       ? item.evidenceUrls.filter((url): url is string => typeof url === "string")
       : [];
     const suppliedEvidence = canonicalEvidenceUrlSet(evidenceUrls);
-    if (suppliedEvidence.size === 0) return undefined;
+    if (suppliedEvidence.size === 0) {
+      return reviewCandidates.length === 1 ? reviewCandidates[0]!.id : undefined;
+    }
     const evidenceMatches = reviewCandidates.filter((candidate) => {
       const allowed = canonicalEvidenceUrlSet([
         candidate.url,
@@ -433,7 +438,8 @@ function hydrateCompetitiveCandidateIds(
       ]);
       return [...suppliedEvidence].some((url) => allowed.has(url));
     });
-    return evidenceMatches.length === 1 ? evidenceMatches[0]!.id : undefined;
+    if (evidenceMatches.length === 1) return evidenceMatches[0]!.id;
+    return reviewCandidates.length === 1 ? reviewCandidates[0]!.id : undefined;
   };
 
   const comparisons = Array.isArray(selection.comparisons)

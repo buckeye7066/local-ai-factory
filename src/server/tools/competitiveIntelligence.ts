@@ -965,10 +965,19 @@ export async function buildCompetitiveDossier(
 ): Promise<CompetitiveDossier> {
   const defaultQueries = buildDiscoveryQueries(spec);
   const productQueries = normalizeProductDiscoveryQueries(options.productQueries ?? []);
+  const deterministicProductQueries = defaultQueries.filter((query) =>
+    isCompetitorQuery(query),
+  );
+  const implementationQueries = defaultQueries.filter(
+    (query) => !isCompetitorQuery(query),
+  );
   const queries = productQueries.length
     ? [
-        ...productQueries,
-        ...defaultQueries.filter((query) => !isCompetitorQuery(query)),
+        ...new Set([
+          ...productQueries,
+          ...deterministicProductQueries,
+          ...implementationQueries,
+        ]),
       ].slice(0, 12)
     : defaultQueries;
   const terms = termsFor(spec, arch);
