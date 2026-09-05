@@ -48,6 +48,30 @@ describe("oversized product metadata evidence", () => {
     ).toBe(true);
   });
 
+  it("ignores product-looking metadata injected outside document head", async () => {
+    const html =
+      '<html><head><meta property="og:title" content="Todoist"></head><body>' +
+      '<meta name="description" content="Todoist helps teams organize tasks projects priorities deadlines recurring work and collaboration across devices">' +
+      "x".repeat(220_000) +
+      "</body></html>";
+    const result = await webFetchTool("https://www.todoist.com/", 15_000, {
+      lookup: publicLookup,
+      fetch: async () =>
+        new Response(html, { status: 200, headers: { "content-type": "text/html" } }),
+    });
+    expect(result).toMatchObject({
+      truncated: true,
+      textExcerpt: "",
+      metadataExcerpt: "Todoist",
+    });
+    expect(
+      isMeaningfulProductEvidence(metadataView(result), {
+        candidateKey: "todoist.com",
+        title: "Todoist",
+      }),
+    ).toBe(false);
+  });
+
   it("does not promote an incomplete metadata tag at the byte boundary", async () => {
     const prefix =
       '<html><head><meta property="og:title" content="Todoist"><meta name="description" content="';

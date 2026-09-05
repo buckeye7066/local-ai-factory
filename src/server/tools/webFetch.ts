@@ -1162,12 +1162,24 @@ function boundedDocumentMetadata(html: string): string {
   ]);
   const values: string[] = [];
   let cursor = 0;
+  let inHead = false;
+  let headClosed = false;
   for (
     let markup = nextHtmlMarkup(html, cursor, false);
     markup;
     markup = nextHtmlMarkup(html, cursor, false)
   ) {
     cursor = markup.end;
+    if (markup.tag === "head") {
+      if (markup.closing) {
+        inHead = false;
+        headClosed = true;
+      } else if (!headClosed) {
+        inHead = true;
+      }
+      continue;
+    }
+    if (!inHead || headClosed) continue;
     if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">"))
       continue;
     const attributes = actualTagAttributes(markup.raw);
