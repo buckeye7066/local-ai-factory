@@ -856,6 +856,76 @@ export function isMeaningfulProductEvidence(
   return relevanceTokens.some((token) => lower.includes(token));
 }
 
+/**
+ * Verify product identity from completed document metadata without pretending a
+ * truncated HTML body was complete. Metadata is accepted only as a separate,
+ * dual-source identity signal: the fetched page must be a same-domain 2xx HTML
+ * response, contain multiple completed head metadata fields, avoid known
+ * challenge/parking/login markers, and agree with independent discovery text.
+ */
+export function isMeaningfulProductMetadataEvidence(
+  result: WebFetchResult,
+  context: ProductEvidenceContext,
+  discoveryText: string,
+): boolean {
+  const metadata = (result.metadataExcerpt ?? "").trim();
+  if (
+    result.truncated !== true ||
+    result.status < 200 ||
+    result.status >= 300 ||
+    !/^text\/html(?:\s*;|$)/i.test(result.contentType.trim()) ||
+    metadata.length < MIN_PRODUCT_EVIDENCE_CHARS
+  ) {
+    return false;
+  }
+
+  const fields = [
+    ...new Set(
+      metadata
+        .split(/\n+/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (fields.length < 2) return false;
+
+  const finalKey = productDomainKeyFromUrl(result.finalUrl);
+  if (!finalKey || finalKey !== context.candidateKey) return false;
+  try {
+    if (/\/(?:auth|login|sign-?in)(?:\/|$)/i.test(new URL(result.finalUrl).pathname)) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  if (
+    /\b(?:buy this domain|domain (?:is )?for sale|parked domain|verify you are human|captcha|checking your browser|access denied|sign in to continue|log in to continue)\b/i.test(
+      metadata,
+    )
+  ) {
+    return false;
+  }
+
+  const brand = context.candidateKey.split(".")[0] ?? "";
+  const relevanceTokens = [brand, ...context.title.split(/[^a-z0-9]+/i)]
+    .map((token) => token.toLowerCase())
+    .filter(
+      (token, index, all) =>
+        token.length >= 2 &&
+        !GENERIC_PRODUCT_WORDS.has(token) &&
+        all.indexOf(token) === index,
+    );
+  if (!relevanceTokens.length) return false;
+
+  const lowerMetadata = metadata.toLowerCase();
+  const lowerDiscovery = discoveryText.toLowerCase();
+  return (
+    relevanceTokens.some((token) => lowerMetadata.includes(token)) &&
+    relevanceTokens.some((token) => lowerDiscovery.includes(token))
+  );
+}
+
 function sourceHealthFromAttempts(
   provider: WebSearchProvider,
   attempts: SearchAttempt[],
@@ -1128,10 +1198,20 @@ export async function buildCompetitiveDossier(
     DISCOVERY_CONCURRENCY,
     async ([key, candidate]): Promise<CompetitiveCandidate> => {
       const fetched = await webFetchTool(candidate.url);
-      const meaningful = isMeaningfulProductEvidence(fetched, {
-        candidateKey: key,
-        title: candidate.title,
-      });
+      const context = { candidateKey: key, title: candidate.title };
+      const pageMeaningful = isMeaningfulProductEvidence(fetched, context);
+      const metadataMeaningful = isMeaningfulProductMetadataEvidence(
+        fetched,
+        context,
+        `${candidate.title}
+${candidate.snippet}`,
+      );
+      const meaningful = pageMeaningful || metadataMeaningful;
+      const evidenceText = pageMeaningful
+        ? fetched.textExcerpt
+        : metadataMeaningful
+          ? (fetched.metadataExcerpt ?? "")
+          : "";
       return {
         id: `product:${key}`,
         kind: "product",
@@ -1151,9 +1231,9 @@ export async function buildCompetitiveDossier(
         sourceEvidence: meaningful
           ? [
               {
-                path: "product-page",
+                path: pageMeaningful ? "product-page" : "product-metadata+discovery",
                 url: fetched.finalUrl || candidate.url,
-                excerpt: fetched.textExcerpt.slice(0, MAX_EVIDENCE_EXCERPT),
+                excerpt: evidenceText.slice(0, MAX_EVIDENCE_EXCERPT),
               },
             ]
           : [],
