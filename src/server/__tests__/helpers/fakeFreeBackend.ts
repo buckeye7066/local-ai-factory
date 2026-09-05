@@ -27,12 +27,7 @@ import type { AddressInfo } from "node:net";
  */
 
 export type BackendMode =
-  | "fast"
-  | "dribble"
-  | "slow-first"
-  | "silent"
-  | "stall-after-first"
-  | "backpressure";
+  "fast" | "dribble" | "slow-first" | "silent" | "stall-after-first" | "backpressure";
 
 export interface FakeBackendOptions {
   mode: BackendMode;

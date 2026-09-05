@@ -73,12 +73,7 @@ export function HazardBar({ className }: { className?: string }) {
 /* ------------------------------------------------------------------ */
 
 export type AndonStatus =
-  | "not_selected"
-  | "queued"
-  | "active"
-  | "needs_attention"
-  | "completed"
-  | "failed";
+  "not_selected" | "queued" | "active" | "needs_attention" | "completed" | "failed";
 
 /** How the plant reads each station state: which lamp is lit, and the words
  *  written on the board. Line workers get a verb, not a status enum. */

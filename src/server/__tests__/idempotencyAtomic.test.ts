@@ -6,9 +6,8 @@ import { resolve } from "node:path";
 const dataRoot = resolve(process.cwd(), ".test-factory-data-idempotency-atomic");
 process.env.FACTORY_DATA_DIR = dataRoot;
 
-const { startIdempotently, _resetIdempotencyForTests } = await import(
-  "../storage/idempotency.js"
-);
+const { startIdempotently, _resetIdempotencyForTests } =
+  await import("../storage/idempotency.js");
 const { inspectDurableRun } = await import("../storage/runsStore.js");
 
 beforeEach(async () => {

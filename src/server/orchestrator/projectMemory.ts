@@ -362,8 +362,8 @@ export function createGoalContract(input: {
     explicitPurposeChange([input.idea, ...partitioned.activeGoals]) ||
     Boolean(
       previous &&
-        partitioned.declaredPurpose &&
-        partitioned.declaredPurpose.trim() !== previous.goalContract.purpose.trim(),
+      partitioned.declaredPurpose &&
+      partitioned.declaredPurpose.trim() !== previous.goalContract.purpose.trim(),
     );
   const preservePriorPurpose = Boolean(
     previous && !purposeChanged && !partitioned.declaredPurpose,

@@ -63,9 +63,7 @@ interface FileEvidence {
 }
 
 type JavascriptHelper =
-  | ts.ArrowFunction
-  | ts.FunctionExpression
-  | ts.FunctionDeclaration;
+  ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration;
 
 type VisibleBinding =
   | { kind: "helper"; helper: JavascriptHelper }
@@ -107,11 +105,11 @@ function containsExpectCall(node: ts.Node): ts.CallExpression | null {
 function isPrimitiveLiteral(node: ts.Expression | undefined): boolean {
   return Boolean(
     node &&
-      (ts.isStringLiteralLike(node) ||
-        ts.isNumericLiteral(node) ||
-        node.kind === ts.SyntaxKind.TrueKeyword ||
-        node.kind === ts.SyntaxKind.FalseKeyword ||
-        node.kind === ts.SyntaxKind.NullKeyword),
+    (ts.isStringLiteralLike(node) ||
+      ts.isNumericLiteral(node) ||
+      node.kind === ts.SyntaxKind.TrueKeyword ||
+      node.kind === ts.SyntaxKind.FalseKeyword ||
+      node.kind === ts.SyntaxKind.NullKeyword),
   );
 }
 
@@ -396,13 +394,13 @@ function statementDefinitelyTerminates(statement: ts.Statement): boolean {
     if (statement.expression.kind === ts.SyntaxKind.FalseKeyword) {
       return Boolean(
         statement.elseStatement &&
-          statementDefinitelyTerminates(statement.elseStatement),
+        statementDefinitelyTerminates(statement.elseStatement),
       );
     }
     return Boolean(
       statement.elseStatement &&
-        statementDefinitelyTerminates(statement.thenStatement) &&
-        statementDefinitelyTerminates(statement.elseStatement),
+      statementDefinitelyTerminates(statement.thenStatement) &&
+      statementDefinitelyTerminates(statement.elseStatement),
     );
   }
   return false;

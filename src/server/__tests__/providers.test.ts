@@ -49,9 +49,7 @@ describe("provider registry selection", () => {
       loadSecrets({ ANTHROPIC_API_KEY: "sk-a", OPENAI_API_KEY: "sk-o" }),
     );
     const exactRungs = reg.automaticRungs!();
-    const rungs = exactRungs.map(
-      (rung) => `${rung.provider.name}:${rung.model}`,
-    );
+    const rungs = exactRungs.map((rung) => `${rung.provider.name}:${rung.model}`);
     expect(rungs.slice(0, -1)).toEqual([
       "anthropic:claude-fable-5-1",
       "anthropic:claude-opus-5",
@@ -60,9 +58,9 @@ describe("provider registry selection", () => {
       "openai:gpt-5.5",
     ]);
     expect(rungs.at(-1)).toMatch(/^free:(aitime:best-free|fcc:)/);
-    expect(
-      exactRungs.find((rung) => rung.model === "claude-opus-5")?.advanceOn,
-    ).toBe("credit-or-unavailable");
+    expect(exactRungs.find((rung) => rung.model === "claude-opus-5")?.advanceOn).toBe(
+      "credit-or-unavailable",
+    );
   });
 
   it("keeps the legacy free-route diagnostic resolver separate from production", () => {

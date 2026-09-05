@@ -8,11 +8,7 @@
  */
 
 export type ProgramScoutJobStatus =
-  | "queued"
-  | "running"
-  | "ready"
-  | "failed"
-  | "cancelled";
+  "queued" | "running" | "ready" | "failed" | "cancelled";
 
 export interface ProgramScoutSource {
   url: string;

@@ -32,10 +32,7 @@ export const SCHEMA = 1;
 
 export type Tier = "frontier" | "strong" | "light";
 export type CostClass =
-  | "local-unlimited"
-  | "subscription"
-  | "free-tier"
-  | "paid-metered";
+  "local-unlimited" | "subscription" | "free-tier" | "paid-metered";
 
 export const TIER_CHAIN: readonly Tier[] = ["frontier", "strong", "light"];
 export const FREE_COST_CLASSES: ReadonlySet<string> = new Set([

@@ -181,7 +181,9 @@ describe("automatic cloud model-ladder contract", () => {
       'candidates=("qwen2.5-coder:3b" "qwen2.5-coder:1.5b")',
     );
     // An explicit operator candidate list still wins over the memory heuristic.
-    expect(freeFallback).toContain('read -r -a candidates <<< "${AITIME_OLLAMA_CANDIDATES}"');
+    expect(freeFallback).toContain(
+      'read -r -a candidates <<< "${AITIME_OLLAMA_CANDIDATES}"',
+    );
   });
 
   it("uses greenfield proofs whose tests can be independently executed", () => {

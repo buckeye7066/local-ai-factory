@@ -112,11 +112,7 @@ describe("ModelLadderProvider", () => {
   });
 
   it("switches the sticky Opus primary to Sol after verified credit exhaustion", async () => {
-    const opus = fake(
-      "exhausted",
-      "anthropic",
-      "429 You have no credits remaining.",
-    );
+    const opus = fake("exhausted", "anthropic", "429 You have no credits remaining.");
     const sol = fake("ok", "openai");
     const provider = new ModelLadderProvider([
       {

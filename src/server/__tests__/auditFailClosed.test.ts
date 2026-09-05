@@ -6,9 +6,8 @@ const dataRoot = resolve(process.cwd(), ".test-factory-data-audit-fail-closed");
 const auditFile = resolve(dataRoot, "audit", "events.jsonl");
 
 process.env.FACTORY_DATA_DIR = dataRoot;
-const { appendAuditEvent, verifyAuditChain, _resetAuditCursorForTests } = await import(
-  "../storage/auditLog.js"
-);
+const { appendAuditEvent, verifyAuditChain, _resetAuditCursorForTests } =
+  await import("../storage/auditLog.js");
 
 beforeEach(async () => {
   await rm(dataRoot, {

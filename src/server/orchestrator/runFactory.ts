@@ -902,14 +902,14 @@ async function executeRun(
   const hasAuthoredDownstream = (): boolean =>
     Boolean(
       checkpoint.build ||
-        checkpoint.files.length > 0 ||
-        checkpoint.testPlan ||
-        checkpoint.testWriterComplete ||
-        checkpoint.verification ||
-        checkpoint.qa ||
-        checkpoint.pendingRepair ||
-        checkpoint.repairComplete ||
-        checkpoint.finalReport,
+      checkpoint.files.length > 0 ||
+      checkpoint.testPlan ||
+      checkpoint.testWriterComplete ||
+      checkpoint.verification ||
+      checkpoint.qa ||
+      checkpoint.pendingRepair ||
+      checkpoint.repairComplete ||
+      checkpoint.finalReport,
     );
 
   /**

@@ -15,9 +15,8 @@ const {
   recordReadinessEvaluation,
   saveReadinessState,
 } = await import("../storage/readinessStore.js");
-const { evaluateProductionReadiness } = await import(
-  "../orchestrator/productionReadinessPolicy.js"
-);
+const { evaluateProductionReadiness } =
+  await import("../orchestrator/productionReadinessPolicy.js");
 
 beforeAll(async () => {
   await rm(resolve(root, "readiness"), { recursive: true, force: true });

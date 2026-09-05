@@ -241,7 +241,7 @@ const SOURCE_RX = JS_TS_SOURCE_EXTENSION_RX;
 function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
   return Boolean(
     ts.canHaveModifiers(node) &&
-      ts.getModifiers(node)?.some((modifier) => modifier.kind === kind),
+    ts.getModifiers(node)?.some((modifier) => modifier.kind === kind),
   );
 }
 

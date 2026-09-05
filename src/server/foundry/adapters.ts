@@ -117,9 +117,9 @@ export function isActionablePlatformEvidenceHold(
 ): boolean {
   return Boolean(
     checkpoint?.testWriterComplete &&
-      checkpoint.verification &&
-      Object.keys(checkpoint.verification.fileDigests ?? {}).length > 0 &&
-      Object.keys(checkpoint.verification.platformArtifactSnapshot ?? {}).length > 0,
+    checkpoint.verification &&
+    Object.keys(checkpoint.verification.fileDigests ?? {}).length > 0 &&
+    Object.keys(checkpoint.verification.platformArtifactSnapshot ?? {}).length > 0,
   );
 }
 
