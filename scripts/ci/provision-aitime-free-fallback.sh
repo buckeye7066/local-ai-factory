@@ -47,7 +47,49 @@ fi
 # that fits and can complete a real inference on this runner. The previous
 # provisioner stopped after the first success, which made one later transport
 # failure terminal even when a smaller verified model was already available.
-read -r -a candidates <<< "${AITIME_OLLAMA_CANDIDATES:-qwen2.5-coder:7b qwen2.5-coder:3b}"
+#
+# Capacity is part of availability. A 7B model can answer a trivial warm-up
+# probe on a roughly 7 GiB hosted runner and then terminate Ollama when the
+# real architect prompt arrives, so the runner's own memory decides whether a
+# 7B candidate is offered at all. An explicit AITIME_OLLAMA_CANDIDATES always
+# wins.
+memory_bytes=0
+if [[ -r /sys/fs/cgroup/memory.max ]]; then
+  raw_limit="$(cat /sys/fs/cgroup/memory.max)"
+  if [[ "${raw_limit}" =~ ^[0-9]+$ ]] && ((raw_limit > 0)); then
+    memory_bytes="${raw_limit}"
+  fi
+elif [[ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ]]; then
+  raw_limit="$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)"
+  if [[ "${raw_limit}" =~ ^[0-9]+$ ]] && ((raw_limit > 0)); then
+    memory_bytes="${raw_limit}"
+  fi
+fi
+available_bytes="$(awk '/^MemAvailable:/ { printf "%.0f", $2 * 1024 }' /proc/meminfo 2>/dev/null || true)"
+if [[ "${available_bytes}" =~ ^[0-9]+$ ]] && ((available_bytes > 0)) &&
+  { ((memory_bytes == 0)) || ((available_bytes < memory_bytes)); }; then
+  memory_bytes="${available_bytes}"
+fi
+
+seven_b_min_bytes="${AITIME_OLLAMA_7B_MIN_BYTES:-12884901888}"
+if ! [[ "${seven_b_min_bytes}" =~ ^[0-9]+$ ]] || ((seven_b_min_bytes <= 0)); then
+  echo "AITIME_OLLAMA_7B_MIN_BYTES must be a positive integer." >&2
+  exit 1
+fi
+
+if [[ -n "${AITIME_OLLAMA_CANDIDATES:-}" ]]; then
+  read -r -a candidates <<< "${AITIME_OLLAMA_CANDIDATES}"
+elif ((memory_bytes >= seven_b_min_bytes)); then
+  candidates=("qwen2.5-coder:7b" "qwen2.5-coder:3b" "qwen2.5-coder:1.5b")
+else
+  candidates=("qwen2.5-coder:3b" "qwen2.5-coder:1.5b")
+fi
+if ((${#candidates[@]} == 0)); then
+  echo "AI Time free candidate list is empty." >&2
+  exit 1
+fi
+echo "AI Time free candidates for ${memory_bytes} usable bytes: ${candidates[*]}"
+
 verified_models=()
 for model in "${candidates[@]}"; do
   echo "Trying AI Time free candidate ${model}..."

@@ -168,6 +168,22 @@ describe("automatic cloud model-ladder contract", () => {
     expect(freeFallback).not.toMatch(/mock|stub/i);
   });
 
+  it("treats sustainable runner capacity as part of free-route availability", () => {
+    // A 7B model can answer a trivial warm-up probe on a small hosted runner
+    // and then terminate Ollama when the real architect prompt arrives, so the
+    // runner's usable memory must gate whether 7B is offered at all.
+    expect(freeFallback).toContain("AITIME_OLLAMA_7B_MIN_BYTES");
+    expect(freeFallback).toContain("MemAvailable");
+    expect(freeFallback).toContain(
+      'candidates=("qwen2.5-coder:7b" "qwen2.5-coder:3b" "qwen2.5-coder:1.5b")',
+    );
+    expect(freeFallback).toContain(
+      'candidates=("qwen2.5-coder:3b" "qwen2.5-coder:1.5b")',
+    );
+    // An explicit operator candidate list still wins over the memory heuristic.
+    expect(freeFallback).toContain('read -r -a candidates <<< "${AITIME_OLLAMA_CANDIDATES}"');
+  });
+
   it("uses greenfield proofs whose tests can be independently executed", () => {
     expect(factory).toContain("command-line only with no HTML, browser, or web UI");
     expect(foundrySmoke).toContain(
