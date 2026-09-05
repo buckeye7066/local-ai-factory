@@ -2,7 +2,9 @@ name: Repair and verify startup health
 on:
   push:
     branches: [repair/production-session-20260905]
-    paths: [.github/workflows/session-validation-20260905.yml]
+    paths:
+      - .github/workflows/session-validation-20260905.yml
+      - src/server/__tests__/existingInstanceHealth.test.ts
 permissions:
   contents: write
 concurrency:
@@ -83,6 +85,31 @@ jobs:
           git push origin HEAD:repair/production-session-20260905
           git rev-parse HEAD > session-evidence/source-sha.txt
           git archive --format=tar.gz HEAD > session-evidence/source.tar.gz
+      - name: Record read-only live readiness of the requested hosted services
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p session-evidence
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          const targets = {
+            grantflow_ready: 'https://grantflow-production.up.railway.app/readyz',
+            grantflow_health: 'https://grantflow.axiombiolabs.org/api/health',
+            grantflow_frontend: 'https://grantflow.axiombiolabs.org/deployment-version.json',
+            flexfactor_cloud: 'https://flexfactor-cloud.vercel.app/api/health',
+          };
+          const result = {};
+          for (const [name, url] of Object.entries(targets)) {
+            try {
+              const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(20000), cache: 'no-store' });
+              result[name] = { url, checked_at: new Date().toISOString(), status: response.status, body: (await response.text()).slice(0, 30000) };
+            } catch (error) {
+              result[name] = { url, checked_at: new Date().toISOString(), error: String(error) };
+            }
+          }
+          writeFileSync('session-evidence/live-services.json', JSON.stringify(result, null, 2));
+          console.log(JSON.stringify(result, null, 2));
+          JS
       - name: Preserve full regression and release evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
