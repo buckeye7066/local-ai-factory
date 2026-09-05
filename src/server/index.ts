@@ -1208,9 +1208,10 @@ server.on("error", (err: NodeJS.ErrnoException) => {
       let isFactory = false;
       try {
         const res = await fetch(`http://127.0.0.1:${config.port}/api/health`, {
+          redirect: "error",
           signal: AbortSignal.timeout(2000),
         });
-        isFactory = isFactoryHealthPayload(await res.json());
+        isFactory = res.ok && isFactoryHealthPayload(await res.json());
       } catch {
         isFactory = false;
       }
