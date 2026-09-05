@@ -26,43 +26,48 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           source = Path('src/server/agents/researchAgent.ts')
           text = source.read_text(encoding='utf-8')
-          old = '''  // The run-scoped orchestrator names plausible competitors; deterministic
-          // search, URL classification, page inspection, and the five-product gate
-          // decide whether any of them count. Planning failure falls back to the
-          // deterministic generic queries and remains advisory.
-          let productQueries: string[] = [];
-          if (!boundedProduction) {
-            try {
-              productQueries = await planProductDiscovery(deps, spec, arch);
-            } catch (err) {
-              if (err instanceof ProviderAbortError) throw err;
-            }
-          }'''
-          new = '''  // The run-scoped orchestrator names plausible competitors before deterministic
-          // search and inspection. Production also needs this bounded planning call:
-          // generic category searches frequently return articles, forums, and roundups
-          // that cannot satisfy the five distinct verified-product gate. Planning
-          // failure still falls back to deterministic generic queries and remains advisory.
-          let productQueries: string[] = [];
+          pattern = re.compile(
+              r'  let productQueries: string\[\] = \[\];\n'
+              r'  if \(!boundedProduction\) \{\n'
+              r'    try \{\n'
+              r'      productQueries = await planProductDiscovery\(deps, spec, arch\);\n'
+              r'    \} catch \(err\) \{\n'
+              r'      if \(err instanceof ProviderAbortError\) throw err;\n'
+              r'    \}\n'
+              r'  \}'
+          )
+          replacement = '''  let productQueries: string[] = [];
           try {
             productQueries = await planProductDiscovery(deps, spec, arch);
           } catch (err) {
             if (err instanceof ProviderAbortError) throw err;
           }'''
-          if old not in text:
-              raise SystemExit('bounded product planning anchor not found')
-          source.write_text(text.replace(old, new, 1), encoding='utf-8')
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'bounded product planning executable anchor count={count}')
+          old_comment = '''  // The run-scoped orchestrator names plausible competitors; deterministic
+          // search, URL classification, page inspection, and the five-product gate
+          // decide whether any of them count. Planning failure falls back to the
+          // deterministic generic queries and remains advisory.'''
+          new_comment = '''  // The run-scoped orchestrator names plausible competitors before deterministic
+          // search and inspection. Production also needs this bounded planning call:
+          // generic category searches frequently return articles, forums, and roundups
+          // that cannot satisfy the five distinct verified-product gate. Planning
+          // failure still falls back to deterministic generic queries and remains advisory.'''
+          text = text.replace(old_comment, new_comment, 1)
+          source.write_text(text, encoding='utf-8')
 
           test = Path('src/server/__tests__/boundedResearch.test.ts')
           t = test.read_text(encoding='utf-8')
-          count = t.count('expect(provider.calls).toBe(1);')
-          if count == 0:
-              raise SystemExit('bounded provider call-count anchors not found')
-          test.write_text(t.replace('expect(provider.calls).toBe(1);', 'expect(provider.calls).toBe(2);'), encoding='utf-8')
-          print(f'updated {count} bounded provider call-count assertions')
+          call_count = t.count('expect(provider.calls).toBe(1);')
+          print(f'bounded one-call assertions found: {call_count}')
+          if call_count:
+              t = t.replace('expect(provider.calls).toBe(1);', 'expect(provider.calls).toBe(2);')
+          test.write_text(t, encoding='utf-8')
           PY
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
