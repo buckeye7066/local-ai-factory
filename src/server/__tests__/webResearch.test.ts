@@ -802,7 +802,7 @@ describe("researchAgent competitive selection failure is a named skip", () => {
     }
   });
 
-  it("derives omitted selection detail from its evidence-validated comparison", async () => {
+  it("derives omitted selection detail and evidence only from the inspected candidate", async () => {
     const ci = await import("../tools/competitiveIntelligence.js");
     const productUrl = "https://rival.example/product";
     const productDossier = {
