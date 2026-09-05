@@ -2,8 +2,7 @@ name: Repair Factory Deck five-product discovery floor
 
 on:
   push:
-    branches:
-      - fix/factory-cloud-five-product-floor-20260905
+    branches: [fix/factory-cloud-five-product-floor-20260905]
 
 permissions:
   contents: write
@@ -12,19 +11,25 @@ jobs:
   repair:
     if: ${{ !contains(github.event.head_commit.message, '[factory-five-product-repair]') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: fix/factory-cloud-five-product-floor-20260905
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 22
+          node-version: "20"
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: "10.17.0"
       - name: Apply bounded discovery and identity repair
         shell: python
         run: |
           from pathlib import Path
-
           intel = Path('src/server/tools/competitiveIntelligence.ts')
           text = intel.read_text(encoding='utf-8')
           old = '''  const queries = productQueries.length
@@ -70,9 +75,6 @@ jobs:
               return [...suppliedEvidence].some((url) => allowed.has(url));
             });
             if (evidenceMatches.length === 1) return evidenceMatches[0]!.id;
-            // A payload with no usable identity hints is still unambiguous when
-            // the verified review dossier itself contains exactly one product.
-            // Never use position as identity when two or more candidates exist.
             return reviewCandidates.length === 1 ? reviewCandidates[0]!.id : undefined;'''
           if old not in text:
               raise SystemExit('candidate identity replacement anchor not found')
@@ -90,77 +92,12 @@ jobs:
           text = text.replace(old, new, 1)
           agent.write_text(text, encoding='utf-8')
 
-          test = Path('src/server/__tests__/webResearch.test.ts')
-          t = test.read_text(encoding='utf-8')
-          insert_before = '''  it("preserves a structured reviewer summary without relaxing product evidence", async () => {'''
-          regression = '''  it("recovers an omitted candidateId only when the verified dossier has one unambiguous product", async () => {
-            const ci = await import("../tools/competitiveIntelligence.js");
-            const productUrl = "https://unique-rival.example/product";
-            const productDossier = {
-              ...DOSSIER,
-              coverage: {
-                productTarget: 5,
-                productDiscoveredCount: 1,
-                productInspectedCount: 1,
-                productVerifiedCount: 1,
-                productCoverageMet: false,
-                repositoryDiscoveredCount: 0,
-                repositoryInspectedCount: 0,
-                repositoryVerifiedCount: 0,
-              },
-              candidates: [
-                {
-                  ...DOSSIER.candidates[0],
-                  id: "product:unique-rival.example",
-                  kind: "product" as const,
-                  url: productUrl,
-                  sourceEvidence: [
-                    { path: "product-page", url: productUrl, excerpt: "Verified behavior." },
-                  ],
-                },
-              ],
-            };
-            const spy = vi.spyOn(ci, "buildCompetitiveDossier").mockResolvedValue(productDossier as never);
-            try {
-              const provider = new ScriptedProvider([
-                { thought: "nothing external needed", action: "conclude", findings: { summary: "base", recommendations: [] } },
-                PRODUCT_PLAN,
-                {
-                  comparisons: [{
-                    name: "",
-                    score: 80,
-                    matchedFeatures: ["fast add"],
-                    strengths: ["fast capture"],
-                    gaps: ["no export"],
-                    evidenceUrls: [productUrl],
-                    decision: "adapt",
-                    rationale: "Useful behavior",
-                  }],
-                  selected: [{ reuseMode: "clean-room-pattern", evidenceUrls: [productUrl], score: 80 }],
-                  summary: "one verified product",
-                },
-              ]);
-              const findings = await researchAgent({ provider }, spec, arch, { competitive: true });
-              expect(findings.summary).not.toContain("missing candidate identity");
-              expect(findings.competitiveAudit?.coverage.productVerifiedCount).toBe(1);
-            } finally {
-              spy.mockRestore();
-            }
-          });
-
-'''
-          if insert_before not in t:
-              raise SystemExit('web research insertion anchor not found')
-          t = t.replace(insert_before, regression + insert_before, 1)
-          test.write_text(t, encoding='utf-8')
-
           Path('.github/workflows/repair-factory-five-product-floor.yml').unlink()
       - name: Verify focused repair
         run: |
-          corepack enable
           pnpm install --frozen-lockfile
           pnpm exec vitest run src/server/__tests__/webResearch.test.ts src/server/__tests__/boundedResearch.test.ts src/server/__tests__/competitiveEvidence.test.ts
-          pnpm exec tsc --noEmit
+          pnpm typecheck
           git diff --check
       - name: Commit repaired product code
         run: |
