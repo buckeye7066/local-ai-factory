@@ -1,0 +1,171 @@
+name: Repair Factory Deck five-product discovery floor
+
+on:
+  push:
+    branches:
+      - fix/factory-cloud-five-product-floor-20260905
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: ${{ !contains(github.event.head_commit.message, '[factory-five-product-repair]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/factory-cloud-five-product-floor-20260905
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply bounded discovery and identity repair
+        shell: python
+        run: |
+          from pathlib import Path
+
+          intel = Path('src/server/tools/competitiveIntelligence.ts')
+          text = intel.read_text(encoding='utf-8')
+          old = '''  const queries = productQueries.length
+            ? [
+                ...productQueries,
+                ...defaultQueries.filter((query) => !isCompetitorQuery(query)),
+              ].slice(0, 12)
+            : defaultQueries;'''
+          new = '''  const deterministicProductQueries = defaultQueries.filter((query) =>
+            isCompetitorQuery(query),
+          );
+          const implementationQueries = defaultQueries.filter(
+            (query) => !isCompetitorQuery(query),
+          );
+          const queries = productQueries.length
+            ? [
+                ...new Set([
+                  ...productQueries,
+                  ...deterministicProductQueries,
+                  ...implementationQueries,
+                ]),
+              ].slice(0, 12)
+            : defaultQueries;'''
+          if old not in text:
+              raise SystemExit('product query replacement anchor not found')
+          intel.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          agent = Path('src/server/agents/researchAgent.ts')
+          text = agent.read_text(encoding='utf-8')
+          old = '''    const evidenceMatches = reviewCandidates.filter((candidate) => {
+              const allowed = canonicalEvidenceUrlSet([
+                candidate.url,
+                ...candidate.sourceEvidence.map((evidence) => evidence.url),
+              ]);
+              return [...suppliedEvidence].some((url) => allowed.has(url));
+            });
+            return evidenceMatches.length === 1 ? evidenceMatches[0]!.id : undefined;'''
+          new = '''    const evidenceMatches = reviewCandidates.filter((candidate) => {
+              const allowed = canonicalEvidenceUrlSet([
+                candidate.url,
+                ...candidate.sourceEvidence.map((evidence) => evidence.url),
+              ]);
+              return [...suppliedEvidence].some((url) => allowed.has(url));
+            });
+            if (evidenceMatches.length === 1) return evidenceMatches[0]!.id;
+            // A payload with no usable identity hints is still unambiguous when
+            // the verified review dossier itself contains exactly one product.
+            // Never use position as identity when two or more candidates exist.
+            return reviewCandidates.length === 1 ? reviewCandidates[0]!.id : undefined;'''
+          if old not in text:
+              raise SystemExit('candidate identity replacement anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '      const inspectedEvidence = evidenceByCandidate.get(comparison.candidateId);'
+          new = '''      const candidate = candidates.find(
+                (item) => item.id === comparison.candidateId,
+              );
+              const inspectedEvidence = canonicalEvidenceUrlSet(
+                candidate?.sourceEvidence.map((item) => item.url) ?? [],
+              );'''
+          if old not in text:
+              raise SystemExit('inspected evidence replacement anchor not found')
+          text = text.replace(old, new, 1)
+          agent.write_text(text, encoding='utf-8')
+
+          test = Path('src/server/__tests__/webResearch.test.ts')
+          t = test.read_text(encoding='utf-8')
+          insert_before = '''  it("preserves a structured reviewer summary without relaxing product evidence", async () => {'''
+          regression = '''  it("recovers an omitted candidateId only when the verified dossier has one unambiguous product", async () => {
+            const ci = await import("../tools/competitiveIntelligence.js");
+            const productUrl = "https://unique-rival.example/product";
+            const productDossier = {
+              ...DOSSIER,
+              coverage: {
+                productTarget: 5,
+                productDiscoveredCount: 1,
+                productInspectedCount: 1,
+                productVerifiedCount: 1,
+                productCoverageMet: false,
+                repositoryDiscoveredCount: 0,
+                repositoryInspectedCount: 0,
+                repositoryVerifiedCount: 0,
+              },
+              candidates: [
+                {
+                  ...DOSSIER.candidates[0],
+                  id: "product:unique-rival.example",
+                  kind: "product" as const,
+                  url: productUrl,
+                  sourceEvidence: [
+                    { path: "product-page", url: productUrl, excerpt: "Verified behavior." },
+                  ],
+                },
+              ],
+            };
+            const spy = vi.spyOn(ci, "buildCompetitiveDossier").mockResolvedValue(productDossier as never);
+            try {
+              const provider = new ScriptedProvider([
+                { thought: "nothing external needed", action: "conclude", findings: { summary: "base", recommendations: [] } },
+                PRODUCT_PLAN,
+                {
+                  comparisons: [{
+                    name: "",
+                    score: 80,
+                    matchedFeatures: ["fast add"],
+                    strengths: ["fast capture"],
+                    gaps: ["no export"],
+                    evidenceUrls: [productUrl],
+                    decision: "adapt",
+                    rationale: "Useful behavior",
+                  }],
+                  selected: [{ reuseMode: "clean-room-pattern", evidenceUrls: [productUrl], score: 80 }],
+                  summary: "one verified product",
+                },
+              ]);
+              const findings = await researchAgent({ provider }, spec, arch, { competitive: true });
+              expect(findings.summary).not.toContain("missing candidate identity");
+              expect(findings.competitiveAudit?.coverage.productVerifiedCount).toBe(1);
+            } finally {
+              spy.mockRestore();
+            }
+          });
+
+'''
+          if insert_before not in t:
+              raise SystemExit('web research insertion anchor not found')
+          t = t.replace(insert_before, regression + insert_before, 1)
+          test.write_text(t, encoding='utf-8')
+
+          Path('.github/workflows/repair-factory-five-product-floor.yml').unlink()
+      - name: Verify focused repair
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec vitest run src/server/__tests__/webResearch.test.ts src/server/__tests__/boundedResearch.test.ts src/server/__tests__/competitiveEvidence.test.ts
+          pnpm exec tsc --noEmit
+          git diff --check
+      - name: Commit repaired product code
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(factory): preserve deterministic five-product discovery floor [factory-five-product-repair]"
+          git push origin HEAD:fix/factory-cloud-five-product-floor-20260905
