@@ -48,9 +48,11 @@ afterEach(async () => {
   vi.doUnmock("node:fs/promises");
   vi.resetModules();
   await Promise.all(
-    scratch.splice(0).map((root) =>
-      rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
-    ),
+    scratch
+      .splice(0)
+      .map((root) =>
+        rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+      ),
   );
 });
 
@@ -129,7 +131,7 @@ describe("Windows process-lock owner-read races", () => {
   });
 
   it.each([
-    ["linux", "EPERM"],
+    [originalPlatform.value, originalPlatform.value === "win32" ? "EINVAL" : "EPERM"],
     ["win32", "EIO"],
   ])("preserves %s %s errors instead of masking them", async (host, code) => {
     platform(host);
