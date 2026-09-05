@@ -975,8 +975,8 @@ export async function buildCompetitiveDossier(
     ? [
         ...new Set([
           ...productQueries,
-          ...deterministicProductQueries,
           ...implementationQueries,
+          ...deterministicProductQueries,
         ]),
       ].slice(0, 12)
     : defaultQueries;
