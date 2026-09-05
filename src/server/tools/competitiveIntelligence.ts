@@ -1128,7 +1128,27 @@ export async function buildCompetitiveDossier(
     DISCOVERY_CONCURRENCY,
     async ([key, candidate]): Promise<CompetitiveCandidate> => {
       const fetched = await webFetchTool(candidate.url);
-      const meaningful = isMeaningfulProductEvidence(fetched, {
+      // Never reinterpret truncated body text as complete. A separate view may
+      // validate completed document metadata because that metadata was itself
+      // wholly present before the byte boundary. Keep the original fetch for
+      // audit/truncation reporting.
+      const evidenceText = fetched.textExcerpt || fetched.metadataExcerpt || "";
+      const metadataOnly =
+        !fetched.ok &&
+        fetched.truncated === true &&
+        fetched.status >= 200 &&
+        fetched.status < 300 &&
+        Boolean(fetched.metadataExcerpt);
+      const evidenceFetch = metadataOnly
+        ? {
+            ...fetched,
+            ok: true,
+            textExcerpt: evidenceText,
+            truncated: false,
+            error: undefined,
+          }
+        : fetched;
+      const meaningful = isMeaningfulProductEvidence(evidenceFetch, {
         candidateKey: key,
         title: candidate.title,
       });
@@ -1153,7 +1173,7 @@ export async function buildCompetitiveDossier(
               {
                 path: "product-page",
                 url: fetched.finalUrl || candidate.url,
-                excerpt: fetched.textExcerpt.slice(0, MAX_EVIDENCE_EXCERPT),
+                excerpt: evidenceText.slice(0, MAX_EVIDENCE_EXCERPT),
               },
             ]
           : [],

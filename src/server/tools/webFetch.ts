@@ -23,6 +23,8 @@ export interface WebFetchResult {
   contentType: string;
   finalUrl: string;
   textExcerpt: string;
+  /** Completed document metadata parsed from the bounded HTML prefix. Body visibility rules never consume this field. */
+  metadataExcerpt?: string;
   /** True when the response body exceeded the network byte budget. */
   truncated?: boolean;
   error?: string;
@@ -1148,6 +1150,41 @@ function toReadableText(
     .trim();
 }
 
+/** Extract only completed metadata from a bounded HTML prefix. */
+function boundedDocumentMetadata(html: string): string {
+  const accepted = new Set([
+    "description",
+    "og:description",
+    "og:title",
+    "twitter:description",
+    "twitter:title",
+    "application-name",
+  ]);
+  const values: string[] = [];
+  let cursor = 0;
+  for (
+    let markup = nextHtmlMarkup(html, cursor, false);
+    markup;
+    markup = nextHtmlMarkup(html, cursor, false)
+  ) {
+    cursor = markup.end;
+    if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">"))
+      continue;
+    const attributes = actualTagAttributes(markup.raw);
+    const key = attributes
+      .find(({ name }) => name === "name" || name === "property")
+      ?.value.trim()
+      .toLowerCase();
+    if (!key || !accepted.has(key)) continue;
+    const content = attributes.find(({ name }) => name === "content")?.value;
+    const normalized = decodeHtmlEntities(content ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (normalized) values.push(normalized);
+  }
+  return [...new Set(values)].join("\n").slice(0, MAX_EXCERPT);
+}
+
 export async function webFetchTool(
   url: string,
   timeoutMs = 15_000,
@@ -1191,6 +1228,7 @@ export async function webFetchTool(
           contentType,
           finalUrl: fetched.finalUrl.href,
           textExcerpt: "",
+          metadataExcerpt: boundedDocumentMetadata(raw),
           truncated: true,
           error: "HTML response exceeded the byte limit and cannot be verified safely.",
         };
