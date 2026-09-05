@@ -40,8 +40,7 @@ jobs:
             } catch (err) {
               if (err instanceof ProviderAbortError) throw err;
             }
-          }
-          '''
+          }'''
           new = '''  // The run-scoped orchestrator names plausible competitors before deterministic
           // search and inspection. Production also needs this bounded planning call:
           // generic category searches frequently return articles, forums, and roundups
@@ -52,20 +51,18 @@ jobs:
             productQueries = await planProductDiscovery(deps, spec, arch);
           } catch (err) {
             if (err instanceof ProviderAbortError) throw err;
-          }
-          '''
+          }'''
           if old not in text:
               raise SystemExit('bounded product planning anchor not found')
           source.write_text(text.replace(old, new, 1), encoding='utf-8')
 
           test = Path('src/server/__tests__/boundedResearch.test.ts')
           t = test.read_text(encoding='utf-8')
-          old_count = t.count('expect(provider.calls).toBe(1);')
-          if old_count == 0:
+          count = t.count('expect(provider.calls).toBe(1);')
+          if count == 0:
               raise SystemExit('bounded provider call-count anchors not found')
-          t = t.replace('expect(provider.calls).toBe(1);', 'expect(provider.calls).toBe(2);')
-          test.write_text(t, encoding='utf-8')
-          print(f'updated {old_count} bounded provider call-count assertions')
+          test.write_text(t.replace('expect(provider.calls).toBe(1);', 'expect(provider.calls).toBe(2);'), encoding='utf-8')
+          print(f'updated {count} bounded provider call-count assertions')
           PY
       - name: Install exact dependencies
         run: pnpm install --frozen-lockfile
