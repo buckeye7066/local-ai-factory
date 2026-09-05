@@ -29,3 +29,12 @@ Thumbs.db
 # Agent worktrees + one-off run dumps (local debugging artifacts, never source)
 .claude/
 /run-*.json
+
+# FlexFactor / autoclean run output. External tooling writes these into the
+# repo ROOT named after the repo; nothing in this repo emits them and main has
+# never tracked one. Without this rule an autoclean sweep keeps folding them
+# into commits — a local-only branch already carries ~389k lines of them.
+/local-ai-factory_run_manifest_*.json
+/local-ai-factory_audit_report.md
+/local-ai-factory_readiness.md
+/*_run_manifest_*.json
