@@ -1,8 +1,8 @@
 name: Harden product metadata evidence to head scope
 on:
   push:
-    branches: [fix/factory-product-metadata-evidence-20260905]
-    paths: [.github/workflows/repair-product-metadata-head-scope.yml]
+    branches:
+      - fix/factory-product-metadata-evidence-20260905
 permissions:
   contents: write
 jobs:
@@ -25,75 +25,80 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --input-type=module <<'JS'
-          import { readFileSync, writeFileSync } from 'node:fs';
+          python - <<'PY'
+          from pathlib import Path
+          web_path = Path("src/server/tools/webFetch.ts")
+          web = web_path.read_text()
+          old = '''  const values: string[] = [];
+            let cursor = 0;
+            for (
+              let markup = nextHtmlMarkup(html, cursor, false);
+              markup;
+              markup = nextHtmlMarkup(html, cursor, false)
+            ) {
+              cursor = markup.end;
+              if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">"))
+                continue;'''
+          new = '''  const values: string[] = [];
+            let cursor = 0;
+            let inHead = false;
+            let headClosed = false;
+            for (
+              let markup = nextHtmlMarkup(html, cursor, false);
+              markup;
+              markup = nextHtmlMarkup(html, cursor, false)
+            ) {
+              cursor = markup.end;
+              if (markup.tag === "head") {
+                if (markup.closing) {
+                  inHead = false;
+                  headClosed = true;
+                } else if (!headClosed) {
+                  inHead = true;
+                }
+                continue;
+              }
+              if (!inHead || headClosed) continue;
+              if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">"))
+                continue;'''
+          old = old.replace("\n            ", "\n  ")
+          new = new.replace("\n            ", "\n  ")
+          if web.count(old) != 1:
+              raise SystemExit(f"webFetch metadata loop anchor count={web.count(old)}")
+          web_path.write_text(web.replace(old, new))
+          test_path = Path("src/server/__tests__/oversizedProductMetadataEvidence.test.ts")
+          test = test_path.read_text()
+          anchor = '  it("does not promote an incomplete metadata tag at the byte boundary", async () => {'
+          injected = '''  it("ignores product-looking metadata injected outside document head", async () => {
+              const html =
+                '<html><head><meta property="og:title" content="Todoist"></head><body>' +
+                '<meta name="description" content="Todoist helps teams organize tasks projects priorities deadlines recurring work and collaboration across devices">' +
+                "x".repeat(220_000) +
+                "</body></html>";
+              const result = await webFetchTool("https://www.todoist.com/", 15_000, {
+                lookup: publicLookup,
+                fetch: async () =>
+                  new Response(html, { status: 200, headers: { "content-type": "text/html" } }),
+              });
+              expect(result).toMatchObject({
+                truncated: true,
+                textExcerpt: "",
+                metadataExcerpt: "Todoist",
+              });
+              expect(
+                isMeaningfulProductEvidence(metadataView(result), {
+                  candidateKey: "todoist.com",
+                  title: "Todoist",
+                }),
+              ).toBe(false);
+            });
 
-          const webPath = 'src/server/tools/webFetch.ts';
-          let web = readFileSync(webPath, 'utf8');
-          const oldLoop = `  const values: string[] = [];
-  let cursor = 0;
-  for (
-    let markup = nextHtmlMarkup(html, cursor, false);
-    markup;
-    markup = nextHtmlMarkup(html, cursor, false)
-  ) {
-    cursor = markup.end;
-    if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">"))
-      continue;`;
-          const newLoop = `  const values: string[] = [];
-  let cursor = 0;
-  let inHead = false;
-  let headClosed = false;
-  for (
-    let markup = nextHtmlMarkup(html, cursor, false);
-    markup;
-    markup = nextHtmlMarkup(html, cursor, false)
-  ) {
-    cursor = markup.end;
-    if (markup.tag === "head") {
-      if (markup.closing) {
-        inHead = false;
-        headClosed = true;
-      } else if (!headClosed) {
-        inHead = true;
-      }
-      continue;
-    }
-    if (!inHead || headClosed) continue;
-    if (markup.closing || markup.tag !== "meta" || !markup.raw.trimEnd().endsWith(">"))
-      continue;`;
-          if ((web.split(oldLoop).length - 1) !== 1) throw new Error('webFetch metadata loop anchor changed');
-          web = web.replace(oldLoop, newLoop);
-          writeFileSync(webPath, web);
-
-          const testPath = 'src/server/__tests__/oversizedProductMetadataEvidence.test.ts';
-          let test = readFileSync(testPath, 'utf8');
-          const anchor = `  it("does not promote an incomplete metadata tag at the byte boundary", async () => {`;
-          if ((test.split(anchor).length - 1) !== 1) throw new Error('test anchor changed');
-          const injected = `  it("ignores product-looking metadata injected outside document head", async () => {
-    const html =
-      '<html><head><meta property="og:title" content="Todoist"></head><body>' +
-      '<meta name="description" content="Todoist helps teams organize tasks projects priorities deadlines recurring work and collaboration across devices">' +
-      "x".repeat(220_000) +
-      '</body></html>';
-    const result = await webFetchTool("https://www.todoist.com/", 15_000, {
-      lookup: publicLookup,
-      fetch: async () =>
-        new Response(html, { status: 200, headers: { "content-type": "text/html" } }),
-    });
-    expect(result).toMatchObject({ truncated: true, textExcerpt: "", metadataExcerpt: "Todoist" });
-    expect(
-      isMeaningfulProductEvidence(metadataView(result), {
-        candidateKey: "todoist.com",
-        title: "Todoist",
-      }),
-    ).toBe(false);
-  });
-
-`;
-          test = test.replace(anchor, injected + anchor);
-          writeFileSync(testPath, test);
-          JS
+          '''
+          injected = injected.replace("\n            ", "\n  ")
+          if test.count(anchor) != 1:
+              raise SystemExit(f"test anchor count={test.count(anchor)}")
+          test_path.write_text(test.replace(anchor, injected + anchor))
+          PY
           pnpm exec prettier --write src/server/tools/webFetch.ts src/server/__tests__/oversizedProductMetadataEvidence.test.ts
           git diff --check
       - name: Verify focused and full release contracts
