@@ -44,7 +44,9 @@ function run(
   timeoutMs = 300_000,
 ): Promise<ExecResult> {
   return new Promise((resolveP) => {
-    const child = spawn(bin, args, { cwd, shell: false });
+    // Routine repository commands must not create a foreground Windows console.
+    // Keep pipe capture, argv isolation, and process lifetime unchanged.
+    const child = spawn(bin, args, { cwd, shell: false, windowsHide: true });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
