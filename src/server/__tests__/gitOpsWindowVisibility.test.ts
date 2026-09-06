@@ -35,7 +35,7 @@ describe("background repository command windows", () => {
   ] as const) {
     it(`hides ${bin} without changing argv, pipes, or lifetime`, async () => {
       const args = ["status", "path with spaces & symbols"];
-      const cwd = "C:\\Users\\Owner\\My Projects";
+      const cwd = "C:\\Projects\\My Workspace";
       const pending = run(args, cwd);
       child.stdout.write("  visible in application logs\n");
       child.stderr.write("  diagnostic output\n");
