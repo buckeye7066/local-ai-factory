@@ -20,10 +20,11 @@ describe("EVA development port isolation", () => {
     expect(config.strictPort).toBe(true);
   });
 
-  it("rejects invalid or colliding ports rather than using a different service", () => {
+  it("rejects invalid ports and UI/API collisions", () => {
     for (const invalid of ["0", "-1", "65536", "1.5", "5179junk", " "]) {
-      expect(() => developmentServerConfig({ FACTORY_UI_PORT: invalid })).toThrow();
-      expect(() => developmentServerConfig({ FACTORY_API_PROXY_PORT: invalid })).toThrow();
+      for (const key of ["FACTORY_UI_PORT", "FACTORY_API_PROXY_PORT"]) {
+        expect(() => developmentServerConfig({ [key]: invalid })).toThrow();
+      }
     }
     expect(() =>
       developmentServerConfig({
