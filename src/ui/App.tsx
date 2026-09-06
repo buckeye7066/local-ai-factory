@@ -33,6 +33,7 @@ import { routeTransition } from "./lib/motion.js";
 import { useClipboard } from "./lib/useClipboard.js";
 import { api, useHealth, useRunPolling } from "./lib/api.js";
 import type { EpicSummary } from "./lib/api.js";
+import { retryDelay } from "./lib/http.js";
 import { useTheme } from "./lib/useTheme.js";
 import { runIsReady } from "./lib/runOutcome.js";
 import type { RunOptions, RunSummary, FileContent } from "../shared/schemas.js";
@@ -61,7 +62,7 @@ function viewLabel(view: string): string {
 
 export function App() {
   const { theme, toggle } = useTheme();
-  const { health } = useHealth();
+  const { health, loading: healthLoading } = useHealth();
 
   const [view, setView] = useState<View>(() =>
     new URLSearchParams(window.location.search).get("mode") === "foundry"
@@ -112,10 +113,12 @@ export function App() {
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
     const poll = async () => {
       const ok = await refreshRuns();
       if (!active) return;
-      timer = setTimeout(poll, ok ? 5000 : 1500);
+      failures = ok ? 0 : failures + 1;
+      timer = setTimeout(poll, ok ? 5000 : retryDelay(failures));
     };
     void poll();
     return () => {
@@ -296,6 +299,16 @@ export function App() {
       onToggleTheme={toggle}
       variant={view === "foundry" ? "foundry" : "deck"}
     >
+      {!healthLoading && !health && (
+        <div
+          role="status"
+          className="mb-4 rounded-xl border border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-200"
+        >
+          Factory Deck cannot reach its local service. Displayed run details may be out
+          of date. Reopen the desktop launcher; this page will reconnect automatically.
+          Check the run status before trying Resume again.
+        </div>
+      )}
       <AnimatePresence mode="wait">
         <motion.div
           key={view + (view === "run" ? activeRunId : "")}
@@ -372,7 +385,7 @@ export function App() {
 /* Run detail                                                          */
 /* ------------------------------------------------------------------ */
 
-function RunDetail({
+export function RunDetail({
   run,
   files,
   onNewRun,
@@ -406,26 +419,31 @@ function RunDetail({
         description: "The factory will halt at the next checkpoint.",
       });
     } catch (e) {
-      setCancelling(false);
       toast.error("Could not cancel", {
         description: e instanceof Error ? e.message : undefined,
       });
+    } finally {
+      setCancelling(false);
+      refreshRun();
     }
-  }, [run.id]);
+  }, [run.id, refreshRun]);
 
   const resume = useCallback(async () => {
     setResuming(true);
     try {
       await api.resumeRun(run.id);
-      refreshRun();
-      toast.success("Run resumed", {
-        description: "Continuing from the last durable stage checkpoint.",
+      toast.success("Resume request accepted", {
+        description: "Refreshing the run from its durable checkpoint.",
       });
     } catch (e) {
-      setResuming(false);
       toast.error("Could not resume", {
         description: e instanceof Error ? e.message : undefined,
       });
+    } finally {
+      // The request ending is independent of a running -> stopped transition.
+      // A fast failure or a lost response must not strand the Resume button.
+      setResuming(false);
+      refreshRun();
     }
   }, [run.id, refreshRun]);
 

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { jsonFetch, retryDelay } from "./http.js";
 import type {
   RunRecord,
   RunSummary,
@@ -12,22 +13,9 @@ import type {
  * lib/api.ts — typed client for the LOCAL backend.
  *
  * The browser never sees API keys; /api/health returns only "configured"
- * booleans. In dev, Vite proxies /api to the backend. If the backend is not
- * running (pure UI preview), calls fail gracefully and the app falls back to
- * the built-in client-side demo simulator.
+ * booleans. In dev, Vite proxies /api to the backend. An unreachable backend
+ * is reported as offline; cached run data is not evidence of a live connection.
  */
-
-async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
-  }
-  return res.json() as Promise<T>;
-}
 
 /**
  * One slice of a large evolution, as the epic runner records it.
@@ -80,8 +68,14 @@ export type PortfolioSession = {
 };
 
 export const api = {
-  health: () => jsonFetch<Health>("/api/health"),
-  listRuns: () => jsonFetch<{ runs: RunSummary[] }>("/api/runs"),
+  health: async (signal?: AbortSignal) => {
+    const health = await jsonFetch<Health>("/api/health", { signal }, 5000);
+    if ((health as { service?: unknown } | null)?.service !== "factory-deck") {
+      throw new Error("The local service did not identify itself as Factory Deck.");
+    }
+    return health;
+  },
+  listRuns: () => jsonFetch<{ runs: RunSummary[] }>("/api/runs", undefined, 10_000),
   /**
    * Every large evolution the factory knows about.
    *
@@ -92,10 +86,11 @@ export const api = {
    * promise that slices "appear in the runs list" was a promise the code did
    * not keep. `/api/epics` has always served this; nothing called it.
    */
-  listEpics: () => jsonFetch<{ epics: EpicSummary[] }>("/api/epics"),
-  getRun: (id: string) => jsonFetch<RunRecord>(`/api/runs/${id}`),
+  listEpics: () => jsonFetch<{ epics: EpicSummary[] }>("/api/epics", undefined, 10_000),
+  getRun: (id: string, signal?: AbortSignal) =>
+    jsonFetch<RunRecord>(`/api/runs/${id}`, { signal }, 10_000),
   getFiles: (id: string) =>
-    jsonFetch<{ files: FileContent[] }>(`/api/runs/${id}/files`),
+    jsonFetch<{ files: FileContent[] }>(`/api/runs/${id}/files`, undefined, 15_000),
   createRun: (idea: string, options: RunOptions) =>
     jsonFetch<{ runId: string }>("/api/runs", {
       method: "POST",
@@ -133,11 +128,13 @@ export const api = {
       body: JSON.stringify({ idea, options }),
     }),
   cancelRun: (id: string) =>
-    jsonFetch<{ ok: true }>(`/api/runs/${id}/cancel`, { method: "POST" }),
+    jsonFetch<{ ok: true }>(`/api/runs/${id}/cancel`, { method: "POST" }, 30_000),
   resumeRun: (id: string) =>
-    jsonFetch<{ ok: true; runId: string }>(`/api/runs/${id}/resume`, {
-      method: "POST",
-    }),
+    jsonFetch<{ ok: true; runId: string }>(
+      `/api/runs/${id}/resume`,
+      { method: "POST" },
+      30_000,
+    ),
   /** Delete one stopped run: its history record AND its workspace folder. */
   deleteRun: (id: string) =>
     jsonFetch<{
@@ -211,75 +208,74 @@ export function useRunPolling(
   const [generation, setGeneration] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const refresh = useCallback(() => setGeneration((value) => value + 1), []);
+
   useEffect(() => {
-    if (!runId) {
-      setRun(null);
-      return;
-    }
+    setError(null);
+    setRun((current) => (current?.id === runId ? current : null));
+    if (!runId) return;
     let active = true;
+    let failures = 0;
+    const controller = new AbortController();
 
     const tick = async () => {
       try {
-        const r = await api.getRun(runId);
+        const r = await api.getRun(runId, controller.signal);
         if (!active) return;
         setRun(r);
         setError(null);
+        failures = 0;
         if (isTerminal(r.status)) return;
       } catch (e) {
         if (!active) return;
+        failures++;
         setError(e instanceof Error ? e.message : "poll error");
       }
-      timer.current = setTimeout(tick, intervalMs);
+      timer.current = setTimeout(tick, failures ? retryDelay(failures) : intervalMs);
     };
-    tick();
+    void tick();
 
     return () => {
       active = false;
+      controller.abort();
       if (timer.current) clearTimeout(timer.current);
     };
   }, [runId, intervalMs, generation]);
 
-  return { run, error, refresh: () => setGeneration((value) => value + 1) };
+  return { run, error, refresh };
 }
 
-/**
- * Health fetch that survives a cold backend.
- *
- * The desktop launcher opens the browser on a fixed timer while the backend
- * (tsx watch) may still be booting, so a single fetch on mount can race the
- * server and fail — leaving the UI to wrongly report "missing API keys" until
- * a manual refresh. To avoid that false negative we retry on failure until the
- * first success, then keep a slow poll so the badges stay accurate if the
- * backend restarts (watch reload) or keys change.
- */
+/** Health is live evidence: clear it on failure and recover without a reload. */
 export function useHealth(): { health: Health | null; loading: boolean } {
   const [health, setHealth] = useState<Health | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     let active = true;
+    let failures = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
 
-    const poll = () => {
-      api
-        .health()
-        .then((h) => {
-          if (!active) return;
-          setHealth(h);
-          setLoading(false);
-          // Healthy: slow steady poll to stay fresh.
-          timer = setTimeout(poll, 15000);
-        })
-        .catch(() => {
-          if (!active) return;
-          setLoading(false);
-          // Backend not up yet (or went away): retry quickly until it answers.
-          timer = setTimeout(poll, 1500);
-        });
+    const poll = async () => {
+      try {
+        const h = await api.health(controller.signal);
+        if (!active) return;
+        setHealth(h);
+        failures = 0;
+      } catch {
+        if (!active) return;
+        // Never leave yesterday's green Connected/Live badges on a dead server.
+        setHealth(null);
+        failures++;
+      }
+      if (!active) return;
+      setLoading(false);
+      timer = setTimeout(poll, failures ? retryDelay(failures) : 5000);
     };
 
-    poll();
+    void poll();
     return () => {
       active = false;
+      controller.abort();
       if (timer) clearTimeout(timer);
     };
   }, []);
