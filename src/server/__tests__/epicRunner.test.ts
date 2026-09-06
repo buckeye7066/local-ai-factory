@@ -381,7 +381,7 @@ describe("saved epic checkpoint safety", () => {
     const first = deps([{ status: "failed", release: null, error: "interrupted" }]);
     first.plan = async () => ({
       summary: "Five-stage product evolution",
-      slices: Array.from({ length: 5 }, (_,index) => ({
+      slices: Array.from({ length: 5 }, (_, index) => ({
         ...PLAN.slices[0]!,
         title: `Product slice ${index + 1}`,
       })),
