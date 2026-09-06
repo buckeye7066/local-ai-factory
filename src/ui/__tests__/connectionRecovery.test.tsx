@@ -162,14 +162,12 @@ describe("request deadlines", () => {
   });
 
   it("preserves HTTP errors and caller headers and clears the deadline", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockImplementation(
-        async () =>
-          new Response(JSON.stringify({ error: "Run is already active" }), {
-            status: 409,
-          }),
-      );
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ error: "Run is already active" }), {
+          status: 409,
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     await expect(
       jsonFetch(
