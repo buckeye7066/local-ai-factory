@@ -193,14 +193,19 @@ describe("epic slices", () => {
     const epic = await createEpic("big evolution", { mode: "extend" }, d);
     const paused = await runEpic(epic, d);
     expect(paused.status).toBe("paused");
+    const savedRunId = paused.slices[0]!.runId;
 
     // What the resume route does: reset the paused slice and continue.
     paused.slices[paused.currentSlice]!.status = "pending";
     paused.status = "running";
     paused.statusReason = null;
     const d2 = deps([released, released]);
+    d2.resumeSliceRun = async (id) => fakeRun({ ...released, id });
     const done = await runEpic(paused, d2);
     expect(done.status).toBe("completed");
+    expect(done.slices[0]!.runId).toBe(savedRunId);
+    expect(d2.ideas).toHaveLength(1);
+    expect(d2.ideas[0]).toContain("Slice 2 of 2");
   });
 });
 
@@ -246,10 +251,161 @@ describe("epic resilience across server restarts", () => {
     const d2 = deps([released, released]);
     d2.resumeSliceRun = async (runId) => {
       resumedWith.push(runId);
-      return fakeRun(released);
+      return fakeRun({ ...released, id: runId });
     };
     const done = await runEpic(paused, d2);
     expect(resumedWith[0]).toBe(startedIds[0]);
     expect(done.slices[0]!.status).toBe("released");
+    expect(done.slices[0]!.runId).toBe(startedIds[0]);
+    expect(d2.ideas).toHaveLength(1);
+  });
+});
+
+describe("saved epic checkpoint safety", () => {
+  const released: Partial<RunRecord> = {
+    status: "completed",
+    release: { released: true, prUrl: "pr", mergedSha: "abc", reason: "merged" },
+  };
+
+  it.each([
+    "provider capacity temporarily unavailable",
+    "saved checkpoint could not be read",
+    "saved run is already executing",
+  ])("preserves the saved run when resume reports: %s", async (reason) => {
+    const first = deps([{ status: "failed", release: null, error: "interrupted" }]);
+    const epic = await createEpic("keep the original work", { mode: "extend" }, first);
+    const paused = await runEpic(epic, first);
+    const savedRunId = paused.slices[0]!.runId;
+    const recovery = deps([released]);
+    const resumedIds: string[] = [];
+    recovery.resumeSliceRun = async (id) => {
+      resumedIds.push(id);
+      throw new Error(reason);
+    };
+
+    const result = await runEpic(paused, recovery);
+    expect(result.status).toBe("paused");
+    expect(result.currentSlice).toBe(0);
+    expect(result.statusReason).toContain(reason);
+    expect(result.slices[0]!.runId).toBe(savedRunId);
+    expect(result.slices[1]!.status).toBe("pending");
+    expect(resumedIds).toEqual([savedRunId]);
+    expect(recovery.ideas).toEqual([]);
+    expect(recovery.planOptions).toEqual([]);
+    const persisted = await getEpic(epic.id);
+    expect(persisted?.slices[0]?.runId).toBe(savedRunId);
+    expect(persisted?.statusReason).toContain(reason);
+  });
+
+  it("does not replace a saved run when the resume handler is unavailable", async () => {
+    const first = deps([{ status: "failed", release: null }]);
+    const epic = await createEpic("preserve checkpoint", { mode: "extend" }, first);
+    const paused = await runEpic(epic, first);
+    const savedRunId = paused.slices[0]!.runId;
+    const recovery = deps([released]);
+
+    const result = await runEpic(paused, recovery);
+    expect(result.status).toBe("paused");
+    expect(result.statusReason).toContain("no resume handler");
+    expect(result.slices[0]!.runId).toBe(savedRunId);
+    expect(result.currentSlice).toBe(0);
+    expect(recovery.ideas).toEqual([]);
+    expect((await getEpic(epic.id))?.slices[0]?.runId).toBe(savedRunId);
+  });
+
+  it("refuses a replacement identity returned by the resume handler", async () => {
+    const first = deps([{ status: "failed", release: null }]);
+    const epic = await createEpic("preserve identity", { mode: "extend" }, first);
+    const paused = await runEpic(epic, first);
+    const savedRunId = paused.slices[0]!.runId;
+    const recovery = deps([released]);
+    recovery.resumeSliceRun = async () => fakeRun(released);
+
+    const result = await runEpic(paused, recovery);
+    expect(result.status).toBe("paused");
+    expect(result.statusReason).toContain("different run");
+    expect(result.slices[0]!.runId).toBe(savedRunId);
+    expect(result.slices[1]!.status).toBe("pending");
+    expect(result.currentSlice).toBe(0);
+    expect(recovery.ideas).toEqual([]);
+    expect((await getEpic(epic.id))?.slices[0]?.runId).toBe(savedRunId);
+  });
+
+  it("does not skip a resumed run that still fails", async () => {
+    const first = deps([{ status: "failed", release: null }]);
+    const epic = await createEpic("retry saved work", { mode: "extend" }, first);
+    const paused = await runEpic(epic, first);
+    const savedRunId = paused.slices[0]!.runId;
+    const recovery = deps([released]);
+    recovery.resumeSliceRun = async (id) =>
+      fakeRun({ id, status: "failed", release: null, error: "build still fails" });
+
+    const result = await runEpic(paused, recovery);
+    expect(result.status).toBe("paused");
+    expect(result.statusReason).toContain("build still fails");
+    expect(result.slices[0]!.runId).toBe(savedRunId);
+    expect(result.slices[1]!.status).toBe("pending");
+    expect(result.currentSlice).toBe(0);
+    expect(recovery.ideas).toEqual([]);
+  });
+
+  it("can retry the preserved checkpoint after a failed recovery and reload", async () => {
+    const first = deps([{ status: "failed", release: null }]);
+    const epic = await createEpic("durable recovery", { mode: "extend" }, first);
+    const paused = await runEpic(epic, first);
+    const savedRunId = paused.slices[0]!.runId;
+    const unavailable = deps([released]);
+    unavailable.resumeSliceRun = async () => {
+      throw new Error("temporary outage");
+    };
+    await runEpic(paused, unavailable);
+    const persisted = await getEpic(epic.id);
+    expect(persisted).not.toBeNull();
+
+    const restored = deps([released]);
+    const resumedIds: string[] = [];
+    restored.resumeSliceRun = async (id) => {
+      resumedIds.push(id);
+      return fakeRun({ ...released, id });
+    };
+    const done = await runEpic(persisted!, restored);
+    expect(done.status).toBe("completed");
+    expect(done.slices[0]!.runId).toBe(savedRunId);
+    expect(resumedIds).toEqual([savedRunId]);
+    expect(unavailable.ideas).toEqual([]);
+    expect(restored.ideas).toHaveLength(1);
+    expect(restored.ideas[0]).toContain("Slice 2 of 2");
+  });
+
+  it("resumes the first of five slices and executes only the four remaining slices", async () => {
+    const first = deps([{ status: "failed", release: null, error: "interrupted" }]);
+    first.plan = async () => ({
+      summary: "Five-stage product evolution",
+      slices: Array.from({ length: 5 }, (_, index) => ({
+        ...PLAN.slices[0]!,
+        title: `Product slice ${index + 1}`,
+      })),
+    });
+    const epic = await createEpic("finish all five slices", { mode: "extend" }, first);
+    const paused = await runEpic(epic, first);
+    const savedRunId = paused.slices[0]!.runId;
+    const recovery = deps([released]);
+    const resumedIds: string[] = [];
+    recovery.resumeSliceRun = async (id) => {
+      resumedIds.push(id);
+      return fakeRun({ ...released, id });
+    };
+
+    const done = await runEpic(paused, recovery);
+    expect(done.status).toBe("completed");
+    expect(done.currentSlice).toBe(5);
+    expect(done.slices.every((slice) => slice.status === "released")).toBe(true);
+    expect(done.slices[0]!.runId).toBe(savedRunId);
+    expect(resumedIds).toEqual([savedRunId]);
+    expect(recovery.ideas).toHaveLength(4);
+    for (let i = 0; i < 4; i++) {
+      expect(recovery.ideas[i]).toContain(`Slice ${i + 2} of 5`);
+    }
+    expect(recovery.planOptions).toEqual([]);
   });
 });

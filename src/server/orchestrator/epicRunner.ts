@@ -116,7 +116,10 @@ export interface EpicDeps {
     options: RunOptions,
     onStarted?: (run: RunRecord) => void | Promise<void>,
   ) => Promise<RunRecord>;
-  /** Resume a failed-but-resumable slice run from its checkpoint (paid work salvage). */
+  /**
+   * Resume the same saved run from its checkpoint. A missing handler or any
+   * failure pauses the epic without replacing the run or replaying paid work.
+   */
   resumeSliceRun?: (runId: string) => Promise<RunRecord>;
   plan: (idea: string, options: RunOptions) => Promise<EpicPlan>;
   config: AppConfig;
@@ -223,26 +226,33 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
 
     let run: RunRecord;
     try {
-      // A slice that already has a runId was interrupted (server restart) —
-      // resume its checkpoint instead of paying for the completed stages again.
-      let resumed: RunRecord | null = null;
-      if (slice.runId && deps.resumeSliceRun) {
-        try {
-          resumed = await deps.resumeSliceRun(slice.runId);
-        } catch {
-          resumed = null; // not resumable (no checkpoint) — fall through to a fresh run
+      // A saved run is continuity evidence, not permission to replace it.
+      // Provider outages, active-run conflicts and unreadable checkpoints must
+      // preserve that identity and pause with the real cause. Previously every
+      // resume exception silently started a fresh run and overwrote the runId.
+      const savedRunId = slice.runId;
+      if (savedRunId) {
+        if (!deps.resumeSliceRun) {
+          throw new Error(
+            `Cannot resume saved slice run ${savedRunId}: no resume handler is available. The existing run was preserved.`,
+          );
         }
-      }
-      run =
-        resumed ??
-        (await deps.executeSliceRun(
+        run = await deps.resumeSliceRun(savedRunId);
+        if (run.id !== savedRunId) {
+          throw new Error(
+            `Resume returned a different run for saved slice ${savedRunId}. The existing slice identity was preserved.`,
+          );
+        }
+      } else {
+        run = await deps.executeSliceRun(
           sliceIdea(epic, i),
           { ...(epic.options as RunOptions) },
           async (started) => {
             slice.runId = started.id;
             await saveEpic(epic);
           },
-        ));
+        );
+      }
     } catch (err) {
       slice.status = "failed";
       slice.detail = String((err as Error)?.message ?? err);
