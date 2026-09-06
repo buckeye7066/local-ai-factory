@@ -2,28 +2,40 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 
-// The UI is a pure local SPA. It talks to the local backend (default :5179)
-// through a dev proxy so the browser never needs to know the backend port,
-// and — critically — never receives API keys (those live only on the server).
-export default defineConfig({
-  root: fileURLToPath(new URL("./src/ui", import.meta.url)),
-  plugins: [react()],
-  server: {
-    // 5190, not 5180: Docker Desktop publishes 5180 machine-wide for
-    // family-stewardship-navigator's web container (com.docker.backend owns
-    // it), so Factory Deck's dev UI could never bind while Docker ran — the
-    // exact "PORT HELD BY A PROTECTED PROCESS" class EVA reported nightly for
-    // are-we-mice/mind-over-math on 3001.
-    port: 5190,
+function port(value: string | undefined, fallback: number, name: string): number {
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (!/^\d{1,5}$/.test(value) || !Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error(`${name} must be an integer between 1 and 65535`);
+  }
+  return parsed;
+}
+
+/** Dedicated test ports never change the normal developer defaults. */
+export function developmentServerConfig(env: Record<string, string | undefined> = process.env) {
+  const uiPort = port(env.FACTORY_UI_PORT, 5190, "FACTORY_UI_PORT");
+  const apiPort = port(env.FACTORY_API_PROXY_PORT, 5179, "FACTORY_API_PROXY_PORT");
+  if (uiPort === apiPort) throw new Error("Factory UI and API ports must differ");
+  return {
+    port: uiPort,
     host: "127.0.0.1",
     strictPort: true,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:5179",
+        target: `http://127.0.0.1:${apiPort}`,
         changeOrigin: true,
       },
     },
-  },
+  };
+}
+
+export default defineConfig({
+  root: fileURLToPath(new URL("./src/ui", import.meta.url)),
+  plugins: [react()],
+  // 5190 remains the UI default: 5180 is occupied by Docker on the workstation.
+  // EVA pins both this UI and its API proxy explicitly instead of killing an
+  // existing service or accepting a response from the wrong process.
+  server: developmentServerConfig(),
   build: {
     outDir: fileURLToPath(new URL("./dist/ui", import.meta.url)),
     emptyOutDir: true,
