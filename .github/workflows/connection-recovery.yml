@@ -38,6 +38,9 @@ jobs:
       - name: Recovery regression tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm exec vitest run src/ui/__tests__/connectionRecovery.test.tsx src/ui/__tests__/runResumeRecovery.test.tsx
+      - name: Build production UI
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm exec vite build
       - name: Check recovery-source formatting with an actionable diff
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
