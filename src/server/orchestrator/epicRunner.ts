@@ -6,6 +6,7 @@ import type { AppConfig, AppSecrets } from "../config.js";
 import type { RunOptions, RunRecord } from "../../shared/schemas.js";
 import { EpicPlanSchema, type EpicPlan } from "../agents/epicPlannerAgent.js";
 import { appendAuditEvent } from "../storage/auditLog.js";
+import { getRunForExecution } from "../storage/runsStore.js";
 
 /**
  * epicRunner — sequential slice execution for large evolutions.
@@ -232,12 +233,20 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
       // resume exception silently started a fresh run and overwrote the runId.
       const savedRunId = slice.runId;
       if (savedRunId) {
-        if (!deps.resumeSliceRun) {
-          throw new Error(
-            `Cannot resume saved slice run ${savedRunId}: no resume handler is available. The existing run was preserved.`,
-          );
+        // The child may have finished before the parent persisted advancement.
+        // Completed children no longer have resumable checkpoints. Reconcile
+        // their saved result and let the unchanged release gate decide below.
+        const savedRun = await getRunForExecution(savedRunId);
+        if (savedRun?.status === "completed") {
+          run = savedRun;
+        } else {
+          if (!deps.resumeSliceRun) {
+            throw new Error(
+              `Cannot resume saved slice run ${savedRunId}: no resume handler is available. The existing run was preserved.`,
+            );
+          }
+          run = await deps.resumeSliceRun(savedRunId);
         }
-        run = await deps.resumeSliceRun(savedRunId);
         if (run.id !== savedRunId) {
           throw new Error(
             `Resume returned a different run for saved slice ${savedRunId}. The existing slice identity was preserved.`,
