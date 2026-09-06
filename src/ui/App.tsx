@@ -304,9 +304,9 @@ export function App() {
           role="status"
           className="mb-4 rounded-xl border border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-200"
         >
-          Factory Deck cannot reach its local service. Displayed run details may be
-          out of date. Reopen the desktop launcher; this page will reconnect
-          automatically. Check the run status before trying Resume again.
+          Factory Deck cannot reach its local service. Displayed run details may be out
+          of date. Reopen the desktop launcher; this page will reconnect automatically.
+          Check the run status before trying Resume again.
         </div>
       )}
       <AnimatePresence mode="wait">
