@@ -23,12 +23,18 @@ Design rules
 5. Preserve existing shortcut icons.
 6. Back up every shortcut target/argument before changing it.
 7. Verify every repaired shortcut after saving it.
+8. Omit an empty ArgumentList when launching executables.
+9. Reinstallation preserves the hidden ForgePress launcher.
+
+Use -InstallOnly -OnlyApps ForgePress to repair only its existing shortcuts.
+Canonical source: buckeye7066/local-ai-factory, scripts/Repair-All-Axiom-App-Shortcuts.ps1.
 #>
 
 [CmdletBinding()]
 param(
     [string]$AppName = '',
     [switch]$InstallOnly,
+    [string[]]$OnlyApps = @(),
     [string[]]$ShortcutFolders = @(
         [Environment]::GetFolderPath('Desktop'),
         'G:\One Drive\Desktop\Apps'
@@ -195,7 +201,12 @@ function Start-LocalTarget {
             if (-not $py) { throw "Python was not found for $Path" }
             Start-Process -FilePath $py.Source -WorkingDirectory $working -ArgumentList (@($quotedPath) + $quotedExtra)
         }
-        default { Start-Process -FilePath $Path -WorkingDirectory $working -ArgumentList $quotedExtra }
+        default {
+            # Windows PowerShell rejects -ArgumentList @(), before starting the app.
+            $startOptions = @{ FilePath = $Path; WorkingDirectory = $working }
+            if ($quotedExtra.Count -gt 0) { $startOptions.ArgumentList = $quotedExtra }
+            Start-Process @startOptions
+        }
     }
     return $true
 }
@@ -293,19 +304,30 @@ function Install-ShortcutRepairs {
     $installedLauncher = Join-Path $launcherRoot 'AxiomAppLauncher.ps1'
     $sourcePath = $PSCommandPath
     if (-not $sourcePath) { throw 'The repair script must be run from a .ps1 file.' }
-    if ([IO.Path]::GetFullPath($sourcePath) -ine [IO.Path]::GetFullPath($installedLauncher)) { Copy-Item -LiteralPath $sourcePath -Destination $installedLauncher -Force }
     $folders = @($ShortcutFolders | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) } | Select-Object -Unique)
     if ($folders.Count -eq 0) { throw 'No shortcut folder was found.' }
     $lookup = Get-AppLookup
+    $selectedNames = @($OnlyApps | ForEach-Object {
+        $key = Normalize-Name $_
+        if (-not $lookup.ContainsKey($key)) { throw "Unknown application selection: $_" }
+        $lookup[$key].Name
+    })
     $shell = New-Object -ComObject WScript.Shell
-    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     $backupPath = Join-Path $launcherRoot "shortcut-backup-$timestamp.csv"
+    if ([IO.Path]::GetFullPath($sourcePath) -ine [IO.Path]::GetFullPath($installedLauncher)) {
+        if (Test-Path -LiteralPath $installedLauncher -PathType Leaf) {
+            Copy-Item -LiteralPath $installedLauncher -Destination "$installedLauncher.backup-$timestamp"
+        }
+        Copy-Item -LiteralPath $sourcePath -Destination $installedLauncher -Force
+    }
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($folder in $folders) {
         foreach ($file in Get-ChildItem -LiteralPath $folder -Filter '*.lnk' -File -ErrorAction SilentlyContinue) {
             $key = Normalize-Name $file.BaseName
             if (-not $lookup.ContainsKey($key)) { continue }
             $app = $lookup[$key]
+            if ($selectedNames.Count -gt 0 -and $selectedNames -notcontains $app.Name) { continue }
             $shortcut = $shell.CreateShortcut($file.FullName)
             $oldTarget = [string]$shortcut.TargetPath
             $oldArgs = [string]$shortcut.Arguments
@@ -313,6 +335,12 @@ function Install-ShortcutRepairs {
             $oldIcon = [string]$shortcut.IconLocation
             $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
             $newArgs = '-NoProfile -ExecutionPolicy Bypass -File "' + $installedLauncher + '" -AppName "' + $app.Name.Replace('"','""') + '"'
+            # Save the actual shortcut before any mutation, not only a CSV report.
+            Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $launcherRoot ($file.Name + '.backup-' + $timestamp + '-' + $results.Count))
+            if ($app.Name -eq 'ForgePress') {
+                $newArgs = '-WindowStyle Hidden ' + $newArgs
+                $shortcut.WindowStyle = 7
+            }
             $shortcut.TargetPath = $powershell
             $shortcut.Arguments = $newArgs
             $shortcut.WorkingDirectory = $launcherRoot
@@ -321,6 +349,9 @@ function Install-ShortcutRepairs {
             $shortcut.Save()
             $check = $shell.CreateShortcut($file.FullName)
             $valid = (([string]$check.TargetPath -ieq $powershell) -and ([string]$check.Arguments -like "*$installedLauncher*") -and ([string]$check.Arguments -notmatch 'https?://github\.com/'))
+            if ($app.Name -eq 'ForgePress') {
+                $valid = $valid -and ([string]$check.Arguments -match '^-WindowStyle Hidden ') -and ($check.WindowStyle -eq 7)
+            }
             if (-not $valid) { throw "Shortcut verification failed: $($file.FullName)" }
             $results.Add([pscustomobject]@{Shortcut=$file.FullName;Application=$app.Name;OldTarget=$oldTarget;OldArguments=$oldArgs;OldWorkingDirectory=$oldWorking;NewTarget=$check.TargetPath;NewArguments=$check.Arguments;Status='REPAIRED'})
         }
@@ -328,6 +359,7 @@ function Install-ShortcutRepairs {
             $key = Normalize-Name $file.BaseName
             if (-not $lookup.ContainsKey($key)) { continue }
             $app = $lookup[$key]
+            if ($selectedNames.Count -gt 0 -and $selectedNames -notcontains $app.Name) { continue }
             if ($app.Mode -ne 'web') { continue }
             if ($app.Url -match '^https?://github\.com/') { throw "Invalid web-app target for $($app.Name)." }
             $old = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction SilentlyContinue
