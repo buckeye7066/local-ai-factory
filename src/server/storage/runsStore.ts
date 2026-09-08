@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { setTimeout as retryRenameDelay } from "node:timers/promises";
 import { resolve, join, relative, isAbsolute, sep, dirname } from "node:path";
 import { z } from "zod";
 import type { RunRecord, RunSummary, FileContent } from "../../shared/schemas.js";
@@ -191,7 +192,19 @@ export async function writeFileContained(path: string, data: string): Promise<vo
       throw new Error(`Refused: store target is not a regular file: ${path}`);
     }
 
-    await rename(tempPath, path);
+    // Windows readers and antivirus can briefly deny replacement. Retry the
+    // atomic rename, never unlink/truncate the last valid record to work around it.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await rename(tempPath, path);
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (attempt >= 8 || !["EPERM", "EACCES", "EBUSY"].includes(code ?? ""))
+          throw error;
+        await retryRenameDelay(Math.min(10 * 2 ** attempt, 250));
+      }
+    }
     published = true;
     if (process.platform !== "win32") {
       const dirHandle = await open(parent, FS.O_RDONLY);
@@ -206,18 +219,28 @@ export async function writeFileContained(path: string, data: string): Promise<vo
   }
 }
 
+const runWrites = new Map<string, Promise<void>>();
 export async function saveRun(run: RunRecord): Promise<void> {
-  // Containment first: never write (or cache) a record with an unsafe id.
   if (!isValidRunId(run.id)) {
     throw new Error(`Refused: invalid run id (not a UUID): ${JSON.stringify(run.id)}`);
   }
-  memory.set(run.id, run);
-  await ensureDirs();
-  // Symlink/realpath + lexical containment (throws → caller rejects, fail closed).
-  const target = await safeStorePath(STORE_DIR, run.id);
-  // Compact JSON: these records are machine-read only, and pretty-printing
-  // roughly doubles every run file written during high-frequency polling.
-  await writeFileContained(target, JSON.stringify(run));
+  const id = run.id;
+  const data = JSON.stringify(run);
+  memory.set(id, run);
+  const previous = runWrites.get(id) ?? Promise.resolve();
+  const write = previous
+    .catch(() => {})
+    .then(async () => {
+      await ensureDirs();
+      const target = await safeStorePath(STORE_DIR, id);
+      await writeFileContained(target, data);
+    });
+  runWrites.set(id, write);
+  try {
+    await write;
+  } finally {
+    if (runWrites.get(id) === write) runWrites.delete(id);
+  }
 }
 
 export function putRunInMemory(run: RunRecord): void {
@@ -234,6 +257,11 @@ async function normalizeLoaded(run: RunRecord): Promise<RunRecord> {
     run.status = "failed";
     const hasCheckpoint = Boolean(await getRunCheckpoint(run.id));
     run.resumable = hasCheckpoint;
+    // Interrupted work, unlike a user cancellation or terminal hold, retains
+    // automatic restart intent even if the process died during a prior retry.
+    run.recovery = hasCheckpoint
+      ? { stage: "restart", attempt: 0, nextAttemptAt: Date.now() }
+      : undefined;
     run.error = hasCheckpoint
       ? "Interrupted: the backend restarted while this run was in progress. Resume continues from its last durable checkpoint."
       : "Interrupted: the backend restarted while this run was in progress, but no durable checkpoint was available. Start a new run.";
@@ -248,7 +276,7 @@ async function normalizeLoaded(run: RunRecord): Promise<RunRecord> {
     }
     run.updatedAt = Date.now();
     // Persist the correction so it survives the next restart too.
-    void saveRun(run).catch(() => {});
+    await saveRun(run);
   }
   return run;
 }
@@ -390,6 +418,7 @@ export async function listRuns(): Promise<RunSummary[]> {
       idea: redactSecrets(r.idea),
       status: r.status,
       resumable: r.resumable,
+      recovery: r.recovery,
       demo: r.demo,
       routingMode: r.routingMode,
       codeProvider: r.codeProvider,

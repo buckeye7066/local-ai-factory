@@ -2,6 +2,8 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RunDetail } from "../App.js";
+import { RunHistory } from "../components/history/RunHistory.js";
+import type { RunSummary } from "../../shared/schemas.js";
 import { api } from "../lib/api.js";
 import type { RunRecord } from "../../shared/schemas.js";
 
@@ -73,5 +75,62 @@ describe("Resume request recovery", () => {
     expect(button("Resume").disabled).toBe(false);
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(api.resumeRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("non-destructive cancellation of scheduled retries", () => {
+  const retryRun = {
+    ...stoppedRun,
+    recovery: {
+      stage: "release" as const,
+      attempt: 1,
+      nextAttemptAt: Date.now() + 30_000,
+    },
+  };
+  it("offers Stop automatic retry in the detail view and calls cancel without deleting work", async () => {
+    vi.spyOn(api, "cancelRun").mockResolvedValue({ ok: true });
+    const deletion = vi.spyOn(api, "deleteRun");
+    const refresh = vi.fn();
+    render(
+      <RunDetail run={retryRun} files={[]} onNewRun={() => {}} refreshRun={refresh} />,
+    );
+    expect(button("Resume")).toBeDefined();
+    await act(async () => {
+      fireEvent.click(button("Stop automatic retry"));
+    });
+    expect(api.cancelRun).toHaveBeenCalledWith(retryRun.id);
+    expect(deletion).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+  it("offers cancellation from history without opening or deleting the run", async () => {
+    const cancel = vi.fn(),
+      remove = vi.fn(),
+      open = vi.fn();
+    render(
+      <RunHistory
+        runs={[retryRun as unknown as RunSummary]}
+        onOpen={open}
+        onDelete={remove}
+        onCancelRetry={cancel}
+      />,
+    );
+    await act(async () => {
+      fireEvent.click(button("Stop automatic retry: futureu"));
+    });
+    expect(cancel).toHaveBeenCalledWith(retryRun.id);
+    expect(remove).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+  it("does not label a manual-only hold as a scheduled retry", () => {
+    render(
+      <RunDetail
+        run={stoppedRun}
+        files={[]}
+        onNewRun={() => {}}
+        refreshRun={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Stop automatic retry" })).toBeNull();
+    expect(button("Resume")).toBeDefined();
   });
 });

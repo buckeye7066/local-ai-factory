@@ -41,6 +41,7 @@ export function RunControlBar({
   resuming?: boolean;
 }) {
   const running = run.status === "running" || run.status === "queued";
+  const retrying = run.status === "failed" && run.resumable && Boolean(run.recovery);
   const done = run.stages.filter(
     (s) => s.status === "completed" || s.status === "skipped",
   ).length;
@@ -96,7 +97,7 @@ export function RunControlBar({
                 {resuming ? "Resuming…" : "Resume"}
               </Button>
             )}
-          {running && onCancel && (
+          {(running || retrying) && onCancel && (
             <Button
               size="sm"
               variant="ghost"
@@ -105,7 +106,7 @@ export function RunControlBar({
               disabled={cancelling}
               className="text-rose-300 hover:text-rose-200"
             >
-              {cancelling ? "Stopping…" : "Stop"}
+              {cancelling ? "Stopping…" : retrying ? "Stop automatic retry" : "Stop"}
             </Button>
           )}
           <Button
@@ -119,6 +120,12 @@ export function RunControlBar({
         </div>
       </div>
 
+      {retrying && (
+        <p role="status" className="mt-3 text-xs text-amber-200">
+          Automatic recovery is scheduled. Stopping keeps the saved work available for
+          manual resume.
+        </p>
+      )}
       <div className="mt-4 flex items-center gap-3">
         <Progress value={progress} className="flex-1" />
         <span className="shrink-0 text-[11px] text-slate-400">

@@ -387,6 +387,20 @@ async function collectPurposeEvidence(
 
 async function gitWorkspaceFiles(rootPath: string): Promise<string[] | null> {
   try {
+    // A source folder nested in another repository must not inherit that
+    // parent's index or ignore rules (for example a temp folder under a home repo).
+    const prefix = await execFileAsync(
+      "git",
+      ["-C", rootPath, "rev-parse", "--show-prefix"],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        windowsHide: true,
+      },
+    );
+    // Let Git identify its own root. Comparing path spellings misidentifies
+    // Windows short-name/junction aliases and falls back to a truncated walk.
+    if (String(prefix.stdout).trim() !== "") return null;
     const { stdout } = await execFileAsync(
       "git",
       ["-C", rootPath, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],

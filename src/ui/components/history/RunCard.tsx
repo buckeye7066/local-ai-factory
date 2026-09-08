@@ -42,12 +42,14 @@ export function RunCard({
   run,
   onOpen,
   onContinue,
+  onCancelRetry,
   onDelete,
 }: {
   run: RunSummary;
   onOpen: (id: string) => void;
   /** Resume a stopped run straight from the list (shown when `resumable`). */
   onContinue?: (id: string) => Promise<void> | void;
+  onCancelRetry?: (id: string) => Promise<void> | void;
   /** Delete a stopped run and its workspace. Hidden while a run is in flight. */
   onDelete?: (id: string) => Promise<void> | void;
 }) {
@@ -56,6 +58,7 @@ export function RunCard({
   const reviewLabel = PROVIDER_LABELS[run.reviewProvider];
   const [continuing, setContinuing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [cancellingRetry, setCancellingRetry] = useState(false);
   // A run that is still working cannot be deleted — the server refuses it too.
   // Every stopped run deletes on ONE click, with no confirmation dialog.
   const stopped =
@@ -84,6 +87,17 @@ export function RunCard({
       await onContinue(run.id);
     } finally {
       setContinuing(false);
+    }
+  };
+
+  const handleCancelRetry = async (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (!onCancelRetry || cancellingRetry) return;
+    setCancellingRetry(true);
+    try {
+      await onCancelRetry(run.id);
+    } finally {
+      setCancellingRetry(false);
     }
   };
 
@@ -164,6 +178,21 @@ export function RunCard({
             <span />
           )}
           <span className="flex shrink-0 items-center gap-2">
+            {run.status === "failed" &&
+              run.resumable &&
+              run.recovery &&
+              onCancelRetry && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleCancelRetry}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  disabled={cancellingRetry}
+                  aria-label={`Stop automatic retry: ${title}`}
+                >
+                  {cancellingRetry ? "Stopping…" : "Stop automatic retry"}
+                </Button>
+              )}
             {stopped && onDelete && (
               <Button
                 size="sm"

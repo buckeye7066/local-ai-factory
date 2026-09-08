@@ -1,6 +1,7 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
 import { mkdtemp, rm, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import {
   PURPOSE_EVIDENCE_LIMIT,
@@ -8,6 +9,7 @@ import {
 } from "../workspace/analyzeExistingCodebase.js";
 
 const cleanupPaths: string[] = [];
+afterEach(() => vi.unstubAllEnvs());
 afterAll(async () => {
   await Promise.all(
     cleanupPaths.map((p) =>
@@ -17,6 +19,64 @@ afterAll(async () => {
 });
 
 describe("analyzeExistingCodebase", () => {
+  it("keeps the complete Git index when the workspace root is reached through a filesystem alias", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "factory-index-alias-"));
+    cleanupPaths.push(parent);
+    const gitConfig = join(parent, "fixture.gitconfig");
+    await writeFile(gitConfig, "");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", gitConfig);
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    const repo = join(parent, "repository"),
+      alias = join(parent, "alias");
+    execFileSync("git", ["init", "-q", repo], { windowsHide: true });
+    await mkdir(join(repo, "000-noise"));
+    for (let i = 0; i < 1505; i++)
+      await writeFile(
+        join(repo, "000-noise", `${String(i).padStart(4, "0")}.txt`),
+        "x",
+      );
+    await mkdir(join(repo, "src"));
+    await writeFile(
+      join(repo, "src", "App.jsx"),
+      "export default function App() { return null; }",
+    );
+    execFileSync("git", ["-C", repo, "add", "-A"], { windowsHide: true });
+    await symlink(repo, alias, process.platform === "win32" ? "junction" : "dir");
+    const analysis = await analyzeExistingCodebase(alias);
+    expect(analysis.fileTree.length).toBeGreaterThan(1500);
+    expect(analysis.fileTree).toContain("src/App.jsx");
+  });
+  it("does not inherit a parent repository's index/ignore rules when scanning an attached subfolder", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "factory-analyze-parent-"));
+    cleanupPaths.push(parent);
+    const gitConfig = join(parent, "fixture.gitconfig");
+    await writeFile(gitConfig, "");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", gitConfig);
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    execFileSync("git", ["init", "-q", parent], { windowsHide: true });
+    const app = join(parent, "attached-app");
+    await mkdir(join(app, "node_modules", "dependency"), { recursive: true });
+    await writeFile(
+      join(app, "package.json"),
+      JSON.stringify({ name: "attached-app" }),
+    );
+    await writeFile(
+      join(app, "node_modules", "dependency", "index.js"),
+      "ignored dependency",
+    );
+    await writeFile(join(parent, "unrelated.txt"), "parent-only file");
+    // This is the pre-fix Git path: prove the sentinel is actually exposed
+    // rather than accidentally passing because the developer globally ignores it.
+    const inheritedIndex = execFileSync(
+      "git",
+      ["-C", app, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      { encoding: "utf8", windowsHide: true },
+    );
+    expect(inheritedIndex.split("\0")).toContain("node_modules/dependency/index.js");
+    const analysis = await analyzeExistingCodebase(app);
+    expect(analysis.appNameGuess).toBe("attached-app");
+    expect(analysis.fileTree).toEqual(["package.json"]);
+  });
   it("detects a React + Express + TypeScript stack from package.json and guesses the app name", async () => {
     const dir = await mkdtemp(join(tmpdir(), "factory-analyze-"));
     cleanupPaths.push(dir);

@@ -38,6 +38,7 @@ export function RunHistory({
   runs,
   onOpen,
   onContinue,
+  onCancelRetry,
   onDelete,
   onDeleteFinished,
   loading,
@@ -46,6 +47,7 @@ export function RunHistory({
   onOpen: (id: string) => void;
   /** Resume a stopped-but-resumable run straight from its card. */
   onContinue?: (id: string) => Promise<void> | void;
+  onCancelRetry?: (id: string) => Promise<void> | void;
   /** Delete one stopped run (record + workspace). */
   onDelete?: (id: string) => Promise<void> | void;
   /** Delete every finished run at once. */
@@ -114,6 +116,7 @@ export function RunHistory({
               run={run}
               onOpen={onOpen}
               onContinue={onContinue}
+              onCancelRetry={onCancelRetry}
               onDelete={onDelete}
             />
           ))}

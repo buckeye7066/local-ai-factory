@@ -301,6 +301,23 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
   };
 
   try {
+    // A release/deployment retry is not a new delivery. Recheck the original
+    // receipt-bound commit before reusing it, without recreating a merged branch.
+    if ((dest.status === "delivered" || dest.branchPushed === true) && dest.commitSha) {
+      const saved = await resolveVerifiedCommit({
+        committed: false,
+        unchanged: true,
+        sha: dest.commitSha,
+        detail: "Rechecking the completed delivery.",
+      });
+      if (saved.sha !== dest.commitSha)
+        return {
+          ...dest,
+          status: "failed",
+          detail: `REFUSED: completed delivery no longer matches this run's verified commit (${saved.reason ?? "commit changed"}).`,
+        };
+      return dest;
+    }
     if (dest.kind === "workspace-only") {
       const init = await initRepo(input.workspacePath);
       if (init && init.code !== 0) {

@@ -1,12 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
 import type { AppConfig, AppSecrets } from "../config.js";
-import type { RunOptions, RunRecord } from "../../shared/schemas.js";
+import {
+  isValidRunId,
+  OperationalRetrySchema,
+  type RunOptions,
+  type RunRecord,
+} from "../../shared/schemas.js";
 import { EpicPlanSchema, type EpicPlan } from "../agents/epicPlannerAgent.js";
 import { appendAuditEvent } from "../storage/auditLog.js";
-import { getRunForExecution } from "../storage/runsStore.js";
+import { getRunForExecution, writeFileContained } from "../storage/runsStore.js";
+import { nextOperationalRetry } from "./operationalRetry.js";
 
 /**
  * epicRunner — sequential slice execution for large evolutions.
@@ -40,6 +46,7 @@ export const EpicRecordSchema = z.object({
   status: z.enum(["planning", "running", "paused", "completed", "failed"]),
   /** Why the epic paused/failed — always named, never silent. */
   statusReason: z.string().nullable().default(null),
+  recovery: OperationalRetrySchema.optional(),
   slices: z.array(EpicSliceStateSchema),
   currentSlice: z.number().int().default(0),
   options: z.record(z.string(), z.unknown()).default({}),
@@ -51,37 +58,74 @@ export type EpicRecord = z.infer<typeof EpicRecordSchema>;
 const EPICS_DIR = () =>
   resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".factory", "epics");
 
+const epicWrites = new Map<string, Promise<void>>();
+const activeEpics = new Set<string>();
+export const isEpicActive = (id: string): boolean => activeEpics.has(id);
+
 export async function saveEpic(epic: EpicRecord): Promise<void> {
-  await mkdir(EPICS_DIR(), { recursive: true });
+  if (!isValidRunId(epic.id)) throw new Error("Refused: invalid epic id.");
   epic.updatedAt = Date.now();
-  await writeFile(
-    resolve(EPICS_DIR(), `${epic.id}.json`),
-    JSON.stringify(epic, null, 2),
-    "utf8",
-  );
+  // Snapshot before yielding and serialize concurrent saves of the same record.
+  const data = JSON.stringify(EpicRecordSchema.parse(epic), null, 2);
+  const dir = EPICS_DIR();
+  const target = resolve(dir, `${epic.id}.json`);
+  const previous = epicWrites.get(target) ?? Promise.resolve();
+  const write = previous
+    .catch(() => {})
+    .then(async () => {
+      await mkdir(dir, { recursive: true });
+      await writeFileContained(target, data);
+    });
+  epicWrites.set(target, write);
+  try {
+    await write;
+  } finally {
+    if (epicWrites.get(target) === write) epicWrites.delete(target);
+  }
 }
 
 export async function getEpic(id: string): Promise<EpicRecord | null> {
+  if (!isValidRunId(id)) return null;
+  let raw: string;
   try {
-    const raw = await readFile(resolve(EPICS_DIR(), `${id}.json`), "utf8");
-    return EpicRecordSchema.parse(JSON.parse(raw));
-  } catch {
-    return null;
+    raw = await readFile(resolve(EPICS_DIR(), `${id}.json`), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  try {
+    const epic = EpicRecordSchema.parse(JSON.parse(raw));
+    if (epic.id !== id) throw new Error("record identity does not match its filename");
+    return epic;
+  } catch (err) {
+    // Corruption is an explicit error, never a silently missing job or a fresh run.
+    throw new Error(
+      `Epic ${id} is unreadable; its saved work was preserved: ${String(err)}`,
+    );
   }
 }
 
-export async function listEpics(): Promise<EpicRecord[]> {
+export type EpicReadErrorHandler = (error: unknown, id: string) => void;
+export async function listEpics(onError?: EpicReadErrorHandler): Promise<EpicRecord[]> {
+  let files: string[];
   try {
-    const files = await readdir(EPICS_DIR());
-    const epics: EpicRecord[] = [];
-    for (const f of files.filter((f) => f.endsWith(".json"))) {
-      const epic = await getEpic(f.replace(/\.json$/, ""));
-      if (epic) epics.push(epic);
-    }
-    return epics.sort((a, b) => b.createdAt - a.createdAt);
-  } catch {
-    return [];
+    files = await readdir(EPICS_DIR());
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
   }
+  const epics: EpicRecord[] = [];
+  for (const file of files.filter((f) => f.endsWith(".json"))) {
+    const id = file.replace(/\.json$/, "");
+    try {
+      const epic = await getEpic(id);
+      if (epic) epics.push(epic);
+    } catch (error) {
+      if (!onError) throw error;
+      onError(error, id);
+    }
+  }
+  return epics.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 /** One slice's goals rendered as a complete, self-contained run idea. */
@@ -121,7 +165,7 @@ export interface EpicDeps {
    * Resume the same saved run from its checkpoint. A missing handler or any
    * failure pauses the epic without replacing the run or replaying paid work.
    */
-  resumeSliceRun?: (runId: string) => Promise<RunRecord>;
+  resumeSliceRun?: (runId: string, automatic?: boolean) => Promise<RunRecord>;
   plan: (idea: string, options: RunOptions) => Promise<EpicPlan>;
   config: AppConfig;
   secrets: AppSecrets;
@@ -198,13 +242,20 @@ export async function createEpic(
  * stuck "running"/"planning" forever with nothing advancing it. Mark such
  * orphans paused with the reason named — resumable, never silent.
  */
-export async function recoverOrphanedEpics(): Promise<number> {
+export async function recoverOrphanedEpics(
+  onError?: EpicReadErrorHandler,
+): Promise<number> {
   let recovered = 0;
-  for (const epic of await listEpics()) {
-    if (epic.status !== "running" && epic.status !== "planning") continue;
+  for (const epic of await listEpics(onError)) {
+    if (
+      isEpicActive(epic.id) ||
+      (epic.status !== "running" && epic.status !== "planning")
+    )
+      continue;
     epic.status = "paused";
+    epic.recovery = { stage: "restart", attempt: 0, nextAttemptAt: Date.now() };
     epic.statusReason =
-      "interrupted by a server restart — resume to continue from the current slice (an interrupted slice run resumes from its checkpoint)";
+      "interrupted by a server restart; automatic recovery will continue the saved current slice";
     const slice = epic.slices[epic.currentSlice];
     if (slice && slice.status === "running") slice.status = "pending";
     await saveEpic(epic);
@@ -218,7 +269,60 @@ export async function recoverOrphanedEpics(): Promise<number> {
   return recovered;
 }
 
-export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRecord> {
+/** One claim covers planning, resume, and every child, including API/worker races. */
+export async function runEpic(
+  epic: EpicRecord,
+  deps: EpicDeps,
+  options: { automatic?: boolean } = {},
+): Promise<EpicRecord> {
+  if (activeEpics.has(epic.id)) throw new Error("Epic is already executing.");
+  activeEpics.add(epic.id);
+  let canonicalLoaded = false;
+  try {
+    // Re-read under the claim: a stale API snapshot must not replay a finished epic.
+    const saved = await getEpic(epic.id);
+    if (!saved)
+      throw new Error("Saved epic no longer exists; refusing to recreate it.");
+    epic = saved;
+    canonicalLoaded = true;
+    if (epic.status === "completed") return epic;
+    if (options.automatic && !epic.recovery) return epic;
+    if (!options.automatic) epic.recovery = undefined;
+    if (epic.slices.length === 0) {
+      epic = await planEpic(epic, deps);
+      if (epic.status === "failed") {
+        if (options.automatic)
+          epic.recovery = nextOperationalRetry("restart", epic.recovery);
+        await saveEpic(epic);
+        return epic;
+      }
+    }
+    epic.status = "running";
+    epic.statusReason = null;
+    await saveEpic(epic);
+    return await driveEpic(epic, deps, options.automatic === true);
+  } catch (error) {
+    // A failed save/audit outside the child loop must not strand an unclaimed
+    // "running" epic. Keep the original slice identity and durable retry intent.
+    if (canonicalLoaded && epic.status !== "completed") {
+      epic.status = "paused";
+      epic.statusReason = `Epic execution postponed: ${error instanceof Error ? error.message : String(error)}`;
+      if (options.automatic && epic.recovery) {
+        epic.recovery = nextOperationalRetry(epic.recovery.stage, epic.recovery);
+      }
+      await saveEpic(epic);
+    }
+    throw error;
+  } finally {
+    activeEpics.delete(epic.id);
+  }
+}
+
+async function driveEpic(
+  epic: EpicRecord,
+  deps: EpicDeps,
+  automatic: boolean,
+): Promise<EpicRecord> {
   while (epic.currentSlice < epic.slices.length) {
     const i = epic.currentSlice;
     const slice = epic.slices[i]!;
@@ -237,6 +341,23 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
         // Completed children no longer have resumable checkpoints. Reconcile
         // their saved result and let the unchanged release gate decide below.
         const savedRun = await getRunForExecution(savedRunId);
+        if (automatic && savedRun?.status === "cancelled") {
+          // A user cancellation is never overridden by restart recovery.
+          epic.recovery = undefined;
+          throw new Error(
+            "Saved slice was cancelled by the user; automatic recovery stopped.",
+          );
+        }
+        if (
+          automatic &&
+          savedRun?.status === "failed" &&
+          (!savedRun.resumable || !savedRun.recovery)
+        ) {
+          epic.recovery = undefined;
+          throw new Error(
+            "Saved slice has a terminal hold; automatic recovery stopped.",
+          );
+        }
         if (savedRun?.status === "completed") {
           run = savedRun;
         } else {
@@ -245,7 +366,9 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
               `Cannot resume saved slice run ${savedRunId}: no resume handler is available. The existing run was preserved.`,
             );
           }
-          run = await deps.resumeSliceRun(savedRunId);
+          run = automatic
+            ? await deps.resumeSliceRun(savedRunId, true)
+            : await deps.resumeSliceRun(savedRunId);
         }
         if (run.id !== savedRunId) {
           throw new Error(
@@ -267,6 +390,8 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
       slice.detail = String((err as Error)?.message ?? err);
       epic.status = "paused";
       epic.statusReason = `Slice ${i + 1} (${slice.title}) failed to run: ${slice.detail}`;
+      if (epic.recovery)
+        epic.recovery = nextOperationalRetry(epic.recovery.stage, epic.recovery);
       await saveEpic(epic);
       await appendAuditEvent({
         type: "epic.paused",
@@ -301,6 +426,7 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
       `run finished with status ${run.status} and no release`;
     epic.status = "paused";
     epic.statusReason = `Slice ${i + 1} (${slice.title}) ${slice.status}: ${slice.detail}`;
+    epic.recovery = run.status === "failed" && run.resumable ? run.recovery : undefined;
     await saveEpic(epic);
     await appendAuditEvent({
       type: "epic.paused",
@@ -312,6 +438,7 @@ export async function runEpic(epic: EpicRecord, deps: EpicDeps): Promise<EpicRec
 
   epic.status = "completed";
   epic.statusReason = null;
+  epic.recovery = undefined;
   await saveEpic(epic);
   await appendAuditEvent({
     type: "epic.completed",

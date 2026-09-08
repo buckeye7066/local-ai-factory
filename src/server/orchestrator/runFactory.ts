@@ -182,6 +182,10 @@ import {
 import { deliverRun, planDestination } from "./deliverRun.js";
 import { releaseRun, isPaperOnlyDelivery } from "./releaseRun.js";
 import { planRelease, planReleaseOutcome } from "./releasePlan.js";
+import {
+  nextOperationalRetry,
+  deploymentOperationalRetry,
+} from "./operationalRetry.js";
 import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
@@ -678,6 +682,7 @@ async function executeRun(
 ): Promise<void> {
   const { config, secrets } = args;
   const { flush, log, ledger } = controller(run);
+  const priorRecovery = run.recovery;
   let checkpoint: FactoryCheckpoint = restored ?? {
     schemaVersion: 3,
     runId: run.id,
@@ -1266,6 +1271,7 @@ async function executeRun(
     const isResume = Boolean(restored);
     run.status = "running";
     run.resumable = false;
+    run.recovery = undefined;
     run.acceptingSteering = true;
     run.error = null;
     await checkpointNow();
@@ -3355,7 +3361,15 @@ async function executeRun(
 
       if (releaseStep === "fail-delivery") {
         run.status = "failed";
-        run.resumable = false;
+        run.resumable = true;
+        // Invalid/stale evidence remains held. Only external delivery failures
+        // receive automatic retry intent; every retry rechecks the receipts.
+        if (
+          delivered.status === "failed" &&
+          !/REFUSED:/i.test(delivered.detail ?? "")
+        ) {
+          run.recovery = nextOperationalRetry("delivery", priorRecovery);
+        }
         run.error = redactSecrets(
           `Delivery did not complete: ${delivered.detail ?? delivered.status}. ` +
             "The verified workspace remains available, but this run is not ready and no success event was emitted.",
@@ -3426,6 +3440,7 @@ async function executeRun(
             qaPassed: qa.passed,
             testStatus,
             verifiedCommitSha: delivered.commitSha!,
+            existingPrUrl: run.release?.prUrl ?? undefined,
             caveats: report.caveats ?? [],
           }),
         );
@@ -3500,8 +3515,9 @@ async function executeRun(
         if (pending) {
           run.status = "failed";
           run.resumable = true;
+          run.recovery = nextOperationalRetry("release", priorRecovery);
           run.error = redactSecrets(
-            `Release pending: ${release.reason}. The verified branch and auto-merge remain active, but the run is not complete until the exact commit is confirmed on the trunk. Resume this run to re-check it.`,
+            `Release pending: ${release.reason}. The verified branch and auto-merge remain active, but the run is not complete until the exact commit is confirmed on the trunk. Automatic recovery will re-check this same run without replacing its work.`,
           );
           await checkpointNow();
           await flush();
@@ -3509,7 +3525,9 @@ async function executeRun(
         }
         if (outcome === "fail-run") {
           run.status = "failed";
-          run.resumable = false;
+          run.resumable = true;
+          if (release.retryable)
+            run.recovery = nextOperationalRetry("release", priorRecovery);
           run.error = redactSecrets(
             `Release held: ${release.reason}. The branch remains available, but the run is not complete or production-ready.`,
           );
@@ -3579,7 +3597,8 @@ async function executeRun(
           });
           if (!(dep.deployed && dep.verified)) {
             run.status = "failed";
-            run.resumable = false;
+            run.resumable = true;
+            run.recovery = deploymentOperationalRetry(dep, priorRecovery);
             run.error = redactSecrets(
               `Deployment held: ${dep.reason}. The repository is saved, but the new app is not live and the run is not complete.`,
             );
@@ -4031,6 +4050,7 @@ async function prepareResume(
   config: AppConfig,
   secrets: AppSecrets,
   providers?: ResumeProviderSwitch,
+  automatic = false,
 ): Promise<{
   run: RunRecord;
   checkpoint: FactoryCheckpoint;
@@ -4048,7 +4068,12 @@ async function prepareResume(
     const stoppedResumable =
       (run?.status === "failed" || run?.status === "cancelled") &&
       run?.resumable === true;
-    if (!run || !checkpoint || !stoppedResumable) {
+    if (
+      !run ||
+      !checkpoint ||
+      !stoppedResumable ||
+      (automatic && run.status === "cancelled")
+    ) {
       throw new RunNotResumableError(
         "Run has no interrupted durable checkpoint to resume.",
       );
@@ -4120,6 +4145,12 @@ async function prepareResume(
         stage.durationMs = null;
       }
     }
+    // A cancellation arriving during async workspace/provider validation wins.
+    if (automatic && (run.status === "cancelled" || isCancelRequested(runId))) {
+      throw new RunNotResumableError(
+        "Automatic recovery stopped by user cancellation.",
+      );
+    }
     run.currentStage = null;
     run.status = "queued";
     run.resumable = false;
@@ -4177,8 +4208,9 @@ export async function resumeFactory(
   runId: string,
   config: AppConfig,
   secrets: AppSecrets,
+  automatic = false,
 ): Promise<RunRecord> {
-  const prepared = await prepareResume(runId, config, secrets);
+  const prepared = await prepareResume(runId, config, secrets, undefined, automatic);
   try {
     await executeRun(prepared.run, prepared.args, prepared.checkpoint);
   } catch (err) {

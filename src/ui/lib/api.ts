@@ -86,7 +86,12 @@ export const api = {
    * promise that slices "appear in the runs list" was a promise the code did
    * not keep. `/api/epics` has always served this; nothing called it.
    */
-  listEpics: () => jsonFetch<{ epics: EpicSummary[] }>("/api/epics", undefined, 10_000),
+  listEpics: () =>
+    jsonFetch<{ epics: EpicSummary[]; errors?: Array<{ id: string; reason: string }> }>(
+      "/api/epics",
+      undefined,
+      10_000,
+    ),
   getRun: (id: string, signal?: AbortSignal) =>
     jsonFetch<RunRecord>(`/api/runs/${id}`, { signal }, 10_000),
   getFiles: (id: string) =>
