@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import type { RunAttribution, RunRecord } from "../../shared/schemas.js";
@@ -16,7 +16,9 @@ const DATA_ROOT = resolve(process.cwd(), process.env.FACTORY_DATA_DIR || ".facto
 const ATTR_DIR = join(DATA_ROOT, "attribution");
 
 export function attributionPathFor(runId: string): string {
-  return join(ATTR_DIR, `${runId}.json`);
+  // A resumed run produces a new receipt. Reusing <runId>.json overwrote
+  // bytes already bound into the audit chain and blocked every later run.
+  return join(ATTR_DIR, `${runId}-${randomUUID()}.json`);
 }
 
 export function buildAttribution(
@@ -90,6 +92,7 @@ export async function writeAttribution(
 ): Promise<{ path: string; manifestSha256: string }> {
   await mkdir(ATTR_DIR, { recursive: true });
   const path = attributionPathFor(attr.jobId);
+  attr.commitPath = path;
   const raw = JSON.stringify(attr, null, 2);
   const manifestSha256 = createHash("sha256").update(raw).digest("hex");
   await writeFileContained(path, raw);

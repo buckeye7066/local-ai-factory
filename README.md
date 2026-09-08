@@ -167,6 +167,14 @@ pnpm factory "build me a family chore tracker with rewards"
 
 Streams stage-by-stage progress and prints the final workspace path + report.
 
+If startup reports a corrupt audit chain from an older installation, run
+`pnpm audit:recover` from the repository root. This explicit repair preserves
+the complete original ledger under `.factory/audit/recovery/` and starts a
+new chain cryptographically bound to that archive. Archived history remains
+unverified; the repair does not certify old runs or remove their checkpoints.
+Ordinary runs still refuse to append to damaged evidence. Attribution receipts
+are immutable per write, so resuming a run cannot invalidate an earlier receipt.
+
 ---
 
 ## Security & safety boundaries

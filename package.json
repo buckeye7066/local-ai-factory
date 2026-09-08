@@ -27,6 +27,7 @@
     "ui": "vite",
     "build": "tsc -p tsconfig.json && vite build",
     "factory": "tsx src/cli/factory.ts",
+    "audit:recover": "tsx src/cli/recover-audit.ts",
     "proof:real-provider": "tsx src/cli/proof-real-provider.ts",
     "proof:free-route": "tsx src/cli/proof-free-route.ts",
     "rotation:pin": "tsx src/cli/rotation-pin.ts",

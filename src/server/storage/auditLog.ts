@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { constants as FS } from "node:fs";
-import { mkdir, appendFile, open, readFile } from "node:fs/promises";
+import { mkdir, appendFile, open, readFile, lstat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, join } from "node:path";
 import { redactSecrets } from "../security/redact.js";
 import { acquireProcessFileLock } from "./processFileLock.js";
+import { writeFileContained } from "./runsStore.js";
 
 /**
  * auditLog.ts — append-only, tamper-evident audit events for Factory Deck jobs.
@@ -19,9 +20,11 @@ const AUDIT_DIR = join(DATA_ROOT, "audit");
 const AUDIT_FILE = join(AUDIT_DIR, "events.jsonl");
 const AUDIT_LOCK = join(AUDIT_DIR, ".append.lock");
 const ATTRIBUTION_DIR = join(DATA_ROOT, "attribution");
+const RECOVERY_DIR = join(AUDIT_DIR, "recovery");
 const HAS_NOFOLLOW = typeof FS.O_NOFOLLOW === "number" && FS.O_NOFOLLOW !== 0;
 
 export type AuditEventType =
+  | "audit.recovered"
   | "run.queued"
   | "run.started"
   | "run.resumed"
@@ -110,6 +113,28 @@ function pathInside(parent: string, child: string): boolean {
 async function verifyAttributionBinding(
   event: Partial<AuditEvent>,
 ): Promise<string | null> {
+  if (event.type === "audit.recovered") {
+    const digest = event.meta?.archiveSha256;
+    if (typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) {
+      return "audit recovery contains an invalid archive digest";
+    }
+    const path = join(RECOVERY_DIR, `${digest}.jsonl`);
+    try {
+      if (
+        (await lstat(RECOVERY_DIR)).isSymbolicLink() ||
+        (await lstat(path)).isSymbolicLink()
+      ) {
+        return "audit recovery archive is a symlink";
+      }
+      const raw = await readFile(path);
+      if (createHash("sha256").update(raw).digest("hex") !== digest) {
+        return "audit recovery archive digest does not match audit";
+      }
+    } catch (error) {
+      return `audit recovery archive could not be verified: ${String(error)}`;
+    }
+    return null;
+  }
   if (event.type !== "attribution.written") return null;
   const digest = event.meta?.manifestSha256;
   // Older audit events predate byte binding. New writers always include the
@@ -193,7 +218,7 @@ async function inspectAuditFile(): Promise<AuditInspection> {
     if (ev.prevHash !== prev || hash !== expectedHash) {
       return invalidAudit(expectedSeq, "audit hash chain is invalid");
     }
-    if (ev.type === "attribution.written") {
+    if (ev.type === "attribution.written" || ev.type === "audit.recovered") {
       attributionEvents.push({ event: ev, seq: expectedSeq });
     }
     prev = hash;
@@ -283,6 +308,81 @@ export async function verifyAuditChain(): Promise<{
   return inspected.ok
     ? { ok: true, badSeq: null }
     : { ok: false, badSeq: inspected.badSeq };
+}
+
+/**
+ * Explicit operator recovery, never an automatic append fallback. Preserve
+ * the entire damaged ledger byte-for-byte, then atomically publish a new
+ * chain bound to that archive. Historical events remain unverified; they
+ * are never renumbered, rehashed, discarded, or presented as successful runs.
+ * A crash before publication leaves the old ledger intact and can be retried.
+ */
+export async function recoverAuditChain(): Promise<{
+  recovered: boolean;
+  archivePath?: string;
+  archiveSha256?: string;
+  badSeq?: number | null;
+  reason?: string;
+}> {
+  const job = chain.then(() =>
+    withAuditLock(async () => {
+      const inspected = await inspectAuditFile();
+      if (inspected.ok) return { recovered: false };
+      // Do not turn permissions failures or redirected stores into a new log.
+      for (const path of [AUDIT_DIR, AUDIT_FILE]) {
+        if ((await lstat(path)).isSymbolicLink()) {
+          throw new Error(`Refused: audit recovery target is a symlink: ${path}`);
+        }
+      }
+      const raw = await readFile(AUDIT_FILE);
+      const archiveSha256 = createHash("sha256").update(raw).digest("hex");
+      await mkdir(RECOVERY_DIR, { recursive: true });
+      if ((await lstat(RECOVERY_DIR)).isSymbolicLink()) {
+        throw new Error("Refused: audit recovery directory is a symlink.");
+      }
+      const archivePath = join(RECOVERY_DIR, `${archiveSha256}.jsonl`);
+      try {
+        const handle = await open(archivePath, "wx", 0o600);
+        try {
+          await handle.writeFile(raw);
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (
+          (await lstat(archivePath)).isSymbolicLink() ||
+          !(await readFile(archivePath)).equals(raw)
+        ) {
+          throw new Error("Refused: existing audit recovery archive differs.");
+        }
+      }
+      const body = {
+        type: "audit.recovered" as const,
+        runId: "audit-recovery",
+        detail:
+          "New chain after explicit recovery; archived history remains unverified.",
+        meta: { archiveSha256, badSeq: inspected.badSeq, reason: inspected.reason },
+        seq: 1,
+        ts: Date.now(),
+        prevHash: "genesis",
+      };
+      const event = { ...body, hash: hashLine(stableStringify(body)) };
+      await writeFileContained(AUDIT_FILE, `${stableStringify(event)}\n`);
+      seq = 1;
+      lastHash = event.hash;
+      return {
+        recovered: true,
+        archivePath,
+        archiveSha256,
+        badSeq: inspected.badSeq,
+        reason: inspected.reason,
+      };
+    }),
+  );
+  chain = job.catch(() => {});
+  return job;
 }
 
 /** Test helper: reset in-memory cursor (does not delete the file). */
