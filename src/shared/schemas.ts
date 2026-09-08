@@ -977,12 +977,21 @@ export function isValidRunId(id: string): boolean {
   return RunIdSchema.safeParse(id).success;
 }
 
+/** Durable retry intent. Its presence never overrides failed verification or cancellation. */
+export const OperationalRetrySchema = z.object({
+  stage: z.enum(["restart", "delivery", "release", "deployment"]),
+  attempt: z.number().int().nonnegative(),
+  nextAttemptAt: z.number().finite(),
+});
+export type OperationalRetry = z.infer<typeof OperationalRetrySchema>;
+
 export const RunRecordSchema = z.object({
   id: RunIdSchema,
   idea: z.string(),
   status: RunStatusSchema,
   /** True only when a private durable checkpoint can continue this run. */
   resumable: z.boolean().optional(),
+  recovery: OperationalRetrySchema.optional(),
   demo: z.boolean(),
   /** "auto" for current runs; legacy "free"/"paid" records remain readable. */
   routingMode: RoutingModeSchema.optional(),

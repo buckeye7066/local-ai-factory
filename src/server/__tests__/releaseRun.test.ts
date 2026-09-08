@@ -390,7 +390,7 @@ describe("releaseRun", () => {
       qaPassed: true,
       testStatus: "passing",
       ghImpl: impl,
-      checkTimeoutMs: 1,
+      checkTimeoutMs: -1,
     });
     // Pending is NOT released and NOT a failure.
     expect(res.released).toBe(false);
@@ -423,7 +423,7 @@ describe("releaseRun", () => {
       qaPassed: true,
       testStatus: "passing",
       ghImpl: impl,
-      checkTimeoutMs: 1,
+      checkTimeoutMs: -1,
     });
     expect(res.released).toBe(false);
     expect(res.state).toBe("held");
@@ -469,7 +469,9 @@ describe("releaseRun", () => {
         fail("a pull request for branch already exists: https://github.com/x/y/pull/7"),
       (a) =>
         a[1] === "view"
-          ? ok("https://github.com/buckeye7066/GrantFlow/pull/7")
+          ? ok(
+              "https://github.com/buckeye7066/GrantFlow/pull/7\tOPEN\tabc123verified\t",
+            )
           : ok(""),
       () => ok(JSON.stringify([{ state: "SUCCESS", name: "test" }])),
       (a) => (a[1] === "merge" ? ok("merged") : ok("MERGED def456")),

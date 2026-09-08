@@ -28,7 +28,7 @@ import {
 import { requestCancel } from "./orchestrator/cancellation.js";
 import {
   createEpicShell,
-  planEpic,
+  isEpicActive,
   recoverOrphanedEpics,
   getEpic,
   listEpics,
@@ -36,6 +36,10 @@ import {
   type EpicDeps,
 } from "./orchestrator/epicRunner.js";
 import { epicPlannerAgent } from "./agents/epicPlannerAgent.js";
+import {
+  createOperationalRecovery,
+  cancelOperationalRetry,
+} from "./orchestrator/operationalRecovery.js";
 import {
   getRun,
   inspectDurableRun,
@@ -642,9 +646,9 @@ function epicDeps(): EpicDeps {
       underWorkTheme({ idea, stage: "epic-slice" }, () =>
         runFactoryTracked({ idea, options, config, secrets }, onStarted ?? (() => {})),
       ),
-    resumeSliceRun: async (runId) =>
+    resumeSliceRun: async (runId, automatic = false) =>
       underWorkTheme(resumeWorkTheme(await getRun(runId), runId, "epic-resume"), () =>
-        resumeFactoryFull(runId, config, secrets),
+        resumeFactoryFull(runId, config, secrets, automatic),
       ),
     plan: async (idea, options) => {
       // Planning obeys the same owner-selected economic tier as every slice.
@@ -732,10 +736,9 @@ app.post(
     const deps = epicDeps();
     // Respond immediately: planning alone can take minutes on the free route.
     const shell = await createEpicShell(idea, parsed.data);
-    void (async () => {
-      const epic = await planEpic(shell, deps);
-      if (epic.status === "running") await runEpic(epic, deps);
-    })().catch(() => {});
+    void runEpic(shell, deps).catch((err) => {
+      console.error(`[factory] epic execution failed: ${safeErrorMessage(err)}`);
+    });
     res.status(202).json({ epicId: shell.id });
   }),
 );
@@ -771,24 +774,18 @@ app.post(
     // - e.g. the provider was out of credits - had zero slices and could never
     // be retried, a permanent dead end for work the owner still wanted. Only
     // completed and already-running epics are refused.
-    if (epic.status === "completed" || epic.status === "running") {
+    if (
+      isEpicActive(epic.id) ||
+      epic.status === "completed" ||
+      epic.status === "running" ||
+      epic.status === "planning"
+    ) {
       res.status(409).json({ error: `Epic is ${epic.status}; nothing to resume.` });
       return;
     }
-    // Retry the slice that paused it: reset to pending and continue.
-    const slice = epic.slices[epic.currentSlice];
-    if (slice) {
-      slice.status = "pending";
-      slice.detail = null;
-    }
-    epic.status = "running";
-    epic.statusReason = null;
-    const deps = epicDeps();
-    // Never planned (or planning failed): plan first, then run.
-    void (async () => {
-      const ready = epic.slices.length === 0 ? await planEpic(epic, deps) : epic;
-      if (ready.status !== "failed") await runEpic(ready, deps);
-    })().catch(() => {});
+    void runEpic(epic, epicDeps()).catch((err) => {
+      console.error(`[factory] epic resume failed: ${safeErrorMessage(err)}`);
+    });
     res.status(202).json({ ok: true });
   }),
 );
@@ -815,6 +812,10 @@ app.post(
     const run = await getRun(runId);
     if (!run) {
       res.status(404).json({ error: "Run not found." });
+      return;
+    }
+    if (await cancelOperationalRetry(runId)) {
+      res.status(202).json({ ok: true });
       return;
     }
     if (run.status !== "queued" && run.status !== "running") {
@@ -1169,16 +1170,16 @@ if (bind.error) {
   process.on("unhandledRejection", (err) => logCrash("unhandledRejection", err));
 }
 
-void recoverOrphanedEpics()
-  .then((n) => {
-    if (n > 0)
-      console.log(`[factory] recovered ${n} orphaned epic(s) — paused, resumable.`);
-  })
-  .catch((err) => {
-    // Boot must stay up even if epic recovery fails — a wedged audit file
-    // must not take the whole deck down (exit -1 under the launcher).
-    console.error(`[factory] orphan epic recovery failed (continuing):`, err);
-  });
+const operationalRecovery = createOperationalRecovery({
+  epicDeps,
+  resumeRun: async (runId) =>
+    underWorkTheme(
+      resumeWorkTheme(await getRun(runId), runId, "automatic-recovery"),
+      () => resumeFactoryFull(runId, config, secrets, true),
+    ),
+  onError: (err) =>
+    console.error(`[factory] automatic recovery: ${safeErrorMessage(err)}`),
+});
 const server = app.listen(config.port, bind.host, () => {
   console.log(`[factory] backend listening on http://${bind.host}:${config.port}`);
   console.log(
@@ -1236,3 +1237,20 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 
 process.on("SIGINT", () => server.close(() => process.exit(0)));
 process.on("SIGTERM", () => server.close(() => process.exit(0)));
+
+// Recover only after this process owns the listening socket. A second launcher
+// that loses the bind must never rewrite a live server's jobs as orphaned.
+server.once("listening", () => {
+  void recoverOrphanedEpics()
+    .then((count) => {
+      if (count)
+        console.log(
+          `[factory] queued ${count} interrupted epic(s) for automatic recovery.`,
+        );
+      operationalRecovery.start();
+    })
+    .catch((err) =>
+      console.error(`[factory] startup recovery: ${safeErrorMessage(err)}`),
+    );
+});
+server.once("close", () => operationalRecovery.stop());

@@ -234,6 +234,11 @@ async function normalizeLoaded(run: RunRecord): Promise<RunRecord> {
     run.status = "failed";
     const hasCheckpoint = Boolean(await getRunCheckpoint(run.id));
     run.resumable = hasCheckpoint;
+    // Interrupted work, unlike a user cancellation or terminal hold, retains
+    // automatic restart intent even if the process died during a prior retry.
+    run.recovery = hasCheckpoint
+      ? { stage: "restart", attempt: 0, nextAttemptAt: Date.now() }
+      : undefined;
     run.error = hasCheckpoint
       ? "Interrupted: the backend restarted while this run was in progress. Resume continues from its last durable checkpoint."
       : "Interrupted: the backend restarted while this run was in progress, but no durable checkpoint was available. Start a new run.";
