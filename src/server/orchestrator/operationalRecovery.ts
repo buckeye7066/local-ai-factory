@@ -28,7 +28,7 @@ export function createOperationalRecovery(deps: OperationalRecoveryDeps) {
       // Do not compete with the owner's already-running pipeline.
       if (summaries.some((r) => r.status === "running" || r.status === "queued"))
         return;
-      const epics = await listEpics();
+      const epics = await listEpics((error) => report(error));
       if (epics.some((epic) => isEpicActive(epic.id))) return;
       const childIds = new Set(
         epics.flatMap((e) => e.slices.flatMap((s) => (s.runId ? [s.runId] : []))),
@@ -66,10 +66,14 @@ export function createOperationalRecovery(deps: OperationalRecoveryDeps) {
           await deps.resumeRun(run.id);
         } catch (err) {
           const current = await getRunForExecution(run.id);
-          if (current?.status === "failed" && current.resumable && current.recovery) {
+          if (
+            current?.status === "failed" &&
+            current.resumable &&
+            !isCancelRequested(current.id)
+          ) {
             current.recovery = nextOperationalRetry(
-              current.recovery.stage,
-              current.recovery,
+              ticket.stage,
+              current.recovery ?? ticket,
               now(),
             );
             current.error = `Automatic recovery postponed: ${safeErrorMessage(err)}`;

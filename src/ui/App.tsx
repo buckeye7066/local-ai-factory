@@ -73,6 +73,9 @@ export function App() {
   const [starting, setStarting] = useState(false);
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [epics, setEpics] = useState<EpicSummary[]>([]);
+  const [epicErrors, setEpicErrors] = useState<Array<{ id: string; reason: string }>>(
+    [],
+  );
   const [runsLoading, setRunsLoading] = useState(true);
   const [files, setFiles] = useState<FileContent[]>([]);
 
@@ -93,8 +96,9 @@ export function App() {
       // to represent it. Losing epics is a missing panel; losing runs is a
       // dead UI, so they get different failure handling.
       try {
-        const { epics: list2 } = await api.listEpics();
+        const { epics: list2, errors = [] } = await api.listEpics();
         setEpics(list2);
+        setEpicErrors(errors);
       } catch {
         /* leave the last known epics on screen */
       }
@@ -263,6 +267,24 @@ export function App() {
     [activeRunId, refreshRuns],
   );
 
+  const cancelRetryById = useCallback(
+    async (id: string) => {
+      try {
+        await api.cancelRun(id);
+        toast.message("Automatic retry stopped", {
+          description: "Saved work is preserved for manual resume.",
+        });
+      } catch (error) {
+        toast.error("Could not stop retry", {
+          description: error instanceof Error ? error.message : undefined,
+        });
+      } finally {
+        void refreshRuns();
+      }
+    },
+    [refreshRuns],
+  );
+
   const deleteFinishedRuns = useCallback(async () => {
     try {
       const res = await api.deleteFinishedRuns();
@@ -309,6 +331,20 @@ export function App() {
           Check the run status before trying Resume again.
         </div>
       )}
+      {epicErrors.length > 0 && (
+        <div
+          role="alert"
+          className="mb-4 rounded-xl border border-amber-500/25 p-4 text-sm text-amber-200"
+        >
+          Some saved evolution records could not be read. Their files are preserved;
+          other jobs can continue.
+          {epicErrors.map((error) => (
+            <p key={error.id} className="mt-1 break-words">
+              {error.id}: {error.reason}
+            </p>
+          ))}
+        </div>
+      )}
       <AnimatePresence mode="wait">
         <motion.div
           key={view + (view === "run" ? activeRunId : "")}
@@ -336,6 +372,7 @@ export function App() {
                 loading={runsLoading}
                 onOpen={openRun}
                 onContinue={continueRun}
+                onCancelRetry={cancelRetryById}
                 onDelete={deleteRunById}
                 onDeleteFinished={deleteFinishedRuns}
               />

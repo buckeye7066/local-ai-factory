@@ -182,7 +182,10 @@ import {
 import { deliverRun, planDestination } from "./deliverRun.js";
 import { releaseRun, isPaperOnlyDelivery } from "./releaseRun.js";
 import { planRelease, planReleaseOutcome } from "./releasePlan.js";
-import { nextOperationalRetry } from "./operationalRetry.js";
+import {
+  nextOperationalRetry,
+  deploymentOperationalRetry,
+} from "./operationalRetry.js";
 import { deployRun } from "./deployRun.js";
 import { storePublish } from "./storePublish.js";
 import { githubLogin, originUrl, currentBranch, git } from "../workspace/gitOps.js";
@@ -3595,7 +3598,7 @@ async function executeRun(
           if (!(dep.deployed && dep.verified)) {
             run.status = "failed";
             run.resumable = true;
-            run.recovery = nextOperationalRetry("deployment", priorRecovery);
+            run.recovery = deploymentOperationalRetry(dep, priorRecovery);
             run.error = redactSecrets(
               `Deployment held: ${dep.reason}. The repository is saved, but the new app is not live and the run is not complete.`,
             );

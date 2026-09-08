@@ -23,3 +23,14 @@ export function operationalRetryDue(run: RunRecord, now = Date.now()): boolean {
     run.recovery.nextAttemptAt <= now
   );
 }
+
+/** A sealed artifact with no deployment target cannot be repaired by retrying. */
+export function deploymentOperationalRetry(
+  result: { target: "railway" | "vercel" | null },
+  previous?: OperationalRetry,
+  now = Date.now(),
+): OperationalRetry | undefined {
+  return result.target === null
+    ? undefined
+    : nextOperationalRetry("deployment", previous, now);
+}

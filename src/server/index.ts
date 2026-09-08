@@ -746,7 +746,11 @@ app.post(
 app.get(
   "/api/epics",
   wrap(async (_req, res) => {
-    res.json({ epics: await listEpics() });
+    const errors: Array<{ id: string; reason: string }> = [];
+    const epics = await listEpics((error, id) =>
+      errors.push({ id, reason: safeErrorMessage(error) }),
+    );
+    res.json({ epics, errors });
   }),
 );
 
@@ -1241,16 +1245,18 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
 // Recover only after this process owns the listening socket. A second launcher
 // that loses the bind must never rewrite a live server's jobs as orphaned.
 server.once("listening", () => {
-  void recoverOrphanedEpics()
+  void recoverOrphanedEpics((error) =>
+    console.error(`[factory] saved epic: ${safeErrorMessage(error)}`),
+  )
     .then((count) => {
       if (count)
         console.log(
           `[factory] queued ${count} interrupted epic(s) for automatic recovery.`,
         );
-      operationalRecovery.start();
     })
     .catch((err) =>
       console.error(`[factory] startup recovery: ${safeErrorMessage(err)}`),
-    );
+    )
+    .finally(() => operationalRecovery.start());
 });
 server.once("close", () => operationalRecovery.stop());

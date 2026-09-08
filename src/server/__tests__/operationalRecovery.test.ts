@@ -102,6 +102,55 @@ async function setup() {
 }
 
 describe("durable automatic operational recovery", () => {
+  it("rebuilds retry intent after a transient execution exception clears its reservation", async () => {
+    const f = await setup();
+    const run = record({
+      status: "failed",
+      resumable: true,
+      recovery: { stage: "release", attempt: 2, nextAttemptAt: 0 },
+    });
+    await f.store.saveRun(run);
+    f.resumeRun.mockImplementation(async () => {
+      run.recovery = undefined;
+      await f.store.saveRun(run);
+      throw new Error("temporary audit persistence failure");
+    });
+    await f.worker.tick();
+    expect((await f.store.getRunForExecution(run.id))?.recovery).toMatchObject({
+      stage: "release",
+      attempt: 3,
+    });
+    await f.worker.tick();
+    expect(f.resumeRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a corrupt epic while still recovering a healthy standalone run", async () => {
+    const f = await setup();
+    const bad = await f.epics.createEpicShell("preserved corrupt record", {});
+    const target = join(dataDir, "epics", `${bad.id}.json`);
+    await writeFile(target, "corrupt bytes");
+    const run = record({
+      status: "failed",
+      resumable: true,
+      recovery: { stage: "release", attempt: 1, nextAttemptAt: 0 },
+    });
+    await f.store.saveRun(run);
+    await f.worker.tick();
+    expect(f.resumeRun).toHaveBeenCalledWith(run.id);
+    expect(f.onError).toHaveBeenCalled();
+    expect(await readFile(target, "utf8")).toBe("corrupt bytes");
+  });
+
+  it("never schedules automatic deployment retries without a supported target", async () => {
+    const { deploymentOperationalRetry } =
+      await import("../orchestrator/operationalRetry.js");
+    expect(deploymentOperationalRetry({ target: null })).toBeUndefined();
+    expect(deploymentOperationalRetry({ target: "railway" }, undefined, 1000)).toEqual({
+      stage: "deployment",
+      attempt: 1,
+      nextAttemptAt: 31_000,
+    });
+  });
   it("resumes a standalone interrupted checkpoint after a process restart", async () => {
     const f = await setup();
     const run = record({ status: "running", resumable: false, release: null });
@@ -330,6 +379,12 @@ describe("real backend startup recovery", () => {
       await f.store.saveRun(child);
     }
     await f.epics.saveEpic(epic);
+    const bad = await f.epics.createEpicShell(
+      "unreadable sibling must not stop startup",
+      {},
+    );
+    const badPath = join(dataDir, "epics", `${bad.id}.json`);
+    await writeFile(badPath, "corrupt sibling");
     // PORT=0 reserves an isolated ephemeral listener. No installed app is touched.
     const child = spawn(process.execPath, ["--import", "tsx", "src/server/index.ts"], {
       cwd: process.cwd(),
@@ -365,6 +420,8 @@ describe("real backend startup recovery", () => {
         { timeout: 20_000, interval: 100 },
       );
       expect(output).toContain("queued 1 interrupted epic(s) for automatic recovery");
+      expect(output).toContain(bad.id);
+      expect(await readFile(badPath, "utf8")).toBe("corrupt sibling");
       expect((await f.epics.getEpic(epic.id))?.slices.map((s) => s.runId)).toEqual(
         epic.slices.map((s) => s.runId),
       );
@@ -376,6 +433,24 @@ describe("real backend startup recovery", () => {
 });
 
 describe("automatic recovery terminal holds", () => {
+  it("does not reinterpret a manually resumable child hold as automatic retry intent", async () => {
+    const f = await setup();
+    const epic = await f.epics.createEpic("preserve manual hold", {}, f.deps);
+    const child = record({
+      status: "failed",
+      resumable: true,
+      recovery: undefined,
+      release: null,
+    });
+    epic.slices[0]!.runId = child.id;
+    await f.store.saveRun(child);
+    await f.epics.saveEpic(epic);
+    await f.epics.recoverOrphanedEpics();
+    await f.worker.tick();
+    expect((await f.epics.getEpic(epic.id))?.recovery).toBeUndefined();
+    expect(f.deps.resumeSliceRun).not.toHaveBeenCalled();
+    expect(f.deps.executeSliceRun).not.toHaveBeenCalled();
+  });
   it("does not repeatedly resume a terminally failed child after its parent restarts", async () => {
     const f = await setup();
     const epic = await f.epics.createEpic("preserve terminal evidence", {}, f.deps);
@@ -391,6 +466,88 @@ describe("automatic recovery terminal holds", () => {
     expect(saved?.recovery).toBeUndefined();
     expect(f.deps.resumeSliceRun).not.toHaveBeenCalled();
     expect(f.deps.executeSliceRun).not.toHaveBeenCalled();
+  });
+});
+
+describe("ordered run persistence", () => {
+  it("serializes captured run snapshots so an older publish cannot overwrite a newer state", async () => {
+    const f = await setup();
+    const run = record({ status: "failed", resumable: true });
+    await f.store.saveRun(run);
+    const target = join(dataDir, "runs", `${run.id}.json`);
+    let releaseFirst!: () => void;
+    let entered = 0;
+    vi.doMock("node:fs/promises", async () => {
+      const fs =
+        await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      return {
+        ...fs,
+        rename: async (from: string, to: string) => {
+          if (to === target && ++entered === 1)
+            await new Promise<void>((resolve) => {
+              releaseFirst = resolve;
+            });
+          return fs.rename(from, to);
+        },
+      };
+    });
+    vi.resetModules();
+    const store = await import("../storage/runsStore.js");
+    const first = store.saveRun({ ...run, status: "failed" });
+    await vi.waitFor(() => expect(entered).toBe(1));
+    const second = store.saveRun({ ...run, status: "completed", resumable: false });
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(JSON.parse(await readFile(target, "utf8")).status).toBe("completed");
+    expect(entered).toBe(2);
+  });
+
+  it("waits for durable normalization before returning a restart ticket", async () => {
+    const f = await setup();
+    const run = record({ status: "running", resumable: false });
+    const { FactoryCheckpointSchema } = await import("../orchestrator/checkpoint.js");
+    await f.store.saveRun(run);
+    await f.store.saveRunCheckpoint(
+      FactoryCheckpointSchema.parse({
+        schemaVersion: 3,
+        runId: run.id,
+        idea: run.idea,
+        options: {},
+        updatedAt: Date.now(),
+      }),
+    );
+    const target = join(dataDir, "runs", `${run.id}.json`);
+    let entered = false;
+    let release!: () => void;
+    vi.doMock("node:fs/promises", async () => {
+      const fs =
+        await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      return {
+        ...fs,
+        rename: async (from: string, to: string) => {
+          if (to === target) {
+            entered = true;
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+          }
+          return fs.rename(from, to);
+        },
+      };
+    });
+    vi.resetModules();
+    const store = await import("../storage/runsStore.js");
+    let returned = false;
+    const reading = store.getRunForExecution(run.id).then((value) => {
+      returned = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(entered).toBe(true));
+    expect(returned).toBe(false);
+    release();
+    const saved = await reading;
+    expect(saved?.recovery?.stage).toBe("restart");
+    expect(JSON.parse(await readFile(target, "utf8")).recovery.stage).toBe("restart");
   });
 });
 

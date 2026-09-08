@@ -105,7 +105,8 @@ export async function getEpic(id: string): Promise<EpicRecord | null> {
   }
 }
 
-export async function listEpics(): Promise<EpicRecord[]> {
+export type EpicReadErrorHandler = (error: unknown, id: string) => void;
+export async function listEpics(onError?: EpicReadErrorHandler): Promise<EpicRecord[]> {
   let files: string[];
   try {
     files = await readdir(EPICS_DIR());
@@ -115,8 +116,14 @@ export async function listEpics(): Promise<EpicRecord[]> {
   }
   const epics: EpicRecord[] = [];
   for (const file of files.filter((f) => f.endsWith(".json"))) {
-    const epic = await getEpic(file.replace(/\.json$/, ""));
-    if (epic) epics.push(epic);
+    const id = file.replace(/\.json$/, "");
+    try {
+      const epic = await getEpic(id);
+      if (epic) epics.push(epic);
+    } catch (error) {
+      if (!onError) throw error;
+      onError(error, id);
+    }
   }
   return epics.sort((a, b) => b.createdAt - a.createdAt);
 }
@@ -235,9 +242,11 @@ export async function createEpic(
  * stuck "running"/"planning" forever with nothing advancing it. Mark such
  * orphans paused with the reason named — resumable, never silent.
  */
-export async function recoverOrphanedEpics(): Promise<number> {
+export async function recoverOrphanedEpics(
+  onError?: EpicReadErrorHandler,
+): Promise<number> {
   let recovered = 0;
-  for (const epic of await listEpics()) {
+  for (const epic of await listEpics(onError)) {
     if (
       isEpicActive(epic.id) ||
       (epic.status !== "running" && epic.status !== "planning")
@@ -339,7 +348,11 @@ async function driveEpic(
             "Saved slice was cancelled by the user; automatic recovery stopped.",
           );
         }
-        if (automatic && savedRun?.status === "failed" && !savedRun.resumable) {
+        if (
+          automatic &&
+          savedRun?.status === "failed" &&
+          (!savedRun.resumable || !savedRun.recovery)
+        ) {
           epic.recovery = undefined;
           throw new Error(
             "Saved slice has a terminal hold; automatic recovery stopped.",

@@ -1058,6 +1058,7 @@ export const RunSummarySchema = RunRecordSchema.pick({
   idea: true,
   status: true,
   resumable: true,
+  recovery: true,
   demo: true,
   routingMode: true,
   codeProvider: true,
