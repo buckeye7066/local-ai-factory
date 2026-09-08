@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
 import { mkdtemp, rm, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -9,6 +9,7 @@ import {
 } from "../workspace/analyzeExistingCodebase.js";
 
 const cleanupPaths: string[] = [];
+afterEach(() => vi.unstubAllEnvs());
 afterAll(async () => {
   await Promise.all(
     cleanupPaths.map((p) =>
@@ -21,6 +22,10 @@ describe("analyzeExistingCodebase", () => {
   it("keeps the complete Git index when the workspace root is reached through a filesystem alias", async () => {
     const parent = await mkdtemp(join(tmpdir(), "factory-index-alias-"));
     cleanupPaths.push(parent);
+    const gitConfig = join(parent, "fixture.gitconfig");
+    await writeFile(gitConfig, "");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", gitConfig);
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     const repo = join(parent, "repository"),
       alias = join(parent, "alias");
     execFileSync("git", ["init", "-q", repo], { windowsHide: true });
@@ -44,6 +49,10 @@ describe("analyzeExistingCodebase", () => {
   it("does not inherit a parent repository's index/ignore rules when scanning an attached subfolder", async () => {
     const parent = await mkdtemp(join(tmpdir(), "factory-analyze-parent-"));
     cleanupPaths.push(parent);
+    const gitConfig = join(parent, "fixture.gitconfig");
+    await writeFile(gitConfig, "");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", gitConfig);
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     execFileSync("git", ["init", "-q", parent], { windowsHide: true });
     const app = join(parent, "attached-app");
     await mkdir(join(app, "node_modules", "dependency"), { recursive: true });
@@ -56,6 +65,14 @@ describe("analyzeExistingCodebase", () => {
       "ignored dependency",
     );
     await writeFile(join(parent, "unrelated.txt"), "parent-only file");
+    // This is the pre-fix Git path: prove the sentinel is actually exposed
+    // rather than accidentally passing because the developer globally ignores it.
+    const inheritedIndex = execFileSync(
+      "git",
+      ["-C", app, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      { encoding: "utf8", windowsHide: true },
+    );
+    expect(inheritedIndex.split("\0")).toContain("node_modules/dependency/index.js");
     const analysis = await analyzeExistingCodebase(app);
     expect(analysis.appNameGuess).toBe("attached-app");
     expect(analysis.fileTree).toEqual(["package.json"]);
