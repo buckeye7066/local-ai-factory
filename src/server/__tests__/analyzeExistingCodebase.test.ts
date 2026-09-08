@@ -18,6 +18,29 @@ afterAll(async () => {
 });
 
 describe("analyzeExistingCodebase", () => {
+  it("keeps the complete Git index when the workspace root is reached through a filesystem alias", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "factory-index-alias-"));
+    cleanupPaths.push(parent);
+    const repo = join(parent, "repository"),
+      alias = join(parent, "alias");
+    execFileSync("git", ["init", "-q", repo], { windowsHide: true });
+    await mkdir(join(repo, "000-noise"));
+    for (let i = 0; i < 1505; i++)
+      await writeFile(
+        join(repo, "000-noise", `${String(i).padStart(4, "0")}.txt`),
+        "x",
+      );
+    await mkdir(join(repo, "src"));
+    await writeFile(
+      join(repo, "src", "App.jsx"),
+      "export default function App() { return null; }",
+    );
+    execFileSync("git", ["-C", repo, "add", "-A"], { windowsHide: true });
+    await symlink(repo, alias, process.platform === "win32" ? "junction" : "dir");
+    const analysis = await analyzeExistingCodebase(alias);
+    expect(analysis.fileTree.length).toBeGreaterThan(1500);
+    expect(analysis.fileTree).toContain("src/App.jsx");
+  });
   it("does not inherit a parent repository's index/ignore rules when scanning an attached subfolder", async () => {
     const parent = await mkdtemp(join(tmpdir(), "factory-analyze-parent-"));
     cleanupPaths.push(parent);
