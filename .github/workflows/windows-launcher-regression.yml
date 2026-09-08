@@ -1,0 +1,28 @@
+name: Windows launcher regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/Repair-All-Axiom-App-Shortcuts.ps1"
+      - "scripts/test-axiom-app-shortcuts.ps1"
+      - ".github/workflows/windows-launcher-regression.yml"
+  pull_request:
+    paths:
+      - "scripts/Repair-All-Axiom-App-Shortcuts.ps1"
+      - "scripts/test-axiom-app-shortcuts.ps1"
+      - ".github/workflows/windows-launcher-regression.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-launcher:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify launch and repeated shortcut installation in Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\test-axiom-app-shortcuts.ps1
