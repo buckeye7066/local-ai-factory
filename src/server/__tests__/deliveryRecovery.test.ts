@@ -67,6 +67,18 @@ async function fixture() {
 }
 
 describe("idempotent delivery of verified work", () => {
+  it("does not repush an already-published branch while a protected-trunk hold is reconciled", async () => {
+    const f = await fixture();
+    const published = await deliverRun(f.input);
+    expect(published.branchPushed).toBe(true);
+    const held = { ...published, status: "failed" as const, releasedToTrunk: false };
+    git(f.remote, "update-ref", "-d", `refs/heads/${f.branch}`);
+    const result = await deliverRun({ ...f.input, destination: held });
+    expect(result.status).toBe("failed");
+    expect(result.branchPushed).toBe(true);
+    expect(result.commitSha).toBe(published.commitSha);
+    expect(git(f.remote, "for-each-ref", `refs/heads/${f.branch}`)).toBe("");
+  }, 60_000);
   it("reuses completed delivery without recreating a branch deleted after merge", async () => {
     const f = await fixture();
     const delivered = await deliverRun(f.input);

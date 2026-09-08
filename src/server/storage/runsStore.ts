@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { setTimeout as retryRenameDelay } from "node:timers/promises";
 import { resolve, join, relative, isAbsolute, sep, dirname } from "node:path";
 import { z } from "zod";
 import type { RunRecord, RunSummary, FileContent } from "../../shared/schemas.js";
@@ -191,7 +192,19 @@ export async function writeFileContained(path: string, data: string): Promise<vo
       throw new Error(`Refused: store target is not a regular file: ${path}`);
     }
 
-    await rename(tempPath, path);
+    // Windows readers and antivirus can briefly deny replacement. Retry the
+    // atomic rename, never unlink/truncate the last valid record to work around it.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await rename(tempPath, path);
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (attempt >= 8 || !["EPERM", "EACCES", "EBUSY"].includes(code ?? ""))
+          throw error;
+        await retryRenameDelay(Math.min(10 * 2 ** attempt, 250));
+      }
+    }
     published = true;
     if (process.platform !== "win32") {
       const dirHandle = await open(parent, FS.O_RDONLY);

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -319,7 +320,139 @@ describe("durable automatic operational recovery", () => {
   });
 });
 
+describe("real backend startup recovery", () => {
+  it("automatically advances saved released children when the actual server boots", async () => {
+    const f = await setup();
+    const epic = await f.epics.createEpic("recover without provider calls", {}, f.deps);
+    for (const slice of epic.slices) {
+      const child = record();
+      slice.runId = child.id;
+      await f.store.saveRun(child);
+    }
+    await f.epics.saveEpic(epic);
+    // PORT=0 reserves an isolated ephemeral listener. No installed app is touched.
+    const child = spawn(process.execPath, ["--import", "tsx", "src/server/index.ts"], {
+      cwd: process.cwd(),
+      windowsHide: true,
+      env: {
+        ...process.env,
+        PORT: "0",
+        FACTORY_DATA_DIR: dataDir,
+        FACTORY_BIND_LAN: "0",
+        ANTHROPIC_API_KEY: "",
+        OPENAI_API_KEY: "",
+        WORKSPACE_ROOT: join(dataDir, "workspaces"),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", (data) => {
+      output = (output + String(data)).slice(-8000);
+    });
+    child.stderr.on("data", (data) => {
+      output = (output + String(data)).slice(-8000);
+    });
+    child.on("error", (err) => {
+      output += String(err);
+    });
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    try {
+      await vi.waitFor(
+        async () => {
+          expect(child.exitCode, output).toBeNull();
+          expect((await f.epics.getEpic(epic.id))?.status, output).toBe("completed");
+        },
+        { timeout: 20_000, interval: 100 },
+      );
+      expect(output).toContain("queued 1 interrupted epic(s) for automatic recovery");
+      expect((await f.epics.getEpic(epic.id))?.slices.map((s) => s.runId)).toEqual(
+        epic.slices.map((s) => s.runId),
+      );
+    } finally {
+      child.kill();
+      await closed;
+    }
+  }, 30_000);
+});
+
+describe("automatic recovery terminal holds", () => {
+  it("does not repeatedly resume a terminally failed child after its parent restarts", async () => {
+    const f = await setup();
+    const epic = await f.epics.createEpic("preserve terminal evidence", {}, f.deps);
+    const child = record({ status: "failed", resumable: false, release: null });
+    epic.slices[0]!.runId = child.id;
+    await f.store.saveRun(child);
+    await f.epics.saveEpic(epic);
+    await f.epics.recoverOrphanedEpics();
+    await f.worker.tick();
+    const saved = await f.epics.getEpic(epic.id);
+    expect(saved?.status).toBe("paused");
+    expect(saved?.statusReason).toContain("terminal hold");
+    expect(saved?.recovery).toBeUndefined();
+    expect(f.deps.resumeSliceRun).not.toHaveBeenCalled();
+    expect(f.deps.executeSliceRun).not.toHaveBeenCalled();
+  });
+});
+
 describe("crash-safe epic persistence", () => {
+  it("does not overwrite a corrupt record with a stale caller snapshot", async () => {
+    const f = await setup();
+    const epic = await f.epics.createEpicShell("preserve storage evidence", {});
+    const target = join(dataDir, "epics", `${epic.id}.json`);
+    await writeFile(target, "corrupt original bytes");
+    await expect(f.epics.runEpic(epic, f.deps)).rejects.toThrow("unreadable");
+    expect(await readFile(target, "utf8")).toBe("corrupt original bytes");
+    expect(f.deps.plan).not.toHaveBeenCalled();
+  });
+
+  it("does not recreate a deleted epic from a stale timer or API snapshot", async () => {
+    const f = await setup();
+    const epic = await f.epics.createEpicShell("do not resurrect", {});
+    await rm(join(dataDir, "epics", `${epic.id}.json`));
+    await expect(f.epics.runEpic(epic, f.deps)).rejects.toThrow("refusing to recreate");
+    expect(await f.epics.getEpic(epic.id)).toBeNull();
+    expect(f.deps.plan).not.toHaveBeenCalled();
+  });
+  it("retries a transient replacement lock without deleting the last valid record", async () => {
+    const f = await setup();
+    const epic = await f.epics.createEpicShell("last valid state", {});
+    const target = join(dataDir, "epics", `${epic.id}.json`);
+    const before = await readFile(target, "utf8");
+    let attempts = 0;
+    vi.doMock("node:fs/promises", async () => {
+      const fs =
+        await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      return {
+        ...fs,
+        rename: async (from: string, to: string) => {
+          if (to === target && ++attempts <= 2) {
+            expect(await fs.readFile(target, "utf8")).toBe(before);
+            throw Object.assign(new Error("transient reader lock"), { code: "EPERM" });
+          }
+          return fs.rename(from, to);
+        },
+      };
+    });
+    vi.resetModules();
+    const restarted = await import("../orchestrator/epicRunner.js");
+    epic.summary = "complete new state";
+    await restarted.saveEpic(epic);
+    expect(attempts).toBeGreaterThanOrEqual(3);
+    expect((await restarted.getEpic(epic.id))?.summary).toBe("complete new state");
+    expect(
+      (await readdir(join(dataDir, "epics"))).filter((p) => p.endsWith(".tmp")),
+    ).toEqual([]);
+  });
+
+  it("caps durable retry delays while continuing to preserve retry intent", async () => {
+    const { nextOperationalRetry } =
+      await import("../orchestrator/operationalRetry.js");
+    let ticket = nextOperationalRetry("release", undefined, 1000);
+    expect(ticket.nextAttemptAt).toBe(31_000);
+    for (let n = 0; n < 40; n++) ticket = nextOperationalRetry("release", ticket, 1000);
+    expect(ticket.attempt).toBe(30);
+    expect(ticket.nextAttemptAt).toBe(1000 + 15 * 60_000);
+  });
   it("keeps complete snapshots ordered during concurrent saves", async () => {
     const f = await setup();
     const epic = await f.epics.createEpicShell("durable", {});

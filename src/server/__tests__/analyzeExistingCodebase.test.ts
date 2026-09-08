@@ -1,6 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { mkdtemp, rm, mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import {
   PURPOSE_EVIDENCE_LIMIT,
@@ -17,6 +18,25 @@ afterAll(async () => {
 });
 
 describe("analyzeExistingCodebase", () => {
+  it("does not inherit a parent repository's index/ignore rules when scanning an attached subfolder", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "factory-analyze-parent-"));
+    cleanupPaths.push(parent);
+    execFileSync("git", ["init", "-q", parent], { windowsHide: true });
+    const app = join(parent, "attached-app");
+    await mkdir(join(app, "node_modules", "dependency"), { recursive: true });
+    await writeFile(
+      join(app, "package.json"),
+      JSON.stringify({ name: "attached-app" }),
+    );
+    await writeFile(
+      join(app, "node_modules", "dependency", "index.js"),
+      "ignored dependency",
+    );
+    await writeFile(join(parent, "unrelated.txt"), "parent-only file");
+    const analysis = await analyzeExistingCodebase(app);
+    expect(analysis.appNameGuess).toBe("attached-app");
+    expect(analysis.fileTree).toEqual(["package.json"]);
+  });
   it("detects a React + Express + TypeScript stack from package.json and guesses the app name", async () => {
     const dir = await mkdtemp(join(tmpdir(), "factory-analyze-"));
     cleanupPaths.push(dir);

@@ -303,7 +303,7 @@ export async function deliverRun(input: DeliveryInput): Promise<RunDestination> 
   try {
     // A release/deployment retry is not a new delivery. Recheck the original
     // receipt-bound commit before reusing it, without recreating a merged branch.
-    if (dest.status === "delivered" && dest.commitSha) {
+    if ((dest.status === "delivered" || dest.branchPushed === true) && dest.commitSha) {
       const saved = await resolveVerifiedCommit({
         committed: false,
         unchanged: true,

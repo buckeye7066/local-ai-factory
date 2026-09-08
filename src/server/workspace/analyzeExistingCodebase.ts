@@ -7,7 +7,7 @@ import type { PurposeEvidence } from "../../shared/schemas.js";
 import { safeResolveExistingPath } from "./fileWriter.js";
 
 const execFileAsync = promisify(execFile);
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 /**
  * analyzeExistingCodebase.ts — deterministic (no LLM call) understanding of an
@@ -387,6 +387,20 @@ async function collectPurposeEvidence(
 
 async function gitWorkspaceFiles(rootPath: string): Promise<string[] | null> {
   try {
+    // A source folder nested in another repository must not inherit that
+    // parent's index or ignore rules (for example a temp folder under a home repo).
+    const top = await execFileAsync(
+      "git",
+      ["-C", rootPath, "rev-parse", "--show-toplevel"],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        windowsHide: true,
+      },
+    );
+    const comparable = (path: string) =>
+      process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+    if (comparable(String(top.stdout).trim()) !== comparable(rootPath)) return null;
     const { stdout } = await execFileAsync(
       "git",
       ["-C", rootPath, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],

@@ -268,9 +268,14 @@ export async function runEpic(
 ): Promise<EpicRecord> {
   if (activeEpics.has(epic.id)) throw new Error("Epic is already executing.");
   activeEpics.add(epic.id);
+  let canonicalLoaded = false;
   try {
     // Re-read under the claim: a stale API snapshot must not replay a finished epic.
-    epic = (await getEpic(epic.id)) ?? epic;
+    const saved = await getEpic(epic.id);
+    if (!saved)
+      throw new Error("Saved epic no longer exists; refusing to recreate it.");
+    epic = saved;
+    canonicalLoaded = true;
     if (epic.status === "completed") return epic;
     if (options.automatic && !epic.recovery) return epic;
     if (!options.automatic) epic.recovery = undefined;
@@ -287,6 +292,18 @@ export async function runEpic(
     epic.statusReason = null;
     await saveEpic(epic);
     return await driveEpic(epic, deps, options.automatic === true);
+  } catch (error) {
+    // A failed save/audit outside the child loop must not strand an unclaimed
+    // "running" epic. Keep the original slice identity and durable retry intent.
+    if (canonicalLoaded && epic.status !== "completed") {
+      epic.status = "paused";
+      epic.statusReason = `Epic execution postponed: ${error instanceof Error ? error.message : String(error)}`;
+      if (options.automatic && epic.recovery) {
+        epic.recovery = nextOperationalRetry(epic.recovery.stage, epic.recovery);
+      }
+      await saveEpic(epic);
+    }
+    throw error;
   } finally {
     activeEpics.delete(epic.id);
   }
@@ -320,6 +337,12 @@ async function driveEpic(
           epic.recovery = undefined;
           throw new Error(
             "Saved slice was cancelled by the user; automatic recovery stopped.",
+          );
+        }
+        if (automatic && savedRun?.status === "failed" && !savedRun.resumable) {
+          epic.recovery = undefined;
+          throw new Error(
+            "Saved slice has a terminal hold; automatic recovery stopped.",
           );
         }
         if (savedRun?.status === "completed") {
