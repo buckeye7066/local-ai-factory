@@ -16,6 +16,8 @@ export default function appUpdates({ app }) {
   const bundleVersion = `1.0.${Date.now()}`;
   return {
     name: 'app-release-updates',
+    // Collect assets after Vite removes inlined multi-page placeholder chunks.
+    enforce: 'post',
     apply: 'build',
     config() { return { define: { 'import.meta.env.VITE_APP_UPDATE_VERSION': JSON.stringify(bundleVersion) } }; },
     configResolved(value) { config = value; },
