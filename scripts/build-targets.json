@@ -1,0 +1,95 @@
+{
+  "name": "local-ai-factory",
+  "defaults": {
+    "win32": "web",
+    "darwin": "web",
+    "linux": "web"
+  },
+  "guidance": "Web builds run in supported browsers on each device; backend and recipient account required. No native Apple or Windows installer is configured.",
+  "targets": {
+    "web": {
+      "format": "web",
+      "output": "dist/ui/",
+      "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "windows": {
+      "format": "web",
+      "output": "dist/ui/",
+      "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "macos": {
+      "format": "web",
+      "output": "dist/ui/",
+      "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "ios": {
+      "format": "web",
+      "output": "dist/ui/",
+      "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "safari": {
+      "format": "web",
+      "output": "dist/ui/",
+      "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    },
+    "android": {
+      "format": "web",
+      "output": "dist/ui/",
+      "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
+      "commands": [
+        {
+          "command": "npm",
+          "args": [
+            "run",
+            "build"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -54,8 +54,10 @@
     "predev": "npm run memory:startup",
     "prestart": "npm run memory:startup",
     "prebuild": "npm run memory:startup",
-    "test:updates": "node --test scripts/app-updates.test.mjs",
-    "test:updates:browser": "node scripts/verify-app-updates-browser.mjs"
+    "test:updates": "npm run test:build-target && node --test scripts/app-updates.test.mjs",
+    "test:updates:browser": "node scripts/verify-app-updates-browser.mjs",
+    "build:smart": "node scripts/build-target.cjs",
+    "test:build-target": "node --test scripts/build-target.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
