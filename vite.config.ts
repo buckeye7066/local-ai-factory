@@ -1,3 +1,4 @@
+import appUpdates from './scripts/app-updates.mjs';
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
@@ -31,7 +32,7 @@ export function developmentServerConfig(env: Record<string, string | undefined> 
 
 export default defineConfig({
   root: fileURLToPath(new URL("./src/ui", import.meta.url)),
-  plugins: [react()],
+  plugins: [appUpdates({ app: 'local-ai-factory' }), react()],
   // 5190 remains the UI default: 5180 is occupied by Docker on the workstation.
   // EVA pins both this UI and its API proxy explicitly instead of killing an
   // existing service or accepting a response from the wrong process.

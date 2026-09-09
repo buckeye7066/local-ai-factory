@@ -25,7 +25,7 @@
     "server:watch": "node --import tsx --watch src/server/index.ts",
     "start": "vite build && node --import tsx src/server/index.ts",
     "ui": "vite",
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "npm run test:updates && tsc -p tsconfig.json && vite build",
     "factory": "tsx src/cli/factory.ts",
     "audit:recover": "tsx src/cli/recover-audit.ts",
     "proof:real-provider": "tsx src/cli/proof-real-provider.ts",
@@ -53,7 +53,9 @@
     "memory:note": "node scripts/obsidian-memory.mjs note",
     "predev": "npm run memory:startup",
     "prestart": "npm run memory:startup",
-    "prebuild": "npm run memory:startup"
+    "prebuild": "npm run memory:startup",
+    "test:updates": "node --test scripts/app-updates.test.mjs",
+    "test:updates:browser": "node scripts/verify-app-updates-browser.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
