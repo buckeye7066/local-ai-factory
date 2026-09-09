@@ -31,7 +31,6 @@ export function startAppUpdates(current, usableUpdate) {
       if (type === 'style' && !/text\/css/i.test(response.headers.get('content-type') || '')) throw new Error('Styles unavailable');
       if (type === 'json') return await response.json();
       const text = await response.text();
-      if (['script', 'style'].includes(type) && !text.trim()) throw new Error('Empty asset');
       return text;
     } finally { clearTimeout(timer); }
   }
