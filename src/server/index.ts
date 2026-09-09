@@ -137,7 +137,7 @@ app.get("/api/health", (_req, res) => {
  * AUTH BOUNDARY for all other /api routes. Fail closed: when FACTORY_AUTH_TOKEN
  * is configured, EVERY request needs the bearer token — including loopback,
  * because a local reverse proxy/tunnel makes remote callers appear as 127.0.0.1.
- * With no token configured the app is loopback-only and loopback is trusted.
+ * With no token configured, local Host and Origin are also required.
  * IP is read from the trusted socket peer (`req.socket.remoteAddress`), never
  * from spoofable X-Forwarded-For / Host headers.
  */
@@ -145,6 +145,8 @@ app.use("/api", (req, res, next) => {
   const decision = authorizeApiRequest({
     remoteAddress: req.socket.remoteAddress,
     authorization: req.headers.authorization,
+    host: req.headers.host,
+    origin: req.headers.origin,
     token: secrets.authToken,
   });
   if (!decision.ok) {
