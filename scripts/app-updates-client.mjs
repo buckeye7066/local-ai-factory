@@ -1,4 +1,4 @@
-/* global location, window, document, navigator, AbortController, localStorage, Notification, CustomEvent, DOMParser, crypto, fetch, setInterval, setTimeout, clearTimeout */
+/* global location, window, document, navigator, AbortController, localStorage, Notification, CustomEvent, DOMParser, fetch, setInterval, setTimeout, clearTimeout */
 /** Shared wire validation. Package versions are deliberately not release identity. */
 export function usableUpdate(value, current) {
   return Boolean(value && value.schema === 1 && value.app === current.app
@@ -29,7 +29,10 @@ export function startAppUpdates(current, usableUpdate) {
       if (!response.ok || (response.url && new URL(response.url).origin !== location.origin)) throw new Error('Unavailable');
       if (type === 'script' && !/(?:java|ecma)script/i.test(response.headers.get('content-type') || '')) throw new Error('Script unavailable');
       if (type === 'style' && !/text\/css/i.test(response.headers.get('content-type') || '')) throw new Error('Styles unavailable');
-      return type === 'json' ? await response.json() : await response.text();
+      if (type === 'json') return await response.json();
+      const text = await response.text();
+      if (['script', 'style'].includes(type) && !text.trim()) throw new Error('Empty asset');
+      return text;
     } finally { clearTimeout(timer); }
   }
 
@@ -129,7 +132,7 @@ export function startAppUpdates(current, usableUpdate) {
   async function activateWorker() {
     if (!navigator.serviceWorker) return;
     const registration = await navigator.serviceWorker.getRegistration(location.href);
-    if (!registration) return;
+    if (!registration || registration.scope !== new URL('./', scriptUrl).href) return;
     await Promise.race([registration.update().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 5000))]);
     await waitForWorker(registration.installing);
     if (!registration.waiting) return;
@@ -137,9 +140,9 @@ export function startAppUpdates(current, usableUpdate) {
     worker.postMessage({ type: 'APP_UPDATE_ACTIVATE' });
     await waitForWorker(worker, ['activated', 'redundant']);
     if (registration.waiting === worker && worker.state !== 'activated') {
-      // Older workers may not understand activation messages. Unregister only
-      // this app's matching worker; never delete caches, IndexedDB, or profiles.
-      await registration.unregister();
+      // A legacy worker that cannot activate must not strand this page behind
+      // an unregistered controller. Keep the installation intact for retry.
+      throw new Error('Close and reopen the app to finish this legacy update');
     }
   }
 

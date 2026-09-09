@@ -58,7 +58,7 @@ export default function appUpdates({ app }) {
         let source;
         try { source = await readFile(filename, 'utf8'); }
         catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-        source += `\n// App release ${manifest.build}\nself.addEventListener('message', (event) => { if (event.data && event.data.type === 'APP_UPDATE_ACTIVATE') self.skipWaiting(); });\n`;
+        source += `\n// App release ${manifest.build}\nself.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));\nself.addEventListener('message', (event) => { if (event.data && event.data.type === 'APP_UPDATE_ACTIVATE') self.skipWaiting(); });\n`;
         await writeFile(filename, source);
       }
     },
