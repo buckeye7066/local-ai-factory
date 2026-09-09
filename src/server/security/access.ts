@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 
 /**
  * security/access.ts — network exposure + request authorization.
@@ -9,7 +10,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
  *  - FACTORY_BIND_LAN=1 asks to bind 0.0.0.0, but is REFUSED unless
  *    FACTORY_AUTH_TOKEN is also set (fail closed — never expose without a token).
  *  - Every non-loopback /api request must then present a matching bearer token
- *    (compared in constant time). Loopback requests are trusted as before.
+ *    (compared in constant time). Token-free loopback requests require local Host and Origin headers.
  *
  * The helpers are pure so the policy can be unit-tested without a live socket.
  */
@@ -41,6 +42,25 @@ export function bearerToken(authorization: string | undefined | null): string | 
   return m ? m[1].trim() : null;
 }
 
+/** A local socket alone does not protect against DNS rebinding. */
+export function isLocalAuthority(authority: string | undefined): boolean {
+  if (!authority || /[\s/@?#\\]/.test(authority)) return false;
+  try {
+    const url = new URL(`http://${authority}`);
+    const hostname = url.hostname.replace(/^\[|\]$/g, "");
+    return hostname === "localhost" || hostname === "::1" ||
+      (isIP(hostname) === 4 && hostname.startsWith("127."));
+  } catch { return false; }
+}
+
+export function isLocalOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return ["http:", "https:"].includes(url.protocol) &&
+      url.origin === origin && isLocalAuthority(url.host);
+  } catch { return false; }
+}
+
 export interface AccessDecision {
   ok: boolean;
   status: number;
@@ -58,12 +78,14 @@ export interface AccessDecision {
  * a configured token is authoritative and loopback is not an auth bypass.
  *
  * When NO token is configured, the app is loopback-only (local-first default)
- * and loopback requests are trusted; any non-loopback request is refused.
+ * and loopback requests must have a local Host and, when present, local Origin.
  */
 export function authorizeApiRequest(opts: {
   remoteAddress: string | undefined | null;
   authorization: string | undefined | null;
   token: string;
+  host?: string;
+  origin?: string;
 }): AccessDecision {
   if (opts.token) {
     const provided = bearerToken(opts.authorization);
@@ -73,7 +95,15 @@ export function authorizeApiRequest(opts: {
     return { ok: true, status: 200 };
   }
   // No token configured → local-first: only loopback is served.
-  if (isLoopbackAddress(opts.remoteAddress)) return { ok: true, status: 200 };
+  if (isLoopbackAddress(opts.remoteAddress)) {
+    if (!isLocalAuthority(opts.host)) {
+      return { ok: false, status: 403, reason: "Local requests require a loopback Host." };
+    }
+    if (opts.origin !== undefined && !isLocalOrigin(opts.origin)) {
+      return { ok: false, status: 403, reason: "Cross-origin access to local data is disabled." };
+    }
+    return { ok: true, status: 200 };
+  }
   return {
     ok: false,
     status: 401,
@@ -109,3 +139,4 @@ export function resolveBindHost(opts: {
   }
   return { host: "0.0.0.0", lan: true };
 }
+
