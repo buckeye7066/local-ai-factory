@@ -17,12 +17,14 @@ function release() {
   files.set('/sw.js', `const CACHE='shell-${manifest.build}';self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.add('/index.html'))));self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));self.addEventListener('message',e=>{if(e.data?.type==='APP_UPDATE_ACTIVATE')self.skipWaiting()});self.addEventListener('fetch',e=>{if(new URL(e.request.url).pathname==='/'||new URL(e.request.url).pathname==='/index.html')e.respondWith(caches.open(CACHE).then(c=>c.match('/index.html')))});`);
   return { files, manifest };
 }
-let active = release();
+const originalRelease = release();
+let active = originalRelease;
+let missingAsset = false;
 const first = active.manifest.build;
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const pathname = url.pathname === '/' ? '/index.html' : url.pathname;
-  const content = active.files.get(pathname);
+  const content = missingAsset && pathname.endsWith('.js') ? undefined : active.files.get(pathname);
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Type', pathname.endsWith('.js') ? 'application/javascript' : pathname.endsWith('.json') ? 'application/json' : pathname.endsWith('.css') ? 'text/css' : 'text/html');
   res.writeHead(content ? 200 : 404);
@@ -49,6 +51,11 @@ try {
   await page.evaluate(() => window.addEventListener('app-update:before-apply', event => event.preventDefault(), { once: true }));
   await page.getByRole('button', { name: 'Update', exact: true }).click();
   assert.equal(await page.locator('h1').textContent(), first, 'app can defer while work is unsaved');
+  missingAsset = true;
+  await page.getByRole('button', { name: 'Update', exact: true }).click();
+  await page.getByText(/not reachable yet/).waitFor();
+  assert.equal(await page.locator('h1').textContent(), first, 'missing new assets must retain the working page');
+  missingAsset = false;
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Update', exact: true }).click();
   await page.getByText(/not reachable yet/).waitFor();
@@ -60,6 +67,11 @@ try {
   await page.waitForFunction((build) => document.querySelector('h1')?.textContent === build, active.manifest.build, { timeout: 20000 });
   assert.equal(await page.evaluate(() => localStorage.getItem('saved-profile')), 'preserve-me');
   assert.equal(await page.locator('.app-release-update').count(), 0);
+  active = originalRelease;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.getByRole('button', { name: 'Update', exact: true }).click();
+  await page.waitForFunction((build) => document.querySelector('h1')?.textContent === build, first, {timeout:20000});
+  assert.equal(await page.evaluate(() => localStorage.getItem('saved-profile')), 'preserve-me');
   console.log('PASS: old installed shell detects release, waits for click, retries offline, activates new worker, preserves saved data.');
 } finally {
   await browser?.close();

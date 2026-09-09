@@ -14,12 +14,12 @@ test('detects a new deployed build without requiring a package version bump', ()
   assert.equal(usableUpdate({ ...newer, build: current.build }, current), false);
 });
 
-test('ignores malformed, foreign, future-schema, and stale cached feeds', () => {
+test('ignores malformed, foreign and future-schema feeds; permits deployed rollbacks', () => {
   for (const value of [null, {}, { ...newer, schema: 2 }, { ...newer, app: 'another-app' },
-    { ...newer, build: '../../evil' }, { ...newer, builtAt: 'invalid' },
-    { ...newer, builtAt: '2026-08-01T00:00:00.000Z' }]) {
+    { ...newer, build: '../../evil' }, { ...newer, builtAt: 'invalid' }]) {
     assert.equal(usableUpdate(value, current), false);
   }
+  assert.equal(usableUpdate({ ...newer, builtAt: '2026-08-01T00:00:00.000Z' }, current), true);
 });
 
 test('emits a matching client, HTML reference, and version feed under a subpath', async () => {
