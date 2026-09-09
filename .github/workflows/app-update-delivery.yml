@@ -1,0 +1,31 @@
+name: App update delivery
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  update-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        browser: [chromium, webkit]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - run: node --test scripts/app-updates.test.mjs
+      - name: Install isolated browser test tools
+        run: |
+          npm install --prefix "$RUNNER_TEMP/app-update-browser" --no-package-lock --ignore-scripts playwright@1.63.0
+          node "$RUNNER_TEMP/app-update-browser/node_modules/playwright/cli.js" install --with-deps ${{ matrix.browser }}
+      - name: Verify waiting, offline recovery, update click and saved data
+        run: node scripts/verify-app-updates-browser.mjs
+        env:
+          APP_UPDATE_BROWSER_DEPS: ${{ runner.temp }}/app-update-browser
+          APP_UPDATE_BROWSER: ${{ matrix.browser }}
