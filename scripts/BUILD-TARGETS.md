@@ -4,7 +4,7 @@ Use npm run build:smart -- --dry-run to inspect the detected host and selected f
 
 | Target | Output |
 |---|---|
-| auto on Windows/macOS/Linux | dist/ browser assets |
+| auto on Windows/macOS/Linux | dist/ui/ browser assets |
 | windows/macOS/iOS/Safari/web | Browser assets; no native installer |
 | android | Browser assets; no APK configured |
 

@@ -9,7 +9,7 @@
   "targets": {
     "web": {
       "format": "web",
-      "output": "dist/",
+      "output": "dist/ui/",
       "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
       "commands": [
         {
@@ -23,7 +23,7 @@
     },
     "windows": {
       "format": "web",
-      "output": "dist/",
+      "output": "dist/ui/",
       "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
       "commands": [
         {
@@ -37,7 +37,7 @@
     },
     "macos": {
       "format": "web",
-      "output": "dist/",
+      "output": "dist/ui/",
       "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
       "commands": [
         {
@@ -51,7 +51,7 @@
     },
     "ios": {
       "format": "web",
-      "output": "dist/",
+      "output": "dist/ui/",
       "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
       "commands": [
         {
@@ -65,7 +65,7 @@
     },
     "safari": {
       "format": "web",
-      "output": "dist/",
+      "output": "dist/ui/",
       "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
       "commands": [
         {
@@ -79,7 +79,7 @@
     },
     "android": {
       "format": "web",
-      "output": "dist/",
+      "output": "dist/ui/",
       "notice": "Browser assets, not a native installer. Host with authenticated recipient access over HTTPS; do not copy owner credentials or data.",
       "commands": [
         {
