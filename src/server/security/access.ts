@@ -48,17 +48,27 @@ export function isLocalAuthority(authority: string | undefined): boolean {
   try {
     const url = new URL(`http://${authority}`);
     const hostname = url.hostname.replace(/^\[|\]$/g, "");
-    return hostname === "localhost" || hostname === "::1" ||
-      (isIP(hostname) === 4 && hostname.startsWith("127."));
-  } catch { return false; }
+    return (
+      hostname === "localhost" ||
+      hostname === "::1" ||
+      (isIP(hostname) === 4 && hostname.startsWith("127."))
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function isLocalOrigin(origin: string): boolean {
   try {
     const url = new URL(origin);
-    return ["http:", "https:"].includes(url.protocol) &&
-      url.origin === origin && isLocalAuthority(url.host);
-  } catch { return false; }
+    return (
+      ["http:", "https:"].includes(url.protocol) &&
+      url.origin === origin &&
+      isLocalAuthority(url.host)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export interface AccessDecision {
@@ -97,10 +107,18 @@ export function authorizeApiRequest(opts: {
   // No token configured → local-first: only loopback is served.
   if (isLoopbackAddress(opts.remoteAddress)) {
     if (!isLocalAuthority(opts.host)) {
-      return { ok: false, status: 403, reason: "Local requests require a loopback Host." };
+      return {
+        ok: false,
+        status: 403,
+        reason: "Local requests require a loopback Host.",
+      };
     }
     if (opts.origin !== undefined && !isLocalOrigin(opts.origin)) {
-      return { ok: false, status: 403, reason: "Cross-origin access to local data is disabled." };
+      return {
+        ok: false,
+        status: 403,
+        reason: "Cross-origin access to local data is disabled.",
+      };
     }
     return { ok: true, status: 200 };
   }
@@ -139,4 +157,3 @@ export function resolveBindHost(opts: {
   }
   return { host: "0.0.0.0", lan: true };
 }
-

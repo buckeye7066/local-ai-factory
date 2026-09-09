@@ -40,8 +40,12 @@ describe("Round-7 #2 API authorization", () => {
     for (const ip of ["127.0.0.1", "::1", "::ffff:127.0.0.1"]) {
       expect(isLoopbackAddress(ip)).toBe(true);
       expect(
-        authorizeApiRequest({ remoteAddress: ip, authorization: undefined, host: "localhost:5179", token: "" })
-          .ok,
+        authorizeApiRequest({
+          remoteAddress: ip,
+          authorization: undefined,
+          host: "localhost:5179",
+          token: "",
+        }).ok,
       ).toBe(true);
     }
   });
@@ -187,4 +191,3 @@ describe("Round-7 #2 secret redaction in durable logs", () => {
     expect(out).not.toContain(secret);
   });
 });
-
