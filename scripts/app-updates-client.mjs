@@ -150,6 +150,11 @@ export function startAppUpdates(current, usableUpdate) {
     if (!available || applying) return;
     if (!window.dispatchEvent(new CustomEvent('app-update:before-apply', { cancelable: true, detail: available }))) return;
     applying = true;
+    const startedAtUrl = location.href;
+    let workChanged = false;
+    const observeWork = (event) => { if (!banner?.contains(event.target)) workChanged = true; };
+    document.addEventListener('input', observeWork, true);
+    document.addEventListener('pointerdown', observeWork, true);
     updateButton.disabled = true;
     message.hidden = false;
     message.textContent = 'Checking that the update is ready…';
@@ -166,13 +171,20 @@ export function startAppUpdates(current, usableUpdate) {
       const html = await request(url, 'text');
       if (!html.includes(`app-update-${available.build}.js`)) throw new Error('Deployment is not ready');
       await verifyAssets(html, available);
+      if (location.href !== startedAtUrl || workChanged) {
+        message.textContent = 'You made changes while checking. Save your work, then choose Update again.';
+        return;
+      }
+      if (!window.dispatchEvent(new CustomEvent('app-update:before-apply', {cancelable:true, detail:available}))) return;
       const destination = new URL(location.href);
       destination.searchParams.set('_app_update', available.build);
       // Normal navigation preserves the app's beforeunload unsaved-work guard.
       location.assign(destination.href);
-    } catch {
-      message.textContent = 'The update is not reachable yet. Your work is safe; try again when connected.';
+    } catch (error) {
+      message.textContent = error.message.startsWith('Close and reopen') ? error.message : 'The update is not reachable yet. Your work is safe; try again when connected.';
     } finally {
+      document.removeEventListener('input', observeWork, true);
+      document.removeEventListener('pointerdown', observeWork, true);
       applying = false;
       updateButton.disabled = false;
     }

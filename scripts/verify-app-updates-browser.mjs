@@ -16,7 +16,8 @@ async function release() {
   const files = new Map();
   plugin.generateBundle.call({ emitFile: ({ fileName, source }) => files.set(`/${fileName}`, source) });
   const manifest = JSON.parse(files.get('/app-update.json'));
-  files.set('/index.html', `<!doctype html><html><head><script defer src="/app-update-${manifest.build}.js"></script></head><body><h1>${manifest.build}</h1><input id="work"><script>navigator.serviceWorker.register('/sw.js');</script></body></html>`);
+  files.set('/assets/app.js', 'window.applicationLoaded = true;');
+  files.set('/index.html', `<!doctype html><html><head><script defer src="/assets/app.js"></script><script defer src="/app-update-${manifest.build}.js"></script></head><body><h1>${manifest.build}</h1><input id="work"><script>navigator.serviceWorker.register('/sw.js');</script></body></html>`);
   files.set('/sw.js', `const CACHE='shell-${manifest.build}';self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.add('/index.html'))));self.addEventListener('fetch',e=>{if(new URL(e.request.url).pathname==='/'||new URL(e.request.url).pathname==='/index.html')e.respondWith(caches.open(CACHE).then(c=>c.match('/index.html')))});`);
   try {
     await mkdir(path.join(root, 'dist'));
@@ -33,7 +34,7 @@ const first = active.manifest.build;
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const pathname = url.pathname === '/' ? '/index.html' : url.pathname;
-  const content = missingAsset && pathname.endsWith('.js') ? undefined : active.files.get(pathname);
+  const content = missingAsset && pathname === '/assets/app.js' ? undefined : active.files.get(pathname);
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Type', pathname.endsWith('.js') ? 'application/javascript' : pathname.endsWith('.json') ? 'application/json' : pathname.endsWith('.css') ? 'text/css' : 'text/html');
   res.writeHead(content ? 200 : 404);
