@@ -27,6 +27,13 @@ export interface WebFetchResult {
   metadataExcerpt?: string;
   /** True when the response body exceeded the network byte budget. */
   truncated?: boolean;
+  /**
+   * True when the complete document arrived but its stylesheets could not be
+   * evaluated within the safety bounds (too many, over budget, @import, or a
+   * failed stylesheet request). Body text is withheld because CSS might hide
+   * any of it; completed head metadata, which CSS never renders, is returned.
+   */
+  visibilityUnverifiable?: boolean;
   error?: string;
 }
 
@@ -1257,19 +1264,41 @@ export async function webFetchTool(
       const xmlMode = normalizedContentType.includes("xhtml");
       const scan = scanHtmlStylesheets(raw, xmlMode);
       if (scan.embeddedStyles.length > 0 || scan.stylesheetLinks.length > 0) {
-        const externalStyles = await loadExternalStylesheets(
-          scan,
-          fetched.finalUrl,
-          signal,
-          fetchImpl,
-          lookup,
-          transport,
-        );
-        const suppressed = stylesheetSuppressedNodes(
-          scan,
-          externalStyles,
-          fetched.finalUrl,
-        );
+        let suppressed: ReturnType<typeof stylesheetSuppressedNodes>;
+        try {
+          const externalStyles = await loadExternalStylesheets(
+            scan,
+            fetched.finalUrl,
+            signal,
+            fetchImpl,
+            lookup,
+            transport,
+          );
+          suppressed = stylesheetSuppressedNodes(
+            scan,
+            externalStyles,
+            fetched.finalUrl,
+          );
+        } catch (styleError) {
+          // The page itself arrived complete; only its CSS could not be proven
+          // harmless. Keep the fail-closed body rule (no text), but do not
+          // discard the response status and head metadata the way a network
+          // failure would: modern product sites routinely ship more than eight
+          // stylesheets or large CSS bundles, and dropping them wholesale left
+          // the five-product research floor unreachable.
+          if (signal.aborted) throw styleError;
+          return {
+            ok: false,
+            status: fetched.response.status,
+            contentType,
+            finalUrl: fetched.finalUrl.href,
+            textExcerpt: "",
+            metadataExcerpt: boundedDocumentMetadata(raw),
+            visibilityUnverifiable: true,
+            error:
+              styleError instanceof Error ? styleError.message : String(styleError),
+          };
+        }
         text = toReadableText(scan.instrumentedHtml, xmlMode, {
           attribute: scan.markerAttribute,
           suppressed,
