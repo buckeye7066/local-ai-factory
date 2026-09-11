@@ -114,8 +114,12 @@ interface GitHubTreeResponse {
 const GITHUB_API = "https://api.github.com";
 const MAX_REPOSITORY_INSPECTED = 8;
 export const MIN_PRODUCT_COMPETITORS = 5;
-/** Headroom lets failed/dead product pages be replaced while pursuing five verified products. */
-export const MAX_PRODUCT_INSPECTION_ATTEMPTS = 10;
+/**
+ * Headroom lets failed/dead product pages be replaced while pursuing five
+ * verified products. Inspection walks the ranked candidates in batches and
+ * stops as soon as the floor is met, so this is a ceiling, not a fixed cost.
+ */
+export const MAX_PRODUCT_INSPECTION_ATTEMPTS = 24;
 const DISCOVERY_CONCURRENCY = 3;
 const MAX_SOURCE_FILES = 24;
 const MAX_SOURCE_BYTES = 360_000;
@@ -858,7 +862,8 @@ export function isMeaningfulProductEvidence(
 
 /**
  * Verify product identity from completed document metadata without pretending a
- * truncated HTML body was complete. Metadata is accepted only as a separate,
+ * truncated HTML body (or one whose stylesheets could not be evaluated safely)
+ * was readable. Metadata is accepted only as a separate,
  * dual-source identity signal: the fetched page must be a same-domain 2xx HTML
  * response, contain multiple completed head metadata fields, avoid known
  * challenge/parking/login markers, and agree with independent discovery text.
@@ -870,7 +875,7 @@ export function isMeaningfulProductMetadataEvidence(
 ): boolean {
   const metadata = (result.metadataExcerpt ?? "").trim();
   if (
-    result.truncated !== true ||
+    (result.truncated !== true && result.visibilityUnverifiable !== true) ||
     result.status < 200 ||
     result.status >= 300 ||
     !/^text\/html(?:\s*;|$)/i.test(result.contentType.trim()) ||
@@ -1193,59 +1198,78 @@ export async function buildCompetitiveDossier(
         a.url.localeCompare(b.url),
     )
     .slice(0, MAX_PRODUCT_INSPECTION_ATTEMPTS);
-  const inspectedProducts = await mapWithConcurrency(
-    pages,
-    DISCOVERY_CONCURRENCY,
-    async ([key, candidate]): Promise<CompetitiveCandidate> => {
-      const fetched = await webFetchTool(candidate.url);
-      const context = { candidateKey: key, title: candidate.title };
-      const pageMeaningful = isMeaningfulProductEvidence(fetched, context);
-      const metadataMeaningful = isMeaningfulProductMetadataEvidence(
-        fetched,
-        context,
-        `${candidate.title}
+  const inspectProduct = async ([
+    key,
+    candidate,
+  ]: (typeof pages)[number]): Promise<CompetitiveCandidate> => {
+    const fetched = await webFetchTool(candidate.url);
+    const context = { candidateKey: key, title: candidate.title };
+    const pageMeaningful = isMeaningfulProductEvidence(fetched, context);
+    const metadataMeaningful = isMeaningfulProductMetadataEvidence(
+      fetched,
+      context,
+      `${candidate.title}
 ${candidate.snippet}`,
-      );
-      const meaningful = pageMeaningful || metadataMeaningful;
-      const evidenceText = pageMeaningful
-        ? fetched.textExcerpt
-        : metadataMeaningful
-          ? (fetched.metadataExcerpt ?? "")
-          : "";
-      return {
-        id: `product:${key}`,
-        kind: "product",
-        name: candidate.title || key,
-        url: candidate.url,
-        description: candidate.snippet,
-        stars: 0,
-        archived: false,
-        updatedAt: "",
-        discoveryEvidence: candidate.evidence,
-        license: assessLicense(
-          null,
-          "Product page; source-code license not applicable or unverified",
-          candidate.url,
-        ),
-        fileTree: [],
-        sourceEvidence: meaningful
-          ? [
-              {
-                path: pageMeaningful ? "product-page" : "product-metadata+discovery",
-                url: fetched.finalUrl || candidate.url,
-                excerpt: evidenceText.slice(0, MAX_EVIDENCE_EXCERPT),
-              },
-            ]
-          : [],
-        inspectionError: meaningful
-          ? ""
-          : fetched.error ||
-            (fetched.ok
-              ? "Fetched page did not contain enough readable product evidence."
-              : `HTTP ${fetched.status}`),
-      };
-    },
-  );
+    );
+    const meaningful = pageMeaningful || metadataMeaningful;
+    const evidenceText = pageMeaningful
+      ? fetched.textExcerpt
+      : metadataMeaningful
+        ? (fetched.metadataExcerpt ?? "")
+        : "";
+    return {
+      id: `product:${key}`,
+      kind: "product",
+      name: candidate.title || key,
+      url: candidate.url,
+      description: candidate.snippet,
+      stars: 0,
+      archived: false,
+      updatedAt: "",
+      discoveryEvidence: candidate.evidence,
+      license: assessLicense(
+        null,
+        "Product page; source-code license not applicable or unverified",
+        candidate.url,
+      ),
+      fileTree: [],
+      sourceEvidence: meaningful
+        ? [
+            {
+              path: pageMeaningful ? "product-page" : "product-metadata+discovery",
+              url: fetched.finalUrl || candidate.url,
+              excerpt: evidenceText.slice(0, MAX_EVIDENCE_EXCERPT),
+            },
+          ]
+        : [],
+      inspectionError: meaningful
+        ? ""
+        : fetched.error ||
+          (fetched.ok
+            ? "Fetched page did not contain enough readable product evidence."
+            : `HTTP ${fetched.status}`),
+    };
+  };
+  // Walk the ranked list in batches until five products are verified or the
+  // attempt ceiling is reached. A fixed top-N slice let dead or unverifiable
+  // pages consume the whole budget while further discovered candidates were
+  // never tried (live run db900aba: 23 discovered, 10 tried, 2 verified).
+  const inspectedProducts: CompetitiveCandidate[] = [];
+  for (let offset = 0; offset < pages.length; offset += DISCOVERY_CONCURRENCY) {
+    if (
+      inspectedProducts.filter((product) => product.sourceEvidence.length > 0).length >=
+      MIN_PRODUCT_COMPETITORS
+    ) {
+      break;
+    }
+    inspectedProducts.push(
+      ...(await mapWithConcurrency(
+        pages.slice(offset, offset + DISCOVERY_CONCURRENCY),
+        DISCOVERY_CONCURRENCY,
+        inspectProduct,
+      )),
+    );
+  }
 
   const rrFailed = queries.length - rrAnswered;
   const rrStatus: DiscoverySourceStatus = !rrAnswered
