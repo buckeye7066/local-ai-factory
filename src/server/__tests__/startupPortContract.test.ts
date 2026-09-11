@@ -93,7 +93,11 @@ describe("Factory Deck startup port contract", () => {
     try {
       const readinessUrl = `http://127.0.0.1:${port}/api/health`;
       let health: { service?: unknown; ok?: unknown } | undefined;
-      for (let attempt = 0; attempt < 100 && !health; attempt += 1) {
+      // A deadline, not an attempt count: a refused connection returns at once,
+      // so 100 attempts x 50ms gave a cold tsx boot only ~5s. On slower
+      // Windows hardware the backend needs longer than that to bind.
+      const deadline = Date.now() + 45_000;
+      while (!health && Date.now() < deadline) {
         if (child.exitCode !== null) {
           throw new Error(
             `Factory exited before readiness (${child.exitCode}): ${output}`,
