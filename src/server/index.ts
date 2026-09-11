@@ -68,9 +68,10 @@ import {
   questionCap,
 } from "./storage/clarificationStore.js";
 import { createFoundryRouter } from "./foundry/router.js";
-import { safeErrorMessage } from "./errors.js";
+import { clientErrorStatus, safeErrorMessage } from "./errors.js";
 import { redactSecrets } from "./security/redact.js";
 import { findRemovedRunOption } from "./removedOptions.js";
+import { localProjectIdentityProblem } from "./orchestrator/projectMemory.js";
 import { FATAL_EXIT_CODE } from "./exitCodes.js";
 import { underWorkTheme } from "./orchestrator/themeBind.js";
 import { resumeWorkTheme } from "./orchestrator/workTheme.js";
@@ -400,6 +401,14 @@ app.post(
         ? req.headers["idempotency-key"].trim()
         : "";
     const idempotencyKey = parsed.data.idempotencyKey?.trim() || headerKey || undefined;
+    // Intake refuses a production run without a stable project identity. When
+    // that refusal is already certain, say so now instead of answering 201 for
+    // a run whose only possible outcome is to fail.
+    const identityProblem = localProjectIdentityProblem(parsed.data);
+    if (identityProblem) {
+      res.status(400).json({ error: identityProblem });
+      return;
+    }
 
     // A from-scratch app must be named by the owner, and the name has to be
     // one GitHub will actually accept and is not already taken — checked HERE,
@@ -726,6 +735,11 @@ app.post(
       });
       return;
     }
+    const epicIdentityProblem = localProjectIdentityProblem(parsed.data);
+    if (epicIdentityProblem) {
+      res.status(400).json({ error: epicIdentityProblem });
+      return;
+    }
     // Validate the selected economic tier before returning 202. Previously a
     // missing Paid key or disabled Free route failed only in the background,
     // leaving an accepted-but-dead epic instead of an explicit blocked reply.
@@ -875,9 +889,13 @@ app.post(
       }
       // Resume under the run's ORIGINAL purpose so rotation fit/yield/cooldown
       // stay keyed to the work, not to the resume event (see resumeWorkTheme).
-      const run = await underWorkTheme(
-        resumeWorkTheme(await getRun(runId), runId),
-        () => resumeRun(runId, config, secrets, wanted.data),
+      const existing = await getRun(runId);
+      if (!existing) {
+        res.status(404).json({ error: "Run not found." });
+        return;
+      }
+      const run = await underWorkTheme(resumeWorkTheme(existing, runId), () =>
+        resumeRun(runId, config, secrets, wanted.data),
       );
       res.status(202).json({ ok: true, runId: run.id });
     } catch (err) {
@@ -1095,6 +1113,13 @@ app.get(
 /** Purpose Foundry is additive: existing Factory Deck routes and standalone tools remain intact. */
 app.use("/api/foundry", createFoundryRouter());
 
+/** An unmatched API path is a JSON 404, never Express's HTML "Cannot GET". */
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    error: `No API route for ${req.method} ${req.originalUrl.split("?")[0]}.`,
+  });
+});
+
 /**
  * Production mode: if the UI has been built (pnpm build → dist/ui), serve it
  * directly so the whole app runs as a single process on config.port — no Vite
@@ -1120,6 +1145,13 @@ if (servesUi) {
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof z.ZodError) {
     res.status(400).json({ error: err.issues[0]?.message ?? "Invalid request." });
+    return;
+  }
+  // Malformed JSON, an oversized body, or a bad charset is the caller's
+  // mistake: answer with the middleware's own 4xx, not a server fault.
+  const clientStatus = clientErrorStatus(err);
+  if (clientStatus !== null) {
+    res.status(clientStatus).json({ error: safeErrorMessage(err, "Invalid request.") });
     return;
   }
   const message = safeErrorMessage(err, "Internal error.");

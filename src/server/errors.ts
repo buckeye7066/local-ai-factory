@@ -36,6 +36,25 @@ function withDetail(message: string, err: unknown): string {
   return safeDetail ? `${message} Detail: ${safeDetail}` : message;
 }
 
+/**
+ * HTTP status for a client mistake raised by middleware (for example
+ * `express.json` on malformed JSON or an oversized body): a 4xx `status` or
+ * `statusCode` the raiser marked safe to expose. Anything else is a server
+ * fault and returns null.
+ */
+export function clientErrorStatus(err: unknown): number | null {
+  if (!err || typeof err !== "object") return null;
+  const record = err as { status?: unknown; statusCode?: unknown; expose?: unknown };
+  const status =
+    typeof record.status === "number"
+      ? record.status
+      : typeof record.statusCode === "number"
+        ? record.statusCode
+        : null;
+  if (status === null || status < 400 || status > 499) return null;
+  return record.expose === true ? status : null;
+}
+
 export function safeErrorMessage(err: unknown, fallback = "Unknown error."): string {
   return redactSecrets(rawErrorMessage(err, fallback));
 }

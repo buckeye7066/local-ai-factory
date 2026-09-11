@@ -415,6 +415,17 @@ export function createFoundryRouter(
     timer.unref();
   }
 
+  // A malformed project id names no project. The store refuses it with a plain
+  // Error (it guards the on-disk path), which surfaced as a 500; answer it the
+  // same way as any other missing project, for every /projects/:projectId route.
+  router.param("projectId", (_req, res, next, projectId) => {
+    if (!z.string().uuid().safeParse(String(projectId)).success) {
+      res.status(404).json({ error: "Purpose Foundry project not found." });
+      return;
+    }
+    next();
+  });
+
   router.get("/stations", (_req, res) => {
     res.json({ protocolVersion: "1.0", stations: STATIONS });
   });
