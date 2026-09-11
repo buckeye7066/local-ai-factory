@@ -131,7 +131,7 @@ export function App() {
     };
   }, [refreshRuns]);
 
-  // Start either a live run or the explicitly labelled, delivery-gated demo.
+  // Start a live run (or an epic). Every run does real work.
   const startRun = useCallback(
     async (idea: string, options: RunOptions) => {
       setStarting(true);

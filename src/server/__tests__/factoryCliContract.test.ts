@@ -17,8 +17,12 @@ describe("Factory Deck cloud CLI terminal contract", () => {
     expect(source).toContain("Run completed without a final report");
     expect(source).toContain("process.env.FACTORY_PROJECT_ID?.trim()");
     expect(source).toContain("parseFactoryCliInputs(process.argv)");
-    expect(source).toContain("demo: true, publish: false, pushToOrigin: false");
-    expect(source).toContain("OFFLINE DEMO COMPLETE");
-    expect(source).toContain("never delivered or production-ready");
+    // No demo/mock path exists in the CLI.
+    expect(source).not.toMatch(/\.demo\b|demo:\s*true|OFFLINE DEMO|zero-credit/);
+    // A missing identity is refused before startRun is reached.
+    expect(source.indexOf("No project identity")).toBeGreaterThan(-1);
+    expect(source.indexOf("No project identity")).toBeLessThan(
+      source.indexOf("startRun({"),
+    );
   });
 });

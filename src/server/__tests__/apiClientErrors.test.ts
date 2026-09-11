@@ -124,6 +124,21 @@ describe("API client errors are client errors (actual server process)", () => {
     expect(res.json?.error).toEqual(expect.any(String));
   });
 
+  it.each(["/api/runs", "/api/epics"])(
+    "refuses options.demo on %s by name — there is no demo mode",
+    async (path) => {
+      const res = await call(path, {
+        method: "POST",
+        body: JSON.stringify({
+          idea: "Build it",
+          options: { demo: true, projectId: "x" },
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(res.json?.removed).toBe("options.demo");
+    },
+  );
+
   it("answers resume of a run that does not exist with 404", async () => {
     const res = await call("/api/runs/00000000-0000-4000-8000-000000000000/resume", {
       method: "POST",

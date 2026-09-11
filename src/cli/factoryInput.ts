@@ -1,5 +1,3 @@
-const DEFAULT_FACTORY_IDEA = "Build a Bible reading habit tracker";
-
 export function factoryIdeaFromInputs(
   argv: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
@@ -11,7 +9,9 @@ export function factoryIdeaFromInputs(
     .filter((argument) => !argument.startsWith("--"))
     .join(" ")
     .trim();
-  return positionalIdea || DEFAULT_FACTORY_IDEA;
+  // No default idea: an empty invocation must never start a real run on an
+  // idea the owner did not give.
+  return positionalIdea;
 }
 
 export class FactoryCliArgumentError extends Error {
@@ -22,28 +22,37 @@ export class FactoryCliArgumentError extends Error {
 }
 
 const REMOVED_FACTORY_FLAGS = new Set(["--dry-run", "--simulate", "--report-only"]);
-const DEMO_FACTORY_FLAGS = new Set(["--demo", "--demo=true"]);
+
+function isRemovedFlag(argument: string): boolean {
+  return REMOVED_FACTORY_FLAGS.has(argument) || /^--demo(=.*)?$/.test(argument);
+}
+
+export const FACTORY_CLI_USAGE =
+  'Usage: FACTORY_PROJECT_ID=<stable-project-id> pnpm factory "<describe the app to build>"';
 
 export function parseFactoryCliInputs(
   argv: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
-): { idea: string; demo: boolean } {
+): { idea: string } {
   const options = argv.slice(2).filter((argument) => argument.startsWith("-"));
-  const removed = options.filter((argument) => REMOVED_FACTORY_FLAGS.has(argument));
+  const removed = options.filter(isRemovedFlag);
   if (removed.length > 0) {
     throw new FactoryCliArgumentError(
-      `${removed.join(", ")} ${removed.length > 1 ? "were" : "was"} removed. Use --demo for an explicit zero-credit offline preview.`,
+      `${removed.join(", ")} ${removed.length > 1 ? "were" : "was"} removed. Factory Deck has no demo, dry-run, simulate, or report-only mode; every run does real work.`,
     );
   }
-  const unknown = options.filter((argument) => !DEMO_FACTORY_FLAGS.has(argument));
+  const unknown = options;
   if (unknown.length > 0) {
     throw new FactoryCliArgumentError(
       `Unknown Factory Deck option${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}. ` +
         "No option is ignored because doing so could silently start a paid live run.",
     );
   }
-  return {
-    idea: factoryIdeaFromInputs(argv, env),
-    demo: options.some((argument) => DEMO_FACTORY_FLAGS.has(argument)),
-  };
+  const idea = factoryIdeaFromInputs(argv, env);
+  if (!idea) {
+    throw new FactoryCliArgumentError(
+      `No idea given, so no run was started. ${FACTORY_CLI_USAGE}`,
+    );
+  }
+  return { idea };
 }

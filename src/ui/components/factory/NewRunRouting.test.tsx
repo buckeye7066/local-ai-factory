@@ -49,36 +49,45 @@ afterEach(() => {
 });
 
 describe("automatic model ladder UI wiring", () => {
-  it("starts an explicit zero-credit demo without any remote side effects", () => {
+  it("offers no offline demo or mock mode; a new app always starts real work", async () => {
+    vi.mocked(api.checkRepoName).mockResolvedValue({
+      valid: true,
+      availability: "free",
+      fullName: "owner/habit-app",
+      reason: null,
+    } as never);
     const onStart = vi.fn();
     render(<NewRunHero health={health} starting={false} onStart={onStart} />);
 
-    fireEvent.click(
-      screen.getByRole("checkbox", {
-        name: /Offline demo — zero paid credits/i,
-      }),
-    );
+    expect(screen.queryByRole("checkbox", { name: /demo/i })).toBeNull();
+    expect(screen.queryByText(/zero paid credits/i)).toBeNull();
+
     fireEvent.change(screen.getByLabelText(/App and repository name/i), {
-      target: { value: "offline-preview" },
+      target: { value: "habit-app" },
     });
     fireEvent.change(screen.getByLabelText(/Describe the app you want/i), {
-      target: { value: "Build a zero-credit preview" },
+      target: { value: "Build a habit tracker" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Start Offline Demo/i }));
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: /Start Factory Run/i,
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Start Factory Run/i }));
 
-    expect(onStart).toHaveBeenCalledWith("Build a zero-credit preview", {
+    expect(onStart).toHaveBeenCalledTimes(1);
+    const [, options] = onStart.mock.calls[0]!;
+    expect(options).not.toHaveProperty("demo");
+    expect(options).toMatchObject({
       routingMode: "auto",
-      demo: true,
-      publish: false,
-      pushToOrigin: false,
       mode: "new",
-      newRepo: {
-        name: "offline-preview",
-        private: true,
-        createRemote: false,
-      },
+      newRepo: { name: "habit-app", private: true },
     });
-    expect(api.checkRepoName).not.toHaveBeenCalled();
+    expect(options.newRepo).not.toHaveProperty("createRemote");
   });
 
   it("warns when the mandatory brain floor is missing despite a live free rung", () => {

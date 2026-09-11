@@ -37,24 +37,35 @@ import type { RunDestination } from "../../shared/schemas.js";
  */
 
 describe("owner run options — demo is explicit; ambiguous no-op flags fail", () => {
-  it("forces demo extensions into an isolated repository copy", () => {
-    const routeSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+  it("keeps any internal demo run out of the owner's real checkout", () => {
     const orchestratorSource = readFileSync(
       new URL("../orchestrator/runFactory.ts", import.meta.url),
       "utf8",
-    );
-
-    expect(routeSource).toMatch(
-      /repoSource:\s*parsed\.data\.repoSource[\s\S]*?inPlace:\s*false/,
     );
     expect(orchestratorSource).toContain(
       "repoSource = { ...repoSource, inPlace: false };",
     );
   });
 
-  it("accepts an explicit demo option for the zero-credit owner preview", () => {
-    expect(findRemovedRunOption({ demo: true })).toBeNull();
-    expect(findRemovedRunOption({ demo: false })).toBeNull();
+  it("gives the HTTP routes no demo path to take", () => {
+    const routeSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+    expect(routeSource).not.toMatch(/parsed\.data\.demo|options\.demo=true/);
+  });
+
+  it("rejects options.demo by name, whatever its value — there is no demo mode", () => {
+    for (const value of [true, false]) {
+      const rejection = findRemovedRunOption({ demo: value });
+      expect(rejection?.status).toBe(400);
+      expect(rejection?.body.removed).toBe("options.demo");
+    }
+  });
+
+  it("never points a caller at a demo or offline preview instead of real work", () => {
+    for (const removed of REMOVED_RUN_OPTIONS) {
+      expect(removed.message).not.toMatch(
+        /use options\.demo|--demo for|offline preview|zero-credit/i,
+      );
+    }
   });
 
   it("rejects every removed sibling flag, not just demo", () => {

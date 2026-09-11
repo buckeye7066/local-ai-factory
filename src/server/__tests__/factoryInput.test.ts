@@ -22,25 +22,34 @@ describe("Factory Deck cloud prompt input", () => {
     ).toBe("---\n--demo is text in this requested application");
   });
 
-  it("retains positional and default behavior outside cloud verification", () => {
+  it("uses the positional idea outside cloud verification", () => {
     expect(factoryIdeaFromInputs(["node", "factory.ts", "Build", "locally"], {})).toBe(
       "Build locally",
     );
-    expect(factoryIdeaFromInputs(["node", "factory.ts"], {})).toBe(
-      "Build a Bible reading habit tracker",
-    );
-  });
-
-  it("accepts assignment-style demo syntax without starting a live run", () => {
     expect(
-      parseFactoryCliInputs(
-        ["node", "factory.ts", "--demo=true", "Build", "offline"],
-        {},
-      ),
-    ).toEqual({ idea: "Build offline", demo: true });
+      parseFactoryCliInputs(["node", "factory.ts", "Build", "locally"], {}),
+    ).toEqual({ idea: "Build locally" });
   });
 
-  it.each(["--demo=false", "--dmeo", "--unknown", "-d"])(
+  it("refuses to start a real run on an idea the owner never gave", () => {
+    expect(() => parseFactoryCliInputs(["node", "factory.ts"], {})).toThrow(
+      FactoryCliArgumentError,
+    );
+    expect(() =>
+      parseFactoryCliInputs(["node", "factory.ts"], { FACTORY_IDEA: "  " }),
+    ).toThrow(/idea/i);
+  });
+
+  it.each(["--demo", "--demo=true", "--demo=false"])(
+    "rejects the removed %s flag instead of running a mock preview",
+    (option) => {
+      expect(() =>
+        parseFactoryCliInputs(["node", "factory.ts", option, "Build", "this"], {}),
+      ).toThrow(/removed/);
+    },
+  );
+
+  it.each(["--dmeo", "--unknown", "-d"])(
     "rejects unknown option %s instead of silently starting live work",
     (option) => {
       expect(() =>
