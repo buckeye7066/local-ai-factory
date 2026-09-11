@@ -187,6 +187,47 @@ describe("RotatingProvider", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
+  // OBSERVED LIVE 2026-09-11 (Factory Deck live test, free-only route): with
+  // OpenRouter's free-models-per-day cap spent, rotation reached inkling:free,
+  // whose 403 below killed epic slice a91cc290, portfolio run 662edf15 and
+  // proof:free-route while NVIDIA NIM, Gemini, Groq, Cerebras and Ollama pools
+  // were never tried. FlexFactor fixed the same misread on 2026-08-22.
+  it.each([
+    [
+      403,
+      JSON.stringify({
+        error: {
+          message:
+            "thinkingmachines/inkling-small:free is only available on agentic harnesses. Try plugging it into a coding agent or productivity app listed on https://openrouter.ai/apps",
+          code: 403,
+        },
+      }),
+    ],
+    [401, JSON.stringify({ error: { message: "Invalid API key", code: 401 } })],
+    [404, JSON.stringify({ error: { message: "model not found: aaa/one" } })],
+  ])(
+    "a route-scoped HTTP %i rotates to the next pool instead of failing the call",
+    async (status, body) => {
+      writeCatalog([
+        row("aaa/one", { pool: "pool-a" }),
+        row("bbb/two", { pool: "pool-b" }),
+      ]);
+      const fetchFn = stubFetch((url) =>
+        url.includes("aaa.example.invalid")
+          ? new Response(body, { status })
+          : undefined,
+      );
+      const prov = provider();
+      // Both calls must succeed: whichever reaches pool-a first rotates to pool-b.
+      const first = await prov.generateText({ system: "s", prompt: "p" });
+      const second = await prov.generateText({ system: "s", prompt: "p" });
+      expect([first.text, second.text]).toContain("completed by two");
+      expect(
+        fetchFn.mock.calls.some(([url]) => String(url).includes("bbb.example.invalid")),
+      ).toBe(true);
+    },
+  );
+
   it("a named max_tokens 400 swaps to max_completion_tokens in the SAME attempt", async () => {
     // Newer api.openai.com models reject `max_tokens` and name the
     // replacement. The route must answer on the swapped re-POST -- not burn
@@ -694,12 +735,30 @@ describe("outcome classification", () => {
     expect(classifyOutcome(boom("segfault in the tokeniser"))).toBe("error");
   });
 
-  it("programming errors and bad requests never rotate across pools", () => {
+  it("programming errors and malformed requests never rotate across pools", () => {
     expect(isRetryableAcrossPools(new TypeError("bad kwarg"))).toBe(false);
-    for (const status of [400, 401, 403, 404, 422]) {
+    for (const status of [400, 404, 422]) {
       expect(isRetryableAcrossPools(boom("nope", status))).toBe(false);
     }
     expect(isRetryableAcrossPools(new ProviderAbortError())).toBe(false);
+  });
+
+  it("authentication refusals are scoped to one backend and rotate (FlexFactor parity)", () => {
+    for (const status of [401, 403]) {
+      expect(isRetryableAcrossPools(boom("nope", status))).toBe(true);
+    }
+  });
+
+  it("a 4xx naming a limit of THIS route rotates; the same status without one does not", () => {
+    for (const [status, message] of [
+      [403, "inkling:free is only available on agentic harnesses"],
+      [404, "model not found"],
+      [404, "No endpoints found for aaa/one"],
+      [400, "This model's maximum context length is 8192 tokens"],
+      [400, "response_format json_object is not supported by this model"],
+    ] as const) {
+      expect(isRetryableAcrossPools(boom(message, status))).toBe(true);
+    }
   });
 
   it("transport-ish failures do rotate", () => {

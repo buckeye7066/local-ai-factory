@@ -434,6 +434,58 @@ const RETRYABLE_MARKERS = [
   "json", // a model that cannot produce the shape — a DIFFERENT model may
 ];
 
+/**
+ * A 4xx that names a limit or capability of THIS route (mirrors FlexFactor's
+ * _ROUTE_CAPABILITY_MARKERS). Such a call is bad here and fine on the next
+ * route; a genuinely malformed request carries none of these phrases.
+ *
+ * OBSERVED LIVE 2026-09-11 (Factory Deck live test, free-only route): with
+ * OpenRouter's free-models-per-day cap spent, rotation reached inkling:free,
+ * whose 403 "only available on agentic harnesses" was read as a bad request.
+ * It failed epic slice a91cc290, portfolio run 662edf15 and proof:free-route
+ * while NVIDIA NIM, Gemini, Groq, Cerebras and Ollama pools were untried.
+ * FlexFactor fixed the identical misread on 2026-08-22; this port had drifted.
+ */
+const ROUTE_CAPABILITY_MARKERS = [
+  "only available on agentic harnesses",
+  "not available on this endpoint",
+  "max_tokens",
+  "max_new_tokens",
+  "maxtokens",
+  "context length",
+  "context_length",
+  "context window",
+  "context_window",
+  "too many tokens",
+  "reduce the length",
+  "input is too long",
+  "string too long",
+  "maximum context",
+  "unsupported model",
+  "model_not_found",
+  "model not found",
+  "does not exist or you do not have access",
+  "does not support",
+  "unsupported parameter",
+  "unsupported value",
+  "response_format",
+  "json_object",
+  "json mode",
+  "not a chat model",
+  "v1/completions",
+  "not supported in the v1",
+  "not found for account",
+  "no such model",
+  "no endpoints found",
+];
+
+function namesRouteCapability(err: unknown): boolean {
+  const blob = `${(err as Error)?.name ?? typeof err} ${
+    (err as Error)?.message ?? String(err)
+  }`.toLowerCase();
+  return ROUTE_CAPABILITY_MARKERS.some((marker) => blob.includes(marker));
+}
+
 function statusOf(err: unknown): number | undefined {
   const s = (err as { status?: unknown })?.status;
   return typeof s === "number" ? s : undefined;
@@ -459,10 +511,12 @@ export function retryAfterOf(err: unknown): number | undefined {
 }
 
 /**
- * Whether another pool is worth trying. A programming error or a bad request
- * stays broken on every backend — rotating past it would burn every pool
- * reproducing the same bug and report it as "all providers failed".
+ * Whether another pool is worth trying. A programming error or a malformed
+ * request stays broken on every backend — rotating past it would burn every
+ * pool reproducing the same bug and report it as "all providers failed".
  * A missing credential IS worth rotating past: only that one backend lacks it.
+ * So is an authentication refusal (401/403: scoped to one backend's
+ * credential) and a 4xx that names a limit of the selected route.
  */
 export function isRetryableAcrossPools(err: unknown): boolean {
   if (err instanceof ProviderAbortError) return false;
@@ -487,8 +541,13 @@ export function isRetryableAcrossPools(err: unknown): boolean {
     return false;
   }
   const status = statusOf(err);
-  if (status !== undefined && [400, 401, 403, 404, 422].includes(status)) {
-    return false; // a bad request stays bad on every backend
+  if (status === 401 || status === 403) {
+    return true; // authentication/access is scoped to the selected backend
+  }
+  if (status !== undefined && [400, 404, 422].includes(status)) {
+    // A route-capability refusal is bad HERE and fine on the next route;
+    // anything else is a malformed request that stays bad on every backend.
+    return namesRouteCapability(err);
   }
   if (status !== undefined) return true;
   const blob = `${(err as Error)?.name ?? typeof err} ${
