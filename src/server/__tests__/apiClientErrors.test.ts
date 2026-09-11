@@ -172,6 +172,17 @@ describe("API client errors are client errors (actual server process)", () => {
     expect(String(res.json?.error)).toContain("options.projectId");
   });
 
+  it.each([
+    ["/api/sessions", {}],
+    ["/api/foundry/projects", {}],
+    ["/api/epics", { idea: "Build it", options: { maxRepairLoops: "three" } }],
+  ])("names the offending field when %s rejects a body", async (path, body) => {
+    const res = await call(path, { method: "POST", body: JSON.stringify(body) });
+    expect(res.status).toBe(400);
+    // "Required" alone does not tell a caller which field is missing.
+    expect(String(res.json?.error)).toMatch(/^[A-Za-z_][\w.]*: /);
+  });
+
   it("applies the same identity rule to epics before planning spends a model call", async () => {
     const res = await call("/api/epics", {
       method: "POST",

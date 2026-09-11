@@ -353,6 +353,18 @@ function rejectRemovedRunOption(req: Request, res: Response): boolean {
   return true;
 }
 
+/**
+ * The first validation issue, prefixed with the field it names. A bare
+ * "Required" does not tell a caller which of a dozen fields is missing.
+ */
+function describeIssue(error: z.ZodError, fallback: string): string {
+  const first = error.issues[0];
+  if (!first) return fallback;
+  return first.path.length
+    ? `${first.path.join(".")}: ${first.message}`
+    : first.message;
+}
+
 /** Route async rejections into the JSON error handler instead of crashing. */
 function wrap(
   fn: (req: Request, res: Response) => Promise<void> | void,
@@ -574,7 +586,7 @@ app.post(
     const parsed = PortfolioSessionRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({
-        error: parsed.error.issues[0]?.message ?? "Invalid portfolio session.",
+        error: describeIssue(parsed.error, "Invalid portfolio session."),
       });
       return;
     }
@@ -723,9 +735,7 @@ app.post(
     if (rejectRemovedRunOption(req, res)) return;
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
-      res
-        .status(400)
-        .json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
+      res.status(400).json({ error: describeIssue(parsed.error, "Bad options.") });
       return;
     }
     if (parsed.data.demo) {
@@ -882,9 +892,7 @@ app.post(
       // checkpoint). Unknown providers are rejected by resumeRun.
       const wanted = ProviderSwitchSchema.safeParse(req.body ?? {});
       if (!wanted.success) {
-        res
-          .status(400)
-          .json({ error: wanted.error.issues[0]?.message ?? "Bad providers." });
+        res.status(400).json({ error: describeIssue(wanted.error, "Bad providers.") });
         return;
       }
       // Resume under the run's ORIGINAL purpose so rotation fit/yield/cooldown
@@ -1144,7 +1152,7 @@ if (servesUi) {
 /** Last-resort JSON error handler — never leak an HTML stack trace. */
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof z.ZodError) {
-    res.status(400).json({ error: err.issues[0]?.message ?? "Invalid request." });
+    res.status(400).json({ error: describeIssue(err, "Invalid request.") });
     return;
   }
   // Malformed JSON, an oversized body, or a bad charset is the caller's
