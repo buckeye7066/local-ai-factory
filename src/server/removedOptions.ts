@@ -2,10 +2,10 @@
  * removedOptions.ts — options that were REMOVED from Factory Deck's owner
  * surface and must now fail loudly.
  *
- * Dry-run / simulate / report-only remain removed because they imply a real
- * run without doing one. demo:true is different: it is an explicit,
- * owner-visible zero-credit preview whose records are permanently marked
- * demo and whose delivery/readiness gates refuse production side effects.
+ * Demo / dry-run / simulate / report-only are removed because each one lets an
+ * owner request look like factory work without doing real work (owner order
+ * 2026-08-13: "I don't want dry runs, I want work"). The internal `demo` run
+ * flag survives only for hermetic unit tests; no owner surface can set it.
  *
  * "Removed" means an invocation that names an old flag FAILS. It is never
  * silently ignored and never downgraded into a confirmation prompt.
@@ -19,12 +19,12 @@ export interface RemovedOption {
 }
 
 const NO_SIMULATION =
-  "Factory Deck does not support dry-run, simulate, or report-only no-ops. " +
-  "Use options.demo=true for a clearly marked, zero-credit offline preview, " +
-  "or omit the flag for real work.";
+  "Factory Deck has no demo, dry-run, simulate, or report-only mode. " +
+  "Omit the flag: every run does real work against real providers.";
 
 /** Options removed from `POST /api/runs` and `POST /api/epics` `options`. */
 export const REMOVED_RUN_OPTIONS: readonly RemovedOption[] = [
+  { key: "demo", message: NO_SIMULATION },
   { key: "dryRun", message: NO_SIMULATION },
   { key: "simulate", message: NO_SIMULATION },
   { key: "reportOnly", message: NO_SIMULATION },

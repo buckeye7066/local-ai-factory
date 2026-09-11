@@ -1,22 +1,28 @@
 import { getConfig, getSecrets } from "../server/config.js";
 import {
   startRun,
+  selectRunRouting,
   MissingProviderCredentialError,
 } from "../server/orchestrator/runFactory.js";
+import { createProviderRegistry } from "../server/providers/index.js";
 import { loadReadinessState } from "../server/storage/readinessStore.js";
 import { getRun } from "../server/storage/runsStore.js";
 import type { RunOptions } from "../shared/schemas.js";
-import { FactoryCliArgumentError, parseFactoryCliInputs } from "./factoryInput.js";
+import {
+  FACTORY_CLI_USAGE,
+  FactoryCliArgumentError,
+  parseFactoryCliInputs,
+} from "./factoryInput.js";
 
 /**
  * cli/factory.ts — run the assembly line from the terminal.
  *
- *   pnpm factory "build me a habit tracker"          (real providers)
- *   pnpm factory --demo "build me a habit tracker"   (zero-credit preview)
+ *   FACTORY_PROJECT_ID=habit-tracker pnpm factory "build me a habit tracker"
  *
- * The explicit --demo route is permanently marked offline, never delivered,
- * and never described as production-ready. Ambiguous dry-run/simulate flags
- * remain hard errors rather than silently changing a real request into a no-op.
+ * Every invocation does real work against real providers. There is no demo,
+ * dry-run, simulate, or report-only mode: those flags are hard errors, and so
+ * is a missing idea or project identity — both are refused BEFORE a run record
+ * exists, instead of starting a run that can only fail at intake.
  */
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -44,7 +50,7 @@ function paint(kind: string, msg: string): string {
 }
 
 async function main() {
-  let parsed: { idea: string; demo: boolean };
+  let parsed: { idea: string };
   try {
     parsed = parseFactoryCliInputs(process.argv);
   } catch (error) {
@@ -54,7 +60,16 @@ async function main() {
     }
     throw error;
   }
-  const { idea, demo } = parsed;
+  const { idea } = parsed;
+  // A CLI run builds a new local app, which intake refuses without a stable
+  // project identity. Refuse here, before any run record or model call.
+  const projectId = process.env.FACTORY_PROJECT_ID?.trim();
+  if (!projectId) {
+    console.error(
+      `${COLORS.red}✘ No project identity: set FACTORY_PROJECT_ID so this app's purpose and memory carry across runs. No run was started.\n  ${FACTORY_CLI_USAGE}${COLORS.reset}`,
+    );
+    process.exit(2);
+  }
   const config = getConfig();
   const secrets = getSecrets();
 
@@ -62,22 +77,26 @@ async function main() {
     `${COLORS.cyan}▌ Factory Deck — Local AI Software Factory${COLORS.reset}`,
   );
   console.log(`${COLORS.dim}  idea: ${idea}${COLORS.reset}`);
-  if (demo) {
-    console.log(
-      `${COLORS.yellow}  mode: zero-credit offline demo (never delivered or production-ready)${COLORS.reset}\n`,
+  const options: RunOptions = { projectId };
+  try {
+    // Print the ladder this run will actually use — only configured rungs —
+    // not the preferred order from config, which named paid rungs that had no
+    // key (a free-only machine read "anthropic → openai → free").
+    const routing = selectRunRouting(
+      options,
+      createProviderRegistry(config, secrets),
+      config,
     );
-  } else {
-    const modelLadder = config.modelLadder ?? ["anthropic", "openai", "free"];
     console.log(
-      `${COLORS.dim}  automatic model ladder: ${modelLadder.join(" → ")}${COLORS.reset}\n`,
+      `${COLORS.dim}  automatic model ladder: ${(routing.ladder ?? [routing.codeProvider]).join(" → ")}${COLORS.reset}\n`,
     );
+  } catch (err) {
+    if (err instanceof MissingProviderCredentialError) {
+      console.error(`${COLORS.red}✘ ${err.message}${COLORS.reset}`);
+      process.exit(1);
+    }
+    throw err;
   }
-
-  const projectId = process.env.FACTORY_PROJECT_ID?.trim();
-  const options: RunOptions = {
-    ...(projectId ? { projectId } : {}),
-    ...(demo ? { demo: true, publish: false, pushToOrigin: false } : {}),
-  };
   let started;
   try {
     started = startRun({ idea, options, config, secrets });
@@ -109,17 +128,7 @@ async function main() {
       run.status === "failed" ||
       run.status === "cancelled"
     ) {
-      if (run.status === "completed" && run.finalReport && run.demo) {
-        const r = run.finalReport;
-        console.log(
-          `\n${COLORS.yellow}✔ ${r.appName} — OFFLINE DEMO COMPLETE${COLORS.reset}`,
-        );
-        console.log(`  ${r.summary}`);
-        console.log(`  ${COLORS.cyan}Workspace:${COLORS.reset} ${r.workspacePath}`);
-        console.log(
-          `  ${COLORS.dim}Mock output only: zero paid credits; no delivery, release, deployment, or production-readiness claim.${COLORS.reset}`,
-        );
-      } else if (run.status === "completed" && run.finalReport) {
+      if (run.status === "completed" && run.finalReport) {
         const readiness = await loadReadinessState(run.id);
         if (readiness?.status !== "ready" || readiness.receipt?.ready !== true) {
           console.log(

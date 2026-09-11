@@ -52,9 +52,20 @@ describe("owner run options — demo is explicit; ambiguous no-op flags fail", (
     );
   });
 
-  it("accepts an explicit demo option for the zero-credit owner preview", () => {
-    expect(findRemovedRunOption({ demo: true })).toBeNull();
-    expect(findRemovedRunOption({ demo: false })).toBeNull();
+  it("rejects options.demo by name, whatever its value — there is no demo mode", () => {
+    for (const value of [true, false]) {
+      const rejection = findRemovedRunOption({ demo: value });
+      expect(rejection?.status).toBe(400);
+      expect(rejection?.body.removed).toBe("options.demo");
+    }
+  });
+
+  it("never points a caller at a demo or offline preview instead of real work", () => {
+    for (const removed of REMOVED_RUN_OPTIONS) {
+      expect(removed.message).not.toMatch(
+        /use options\.demo|--demo for|offline preview|zero-credit/i,
+      );
+    }
   });
 
   it("rejects every removed sibling flag, not just demo", () => {
