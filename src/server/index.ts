@@ -365,6 +365,18 @@ function describeIssue(error: z.ZodError, fallback: string): string {
     : first.message;
 }
 
+/** Shape check for steering text; the stores keep the same limit. */
+function steeringTextProblem(
+  text: string,
+  field: "instruction" | "prompt",
+): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return `Field '${field}' is required.`;
+  if (trimmed.length > 4_000)
+    return `Field '${field}' must be 4,000 characters or fewer.`;
+  return null;
+}
+
 /** Route async rejections into the JSON error handler instead of crashing. */
 function wrap(
   fn: (req: Request, res: Response) => Promise<void> | void,
@@ -624,6 +636,11 @@ app.post(
   wrap(async (req, res) => {
     const id = String(req.params.sessionId ?? "");
     const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
+    const steeringProblem = steeringTextProblem(prompt, "prompt");
+    if (steeringProblem) {
+      res.status(400).json({ error: steeringProblem });
+      return;
+    }
     const receipt = await steerPortfolioSession(id, prompt);
     if (!receipt.ok) {
       res.status(receipt.reason.includes("not found") ? 404 : 409).json({
@@ -843,6 +860,13 @@ app.post(
     if (runId === null) return;
     const instruction =
       typeof req.body?.instruction === "string" ? req.body.instruction : "";
+    // A missing or oversized instruction is a malformed request (400), not a
+    // conflict with the run's state (409) — and it says so before any lookup.
+    const steeringProblem = steeringTextProblem(instruction, "instruction");
+    if (steeringProblem) {
+      res.status(400).json({ error: steeringProblem });
+      return;
+    }
     const receipt = await submitRunSteering(runId, instruction);
     if (!receipt.ok) {
       const status = receipt.reason === "Run not found." ? 404 : 409;

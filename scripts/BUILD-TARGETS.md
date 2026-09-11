@@ -1,6 +1,6 @@
 # Build target selection
 
-Use npm run build:smart -- --dry-run to inspect the detected host and selected format. Run npm run build:smart to build. Add --target android, windows, macos, ios, safari or web when preparing files for another device. Host simulation (--host win32|darwin|linux) is dry-run only. Dependencies must already be installed.
+Run npm run build:smart to build; it prints the detected host and selected format first, then builds. Add --target android, windows, macos, ios, safari or web when preparing files for another device. There is no dry-run or host-simulation mode: --dry-run and --host are removed flags and fail. Dependencies must already be installed.
 
 | Target | Output |
 |---|---|

@@ -19,32 +19,35 @@ function plan(host = process.platform, requested = 'auto') {
     output: entry.output, notice: entry.notice,
     commands: entry.commands.map(step => ({ ...step, args: [...step.args] })) };
 }
+// Owner order: no dry-run or simulation modes in owner tooling. Naming a removed
+// flag fails; it is never ignored. The build plan is printed before every real
+// build, and tests simulate hosts through plan() directly.
+const REMOVED_FLAGS = new Set(['--dry-run', '--host']);
 function options(args) {
-  const result = { target: 'auto', host: process.platform, dryRun: false };
+  const result = { target: 'auto', host: process.platform };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--dry-run') result.dryRun = true;
-    else if (arg === '--help') result.help = true;
-    else if (arg === '--target' || arg === '--host') {
+    const flag = arg.split('=')[0];
+    if (REMOVED_FLAGS.has(flag)) {
+      throw Error(flag + ' was removed: build:smart has no dry-run or host-simulation mode. Every run builds for this machine.');
+    } else if (arg === '--help') result.help = true;
+    else if (arg === '--target') {
       if (!args[i + 1] || args[i + 1].startsWith('--')) throw Error(arg + ' requires a value.');
-      result[arg.slice(2)] = args[++i].toLowerCase();
-      if (arg === '--host') result.injectedHost = true;
+      result.target = args[++i].toLowerCase();
     } else throw Error('Unknown argument: ' + arg);
   }
-  if (result.injectedHost && !result.dryRun) throw Error('--host is a dry-run testing option only. Actual builds always detect this machine.');
   return result;
 }
 function main(args) {
   const opts = options(args);
   if (opts.help) {
-    console.log('Usage: node scripts/build-target.cjs [--target auto|' + Object.keys(config.targets).join('|') + '] [--dry-run]');
-    console.log('Auto detects the build host. --target selects the recipient device explicitly. --host is allowed only with --dry-run.');
+    console.log('Usage: node scripts/build-target.cjs [--target auto|' + Object.keys(config.targets).join('|') + ']');
+    console.log('Auto detects the build host. --target selects the recipient device explicitly. The selected plan is printed, then built.');
     console.log(config.guidance);
     return;
   }
   const selected = plan(opts.host, opts.target);
   console.log(JSON.stringify(selected, null, 2));
-  if (opts.dryRun) return;
   for (const step of selected.commands) {
     const cwd = path.resolve(ROOT, step.cwd || '.');
     let command = step.command, args = step.args;

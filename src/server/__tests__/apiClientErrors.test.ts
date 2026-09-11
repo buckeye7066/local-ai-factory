@@ -139,6 +139,22 @@ describe("API client errors are client errors (actual server process)", () => {
     },
   );
 
+  it.each([
+    ["/api/runs/00000000-0000-4000-8000-000000000000/steer", { instruction: "   " }],
+    [
+      "/api/runs/00000000-0000-4000-8000-000000000000/steer",
+      { instruction: "x".repeat(4_001) },
+    ],
+    ["/api/sessions/00000000-0000-4000-8000-000000000000/steer", { prompt: "" }],
+  ])(
+    "answers an empty or oversized steering body on %s with 400",
+    async (path, body) => {
+      const res = await call(path, { method: "POST", body: JSON.stringify(body) });
+      // A missing instruction is a malformed request, not a conflict with run state.
+      expect(res.status).toBe(400);
+    },
+  );
+
   it("answers resume of a run that does not exist with 404", async () => {
     const res = await call("/api/runs/00000000-0000-4000-8000-000000000000/resume", {
       method: "POST",
