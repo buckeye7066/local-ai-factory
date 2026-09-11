@@ -286,6 +286,19 @@ async function searchFirecrawl(
   }
 }
 
+/**
+ * DuckDuckGo answers automated traffic it distrusts with an HTTP 202 "anomaly"
+ * bot-challenge page instead of results. That page has no result links, so
+ * parsing it yields zero results; reporting it as an honest empty search hid a
+ * blocked source (live test 2026-09-11, every research query in run d6c261cd).
+ */
+export function isDuckDuckGoChallenge(status: number, html: string): boolean {
+  return (
+    /anomaly-modal|\/anomaly\.js/i.test(html) ||
+    (status === 202 && !/result-link/i.test(html))
+  );
+}
+
 async function searchDuckDuckGo(
   query: string,
   fetchImpl: typeof fetch,
@@ -314,9 +327,19 @@ async function searchDuckDuckGo(
         },
       };
     }
-    const results = parseDdgLiteHtml(
-      await readBoundedText(response, MAX_DDG_RESPONSE_BYTES),
-    );
+    const html = await readBoundedText(response, MAX_DDG_RESPONSE_BYTES);
+    const results = parseDdgLiteHtml(html);
+    if (!results.length && isDuckDuckGoChallenge(response.status, html)) {
+      return {
+        results: [],
+        attempt: {
+          provider: "duckduckgo",
+          status: "failed",
+          resultCount: 0,
+          detail: `DuckDuckGo Lite served a bot challenge (HTTP ${response.status}) instead of results; the search was blocked, not empty.`,
+        },
+      };
+    }
     return {
       results,
       attempt: {
