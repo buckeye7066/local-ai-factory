@@ -339,8 +339,8 @@ function validRunIdParam(req: Request, res: Response): string | null {
 }
 
 /**
- * Reject any request that names a removed no-op option (dryRun / simulate /
- * reportOnly). Explicit demo runs are accepted and remain delivery-gated.
+ * Reject any request that names a removed option (demo / dryRun / simulate /
+ * reportOnly). Every accepted run does real work.
  * The decision itself lives in removedOptions.ts so it
  * is unit-testable without booting the server.
  *
@@ -434,7 +434,7 @@ app.post(
         res.status(400).json({ error: `Invalid repo name: ${problem}` });
         return;
       }
-      if (parsed.data.demo !== true && newRepo.createRemote !== false) {
+      if (newRepo.createRemote !== false) {
         const owner =
           newRepo.owner?.trim() ||
           process.env.FACTORY_GITHUB_OWNER?.trim() ||
@@ -456,21 +456,8 @@ app.post(
       }
     }
 
-    const options = parsed.data.demo
-      ? {
-          ...parsed.data,
-          demo: true,
-          publish: false,
-          pushToOrigin: false,
-          repoSource: parsed.data.repoSource
-            ? { ...parsed.data.repoSource, inPlace: false }
-            : undefined,
-          newRepo: parsed.data.newRepo
-            ? { ...parsed.data.newRepo, createRemote: false }
-            : undefined,
-          idempotencyKey,
-        }
-      : { ...parsed.data, idempotencyKey };
+    // options.demo was refused by name above; every accepted run is live.
+    const options = { ...parsed.data, idempotencyKey };
     let run: ReturnType<typeof startRun>;
     try {
       // Bind a directed WorkTheme for the whole async run subtree so every
@@ -533,9 +520,8 @@ app.post(
           hint:
             "Start the FREE route (run the 'Claude Code - FREE (Ollama)' shortcut, " +
             "or set FACTORY_FREE_ENABLED=1 with fcc-server running). " +
-            "A paid ANTHROPIC_API_KEY / OPENAI_API_KEY is optional and used only " +
-            "as a rescue tier. For a clearly marked zero-credit preview, set " +
-            "options.demo=true; demo output is never released.",
+            "A paid ANTHROPIC_API_KEY / OPENAI_API_KEY is optional. Factory Deck " +
+            "has no offline or demo mode: a run without a live provider does not start.",
         });
         return;
       }
@@ -736,13 +722,6 @@ app.post(
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
       res.status(400).json({ error: describeIssue(parsed.error, "Bad options.") });
-      return;
-    }
-    if (parsed.data.demo) {
-      res.status(400).json({
-        error:
-          "Offline demo is available for a single /api/runs job only; epic planning requires live providers.",
-      });
       return;
     }
     const epicIdentityProblem = localProjectIdentityProblem(parsed.data);

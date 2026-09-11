@@ -37,19 +37,19 @@ import type { RunDestination } from "../../shared/schemas.js";
  */
 
 describe("owner run options — demo is explicit; ambiguous no-op flags fail", () => {
-  it("forces demo extensions into an isolated repository copy", () => {
-    const routeSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+  it("keeps any internal demo run out of the owner's real checkout", () => {
     const orchestratorSource = readFileSync(
       new URL("../orchestrator/runFactory.ts", import.meta.url),
       "utf8",
     );
-
-    expect(routeSource).toMatch(
-      /repoSource:\s*parsed\.data\.repoSource[\s\S]*?inPlace:\s*false/,
-    );
     expect(orchestratorSource).toContain(
       "repoSource = { ...repoSource, inPlace: false };",
     );
+  });
+
+  it("gives the HTTP routes no demo path to take", () => {
+    const routeSource = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+    expect(routeSource).not.toMatch(/parsed\.data\.demo|options\.demo=true/);
   });
 
   it("rejects options.demo by name, whatever its value — there is no demo mode", () => {
