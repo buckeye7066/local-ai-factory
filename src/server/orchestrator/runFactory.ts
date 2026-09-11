@@ -34,6 +34,7 @@ import {
   ModelLadderProvider,
 } from "../providers/index.js";
 import type { ProviderRegistry } from "../providers/index.js";
+import { isQuotaRefusal } from "../providers/modelExhaustion.js";
 import { createReadinessBrainProviders } from "../providers/readinessBrains.js";
 import {
   artifactTreeDigest,
@@ -754,10 +755,15 @@ async function executeRun(
   }
   const countProvider = (provider: LLMProvider): LLMProvider =>
     new CountingProvider(provider, run, config.maxModelCallsPerRun, "declared");
+  // Name an out-of-credit account up front: a provider's JSON error prefix can
+  // push "credit balance is too low" past the slice, and the error ledger then
+  // cannot tell a billing stop from a deck defect (cloud proof run 7b24a7f8).
   const onModelFailover = (from: string, to: string, reason: string) =>
     log(
       "warning",
-      `${from} model rung exhausted — continuing on ${to}. (${reason.slice(0, 120)})`,
+      `${from} model rung exhausted — continuing on ${to}. (${
+        isQuotaRefusal(reason) ? "account out of credit — " : ""
+      }${reason.slice(0, 240)})`,
     );
 
   const modelProvider: LLMProvider = run.demo
