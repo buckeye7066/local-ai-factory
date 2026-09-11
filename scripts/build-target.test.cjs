@@ -24,9 +24,14 @@ test('explicit targets respect supported host restrictions', () => {
     }
   }
 });
-test('host simulation cannot override actual execution and invalid flags fail closed', () => {
-  assert.throws(() => options(['--host', 'win32']), /dry-run/);
-  assert.equal(options(['--host', 'darwin', '--dry-run']).host, 'darwin');
+test('dry-run and host simulation are removed flags, never report-only modes', () => {
+  for (const args of [['--dry-run'], ['--host', 'win32'], ['--host', 'darwin', '--dry-run']]) {
+    assert.throws(() => options(args), /removed/);
+  }
+  // Host simulation remains available to tests through the plan() API only.
+  assert.equal(plan('darwin', 'web').host, 'darwin');
+});
+test('invalid flags fail closed', () => {
   assert.equal(options(['--target', 'android']).target, 'android');
   assert.throws(() => options(['--target']), /requires a value/);
   assert.throws(() => options(['--unknown']), /Unknown argument/);
