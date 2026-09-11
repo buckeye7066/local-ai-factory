@@ -82,6 +82,26 @@ describe("error ledger — deterministic signature table", () => {
     ).toBe("environment");
   });
 
+  it("classifies an out-of-credit account as budget, not a deck defect or a cooldown", () => {
+    // Exact lines from cloud proof run 7b24a7f8 (2026-09-11), both accounts empty.
+    for (const message of [
+      "gpt-5.6-sol model rung exhausted — continuing on rotating. (ProviderExhaustionError openai.generateJson account exhausted (provider returned 429).)",
+      'claude-opus-5 model rung exhausted — continuing on gpt-5.6-sol. (account out of credit — Error anthropic.generateJson failed after 1 attempt(s): 400 {"type":"error","error":{"type":"invalid_request_error","mes)',
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}',
+      'HTTP 429 {"error":{"type":"insufficient_quota","code":"credit_balance_exhausted"}}',
+    ]) {
+      const billing = classifyErrorMessage(message);
+      expect(billing.classification, message).toBe("budget");
+      expect(billing.signature, message).toBe("billing_credit_exhausted");
+      expect(billing.suggestion, message).toMatch(/add credits/i);
+    }
+    // A plain rate limit is still a cooldown.
+    expect(
+      classifyErrorMessage("route groq/llama-3.3-70b HTTP 429: rate limit reached")
+        .signature,
+    ).toBe("rate_or_overload");
+  });
+
   it("names the route and the program file when the text carries them", () => {
     expect(
       routeIdFrom("route openrouter/nvidia/nemotron-3-ultra-550b-a55b:free HTTP 429"),

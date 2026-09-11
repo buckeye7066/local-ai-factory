@@ -71,6 +71,18 @@ const SIGNATURES: readonly Signature[] = [
       "This route is an agentic deep-research product, not a chat model — hold it out of rotation (routeFitness `deep-research` pattern; refresh the AI Time catalog so it is not offered).",
   },
   {
+    // Before rate_or_overload: an out-of-credit account also answers 429 (OpenAI)
+    // or 400 (Anthropic), and "cooling down, nothing to fix" is wrong advice for
+    // it. Live 2026-09-11, cloud proof run 7b24a7f8: both paid accounts were
+    // empty; the Anthropic line was ledgered as a deck defect, OpenAI's as a cooldown.
+    id: "billing_credit_exhausted",
+    pattern:
+      /credit balance is too low|no credits remaining|insufficient_quota|credit_balance_exhausted|exceeded your current quota|account exhausted|account out of credit/i,
+    classification: "budget",
+    suggestion: () =>
+      "The provider account is out of credit or quota; waiting and rotation do not fix it. Add credits (Anthropic: console.anthropic.com Plans & Billing; OpenAI: platform.openai.com/settings/organization/billing), then resume the run. Until then the ladder continues on the next rung.",
+  },
+  {
     id: "rate_or_overload",
     pattern: /\b(429|529|503)\b|rate[- ]?limit|temporarily overloaded|Overloaded/i,
     classification: "provider",
