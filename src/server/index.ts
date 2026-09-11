@@ -68,9 +68,10 @@ import {
   questionCap,
 } from "./storage/clarificationStore.js";
 import { createFoundryRouter } from "./foundry/router.js";
-import { safeErrorMessage } from "./errors.js";
+import { clientErrorStatus, safeErrorMessage } from "./errors.js";
 import { redactSecrets } from "./security/redact.js";
 import { findRemovedRunOption } from "./removedOptions.js";
+import { localProjectIdentityProblem } from "./orchestrator/projectMemory.js";
 import { FATAL_EXIT_CODE } from "./exitCodes.js";
 import { underWorkTheme } from "./orchestrator/themeBind.js";
 import { resumeWorkTheme } from "./orchestrator/workTheme.js";
@@ -352,6 +353,18 @@ function rejectRemovedRunOption(req: Request, res: Response): boolean {
   return true;
 }
 
+/**
+ * The first validation issue, prefixed with the field it names. A bare
+ * "Required" does not tell a caller which of a dozen fields is missing.
+ */
+function describeIssue(error: z.ZodError, fallback: string): string {
+  const first = error.issues[0];
+  if (!first) return fallback;
+  return first.path.length
+    ? `${first.path.join(".")}: ${first.message}`
+    : first.message;
+}
+
 /** Route async rejections into the JSON error handler instead of crashing. */
 function wrap(
   fn: (req: Request, res: Response) => Promise<void> | void,
@@ -400,6 +413,14 @@ app.post(
         ? req.headers["idempotency-key"].trim()
         : "";
     const idempotencyKey = parsed.data.idempotencyKey?.trim() || headerKey || undefined;
+    // Intake refuses a production run without a stable project identity. When
+    // that refusal is already certain, say so now instead of answering 201 for
+    // a run whose only possible outcome is to fail.
+    const identityProblem = localProjectIdentityProblem(parsed.data);
+    if (identityProblem) {
+      res.status(400).json({ error: identityProblem });
+      return;
+    }
 
     // A from-scratch app must be named by the owner, and the name has to be
     // one GitHub will actually accept and is not already taken — checked HERE,
@@ -565,7 +586,7 @@ app.post(
     const parsed = PortfolioSessionRequestSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       res.status(400).json({
-        error: parsed.error.issues[0]?.message ?? "Invalid portfolio session.",
+        error: describeIssue(parsed.error, "Invalid portfolio session."),
       });
       return;
     }
@@ -714,9 +735,7 @@ app.post(
     if (rejectRemovedRunOption(req, res)) return;
     const parsed = RunOptionsSchema.safeParse(req.body?.options ?? {});
     if (!parsed.success) {
-      res
-        .status(400)
-        .json({ error: parsed.error.issues[0]?.message ?? "Bad options." });
+      res.status(400).json({ error: describeIssue(parsed.error, "Bad options.") });
       return;
     }
     if (parsed.data.demo) {
@@ -724,6 +743,11 @@ app.post(
         error:
           "Offline demo is available for a single /api/runs job only; epic planning requires live providers.",
       });
+      return;
+    }
+    const epicIdentityProblem = localProjectIdentityProblem(parsed.data);
+    if (epicIdentityProblem) {
+      res.status(400).json({ error: epicIdentityProblem });
       return;
     }
     // Validate the selected economic tier before returning 202. Previously a
@@ -868,16 +892,18 @@ app.post(
       // checkpoint). Unknown providers are rejected by resumeRun.
       const wanted = ProviderSwitchSchema.safeParse(req.body ?? {});
       if (!wanted.success) {
-        res
-          .status(400)
-          .json({ error: wanted.error.issues[0]?.message ?? "Bad providers." });
+        res.status(400).json({ error: describeIssue(wanted.error, "Bad providers.") });
         return;
       }
       // Resume under the run's ORIGINAL purpose so rotation fit/yield/cooldown
       // stay keyed to the work, not to the resume event (see resumeWorkTheme).
-      const run = await underWorkTheme(
-        resumeWorkTheme(await getRun(runId), runId),
-        () => resumeRun(runId, config, secrets, wanted.data),
+      const existing = await getRun(runId);
+      if (!existing) {
+        res.status(404).json({ error: "Run not found." });
+        return;
+      }
+      const run = await underWorkTheme(resumeWorkTheme(existing, runId), () =>
+        resumeRun(runId, config, secrets, wanted.data),
       );
       res.status(202).json({ ok: true, runId: run.id });
     } catch (err) {
@@ -1095,6 +1121,13 @@ app.get(
 /** Purpose Foundry is additive: existing Factory Deck routes and standalone tools remain intact. */
 app.use("/api/foundry", createFoundryRouter());
 
+/** An unmatched API path is a JSON 404, never Express's HTML "Cannot GET". */
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    error: `No API route for ${req.method} ${req.originalUrl.split("?")[0]}.`,
+  });
+});
+
 /**
  * Production mode: if the UI has been built (pnpm build → dist/ui), serve it
  * directly so the whole app runs as a single process on config.port — no Vite
@@ -1119,7 +1152,14 @@ if (servesUi) {
 /** Last-resort JSON error handler — never leak an HTML stack trace. */
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof z.ZodError) {
-    res.status(400).json({ error: err.issues[0]?.message ?? "Invalid request." });
+    res.status(400).json({ error: describeIssue(err, "Invalid request.") });
+    return;
+  }
+  // Malformed JSON, an oversized body, or a bad charset is the caller's
+  // mistake: answer with the middleware's own 4xx, not a server fault.
+  const clientStatus = clientErrorStatus(err);
+  if (clientStatus !== null) {
+    res.status(clientStatus).json({ error: safeErrorMessage(err, "Invalid request.") });
     return;
   }
   const message = safeErrorMessage(err, "Internal error.");

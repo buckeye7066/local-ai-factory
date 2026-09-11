@@ -109,6 +109,24 @@ export interface ProjectIdentityContext {
 }
 
 /** Stable, credential-free identity used to join separate runs for one app. */
+/**
+ * The project-identity requirement a request can be checked against BEFORE a
+ * run record exists. `projectKeyForOptions` is the authority; this mirrors only
+ * its deterministic refusals so the API answers 400 instead of accepting a run
+ * that can only die at intake. A requested GitHub remote resolves its owner at
+ * intake and an extend run resolves its repository there, so neither is judged
+ * here.
+ */
+export const LOCAL_PROJECT_IDENTITY_REQUIRED =
+  "A new app without a GitHub remote needs a stable project identity: set options.projectId (for example the app name) so later runs join the same project, or request a GitHub remote with options.newRepo.";
+
+export function localProjectIdentityProblem(options: RunOptions): string | null {
+  if (options.demo === true || options.mode === "extend") return null;
+  if (options.newRepo?.name && options.newRepo.createRemote !== false) return null;
+  if (options.projectId?.trim()) return null;
+  return LOCAL_PROJECT_IDENTITY_REQUIRED;
+}
+
 export function projectKeyForOptions(
   options: RunOptions,
   context: ProjectIdentityContext = {},
