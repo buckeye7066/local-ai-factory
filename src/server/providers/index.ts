@@ -14,6 +14,8 @@ import {
 import { estimateUsd, loadLimits } from "./paidBudget.js";
 import {
   buildRotator,
+  Catalog,
+  Rotator,
   rotationEnabled,
   unavailableReason,
 } from "../rotation/aitimeRotation.js";
@@ -82,8 +84,8 @@ export interface ProviderRegistry {
   /** Configured paid ladder rungs only. */
   availablePaid(): ProviderName[];
   /**
-   * Exact strongest-to-weakest model rungs for a run. Paid models are
-   * individual sticky rungs; AI Time's best available free rotation is last.
+   * Owner subscriptions first, followed by the existing metered model ladder.
+   * Free/local fallback remains last; an explicit free-only order is preserved.
    */
   automaticRungs?(order?: ProviderName[]): ModelLadderRung[];
   missingCredentialNames(): string[];
@@ -234,6 +236,37 @@ export function createProviderRegistry(
       })
     : free;
 
+  // Owner-signed-in, unmodified coding CLIs only; never export account tokens.
+  const subscriptionRoutes =
+    rotator?.catalog.routes.filter(
+      (route) =>
+        route.cost_class === "subscription" &&
+        (route.api === "claude-code" || route.api === "codex-cli"),
+    ) ?? [];
+  const subscriptionPrimary =
+    subscriptionRoutes.length && rotator
+      ? new RotatingProvider(
+          new Rotator(
+            new Catalog(
+              subscriptionRoutes,
+              rotator.catalog.generatedAt,
+              rotator.catalog.ageSeconds,
+              rotator.catalog.path,
+            ),
+            rotator.store,
+            `${app}:subscriptions`,
+            true,
+          ),
+          {
+            fccDelegate: free,
+            fccBaseUrl: config.free.baseUrl,
+            tier: "frontier",
+            log,
+            signal,
+          },
+        )
+      : null;
+
   function automaticRungs(
     order: ProviderName[] = config.modelLadder ?? ["anthropic", "openai", "free"],
   ): ModelLadderRung[] {
@@ -247,9 +280,21 @@ export function createProviderRegistry(
         },
       ],
     };
-    return [...new Set(order)]
-      .flatMap((name) => groups[name] ?? [])
-      .filter((rung) => rung.provider.isConfigured());
+    const subscriptionRungs: ModelLadderRung[] =
+      subscriptionPrimary &&
+      order.some((name) => name === "anthropic" || name === "openai")
+        ? [
+            {
+              model: "subscription:owner",
+              provider: subscriptionPrimary,
+              advanceOn: "subscription-unavailable",
+            },
+          ]
+        : [];
+    return [
+      ...subscriptionRungs,
+      ...[...new Set(order)].flatMap((name) => groups[name] ?? []),
+    ].filter((rung) => rung.provider.isConfigured());
   }
 
   /** Legacy free-route diagnostic chain; current live work uses the ladder. */

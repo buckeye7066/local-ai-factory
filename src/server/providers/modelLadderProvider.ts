@@ -12,6 +12,7 @@ import {
   modelFailureText,
 } from "./modelExhaustion.js";
 import { ProviderAbortError } from "./types.js";
+import { RotationError } from "../rotation/aitimeRotation.js";
 
 export type ModelLadderRung = {
   model: string;
@@ -21,7 +22,7 @@ export type ModelLadderRung = {
    * owner-directed Opus primary advances only for real credit/quota loss or
    * permanent model unavailability, never for an ordinary transient.
    */
-  advanceOn?: "model-exhaustion" | "credit-or-unavailable";
+  advanceOn?: "model-exhaustion" | "credit-or-unavailable" | "subscription-unavailable";
 };
 
 /**
@@ -36,6 +37,7 @@ export class ModelLadderProvider implements LLMProvider {
   readonly paidBudgetManaged: boolean;
   private readonly rungs: ModelLadderRung[];
   private cursor = 0;
+  private subscriptionFallbackCursor = 1;
 
   constructor(
     rungs: ModelLadderRung[],
@@ -86,16 +88,26 @@ export class ModelLadderProvider implements LLMProvider {
   }
 
   private async execute<T>(invoke: (provider: LLMProvider) => Promise<T>): Promise<T> {
+    // Recheck the plan tier on every call; its shared cooldown prevents probing
+    // exhausted accounts until reset, without sticking to paid APIs forever.
+    if (this.rungs[0]?.advanceOn === "subscription-unavailable") this.cursor = 0;
     let lastExhaustion: unknown = null;
     for (let index = this.cursor; index < this.rungs.length; index += 1) {
       const rung = this.rungs[index]!;
       if (!rung.provider.isConfigured()) continue;
+      if (index > 0) this.subscriptionFallbackCursor = index;
       try {
         const result = await invoke(rung.provider);
         this.cursor = index;
         return result;
       } catch (error) {
-        if (error instanceof ProviderAbortError || !isModelExhaustion(error)) {
+        const subscriptionUnavailable =
+          rung.advanceOn === "subscription-unavailable" &&
+          error instanceof RotationError;
+        if (
+          error instanceof ProviderAbortError ||
+          (!subscriptionUnavailable && !isModelExhaustion(error))
+        ) {
           throw error;
         }
         if (
@@ -110,13 +122,17 @@ export class ModelLadderProvider implements LLMProvider {
         // billable refusal. Model-scoped availability and capacity failures do
         // still walk the configured family ladder.
         const providerAccountExhausted =
-          isQuotaRefusal(error) || (error as { status?: unknown })?.status === 402;
+          !subscriptionUnavailable &&
+          (isQuotaRefusal(error) || (error as { status?: unknown })?.status === 402);
         const excludedProviders = isPaidBudgetExhaustion(error)
           ? new Set<LLMProvider["name"]>(["anthropic", "openai"])
           : providerAccountExhausted
             ? new Set<LLMProvider["name"]>([rung.provider.name])
             : undefined;
-        const nextIndex = this.nextConfigured(index, excludedProviders);
+        const resumeAfter = subscriptionUnavailable
+          ? Math.max(index, this.subscriptionFallbackCursor - 1)
+          : index;
+        const nextIndex = this.nextConfigured(resumeAfter, excludedProviders);
         if (nextIndex === null) throw lastExhaustion;
         const next = this.rungs[nextIndex]!;
         this.onFailover(

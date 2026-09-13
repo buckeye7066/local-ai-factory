@@ -165,13 +165,33 @@ export function assertLiteralArgv(argv: readonly string[]): void {
   }
 }
 
-function recursionGuardEnv(): NodeJS.ProcessEnv {
-  return {
+export function recursionGuardEnv(api: string = ""): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     [CLI_RECURSION_MARKER]: "1",
     CI: process.env.CI ?? "1",
     NO_COLOR: process.env.NO_COLOR ?? "1",
   };
+  if (api === "claude-code" || api === "codex-cli") {
+    // Copy-only: API fallback providers retain their original credentials.
+    for (const key of [
+      "OPENAI_API_KEY",
+      "CODEX_API_KEY",
+      "OPENAI_BASE_URL",
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_PROFILE",
+      "ANTHROPIC_FEDERATION_RULE_ID",
+      "ANTHROPIC_ORGANIZATION_ID",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+    ]) {
+      delete env[key];
+    }
+  }
+  return env;
 }
 
 function activeRecursionMarker(): string | null {
@@ -251,7 +271,7 @@ export async function runCli(
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(exe, args, {
-        env: recursionGuardEnv(),
+        env: recursionGuardEnv(api),
         windowsHide: true,
         windowsVerbatimArguments: viaCmd,
         stdio: ["pipe", "pipe", "pipe"],
@@ -381,7 +401,7 @@ export class CliRouteProvider {
       let child: ReturnType<typeof spawn>;
       try {
         child = spawn(exe, args, {
-          env: recursionGuardEnv(),
+          env: recursionGuardEnv(this.api),
           windowsHide: true,
           windowsVerbatimArguments: viaCmd,
           stdio: "ignore",
