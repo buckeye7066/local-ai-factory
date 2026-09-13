@@ -165,12 +165,15 @@ export function assertLiteralArgv(argv: readonly string[]): void {
   }
 }
 
-export function recursionGuardEnv(api: string = ""): NodeJS.ProcessEnv {
+export function recursionGuardEnv(
+  api: string = "",
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...source,
     [CLI_RECURSION_MARKER]: "1",
-    CI: process.env.CI ?? "1",
-    NO_COLOR: process.env.NO_COLOR ?? "1",
+    CI: source.CI ?? "1",
+    NO_COLOR: source.NO_COLOR ?? "1",
   };
   if (api === "claude-code" || api === "codex-cli") {
     // Copy-only: API fallback providers retain their original credentials.

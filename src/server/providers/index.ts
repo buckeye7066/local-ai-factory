@@ -85,7 +85,7 @@ export interface ProviderRegistry {
   availablePaid(): ProviderName[];
   /**
    * Owner subscriptions first, followed by the existing metered model ladder.
-   * Free/local fallback remains last; an explicit free-only order is preserved.
+   * Free/local fallback remains last; an explicitly configured free-only ladder is preserved.
    */
   automaticRungs?(order?: ProviderName[]): ModelLadderRung[];
   missingCredentialNames(): string[];
@@ -254,8 +254,8 @@ export function createProviderRegistry(
               rotator.catalog.path,
             ),
             rotator.store,
-            `${app}:subscriptions`,
-            true,
+            rotator.app,
+            rotator.ignorePins,
           ),
           {
             fccDelegate: free,
@@ -282,7 +282,9 @@ export function createProviderRegistry(
     };
     const subscriptionRungs: ModelLadderRung[] =
       subscriptionPrimary &&
-      order.some((name) => name === "anthropic" || name === "openai")
+      (config.modelLadder ?? ["anthropic", "openai", "free"]).some(
+        (name) => name === "anthropic" || name === "openai",
+      )
         ? [
             {
               model: "subscription:owner",
