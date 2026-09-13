@@ -174,7 +174,7 @@ export function recursionGuardEnv(api: string = ""): NodeJS.ProcessEnv {
   };
   if (api === "claude-code" || api === "codex-cli") {
     // Copy-only: API fallback providers retain their original credentials.
-    for (const key of [
+    const blocked = new Set([
       "OPENAI_API_KEY",
       "CODEX_API_KEY",
       "OPENAI_BASE_URL",
@@ -187,8 +187,10 @@ export function recursionGuardEnv(api: string = ""): NodeJS.ProcessEnv {
       "CLAUDE_CODE_USE_BEDROCK",
       "CLAUDE_CODE_USE_VERTEX",
       "CLAUDE_CODE_USE_FOUNDRY",
-    ]) {
-      delete env[key];
+    ]);
+    // Copied Windows environment keys retain spelling; lookup is case-insensitive.
+    for (const key of Object.keys(env)) {
+      if (blocked.has(key.toUpperCase())) delete env[key];
     }
   }
   return env;
