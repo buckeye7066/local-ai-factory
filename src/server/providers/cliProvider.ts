@@ -165,13 +165,38 @@ export function assertLiteralArgv(argv: readonly string[]): void {
   }
 }
 
-function recursionGuardEnv(): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
+export function recursionGuardEnv(
+  api: string = "",
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...source,
     [CLI_RECURSION_MARKER]: "1",
-    CI: process.env.CI ?? "1",
-    NO_COLOR: process.env.NO_COLOR ?? "1",
+    CI: source.CI ?? "1",
+    NO_COLOR: source.NO_COLOR ?? "1",
   };
+  if (api === "claude-code" || api === "codex-cli") {
+    // Copy-only: API fallback providers retain their original credentials.
+    const blocked = new Set([
+      "OPENAI_API_KEY",
+      "CODEX_API_KEY",
+      "OPENAI_BASE_URL",
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_PROFILE",
+      "ANTHROPIC_FEDERATION_RULE_ID",
+      "ANTHROPIC_ORGANIZATION_ID",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+    ]);
+    // Copied Windows environment keys retain spelling; lookup is case-insensitive.
+    for (const key of Object.keys(env)) {
+      if (blocked.has(key.toUpperCase())) delete env[key];
+    }
+  }
+  return env;
 }
 
 function activeRecursionMarker(): string | null {
@@ -251,7 +276,7 @@ export async function runCli(
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn(exe, args, {
-        env: recursionGuardEnv(),
+        env: recursionGuardEnv(api),
         windowsHide: true,
         windowsVerbatimArguments: viaCmd,
         stdio: ["pipe", "pipe", "pipe"],
@@ -381,7 +406,7 @@ export class CliRouteProvider {
       let child: ReturnType<typeof spawn>;
       try {
         child = spawn(exe, args, {
-          env: recursionGuardEnv(),
+          env: recursionGuardEnv(this.api),
           windowsHide: true,
           windowsVerbatimArguments: viaCmd,
           stdio: "ignore",

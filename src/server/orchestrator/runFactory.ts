@@ -483,7 +483,7 @@ export function createTierProvider(
   if (exactRungs.length > 0) {
     return new ModelLadderProvider(
       exactRungs.map((rung) => ({
-        model: rung.model,
+        ...rung,
         provider: buildProvider(rung.provider),
       })),
       options.onFailover,

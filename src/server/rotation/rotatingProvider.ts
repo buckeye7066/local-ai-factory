@@ -1,3 +1,4 @@
+import { RotationError } from "./aitimeRotation.js";
 /**
  * rotatingProvider.ts — an LLMProvider whose backing model changes on every
  * call, driven by the AI Time route catalog (see aitimeRotation.ts and
@@ -996,7 +997,7 @@ export class RotatingProvider implements LLMProvider {
       }
     }
 
-    throw new Error(
+    throw new RotationError(
       `every ${this.tier} pool failed this call; last error was ` +
         `${lastError instanceof Error ? `${lastError.name}: ${lastError.message.slice(0, 200)}` : String(lastError)}`,
     );

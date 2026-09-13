@@ -584,6 +584,7 @@ export class Rotator {
     readonly catalog: Catalog,
     readonly store: StateStore = new StateStore(),
     readonly app: string = "factory-deck",
+    readonly ignorePins: boolean = false,
   ) {}
 
   /**
@@ -611,12 +612,13 @@ export class Rotator {
       // and skewing the rotation (caught live by the CI fairness test —
       // one pool absorbed 4 of 6 concurrent picks).
       const now = opts.now ?? Date.now() / 1000;
-      const resolvedPin =
-        opts.pin ||
-        process.env.AI_ROTATE_PIN ||
-        state.pin?.[this.app] ||
-        state.pin?.["global"] ||
-        null;
+      const resolvedPin = this.ignorePins
+        ? null
+        : opts.pin ||
+          process.env.AI_ROTATE_PIN ||
+          state.pin?.[this.app] ||
+          state.pin?.["global"] ||
+          null;
       if (resolvedPin) {
         selection = this.resolvePin(
           resolvedPin,
