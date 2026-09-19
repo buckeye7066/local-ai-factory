@@ -239,8 +239,7 @@ export function createProviderRegistry(
               (route) =>
                 isFreeRoute(route) &&
                 route.cost_class !== "subscription" &&
-                route.enabled &&
-                route.tier === "frontier",
+                route.enabled,
             ),
             rotator.catalog.generatedAt,
             rotator.catalog.ageSeconds,

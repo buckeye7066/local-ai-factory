@@ -96,3 +96,41 @@ describe("owner subscription priority", () => {
     expect(process.env.OPENAI_API_KEY).toBe("test-openai");
   });
 });
+
+for (const tier of ["strong", "light"] as const) {
+  it(`keeps the owner free fallback at the ${tier} tier without FCC`, () => {
+    vi.stubEnv("FACTORY_OWNER_SUBSCRIPTION_ONLY", "1");
+    vi.stubEnv("FACTORY_OWNER_CODEX_HOME", process.cwd() + "/fixture-auth");
+    const route = {
+      id: "local-fixture",
+      backend: "ollama",
+      backend_label: "Local",
+      model: "fixture",
+      wire_model: "fixture",
+      api: "ollama" as const,
+      base_url: "http://127.0.0.1:11434",
+      pool: "local-fixture",
+      auth_env: "",
+      auth_kind: "none",
+      cost_class: "local-unlimited" as const,
+      tier,
+      enabled: true,
+      disabled_reason: "",
+      quota_status: "unknown",
+      resets_at: null,
+      note: "",
+      capabilities: [],
+      capabilities_source: "" as const,
+    };
+    vi.spyOn(rotation, "buildRotator").mockReturnValue(
+      new rotation.Rotator(new rotation.Catalog([route])),
+    );
+    vi.spyOn(providers, "filterRoutableCatalog").mockImplementation((value) => value);
+    const config = loadConfig({});
+    config.free.enabled = false;
+    const registry = createProviderRegistry(config, loadSecrets({}));
+    expect(
+      registry.automaticRungs!().some((rung) => rung.model === "free:configured"),
+    ).toBe(true);
+  });
+}

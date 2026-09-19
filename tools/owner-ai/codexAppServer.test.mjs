@@ -55,3 +55,26 @@ test('deadline ends an unresponsive worker and yields no success',async()=>{
  const fixture=protocol({stall:true});assert.equal(await runCodexSession({...base,timeoutMs:20},opts(fixture)),null)
  assert.equal(fixture.child.killed,true)
 })
+
+import {runChild} from './officialCli.mjs'
+for (const executable of ['codex','codex.exe','claude','claude.exe']) {
+ test('captures only requested authentication metadata for '+executable,async()=>{
+  const args=executable.startsWith('codex')?['login','status']:['auth','status','--json']
+  const spawnImpl=()=>{
+   const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough()
+   child.stdin=new Writable({write(_chunk,_encoding,done){done()},final(done){done();queueMicrotask(()=>{child.stderr.write('authentication fixture');child.emit('close',0)})}})
+   return child
+  }
+  assert.equal(await runChild(executable,args,{env:{},captureAuthMetadata:true,spawnImpl}),'authentication fixture')
+  assert.equal(await runChild(executable,args,{env:{},captureAuthMetadata:false,spawnImpl}),'')
+ })
+}
+test('strict app-server invocation uses supported containment controls',async()=>{
+ const fixture=protocol();let argv
+ const spawnImpl=(exe,args,options)=>{argv=args;return fixture.spawnImpl(exe,args,options)}
+ assert.ok(await runCodexSession(base,{...opts(fixture),spawnImpl}))
+ assert.equal(argv.includes('tools.update_plan.enabled=false'),false)
+ assert.equal(argv.includes('agents.enabled=false'),false)
+ assert.ok(argv.includes('--strict-config'));assert.ok(argv.includes('forced_login_method=chatgpt'))
+ assert.ok(argv.includes('web_search="disabled"'));assert.ok(argv.includes('shell_tool'))
+})

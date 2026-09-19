@@ -90,8 +90,8 @@ export function runChild(executable, args, { cwd, env, input = '', signal, captu
       child.on('error', () => { failed = true; signal?.removeEventListener('abort', kill); resolve(null) })
       child.on('close', code => { signal?.removeEventListener('abort', kill); resolve(!failed && code === 0 ? Buffer.concat(output).toString('utf8') : null) })
       // Only explicit native auth metadata probes merge stderr, never inference.
-      const mergeAuth = captureAuthMetadata && !input && ((path.basename(executable) === 'codex.exe' && args.join(' ') === 'login status') ||
-        (path.basename(executable) === 'claude.exe' && args.join(' ') === 'auth status --json'))
+      const mergeAuth = captureAuthMetadata && !input && ((/^codex(?:\.exe)?$/.test(path.basename(executable)) && args.join(' ') === 'login status') ||
+        (/^claude(?:\.exe)?$/.test(path.basename(executable)) && args.join(' ') === 'auth status --json'))
       const collect = (chunk, stdout) => { bytes += chunk.length; if (bytes > (mergeAuth ? 16384 : 524288)) kill(); else if (stdout || mergeAuth) output.push(Buffer.from(chunk)) }
       child.stdout.on('data', chunk => collect(chunk, true))
       child.stderr.on('data', chunk => collect(chunk, false))
