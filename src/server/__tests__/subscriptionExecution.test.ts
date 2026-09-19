@@ -114,18 +114,22 @@ it("strips mixed-case Windows credential names from the copied environment", () 
   expect(original.OpenAI_Api_Key).toBe("test");
 });
 
-
-it("owner-only enrollment never retains metered API rungs even when keys exist",()=>{
- vi.stubEnv("FACTORY_OWNER_SUBSCRIPTION_ONLY","1");vi.stubEnv("FACTORY_OWNER_CODEX_HOME",process.cwd()+"/fixture-subscription")
- vi.spyOn(rotation,"buildRotator").mockReturnValue(null)
- const config=loadConfig({});const secrets=loadSecrets({OPENAI_API_KEY:"fixture-only",ANTHROPIC_API_KEY:"fixture-only"})
- const registry=createProviderRegistry(config,secrets)
- expect(registry.availablePaid()).toEqual([])
- expect(registry.automaticRungs!()[0].model).toBe("subscription:codex")
- expect(registry.get("openai").isConfigured()).toBe(false)
-})
-it("a Codex subscription route cannot silently accept API-key authentication",()=>{
- const args=argvFor("codex-cli")
- expect(args).toContain("forced_login_method=chatgpt")
- expect(args).toContain("--ignore-user-config")
-})
+it("owner-only enrollment never retains metered API rungs even when keys exist", () => {
+  vi.stubEnv("FACTORY_OWNER_SUBSCRIPTION_ONLY", "1");
+  vi.stubEnv("FACTORY_OWNER_CODEX_HOME", process.cwd() + "/fixture-subscription");
+  vi.spyOn(rotation, "buildRotator").mockReturnValue(null);
+  const config = loadConfig({});
+  const secrets = loadSecrets({
+    OPENAI_API_KEY: "fixture-only",
+    ANTHROPIC_API_KEY: "fixture-only",
+  });
+  const registry = createProviderRegistry(config, secrets);
+  expect(registry.availablePaid()).toEqual([]);
+  expect(registry.automaticRungs!()[0].model).toBe("subscription:codex");
+  expect(registry.get("openai").isConfigured()).toBe(false);
+});
+it("a Codex subscription route cannot silently accept API-key authentication", () => {
+  const args = argvFor("codex-cli");
+  expect(args).toContain("forced_login_method=chatgpt");
+  expect(args).toContain("--ignore-user-config");
+});

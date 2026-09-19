@@ -158,7 +158,17 @@ afterEach(() => {
 describe("CLI transport — the prompt goes over stdin, never argv", () => {
   it("argv carries fixed literal flags only", () => {
     expect(argvFor("claude-code")).toEqual(["-p", "--output-format", "text"]);
-    expect(argvFor("codex-cli")).toEqual(["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", "--sandbox", "read-only", "-c", "forced_login_method=chatgpt", "-"]);
+    expect(argvFor("codex-cli")).toEqual([
+      "exec",
+      "--skip-git-repo-check",
+      "--ignore-user-config",
+      "--ephemeral",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "forced_login_method=chatgpt",
+      "-",
+    ]);
     for (const api of ["claude-code", "codex-cli"]) {
       expect(() => assertLiteralArgv(argvFor(api))).not.toThrow();
     }
