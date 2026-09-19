@@ -150,10 +150,12 @@ export async function executeJob(job, { signal, env = process.env, run = runChil
         if (provider === 'claude') clean.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(Math.min(job.maxTokens, 32000))
         const args = cliArguments(provider, env)
         const raw = await run(provider + '.exe', args, { cwd, env: clean, signal: attemptSignal,
-          input: JSON.stringify({ system: job.system, prompt: job.prompt, format: job.format }) })
+          input: JSON.stringify({ system: job.system, prompt: job.prompt, format: job.format, requested_max_output_tokens: job.maxTokens }) })
         if (attemptSignal.aborted || Date.now() >= deadline) continue
         const result = raw ? parseResult(provider, raw, provider === 'codex' ? args[args.indexOf('--model') + 1] : undefined) : null
-        if (result && result.usage.output_tokens < job.maxTokens && (job.format !== 'json' || validJsonObject(result.raw))) return result
+        // Codex usage includes reasoning; its requested text budget is advisory, not
+        // a truncation signal. Completion, byte, deadline and JSON checks remain strict.
+        if (result && (provider === 'codex' || result.usage.output_tokens < job.maxTokens) && (job.format !== 'json' || validJsonObject(result.raw))) return result
       } catch { /* Native failure permits the next subscription, never an API call. */ }
       finally { clearTimeout(timer); slice.abort() }
     }
