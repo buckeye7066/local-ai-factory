@@ -3,6 +3,7 @@ import type { LLMProvider } from "../../shared/types.js";
 import type { ProviderName } from "../../shared/schemas.js";
 import { AnthropicProvider } from "./anthropicProvider.js";
 import { OpenAIProvider } from "./openaiProvider.js";
+import {OwnerCodexProvider,ownerSubscriptionOnly} from "./ownerCodexProvider.js";
 import { StubProvider } from "./stubProvider.js";
 import { MockProvider } from "./mockProvider.js";
 import { FreeProvider } from "./freeProvider.js";
@@ -113,6 +114,9 @@ export function createProviderRegistry(
    */
   app: string = "factory-deck",
 ): ProviderRegistry {
+  const ownerOnly = ownerSubscriptionOnly();
+  if (ownerOnly) secrets = {...secrets,openaiApiKey:"",anthropicApiKey:""};
+  const ownerCodex = new OwnerCodexProvider(signal);
   const mock = new MockProvider();
   const stub = new StubProvider("stub");
   // Every paid SDK call reserves admission before I/O. Its returned token
@@ -226,8 +230,9 @@ export function createProviderRegistry(
         `\`python -m aitime.catalog\`.`,
     );
   }
-  const freePrimary: FreePrimary = rotator
-    ? new RotatingProvider(rotator, {
+  const freeRotator = ownerOnly && rotator ? new Rotator(new Catalog(rotator.catalog.routes.filter(route => route.cost_class !== "subscription"),rotator.catalog.generatedAt,rotator.catalog.ageSeconds,rotator.catalog.path),rotator.store,rotator.app,rotator.ignorePins) : rotator;
+  const freePrimary: FreePrimary = freeRotator
+    ? new RotatingProvider(freeRotator, {
         fccDelegate: free,
         fccBaseUrl: config.free.baseUrl,
         tier: "frontier",
@@ -270,6 +275,10 @@ export function createProviderRegistry(
   function automaticRungs(
     order: ProviderName[] = config.modelLadder ?? ["anthropic", "openai", "free"],
   ): ModelLadderRung[] {
+    if (ownerOnly) {
+      const wantsFreeOnly = config.modelLadder?.length === 1 && config.modelLadder[0] === "free";
+      return [...(wantsFreeOnly ? [] : [{model:"subscription:codex",provider:ownerCodex,advanceOn:"subscription-unavailable" as const}]),{model:"free:configured",provider:freePrimary}].filter(rung=>rung.provider.isConfigured());
+    }
     const groups: Partial<Record<ProviderName, ModelLadderRung[]>> = {
       anthropic: anthropicRungs,
       openai: openaiRungs,
@@ -315,10 +324,11 @@ export function createProviderRegistry(
     log,
   );
 
+  const ownerChain = new ModelLadderProvider([...(config.modelLadder?.length === 1 && config.modelLadder[0] === "free" ? [] : [{model:"subscription:codex",provider:ownerCodex,advanceOn:"subscription-unavailable" as const}]),{model:"free:configured",provider:freePrimary}]);
   const byName: Record<ProviderName, LLMProvider> = {
     // "free" is the $0 primary — the rotating provider when rotation is on,
     // the FCC route alone otherwise. Either way it never spends money.
-    free: freePrimary,
+    free: ownerOnly ? ownerChain : freePrimary,
     mock,
     stub,
     anthropic,
@@ -330,6 +340,7 @@ export function createProviderRegistry(
   }
 
   function missingCredentialNames(): string[] {
+    if (ownerOnly) return ["FACTORY_OWNER_CODEX_HOME / ChatGPT sign-in",...(freePrimary.isConfigured()?[]:["configured free/local capacity"])];
     const missing: string[] = [];
     if (!free.isConfigured()) {
       missing.push("FACTORY_FREE_ENABLED / FACTORY_FREE_BASE_URL");
@@ -369,6 +380,7 @@ export function createProviderRegistry(
     requested: ProviderName | undefined,
     fallback: ProviderName,
   ): LLMProvider {
+    if (ownerOnly && ownerChain.isConfigured()) return withTheme(ownerChain);
     // The free route is primary whenever it is usable, regardless of what was
     // requested, EXCEPT when the caller explicitly pinned a paid provider.
     const explicitPaid =

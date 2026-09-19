@@ -37,6 +37,9 @@ export interface GenerateTextInput {
 }
 
 export interface GenerateTextResult {
+  billingMode?: "subscription" | "paid_api" | "free_or_local";
+  model?: string;
+  usage?: {input_tokens:number;cached_input_tokens:number;output_tokens:number};
   text: string;
   provider: ProviderName;
 }

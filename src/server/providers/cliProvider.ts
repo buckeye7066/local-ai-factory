@@ -142,7 +142,7 @@ export function argvFor(api: string): string[] {
       return ["-p", "--output-format", "text"];
     case "codex-cli":
       // `exec` is codex's non-interactive one-shot mode; `-` means stdin.
-      return ["exec", "--skip-git-repo-check", "-"];
+      return ["exec", "--skip-git-repo-check", "--ignore-user-config", "--ephemeral", "--sandbox", "read-only", "-c", "forced_login_method=chatgpt", "-"];
     default:
       throw new CliUnavailable(`no CLI argv defined for api '${api}'`);
   }

@@ -4,7 +4,7 @@ import { createProviderRegistry, type ProviderRegistry } from "../providers/inde
 import { loadConfig, loadSecrets } from "../config.js";
 import * as rotation from "../rotation/aitimeRotation.js";
 import * as providers from "../rotation/rotatingProvider.js";
-import { recursionGuardEnv } from "../providers/cliProvider.js";
+import { recursionGuardEnv, argvFor } from "../providers/cliProvider.js";
 import type { LLMProvider } from "../../shared/types.js";
 import type { RunOptions } from "../../shared/schemas.js";
 afterEach(() => {
@@ -113,3 +113,19 @@ it("strips mixed-case Windows credential names from the copied environment", () 
   expect(env.KEEP_VALUE).toBe("preserved");
   expect(original.OpenAI_Api_Key).toBe("test");
 });
+
+
+it("owner-only enrollment never retains metered API rungs even when keys exist",()=>{
+ vi.stubEnv("FACTORY_OWNER_SUBSCRIPTION_ONLY","1");vi.stubEnv("FACTORY_OWNER_CODEX_HOME",process.cwd()+"/fixture-subscription")
+ vi.spyOn(rotation,"buildRotator").mockReturnValue(null)
+ const config=loadConfig({});const secrets=loadSecrets({OPENAI_API_KEY:"fixture-only",ANTHROPIC_API_KEY:"fixture-only"})
+ const registry=createProviderRegistry(config,secrets)
+ expect(registry.availablePaid()).toEqual([])
+ expect(registry.automaticRungs!()[0].model).toBe("subscription:codex")
+ expect(registry.get("openai").isConfigured()).toBe(false)
+})
+it("a Codex subscription route cannot silently accept API-key authentication",()=>{
+ const args=argvFor("codex-cli")
+ expect(args).toContain("forced_login_method=chatgpt")
+ expect(args).toContain("--ignore-user-config")
+})
