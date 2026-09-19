@@ -27,3 +27,7 @@ on their supported API integrations. No personal account secret belongs in Git.
 Prompts continue through the existing run idea and persisted steering mailbox, not a second instruction path. Existing completion/checkpoint and independent-review requirements remain enforced.
 
 Executed locally: official subscription inference returned Factory subscription OK with `billingMode=subscription`, actual `gpt-6-astra` model and usage counters. The subscription/prompt/auth test set passed 44 cases; full-suite verification is recorded with the release. No owner credential, home directory or token is bundled in the app.
+
+## Authoritative local execution metadata
+
+The owner transport now uses the official Codex app-server stdio protocol. It verifies ChatGPT account authentication, the selected model returned by thread/start, ephemeral read-only execution and absence of user instruction files. Server invariants remain privileged developer instructions; task text is separate. Unexpected tools, model rerouting, malformed/incomplete output and deadline failures are refused. Requested output tokens are advisory; actual provider usage is recorded and hard byte/time limits remain enforced. In a controlled live test the trusted instruction prevailed over conflicting task text and the runtime returned model_source=app_server_configuration.

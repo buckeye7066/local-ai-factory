@@ -1,3 +1,4 @@
+import {runCodexSession} from './codexAppServer.mjs'
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -14,8 +15,9 @@ const codexModel = env => {
 export function childEnvironment(provider, env = process.env) {
   const clean = {}
   for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'LOCALAPPDATA', 'USERPROFILE', 'HOME']) if (env[key]) clean[key] = env[key]
-  if (!env.LOCALAPPDATA) throw new Error('unavailable')
-  const subscriptionHome = provider === 'codex' && env.OWNER_AI_CODEX_HOME ? env.OWNER_AI_CODEX_HOME : path.join(env.LOCALAPPDATA, 'FactoryDeck', 'subscriptions', provider)
+  const explicitHome = provider === 'codex' ? env.OWNER_AI_CODEX_HOME : env.OWNER_AI_CLAUDE_HOME
+  if (!explicitHome && !env.LOCALAPPDATA) throw new Error('unavailable')
+  const subscriptionHome = explicitHome || path.join(env.LOCALAPPDATA, 'FactoryDeck', 'subscriptions', provider)
   if (!path.isAbsolute(subscriptionHome)) throw new Error('unavailable')
   clean[provider === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = subscriptionHome
   clean.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
@@ -104,18 +106,12 @@ export async function probeProvider(provider, { signal, env = process.env, run =
   try {
     const clean = childEnvironment(provider, env)
     if (provider === 'codex') {
-      const args = cliArguments(provider, env)
-      const help = await run('codex.exe', [...args, '--help'], { env: clean, signal })
-      const required = ['--sandbox', '--ephemeral', '--ignore-user-config', '--strict-config', '--skip-git-repo-check', '--json', '--model', '--config', '--disable']
-      const flags = new Set(help?.match(/--[a-z][a-z-]*/g) || [])
-      if (!required.every(flag => flags.has(flag)) || signal?.aborted) return 'unavailable'
-      const features = await run('codex.exe', ['features', 'list'], { env: clean, signal })
-      const supported = new Set((features || '').split(/\r?\n/).filter(line => /\s(?:true|false)\s*$/.test(line) && !/\bremoved\b/i.test(line)).map(line => line.trim().split(/\s+/)[0]))
-      if (!codexDisabledFeatures.every(feature => supported.has(feature)) || signal?.aborted) return 'unavailable'
-      const auth = await run('codex.exe', ['login', 'status'], { env: clean, signal, captureAuthMetadata: true })
-      if (signal?.aborted) return 'unavailable'
-      if (auth && subscriptionAuth(provider, auth)) return 'ready'
-      return auth && /^(?:Logged in using (?:an? )?API key.*|Not logged in)\s*$/i.test(auth.trim()) ? 'auth_required' : 'unavailable'
+      const executable=process.platform==='win32'?'codex.exe':'codex'
+      const help=await run(executable,['app-server','--help'],{env:clean,signal})
+      if(!help||!['--strict-config','--listen'].every(flag=>help.includes(flag))||signal?.aborted)return 'unavailable'
+      const auth=await run(executable,['login','status'],{env:clean,signal,captureAuthMetadata:true})
+      if(signal?.aborted)return 'unavailable'
+      return auth&&subscriptionAuth(provider,auth)?'ready':'auth_required'
     }
     const help = await run('claude.exe', [...cliArguments(provider), '--help'], { env: clean, signal })
     if (!help || !['--safe-mode', '--tools', '--strict-mcp-config', '--setting-sources', '--permission-prompts'].every(flag => help.includes(flag))) return 'unavailable'
@@ -124,7 +120,7 @@ export async function probeProvider(provider, { signal, env = process.env, run =
     return auth && subscriptionAuth(provider, auth) ? 'ready' : 'auth_required'
   } catch { return 'unavailable' }
 }
-export async function executeJob(job, { signal, env = process.env, run = runChild } = {}) {
+export async function executeJob(job, { signal, env = process.env, run = runChild, runSession = runCodexSession } = {}) {
   let cwd
   let deadlineTimer
   try {
@@ -147,6 +143,16 @@ export async function executeJob(job, { signal, env = process.env, run = runChil
       try {
         if (await probeProvider(provider, { signal: attemptSignal, env, run }) !== 'ready' || attemptSignal.aborted) continue
         const clean = childEnvironment(provider, env)
+        if (provider === 'codex') {
+          const executable=process.platform==='win32'?'codex.exe':'codex'
+          const rawFeatures=await run(executable,['features','list'],{env:clean,signal:attemptSignal})
+          if(!rawFeatures||attemptSignal.aborted)continue
+          const supported=new Set(rawFeatures.split(/\r?\n/).filter(line=>/\s(?:true|false)\s*$/.test(line)&&!/\bremoved\b/i.test(line)).map(line=>line.trim().split(/\s+/)[0]))
+          const features=codexDisabledFeatures.filter(feature=>supported.has(feature))
+          const result=await runSession({...job,timeoutMs:Math.max(1,Math.min(job.timeoutMs,deadline-Date.now()))},{env:clean,cwd,model:codexModel(env),features,signal:attemptSignal})
+          if(result&&!attemptSignal.aborted&&Date.now()<deadline)return result
+          continue
+        }
         if (provider === 'claude') clean.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(Math.min(job.maxTokens, 32000))
         const args = cliArguments(provider, env)
         const raw = await run(provider + '.exe', args, { cwd, env: clean, signal: attemptSignal,

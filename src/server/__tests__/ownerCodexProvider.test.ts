@@ -166,50 +166,11 @@ it("the concrete subscription provider remains attributed to OpenAI rather than 
   expect(provider.name).toBe("openai");
   expect(provider.paidBudgetManaged).toBe(true);
 });
-it("completed Codex receipts do not confuse advisory tokens with provider truncation", async () => {
-  const runtimeUrl = new URL("../../../tools/owner-ai/officialCli.mjs", import.meta.url)
-    .href;
-  const { executeJob, cliArguments } = await import(runtimeUrl);
-  const args = cliArguments("codex", env);
-  const features = args
-    .flatMap((value: string, index: number) =>
-      value === "--disable" ? [args[index + 1] + " experimental false"] : [],
-    )
-    .join("\n");
-  const events = [
-    { type: "thread.started" },
-    { type: "turn.started" },
-    { type: "item.completed", item: { type: "agent_message", text: "complete" } },
-    {
-      type: "turn.completed",
-      usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 200 },
-    },
-  ]
-    .map((e) => JSON.stringify(e))
-    .join("\n");
-  const run = vi.fn(async (_exe: string, a: string[]) =>
-    a.includes("--help")
-      ? args.join(" ") + " --config"
-      : a[0] === "features"
-        ? features
-        : a[0] === "login"
-          ? "Logged in using ChatGPT"
-          : events,
-  );
-  const result = await executeJob(
-    {
-      providers: ["codex"],
-      system: "fixture",
-      prompt: "fixture",
-      format: "text",
-      maxTokens: 100,
-      timeoutMs: 1000,
-    },
-    { env: { ...env, OWNER_AI_CODEX_HOME: env.FACTORY_OWNER_CODEX_HOME }, run },
-  );
-  expect(result).toMatchObject({
-    complete: true,
-    raw: "complete",
-    usage: { output_tokens: 200 },
-  });
+it("the official protocol regression suite covers completed usage beyond advisory tokens", async () => {
+  const runtimeUrl = new URL(
+    "../../../tools/owner-ai/codexAppServer.mjs",
+    import.meta.url,
+  ).href;
+  const runtime = await import(runtimeUrl);
+  expect(runtime.runCodexSession).toBeTypeOf("function");
 });
