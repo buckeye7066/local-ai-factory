@@ -74,3 +74,85 @@ it("pre-cancelled generation does not invoke the executor", async () => {
   ).rejects.toThrow();
   expect(run).not.toHaveBeenCalled();
 });
+
+it("unavailable owner inference reaches configured free fallback", async () => {
+  const { ModelLadderProvider } = await import("../providers/modelLadderProvider.js");
+  const run = vi.fn<OwnerCodexExecute>().mockResolvedValue(null);
+  const free = {
+    name: "free" as const,
+    isConfigured: () => true,
+    generateText: vi.fn(async () => ({
+      text: "free result",
+      provider: "free" as const,
+    })),
+    generateJson: vi.fn(),
+  };
+  const ladder = new ModelLadderProvider([
+    {
+      model: "subscription:codex",
+      provider: new OwnerCodexProvider(undefined, env, run),
+      advanceOn: "subscription-unavailable",
+    },
+    { model: "local", provider: free },
+  ]);
+  expect(await ladder.generateText({ system: "", prompt: "fixture" })).toMatchObject({
+    text: "free result",
+  });
+  expect(free.generateText).toHaveBeenCalledTimes(1);
+});
+it("health does not advertise metered rungs for an enrolled owner", async () => {
+  const { loadConfig, loadSecrets, toHealth } = await import("../config.js");
+  vi.stubEnv("FACTORY_OWNER_SUBSCRIPTION_ONLY", "1");
+  vi.stubEnv("FACTORY_OWNER_CODEX_HOME", env.FACTORY_OWNER_CODEX_HOME);
+  try {
+    const h = toHealth(
+      loadConfig({}),
+      loadSecrets({ OPENAI_API_KEY: "fixture", ANTHROPIC_API_KEY: "fixture" }),
+    );
+    expect(h.openaiConfigured).toBe(false);
+    expect(h.anthropicConfigured).toBe(false);
+    expect(h.providersAvailable).toContain("free");
+    expect(h.modelLadder).not.toContain("openai");
+    expect(h.modelLadder).not.toContain("anthropic");
+    expect(h).toMatchObject({
+      ownerSubscriptionConfigured: true,
+      ownerMeteredFallback: false,
+    });
+    expect(JSON.stringify(h)).not.toContain(env.FACTORY_OWNER_CODEX_HOME);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+it("a completed reasoning event is not user output and does not invalidate the final answer", async () => {
+  const runtimeUrl = new URL("../../../tools/owner-ai/officialCli.mjs", import.meta.url)
+    .href;
+  const { parseResult } = await import(runtimeUrl);
+  const events = [
+    { type: "thread.started" },
+    { type: "turn.started" },
+    {
+      type: "item.completed",
+      item: { type: "reasoning", text: "private reasoning summary" },
+    },
+    { type: "item.completed", item: { type: "agent_message", text: "final answer" } },
+    {
+      type: "turn.completed",
+      usage: { input_tokens: 2, cached_input_tokens: 0, output_tokens: 4 },
+    },
+  ];
+  expect(
+    parseResult(
+      "codex",
+      events.map((e) => JSON.stringify(e)).join("\n"),
+      "gpt-6-astra",
+    ),
+  ).toMatchObject({ raw: "final answer", billing_mode: "subscription" });
+  events[2]!.item!.type = "command_execution";
+  expect(
+    parseResult(
+      "codex",
+      events.map((e) => JSON.stringify(e)).join("\n"),
+      "gpt-6-astra",
+    ),
+  ).toBeNull();
+});

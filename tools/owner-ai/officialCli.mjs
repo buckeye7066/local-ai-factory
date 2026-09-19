@@ -45,9 +45,11 @@ export function parseResult(provider, raw, requestedModel) {
       const events = raw.trim().split(/\r?\n/).map(line => JSON.parse(line))
       if (events.length < 4 || events.length > 4096 || events[0]?.type !== 'thread.started' || events[1]?.type !== 'turn.started') return null
       const terminal = events.at(-1)
-      const messages = events.slice(2, -1)
+      const items = events.slice(2, -1)
+      const messages = items.filter(event => event.item?.type === 'agent_message')
       if (terminal?.type !== 'turn.completed' || !messages.length || events.some(event => !event || event.error || event.is_error) ||
-          !messages.every(event => event.type === 'item.completed' && event.item?.type === 'agent_message' &&
+          items.at(-1)?.item?.type !== 'agent_message' ||
+          !items.every(event => event.type === 'item.completed' && ['agent_message','reasoning'].includes(event.item?.type) &&
             !event.item.error && (!event.item.status || event.item.status === 'completed') && typeof event.item.text === 'string' && event.item.text.trim())) return null
       const usage = terminal.usage
       if (!['input_tokens', 'cached_input_tokens', 'output_tokens'].every(key => Number.isSafeInteger(usage?.[key]) && usage[key] >= 0) || usage.output_tokens === 0) return null

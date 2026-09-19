@@ -1,3 +1,4 @@
+import path from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { resolve } from "node:path";
 import type { ProviderName } from "../shared/schemas.js";
@@ -296,18 +297,33 @@ export function isFreeConfigured(config: AppConfig): boolean {
 }
 
 export function toHealth(config: AppConfig, secrets: AppSecrets, route?: unknown) {
+  const ownerOnly = /^(1|true)$/i.test(
+    process.env.FACTORY_OWNER_SUBSCRIPTION_ONLY || "",
+  );
+  const ownerSubscriptionConfigured =
+    ownerOnly && path.isAbsolute(process.env.FACTORY_OWNER_CODEX_HOME || "");
+  if (ownerOnly) secrets = { ...secrets, openaiApiKey: "", anthropicApiKey: "" };
   const anthropicConfigured = isAnthropicConfigured(secrets);
   const openaiConfigured = isOpenAiConfigured(secrets);
   const freeConfigured = isFreeConfigured(config);
   const brainFloor = readinessBrainFloor(config, secrets);
   const providersAvailable: ProviderName[] = ["mock", "stub"];
-  if (freeConfigured) providersAvailable.push("free");
+  if (freeConfigured || ownerSubscriptionConfigured) providersAvailable.push("free");
   if (anthropicConfigured) providersAvailable.push("anthropic");
   if (openaiConfigured) providersAvailable.push("openai");
-  const modelLadder = (config.modelLadder ?? ["anthropic", "openai", "free"]).filter(
-    (name) => providersAvailable.includes(name),
-  );
+  const modelLadder = (
+    ownerOnly
+      ? (["free"] as ProviderName[])
+      : (config.modelLadder ?? ["anthropic", "openai", "free"])
+  ).filter((name) => providersAvailable.includes(name));
   return {
+    ...(ownerOnly
+      ? {
+          ownerSubscriptionConfigured,
+          ownerMeteredFallback: false,
+          ownerSubscriptionAuthentication: "checked-on-use",
+        }
+      : {}),
     freeConfigured,
     freeBaseUrl: config.free.baseUrl,
     freeModel: config.free.model,

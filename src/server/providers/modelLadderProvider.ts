@@ -12,6 +12,7 @@ import {
   modelFailureText,
 } from "./modelExhaustion.js";
 import { ProviderAbortError } from "./types.js";
+import { CliUnavailable } from "./cliProvider.js";
 import { RotationError } from "../rotation/aitimeRotation.js";
 
 export type ModelLadderRung = {
@@ -103,7 +104,7 @@ export class ModelLadderProvider implements LLMProvider {
       } catch (error) {
         const subscriptionUnavailable =
           rung.advanceOn === "subscription-unavailable" &&
-          error instanceof RotationError;
+          (error instanceof RotationError || error instanceof CliUnavailable);
         if (
           error instanceof ProviderAbortError ||
           (!subscriptionUnavailable && !isModelExhaustion(error))
