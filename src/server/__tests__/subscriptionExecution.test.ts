@@ -133,3 +133,33 @@ it("a Codex subscription route cannot silently accept API-key authentication", (
   expect(args).toContain("forced_login_method=chatgpt");
   expect(args).toContain("--ignore-user-config");
 });
+
+it("an owner catalog with only subscriptions falls through to the configured direct free provider", async () => {
+  const { OwnerCodexProvider } = await import("../providers/ownerCodexProvider.js");
+  const { FreeProvider } = await import("../providers/freeProvider.js");
+  const { CliUnavailable } = await import("../providers/cliProvider.js");
+  vi.stubEnv("FACTORY_OWNER_SUBSCRIPTION_ONLY", "1");
+  vi.stubEnv("FACTORY_OWNER_CODEX_HOME", process.cwd() + "/fixture-home");
+  vi.spyOn(rotation, "buildRotator").mockReturnValue(
+    new rotation.Rotator(subscriptionCatalog()),
+  );
+  vi.spyOn(providers, "filterRoutableCatalog").mockImplementation((r) => r);
+  vi.spyOn(OwnerCodexProvider.prototype, "generateText").mockRejectedValue(
+    new CliUnavailable("subscription offline"),
+  );
+  const direct = vi
+    .spyOn(FreeProvider.prototype, "generateText")
+    .mockResolvedValue({ text: "direct free response", provider: "free" });
+  const registry = createProviderRegistry(
+    loadConfig({
+      FACTORY_FREE_ENABLED: "true",
+      FACTORY_FREE_BASE_URL: "http://127.0.0.1:1234",
+    }),
+    loadSecrets({ OPENAI_API_KEY: "fixture" }),
+  );
+  const result = await registry
+    .get("free")
+    .generateText({ system: "fixture", prompt: "fixture" });
+  expect(result.text).toBe("direct free response");
+  expect(direct).toHaveBeenCalledTimes(1);
+});

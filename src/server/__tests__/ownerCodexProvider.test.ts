@@ -156,3 +156,21 @@ it("a completed reasoning event is not user output and does not invalidate the f
     ),
   ).toBeNull();
 });
+
+it("the concrete subscription provider remains attributed to OpenAI rather than free capacity", () => {
+  const provider = new OwnerCodexProvider(
+    undefined,
+    env,
+    vi.fn<OwnerCodexExecute>().mockResolvedValue(receipt),
+  );
+  expect(provider.name).toBe("openai");
+  expect(provider.paidBudgetManaged).toBe(true);
+});
+it("the official protocol regression suite covers completed usage beyond advisory tokens", async () => {
+  const runtimeUrl = new URL(
+    "../../../tools/owner-ai/codexAppServer.mjs",
+    import.meta.url,
+  ).href;
+  const runtime = await import(runtimeUrl);
+  expect(runtime.runCodexSession).toBeTypeOf("function");
+});

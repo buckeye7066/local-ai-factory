@@ -15,6 +15,7 @@ import {
 import { estimateUsd, loadLimits } from "./paidBudget.js";
 import {
   buildRotator,
+  isFreeRoute,
   Catalog,
   Rotator,
   rotationEnabled,
@@ -235,7 +236,10 @@ export function createProviderRegistry(
       ? new Rotator(
           new Catalog(
             rotator.catalog.routes.filter(
-              (route) => route.cost_class !== "subscription",
+              (route) =>
+                isFreeRoute(route) &&
+                route.cost_class !== "subscription" &&
+                route.enabled,
             ),
             rotator.catalog.generatedAt,
             rotator.catalog.ageSeconds,
@@ -246,15 +250,16 @@ export function createProviderRegistry(
           rotator.ignorePins,
         )
       : rotator;
-  const freePrimary: FreePrimary = freeRotator
-    ? new RotatingProvider(freeRotator, {
-        fccDelegate: free,
-        fccBaseUrl: config.free.baseUrl,
-        tier: "frontier",
-        log,
-        signal,
-      })
-    : free;
+  const freePrimary: FreePrimary =
+    freeRotator && (!ownerOnly || freeRotator.catalog.routes.length > 0)
+      ? new RotatingProvider(freeRotator, {
+          fccDelegate: free,
+          fccBaseUrl: config.free.baseUrl,
+          tier: "frontier",
+          log,
+          signal,
+        })
+      : free;
 
   // Owner-signed-in, unmodified coding CLIs only; never export account tokens.
   const subscriptionRoutes =

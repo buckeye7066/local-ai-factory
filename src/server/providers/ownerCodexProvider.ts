@@ -33,7 +33,7 @@ const execute: OwnerCodexExecute = async (job, options) =>
 
 /** Local owner enrollment, never a customer-facing subscription proxy. */
 export class OwnerCodexProvider implements LLMProvider {
-  readonly name = "free" as const;
+  readonly name = "openai" as const;
   readonly paidBudgetManaged = true;
   private readonly model: string;
   constructor(
